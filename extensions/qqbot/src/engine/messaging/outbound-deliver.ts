@@ -219,10 +219,8 @@ async function sendTextChunks(
   deps: DeliverDeps,
 ): Promise<void> {
   const { account, log } = actx;
-  const chunks = mergeChunksIfSafe(
-    deps.chunkText(text, TEXT_CHUNK_LIMIT),
-    QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
-  );
+  const rawChunks = deps.chunkText(text, TEXT_CHUNK_LIMIT);
+  const chunks = mergeChunksIfSafe(rawChunks, QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT);
   await sendTextChunksWithRetry({
     account,
     event,
@@ -231,6 +229,7 @@ async function sendTextChunks(
     consumeQuoteRef,
     allowDm: true,
     log,
+    fallbackChunks: chunks.length < rawChunks.length ? rawChunks : undefined,
     onSuccess: (chunk) =>
       `Sent text chunk (${chunk.length}/${text.length} chars): ${chunk.slice(0, 50)}...`,
     onError: (err) => `Failed to send text chunk: ${formatErrorMessage(err)}`,
@@ -250,10 +249,8 @@ export async function sendTextOnlyReply(
     return;
   }
   const { account, log } = actx;
-  const chunks = mergeChunksIfSafe(
-    deps.chunkText(safeText, TEXT_CHUNK_LIMIT),
-    QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
-  );
+  const rawChunks = deps.chunkText(safeText, TEXT_CHUNK_LIMIT);
+  const chunks = mergeChunksIfSafe(rawChunks, QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT);
   await sendTextChunksWithRetry({
     account,
     event,
@@ -263,6 +260,7 @@ export async function sendTextOnlyReply(
     allowDm: true,
     forcePlainText: true,
     log,
+    fallbackChunks: chunks.length < rawChunks.length ? rawChunks : undefined,
     onSuccess: (chunk) =>
       `Sent text-only chunk (${chunk.length}/${safeText.length} chars): ${chunk.slice(0, 50)}...`,
     onError: (err) => `Failed to send text-only chunk: ${formatErrorMessage(err)}`,
@@ -280,9 +278,25 @@ async function sendTextChunksWithRetry(params: {
   log?: DeliverAccountContext["log"];
   onSuccess: (chunk: string) => string;
   onError: (err: unknown) => string;
+  /**
+   * Original chunks before a merge-gate coalesced them.
+   * When a merged chunk fails, the sender retries with these original
+   * chunks individually so the reply is not lost entirely when QQ
+   * rejects a merged markdown shape.
+   */
+  fallbackChunks?: string[];
 }): Promise<void> {
-  const { account, event, chunks, sendWithRetry, consumeQuoteRef, allowDm, forcePlainText, log } =
-    params;
+  const {
+    account,
+    event,
+    chunks,
+    sendWithRetry,
+    consumeQuoteRef,
+    allowDm,
+    forcePlainText,
+    log,
+    fallbackChunks,
+  } = params;
   for (const chunk of chunks) {
     try {
       await sendWithRetry((token) =>
@@ -298,7 +312,33 @@ async function sendTextChunksWithRetry(params: {
       );
       log?.info(params.onSuccess(chunk));
     } catch (err) {
-      log?.error(params.onError(err));
+      // When a merged chunk fails, retry with the original split chunks
+      // so the reply is not lost entirely.
+      if (fallbackChunks?.length) {
+        log?.info(
+          `Merged chunk send failed; retrying with ${fallbackChunks.length} original chunk(s)`,
+        );
+        for (const fallbackChunk of fallbackChunks) {
+          try {
+            await sendWithRetry((token) =>
+              sendTextChunkToTarget({
+                account,
+                event,
+                token,
+                text: fallbackChunk,
+                consumeQuoteRef,
+                allowDm,
+                forcePlainText,
+              }),
+            );
+            log?.info(params.onSuccess(fallbackChunk));
+          } catch (fbErr) {
+            log?.error(params.onError(fbErr));
+          }
+        }
+      } else {
+        log?.error(params.onError(err));
+      }
     }
   }
 }
@@ -792,10 +832,8 @@ async function sendMarkdownReply(
 
   // Send markdown text.
   if (result.trim()) {
-    const mdChunks = mergeChunksIfSafe(
-      deps.chunkText(result, TEXT_CHUNK_LIMIT),
-      QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
-    );
+    const rawMdChunks = deps.chunkText(result, TEXT_CHUNK_LIMIT);
+    const mdChunks = mergeChunksIfSafe(rawMdChunks, QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT);
     await sendTextChunksWithRetry({
       account,
       event,
@@ -804,6 +842,7 @@ async function sendMarkdownReply(
       consumeQuoteRef,
       allowDm: true,
       log,
+      fallbackChunks: mdChunks.length < rawMdChunks.length ? rawMdChunks : undefined,
       onSuccess: (chunk) =>
         `Sent markdown chunk (${chunk.length}/${result.length} chars) with ${httpImageUrls.length} HTTP images (${event.type})`,
       onError: (err) => `Failed to send markdown message chunk: ${formatErrorMessage(err)}`,
@@ -854,10 +893,8 @@ async function sendPlainTextReply(
     }
 
     if (result.trim()) {
-      const plainChunks = mergeChunksIfSafe(
-        deps.chunkText(result, TEXT_CHUNK_LIMIT),
-        QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT,
-      );
+      const rawPlainChunks = deps.chunkText(result, TEXT_CHUNK_LIMIT);
+      const plainChunks = mergeChunksIfSafe(rawPlainChunks, QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT);
       await sendTextChunksWithRetry({
         account,
         event,
@@ -866,6 +903,7 @@ async function sendPlainTextReply(
         consumeQuoteRef,
         allowDm: false,
         log,
+        fallbackChunks: plainChunks.length < rawPlainChunks.length ? rawPlainChunks : undefined,
         onSuccess: (chunk) =>
           `Sent text chunk (${chunk.length}/${result.length} chars) (${event.type})`,
         onError: (err) => `Send failed: ${formatErrorMessage(err)}`,

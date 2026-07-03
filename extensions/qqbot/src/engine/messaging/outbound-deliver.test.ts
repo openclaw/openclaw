@@ -183,4 +183,40 @@ describe("sendTextOnlyReply chunk merging", () => {
     expect(sendTextMock).toHaveBeenCalledTimes(1);
     expect(sendTextMock.mock.calls[0]?.[1]).toBe("Just one chunk.");
   });
+
+  it("retries with original chunks when a merged chunk send fails", async () => {
+    // chunkText returns two small chunks that would normally merge.
+    // Make sendText fail on the first call (merged chunk), then succeed.
+    const chunk1 = "First paragraph.";
+    const chunk2 = "Second paragraph.";
+    sendTextMock
+      .mockRejectedValueOnce(new Error("QQ API reject"))
+      .mockResolvedValueOnce({ id: "fb-1", timestamp: "2026-07-01T00:00:00.000Z" })
+      .mockResolvedValueOnce({ id: "fb-2", timestamp: "2026-07-01T00:00:00.000Z" });
+
+    const deps = {
+      mediaSender: {} as Parameters<typeof sendTextOnlyReply>[5]["mediaSender"],
+      chunkText: (_text: string, _limit: number) => [chunk1, chunk2],
+    };
+
+    // Must not throw — fallback sends the original chunks individually.
+    await expect(
+      sendTextOnlyReply(
+        `${chunk1}\n\n${chunk2}`,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    // 3 calls total: 1 failed merged send + 2 fallback original chunks.
+    expect(sendTextMock).toHaveBeenCalledTimes(3);
+    // First attempt: the merged chunk.
+    expect(sendTextMock.mock.calls[0]?.[1]).toBe("First paragraph.\n\nSecond paragraph.");
+    // Fallback: original chunks sent individually in order.
+    expect(sendTextMock.mock.calls[1]?.[1]).toBe(chunk1);
+    expect(sendTextMock.mock.calls[2]?.[1]).toBe(chunk2);
+  });
 });
