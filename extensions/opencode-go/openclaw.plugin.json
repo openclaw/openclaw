@@ -30,6 +30,15 @@
             "id": "deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": "low",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -49,6 +58,15 @@
             "id": "deepseek-v4-flash",
             "name": "DeepSeek V4 Flash",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": "low",
+              "low": "low",
+              "medium": "medium",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,

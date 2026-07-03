@@ -31,6 +31,16 @@ type OpencodeGoModelDefinition = ModelDefinitionConfig & {
   input: Array<"text" | "image">;
 };
 
+const OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP = {
+  off: null,
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+} satisfies NonNullable<ModelDefinitionConfig["thinkingLevelMap"]>;
+
 const OPENCODE_GO_MODELS = (
   [
     {
@@ -40,6 +50,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP,
       input: ["text"],
       cost: {
         input: 1.74,
@@ -62,6 +73,7 @@ const OPENCODE_GO_MODELS = (
       provider: PROVIDER_ID,
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
       reasoning: true,
+      thinkingLevelMap: OPENCODE_GO_DEEPSEEK_V4_THINKING_LEVEL_MAP,
       input: ["text"],
       cost: {
         input: 0.14,

@@ -1,4 +1,5 @@
 // Opencode Go tests cover index plugin behavior.
+import { clampThinkingLevel } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   registerProviderPlugin,
@@ -38,6 +39,16 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
   }
   return requireRecord(entry, `supplemental catalog entry ${id}`);
 }
+
+const EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP = {
+  off: null,
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "max",
+  max: "max",
+} as const;
 
 describe("opencode-go provider plugin", () => {
   beforeEach(() => {
@@ -126,6 +137,14 @@ describe("opencode-go provider plugin", () => {
     const deepSeekFlash = requireCatalogEntry(supplemental, "deepseek-v4-flash");
     expect(deepSeekFlash.provider).toBe("opencode-go");
     expect(deepSeekFlash.name).toBe("DeepSeek V4 Flash");
+
+    const deepSeekProModel = requireMapEntry(models, "deepseek-v4-pro");
+    expect(deepSeekProModel.thinkingLevelMap).toEqual(EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP);
+    expect(clampThinkingLevel(deepSeekProModel as never, "max")).toBe("max");
+
+    const deepSeekFlashModel = requireMapEntry(models, "deepseek-v4-flash");
+    expect(deepSeekFlashModel.thinkingLevelMap).toEqual(EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP);
+    expect(clampThinkingLevel(deepSeekFlashModel as never, "xhigh")).toBe("xhigh");
 
     const glm52 = requireMapEntry(models, "glm-5.2");
     expect(glm52.api).toBe("openai-completions");
@@ -241,6 +260,13 @@ describe("opencode-go provider plugin", () => {
   it("loads OpenCode Go model discovery through the provider runtime", () => {
     expect(manifest.providerCatalogEntry).toBe("./provider-discovery.ts");
     expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
+    const manifestModels = manifest.modelCatalog.providers["opencode-go"].models;
+    expect(
+      manifestModels.find((model) => model.id === "deepseek-v4-pro")?.thinkingLevelMap,
+    ).toEqual(EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP);
+    expect(
+      manifestModels.find((model) => model.id === "deepseek-v4-flash")?.thinkingLevelMap,
+    ).toEqual(EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP);
   });
 
   it("exposes the complete offline catalog through provider discovery", async () => {
@@ -249,6 +275,7 @@ describe("opencode-go provider plugin", () => {
       throw new Error("expected OpenCode Go static provider");
     }
     const deepSeekPro = result.provider.models.find((model) => model.id === "deepseek-v4-pro");
+    const deepSeekFlash = result.provider.models.find((model) => model.id === "deepseek-v4-flash");
     const glm52 = result.provider.models.find((model) => model.id === "glm-5.2");
 
     expect(result.provider.models).toHaveLength(20);
@@ -256,6 +283,13 @@ describe("opencode-go provider plugin", () => {
       provider: "opencode-go",
       contextWindow: 1_000_000,
       maxTokens: 384_000,
+      thinkingLevelMap: EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP,
+    });
+    expect(deepSeekFlash).toMatchObject({
+      provider: "opencode-go",
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      thinkingLevelMap: EXPECTED_DEEPSEEK_V4_THINKING_LEVEL_MAP,
     });
     expect(glm52).toMatchObject({
       provider: "opencode-go",
