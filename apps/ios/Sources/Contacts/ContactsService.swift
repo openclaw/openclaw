@@ -11,6 +11,11 @@ final class ContactsService: ContactsServicing {
             CNContactOrganizationNameKey as CNKeyDescriptor,
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
+            // CNContactFormatter reads name components (middle name, prefixes, phonetic
+            // fields) beyond the ones above. Without its descriptor the formatter accesses
+            // an unfetched key and CNContact raises CNPropertyNotFetchedException, which is
+            // an Objective-C exception that crashes the app. See payload(from:).
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
         ]
     }
 
