@@ -63,6 +63,8 @@ targets:
       - path: Resources/Licenses
         type: folder
         buildPhase: resources
+      - path: Sources/Fonts
+        buildPhase: resources
     resources:
       - path: Resources/Localizable.xcstrings
     dependencies:
@@ -177,6 +179,13 @@ targets:
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
         OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
         UISupportedInterfaceOrientations:
@@ -236,6 +245,8 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+      - path: Sources/Fonts
+        buildPhase: resources
     resources:
       - path: Resources/Localizable.xcstrings
     dependencies:
@@ -259,6 +270,13 @@ targets:
         CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
@@ -270,6 +288,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+      - path: Sources/Fonts
+        buildPhase: resources
     resources:
       - path: Resources/Localizable.xcstrings
     dependencies:
@@ -302,6 +322,13 @@ targets:
         CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKApplication: true
+        UIAppFonts:
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
+          - JetBrainsMono-Regular.ttf
+          - JetBrainsMono-Medium.ttf
+          - JetBrainsMono-SemiBold.ttf
 
   OpenClawTests:
     type: bundle.unit-test

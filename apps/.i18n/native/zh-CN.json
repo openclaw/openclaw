@@ -4324,6 +4324,16 @@
       "translated": "编辑 \\(skill.displayName)"
     },
     {
+      "id": "native.apple.de59fbc2807318fc",
+      "source": "Skill unavailable",
+      "translated": "技能不可用"
+    },
+    {
+      "id": "native.apple.2e0b19585f4fec18",
+      "source": "Return to the skills list and choose another skill.",
+      "translated": "返回技能列表并选择其他技能。"
+    },
+    {
       "id": "native.apple.29d82bdb73f5a551",
       "source": "Skill",
       "translated": "Skill"
@@ -5049,11 +5059,6 @@
       "translated": "默认代理"
     },
     {
-      "id": "native.apple.0c99715b98ca22a2",
-      "source": "Card",
-      "translated": "卡片"
-    },
-    {
       "id": "native.apple.77a417fa0f2aba1d",
       "source": "Title",
       "translated": "标题"
@@ -5064,9 +5069,9 @@
       "translated": "状态"
     },
     {
-      "id": "native.apple.68a43a9e8939f395",
-      "source": "Actions",
-      "translated": "操作"
+      "id": "native.apple.0c99715b98ca22a2",
+      "source": "Card",
+      "translated": "卡片"
     },
     {
       "id": "native.apple.93eeaedb2ff61043",
@@ -5087,6 +5092,11 @@
       "id": "native.apple.dab3609e8a71ed48",
       "source": "Unarchive",
       "translated": "取消归档"
+    },
+    {
+      "id": "native.apple.68a43a9e8939f395",
+      "source": "Actions",
+      "translated": "操作"
     },
     {
       "id": "native.apple.07a313e2adf7227b",
@@ -5639,31 +5649,6 @@
       "translated": "许可证"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.800b6502b5b49941",
-      "source": "Address",
-      "translated": "地址"
-    },
-    {
-      "id": "native.apple.fde8b41db7ec49f3",
-      "source": "Server",
-      "translated": "服务器"
-    },
-    {
-      "id": "native.apple.624f9dc99e8f9ff4",
-      "source": "Discovered",
-      "translated": "已发现"
-    },
-    {
-      "id": "native.apple.8e3656d85f092897",
-      "source": "Agents",
-      "translated": "代理"
-    },
-    {
       "id": "native.apple.3c8f5bb5ce507cf9",
       "source": "Approvals",
       "translated": "审批"
@@ -5834,6 +5819,31 @@
       "translated": "OpenClaw 感谢其在开源社区中的合作伙伴。"
     },
     {
+      "id": "native.apple.4b8dfe776225b172",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.800b6502b5b49941",
+      "source": "Address",
+      "translated": "地址"
+    },
+    {
+      "id": "native.apple.fde8b41db7ec49f3",
+      "source": "Server",
+      "translated": "服务器"
+    },
+    {
+      "id": "native.apple.624f9dc99e8f9ff4",
+      "source": "Discovered",
+      "translated": "已发现"
+    },
+    {
+      "id": "native.apple.8e3656d85f092897",
+      "source": "Agents",
+      "translated": "代理"
+    },
+    {
       "id": "native.apple.0f4e7486619df175",
       "source": "Controls whether location can be shared with gateway tools.",
       "translated": "控制是否可与 Gateway 工具共享位置。"
@@ -5864,14 +5874,14 @@
       "translated": "默认代理"
     },
     {
-      "id": "native.apple.bf6ddc5fa4832324",
-      "source": "Agent",
-      "translated": "代理"
-    },
-    {
       "id": "native.apple.6ace5e6f09ec98c7",
       "source": "Default",
       "translated": "默认"
+    },
+    {
+      "id": "native.apple.bf6ddc5fa4832324",
+      "source": "Agent",
+      "translated": "代理"
     },
     {
       "id": "native.apple.3de045f17ea3c6d0",
@@ -6334,14 +6344,14 @@
       "translated": "详情"
     },
     {
-      "id": "native.apple.677a41ec947a185b",
-      "source": "Technical details",
-      "translated": "技术详情"
-    },
-    {
       "id": "native.apple.79b30b1d014a383d",
       "source": "Copy diagnostics",
       "translated": "复制诊断信息"
+    },
+    {
+      "id": "native.apple.677a41ec947a185b",
+      "source": "Technical details",
+      "translated": "技术详情"
     },
     {
       "id": "native.apple.e87c850114041ce8",
@@ -6499,19 +6509,14 @@
       "translated": "需要注意"
     },
     {
-      "id": "native.apple.fd04cd49334845a9",
-      "source": "Request",
-      "translated": "请求"
-    },
-    {
       "id": "native.apple.ae581f232bd0ecc0",
       "source": "Copy request ID",
       "translated": "复制请求 ID"
     },
     {
-      "id": "native.apple.50622ef698ba07f5",
-      "source": "Gateway command",
-      "translated": "Gateway 命令"
+      "id": "native.apple.fd04cd49334845a9",
+      "source": "Request",
+      "translated": "请求"
     },
     {
       "id": "native.apple.98df0e8ba486e4d1",
@@ -6519,9 +6524,9 @@
       "translated": "复制命令"
     },
     {
-      "id": "native.apple.6b1a61d6c9510bdb",
-      "source": "Help",
-      "translated": "帮助"
+      "id": "native.apple.50622ef698ba07f5",
+      "source": "Gateway command",
+      "translated": "Gateway 命令"
     },
     {
       "id": "native.apple.32ea6ea1f9aea920",
@@ -6529,12 +6534,17 @@
       "translated": "打开文档"
     },
     {
+      "id": "native.apple.6b1a61d6c9510bdb",
+      "source": "Help",
+      "translated": "帮助"
+    },
+    {
       "id": "native.apple.7041ebbb775bfdd7",
       "source": "Technical details",
       "translated": "技术详细信息"
     },
     {
-      "id": "native.apple.d33a0c45a54fa8a3",
+      "id": "native.apple.f307f967ec2df705",
       "source": "Connection problem",
       "translated": "连接问题"
     },
@@ -6574,7 +6584,7 @@
       "translated": "尚未找到 Gateway。请确保你的 Gateway 正在运行，并且已启用 Bonjour 发现。"
     },
     {
-      "id": "native.apple.476757fc54c63560",
+      "id": "native.apple.d2445a87f9cb6ff4",
       "source": "Quick Setup",
       "translated": "快速设置"
     },
@@ -6979,7 +6989,7 @@
       "translated": "确定"
     },
     {
-      "id": "native.apple.a5fe3de8fc43f3da",
+      "id": "native.apple.80a2693bba128a6c",
       "source": "Scan QR Code",
       "translated": "扫描二维码"
     },
@@ -7059,11 +7069,6 @@
       "translated": "返回模式选择"
     },
     {
-      "id": "native.apple.07ebd3b75969629f",
-      "source": "Discovered Gateways",
-      "translated": "已发现的 Gateway"
-    },
-    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "尚未找到任何 Gateway。"
@@ -7077,6 +7082,11 @@
       "id": "native.apple.94c9697fb748d05d",
       "source": "Restart Discovery",
       "translated": "重新开始发现"
+    },
+    {
+      "id": "native.apple.07ebd3b75969629f",
+      "source": "Discovered Gateways",
+      "translated": "已发现的 Gateway"
     },
     {
       "id": "native.apple.1284354b0d0098ad",
@@ -7394,11 +7404,6 @@
       "translated": "连接"
     },
     {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "隐私与访问权限"
-    },
-    {
       "id": "native.apple.4dac301c7e0c921c",
       "source": "Contacts",
       "translated": "联系人"
@@ -7442,6 +7447,11 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "列出、添加和完成提醒事项。"
+    },
+    {
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "隐私与访问权限"
     },
     {
       "id": "native.apple.651cc89381dd69c0",

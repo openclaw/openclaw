@@ -181,6 +181,7 @@ struct RootTabs: View {
                 Label(
                     "Talk",
                     systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
+                    .font(OpenClawType.captionSemiBold)
             }
             .tag(AppTab.talk)
 
@@ -306,7 +307,7 @@ struct RootTabs: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
-                    .font(.headline.weight(.semibold))
+                    .font(OpenClawType.headline)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
@@ -315,9 +316,10 @@ struct RootTabs: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(self.sidebarGatewayStatusColor)
                     Text(self.sidebarGatewayStatusTitle)
+                        .font(OpenClawType.captionMedium)
                         .lineLimit(1)
                 }
-                .font(.caption.weight(.medium))
+                .font(OpenClawType.captionMedium)
                 .foregroundStyle(.secondary)
             }
 
@@ -400,6 +402,7 @@ struct RootTabs: View {
             self.selectSidebarDestination(destination)
         } label: {
             Label(title ?? destination.sidebarTitle, systemImage: destination.systemImage)
+                .font(OpenClawType.subheadSemiBold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .truncationMode(.tail)
@@ -408,6 +411,7 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
+        .font(OpenClawType.subheadSemiBold)
         .buttonStyle(.plain)
         .foregroundStyle(destination == self.selectedSidebarDestination ? OpenClawBrand.accent : .primary)
         .listRowBackground(
@@ -608,7 +612,7 @@ struct RootTabs: View {
             self.hideSidebar()
         } label: {
             Image(systemName: self.isSidebarDrawerLayout ? "xmark" : "sidebar.left")
-                .font(.system(size: 15, weight: .semibold))
+                .font(OpenClawType.subheadSemiBold)
         }
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
