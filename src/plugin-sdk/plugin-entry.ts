@@ -87,6 +87,8 @@ export type ProviderNormalizeTransportContext =
   import("../plugins/types.js").ProviderNormalizeTransportContext;
 export type ProviderResolveConfigApiKeyContext =
   import("../plugins/types.js").ProviderResolveConfigApiKeyContext;
+export type ProviderResolveCliBackendAuthCredentialContext =
+  import("../plugins/types.js").ProviderResolveCliBackendAuthCredentialContext;
 export type ProviderNormalizeModelIdContext =
   import("../plugins/types.js").ProviderNormalizeModelIdContext;
 export type ProviderNormalizeResolvedModelContext =
@@ -108,6 +110,8 @@ export type ProviderReplaySessionState = import("../plugins/types.js").ProviderR
 export type RealtimeTranscriptionProviderPlugin =
   import("../plugins/types.js").RealtimeTranscriptionProviderPlugin;
 export type ProviderResolvedUsageAuth = import("../plugins/types.js").ProviderResolvedUsageAuth;
+export type ProviderResolvedCliBackendAuthCredential =
+  import("../plugins/types.js").ProviderResolvedCliBackendAuthCredential;
 export type ProviderUsageAuthToken = import("../plugins/types.js").ProviderUsageAuthToken;
 export type ProviderResolveDynamicModelContext =
   import("../plugins/types.js").ProviderResolveDynamicModelContext;

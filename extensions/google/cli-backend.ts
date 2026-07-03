@@ -74,8 +74,8 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     authEpochMode: "profile-only",
     authProfileForwarding: {
       supported: true,
-      providers: ["google-gemini-cli"],
-      credentialKinds: ["oauth"],
+      providers: ["google", "google-gemini-cli"],
+      credentialKinds: ["api_key", "oauth"],
     },
     normalizeConfig: normalizeGeminiCliBackendConfig,
     prepareExecution: async (ctx) => {

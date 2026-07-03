@@ -289,15 +289,40 @@ describe("google gemini cli backend auth bridge", () => {
     });
   });
 
-  it("rejects selected canonical Google API-key credentials before the CLI can use ambient auth", async () => {
+  it("stages selected canonical Google API-key credentials without OAuth files", async () => {
     const backend = buildGoogleGeminiCliBackend();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));
+    let prepared:
+      | Awaited<ReturnType<NonNullable<typeof backend.prepareExecution>>>
+      | null
+      | undefined;
 
     try {
+      prepared = await backend.prepareExecution?.(buildGeminiApiKeyPrepareContext(workspaceDir));
+      await stageGeminiPreparedExecution(prepared);
+
+      const home = prepared?.env?.GEMINI_CLI_HOME;
+      if (!home) {
+        throw new Error("expected Gemini CLI profile home");
+      }
+      const systemSettingsRaw = await fs.readFile(
+        prepared?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? "",
+        "utf8",
+      );
+      expect(prepared?.env?.GEMINI_API_KEY).toBe("gemini-api-key");
+      expect(JSON.parse(systemSettingsRaw)).toMatchObject({
+        security: { auth: { selectedType: "gemini-api-key" } },
+      });
+      await expect(fs.stat(path.join(home, ".gemini", "oauth_creds.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       await expect(
-        backend.prepareExecution?.(buildGeminiApiKeyPrepareContext(workspaceDir)),
-      ).rejects.toThrow(/google-gemini-cli OAuth auth profile/);
+        fs.stat(path.join(home, ".gemini", "gemini-credentials.json")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     } finally {
+      await prepared?.cleanup?.();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });

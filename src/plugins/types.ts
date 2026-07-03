@@ -87,7 +87,11 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
+import type {
+  CliBackendForwardedCredentialKind,
+  CliBackendPlugin,
+  PluginTextTransforms,
+} from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
@@ -766,6 +770,23 @@ export type ProviderResolveAuthProfileIdContext = {
   lockedProfileId?: string;
   profileOrder: string[];
   authStore: AuthProfileStore;
+};
+
+export type ProviderResolvedCliBackendAuthCredential = {
+  kind: CliBackendForwardedCredentialKind;
+  providerId: string;
+  profileId: string;
+} & Record<string, unknown>;
+
+export type ProviderResolveCliBackendAuthCredentialContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  profileId: string;
+  credential: AuthProfileCredential;
+  store: AuthProfileStore;
 };
 
 export type ProviderReplaySanitizeMode = "full" | "images-only";
@@ -1701,6 +1722,20 @@ export type ProviderPlugin = {
    * invalid or missing ids are ignored by core.
    */
   resolveAuthProfileId?: (ctx: ProviderResolveAuthProfileIdContext) => string | null | undefined;
+  /**
+   * Provider-owned credential resolver for CLI backend auth-profile forwarding.
+   *
+   * Core calls this only after a CLI backend explicitly allowlists the selected
+   * provider id and raw auth-profile kind. Return a typed, minimal credential
+   * envelope that the backend can validate before staging CLI-owned auth files.
+   */
+  resolveCliBackendAuthCredential?: (
+    ctx: ProviderResolveCliBackendAuthCredentialContext,
+  ) =>
+    | Promise<ProviderResolvedCliBackendAuthCredential | null | undefined>
+    | ProviderResolvedCliBackendAuthCredential
+    | null
+    | undefined;
   /**
    * Provider-owned final system-prompt transform.
    *

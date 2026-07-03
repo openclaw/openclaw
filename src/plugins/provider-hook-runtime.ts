@@ -28,9 +28,11 @@ import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
   ProviderPrepareExtraParamsContext,
+  ProviderResolveCliBackendAuthCredentialContext,
   ProviderResolveAuthProfileIdContext,
   ProviderFollowupFallbackRouteContext,
   ProviderFollowupFallbackRouteResult,
+  ProviderResolvedCliBackendAuthCredential,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -420,6 +422,20 @@ export function resolveProviderAuthProfileId(params: {
     params.context,
   );
   return typeof resolved === "string" && resolved.trim() ? resolved.trim() : undefined;
+}
+
+export async function resolveProviderCliBackendAuthCredential(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
+  context: ProviderResolveCliBackendAuthCredentialContext;
+}): Promise<ProviderResolvedCliBackendAuthCredential | undefined> {
+  const resolved = await ensureProviderRuntimePluginHandle(
+    params,
+  ).plugin?.resolveCliBackendAuthCredential?.(params.context);
+  return resolved ?? undefined;
 }
 
 export function resolveProviderFollowupFallbackRoute(params: {

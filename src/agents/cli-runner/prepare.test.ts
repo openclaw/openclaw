@@ -35,6 +35,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
   prepareCliRunContext,
+  resetCliRunnerPrepareTestDeps,
   setCliRunnerPrepareTestDeps,
   shouldForwardAuthCredentialToCliBackend,
   shouldSkipLocalCliCredentialEpoch,
@@ -244,6 +245,7 @@ function appendTranscriptEntry(
 
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   beforeEach(() => {
+    resetCliRunnerPrepareTestDeps();
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
     cliBackendsTesting.setDepsForTest({
@@ -269,6 +271,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cleanup: vi.fn(async () => undefined),
       })),
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
+      resolveProviderCliBackendAuthCredential: vi.fn(async () => undefined),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
@@ -280,6 +283,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   afterEach(() => {
+    resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     resetCliAuthEpochTestDeps();
     getRuntimeConfigMock.mockReset();
@@ -335,7 +339,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveGoogleAuthCredential = vi.fn(async () => ({
+    const resolveProviderCliBackendAuthCredential = vi.fn(async () => ({
       kind: "oauth" as const,
       providerId: "google-gemini-cli" as const,
       profileId: authProfileId,
@@ -387,7 +391,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveGoogleAuthCredential,
+      resolveProviderCliBackendAuthCredential,
     });
 
     try {
@@ -405,7 +409,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: {},
       });
 
-      expect(resolveGoogleAuthCredential).toHaveBeenCalledOnce();
+      expect(resolveProviderCliBackendAuthCredential).toHaveBeenCalledOnce();
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId,
@@ -431,7 +435,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveGoogleAuthCredential = vi.fn(async () => ({
+    const resolveProviderCliBackendAuthCredential = vi.fn(async () => ({
       kind: "oauth" as const,
       providerId: "google-gemini-cli" as const,
       profileId: resolvedProfileId,
@@ -491,7 +495,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveGoogleAuthCredential,
+      resolveProviderCliBackendAuthCredential,
     });
 
     try {
@@ -509,7 +513,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: {},
       });
 
-      expect(resolveGoogleAuthCredential).toHaveBeenCalledOnce();
+      expect(resolveProviderCliBackendAuthCredential).toHaveBeenCalledOnce();
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId: resolvedProfileId,
@@ -534,7 +538,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveGoogleAuthCredential = vi.fn(async () => ({
+    const resolveProviderCliBackendAuthCredential = vi.fn(async () => ({
       kind: "oauth" as const,
       providerId: "google-gemini-cli" as const,
       profileId: authProfileId,
@@ -586,7 +590,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveGoogleAuthCredential,
+      resolveProviderCliBackendAuthCredential,
     });
 
     try {
@@ -613,10 +617,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         } as OpenClawConfig,
       });
 
-      expect(resolveGoogleAuthCredential).toHaveBeenCalledWith(
+      expect(resolveProviderCliBackendAuthCredential).toHaveBeenCalledWith(
         expect.objectContaining({
-          profileId: authProfileId,
-          agentDir,
+          provider: "google-gemini-cli",
+          context: expect.objectContaining({
+            profileId: authProfileId,
+            agentDir,
+          }),
         }),
       );
       expect(prepareExecution).toHaveBeenCalledWith(
@@ -643,7 +650,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const prepareExecution = vi.fn(async () => ({
       env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
     }));
-    const resolveGoogleAuthCredential = vi.fn(async () => ({
+    const resolveProviderCliBackendAuthCredential = vi.fn(async () => ({
       kind: "oauth" as const,
       providerId: "google-gemini-cli" as const,
       profileId: authProfileId,
@@ -695,7 +702,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
-      resolveGoogleAuthCredential,
+      resolveProviderCliBackendAuthCredential,
     });
 
     try {
@@ -713,7 +720,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: {},
       });
 
-      expect(resolveGoogleAuthCredential).toHaveBeenCalledOnce();
+      expect(resolveProviderCliBackendAuthCredential).toHaveBeenCalledOnce();
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
           authProfileId,
@@ -790,6 +797,80 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       );
       expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards typed API-key credentials to a backend with a generic allowlist", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "test-cli:secret";
+    const prepareExecution = vi.fn(async (_ctx: unknown) => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "api_key",
+            provider: "test-cli",
+            key: "secret-key",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          authProfileForwarding: {
+            supported: true,
+            providers: ["test-cli"],
+            credentialKinds: ["api_key"],
+          },
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-generic-credential-forwarding",
+        authProfileId,
+        config: {},
+      });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+          authCredential: {
+            kind: "api_key",
+            providerId: "test-cli",
+            profileId: authProfileId,
+            apiKey: "secret-key",
+          },
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3447,7 +3528,7 @@ describe("shouldForwardAuthCredentialToCliBackend", () => {
     ).toBe(true);
   });
 
-  it("blocks API-key material from the Gemini CLI OAuth bridge", () => {
+  it("blocks API-key material from OAuth-only backend forwarding", () => {
     expect(
       shouldForwardAuthCredentialToCliBackend({
         backend: {
@@ -3466,6 +3547,27 @@ describe("shouldForwardAuthCredentialToCliBackend", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("allows Google API-key material when the backend explicitly accepts it", () => {
+    expect(
+      shouldForwardAuthCredentialToCliBackend({
+        backend: {
+          authProfileForwarding: {
+            supported: true,
+            providers: ["google", "google-gemini-cli"],
+            credentialKinds: ["api_key", "oauth"],
+          },
+        },
+        authProfileId: "google:key-1",
+        authCredential: {
+          kind: "api_key",
+          providerId: "google",
+          profileId: "google:key-1",
+          apiKey: "AIza-test-google-api-key-material",
+        },
+      }),
+    ).toBe(true);
   });
 
   it("allows a non-Gemini backend to opt into google-gemini-cli OAuth forwarding", () => {

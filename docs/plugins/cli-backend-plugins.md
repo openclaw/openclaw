@@ -229,6 +229,14 @@ set `authProfileForwarding` with both the accepted provider ids and accepted
 credential kinds, then consume the typed value from `ctx.authCredential` inside
 `prepareExecution`.
 
+OpenClaw resolves forwarded material through the selected provider plugin's
+`resolveCliBackendAuthCredential` hook when one is registered. Without a
+provider hook, OpenClaw uses the standard auth-profile resolver and forwards a
+minimal envelope such as `{ kind: "api_key", providerId, profileId, apiKey }`,
+`{ kind: "token", providerId, profileId, token }`, or
+`{ kind: "oauth", providerId, profileId, accessToken }`. Backend code must still
+validate the provider-specific shape before writing CLI auth files.
+
 ```typescript
 return {
   id: "acme-cli",

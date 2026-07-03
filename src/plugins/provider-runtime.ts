@@ -27,6 +27,7 @@ import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.run
 import {
   clearProviderRuntimePluginCacheForTest,
   prepareProviderExtraParams,
+  resolveProviderCliBackendAuthCredential,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
@@ -162,6 +163,7 @@ function hasConfiguredModelProvider(params: {
 
 export {
   prepareProviderExtraParams,
+  resolveProviderCliBackendAuthCredential,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,

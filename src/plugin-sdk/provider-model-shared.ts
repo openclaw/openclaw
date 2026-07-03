@@ -49,6 +49,8 @@ export type {
   ProviderEndpointResolution,
 } from "../agents/provider-attribution.js";
 export type {
+  ProviderResolvedCliBackendAuthCredential,
+  ProviderResolveCliBackendAuthCredentialContext,
   ProviderPlugin,
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
