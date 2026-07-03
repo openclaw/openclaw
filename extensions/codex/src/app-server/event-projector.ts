@@ -180,6 +180,7 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
+  private readonly toolResultOutputTextOriginalLengthByItem = new Map<string, number>();
   private readonly toolResultOutputTextTruncatedItemIds = new Set<string>();
   private readonly toolMetas = new Map<
     string,
@@ -999,6 +1000,7 @@ export class CodexAppServerEventProjector {
     }
     appendToolOutputDeltaText(
       this.toolResultOutputTextByItem,
+      this.toolResultOutputTextOriginalLengthByItem,
       this.toolResultOutputTextTruncatedItemIds,
       itemId,
       delta,
@@ -2731,17 +2733,19 @@ function itemTranscriptResultText(
 
 function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
+  originalLengthByItem: Map<string, number>,
   truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
 ): void {
-  if (truncatedItemIds.has(itemId)) {
-    return;
-  }
+  const previousOriginalLength =
+    originalLengthByItem.get(itemId) ?? outputTextByItem.get(itemId)?.length ?? 0;
+  const originalLength = previousOriginalLength + delta.length;
+  originalLengthByItem.set(itemId, originalLength);
   const current = outputTextByItem.get(itemId) ?? "";
   const next = current + delta;
-  outputTextByItem.set(itemId, truncateToolTranscriptText(next));
-  if (next.length > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+  outputTextByItem.set(itemId, truncateToolTranscriptText(next, originalLength));
+  if (originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     truncatedItemIds.add(itemId);
   }
 }
@@ -2768,11 +2772,14 @@ function collectDynamicToolContentText(contentItems: CodexThreadItem["contentIte
     .join("\n");
 }
 
-function truncateToolTranscriptText(text: string): string {
-  if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+function truncateToolTranscriptText(text: string, originalLength = text.length): string {
+  if (
+    originalLength <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS &&
+    text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS
+  ) {
     return text;
   }
-  const noticeText = `${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original ${text.length} chars, showing ${TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS}; rerun with narrower args.)`;
+  const noticeText = `${TOOL_OUTPUT_TRUNCATION_NOTICE_PREFIX}: original ${originalLength} chars, showing ${TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
   if (notice.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     return noticeText.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS);

@@ -2435,6 +2435,12 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
     await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-stream-large",
+        delta: "e".repeat(678),
+      }),
+    );
+    await projector.handleNotification(
       turnCompleted([
         {
           type: "commandExecution",
@@ -2459,8 +2465,9 @@ describe("CodexAppServerEventProjector", () => {
     )?.output;
     expect(output).toHaveLength(10_000);
     expect(output).toContain("OpenClaw truncated Codex native tool output");
-    expect(output).toContain("original 12345 chars");
+    expect(output).toContain("original 13023 chars");
     expect(output).toContain("showing 10000");
+    expect(output?.match(/OpenClaw truncated Codex native tool output/g)).toHaveLength(1);
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     const toolResultMessage = result.messagesSnapshot.find(
