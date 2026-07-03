@@ -25,6 +25,8 @@ const fetchWithUndiciGuard = async (
 ): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
+/** Safety cap for MCP HTTP response body reads (1 MiB). */
+const MCP_HTTP_MAX_RESPONSE_BYTES = 1 * 1024 * 1024;
 const managedMcpResponseCleanupRegistry = new FinalizationRegistry<{
   finalize: () => Promise<void>;
 }>((held) => {
@@ -66,7 +68,23 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
     return new Response(null, init);
   }
   if (typeof response.text === "function") {
+    const contentLength = response.headers.get("content-length");
+    // Reject without reading when the declared size is missing, malformed,
+    // or exceeds the cap. A missing Content-Length on a body-less response
+    // means we cannot verify the size before calling text(), so we skip the
+    // read to avoid unbounded allocation on untrusted input.
+    if (contentLength == null || !/^\d+$/.test(contentLength)) {
+      return new Response(null, init);
+    }
+    const length = Number(contentLength);
+    if (!Number.isFinite(length) || length > MCP_HTTP_MAX_RESPONSE_BYTES) {
+      return new Response(null, init);
+    }
     const text = await response.text();
+    // Guard against declared Content-Length that understates the actual body.
+    if (Buffer.byteLength(text, "utf8") > MCP_HTTP_MAX_RESPONSE_BYTES) {
+      return new Response(null, init);
+    }
     return new Response(text, init);
   }
   return new Response(null, init);

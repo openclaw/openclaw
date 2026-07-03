@@ -213,16 +213,20 @@ describe("MCP HTTP fetch helpers", () => {
   });
 
   it("returns fetch responses compatible with MCP SDK OAuth error parsing", async () => {
+    const body = '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
     class ForeignResponse {
       status = 400;
       statusText = "Bad Request";
-      headers = new Headers({ "content-type": "application/json" });
+      headers = new Headers({
+        "content-length": String(Buffer.byteLength(body, "utf8")),
+        "content-type": "application/json",
+      });
       body = null;
       get ok() {
         return false;
       }
       async text() {
-        return '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
+        return body;
       }
     }
 
@@ -244,5 +248,120 @@ describe("MCP HTTP fetch helpers", () => {
     const error = await parseErrorResponse(response);
     expect(error.message).toContain("bad redirect");
     expect(error.message).not.toContain("[object Response]");
+  });
+
+  it("drops body-less text when Content-Length exceeds the 1 MiB cap", async () => {
+    const text = vi.fn(async () => "x".repeat(1024 * 1024 + 1));
+    class OversizedResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({
+        "content-length": String(1024 * 1024 + 1),
+        "content-type": "application/json",
+      });
+      body = null;
+      get ok() {
+        return false;
+      }
+      text = text;
+    }
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new OversizedResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+    expect(response).toBeInstanceOf(Response);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("drops body-less text when Content-Length is missing", async () => {
+    const text = vi.fn(async () => '{"error":"too large"}');
+    class NoLengthResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({ "content-type": "application/json" });
+      body = null;
+      get ok() {
+        return false;
+      }
+      text = text;
+    }
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new NoLengthResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+    expect(response).toBeInstanceOf(Response);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it.each(["abc", "1e3", "0x40"])(
+    "drops body-less text when Content-Length is malformed (%s)",
+    async (contentLength) => {
+      const text = vi.fn(async () => '{"error":"too large"}');
+      class MalformedLengthResponse {
+        status = 400;
+        statusText = "Bad Request";
+        headers = new Headers({
+          "content-length": contentLength,
+          "content-type": "application/json",
+        });
+        body = null;
+        get ok() {
+          return false;
+        }
+        text = text;
+      }
+      testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: TestAgent,
+        EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+        ProxyAgent: TestProxyAgent,
+        fetch: async () => new MalformedLengthResponse() as unknown as Response,
+      };
+      const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+      const response = await fetch("https://mcp.example.com/mcp");
+      expect(response).toBeInstanceOf(Response);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts body-less responses with valid Content-Length within the 1 MiB cap", async () => {
+    const body = JSON.stringify({ ok: true });
+    class WithinLimitResponse {
+      status = 200;
+      statusText = "OK";
+      headers = new Headers({
+        "content-length": String(Buffer.byteLength(body, "utf8")),
+        "content-type": "application/json",
+      });
+      body = null;
+      async text() {
+        return body;
+      }
+    }
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new WithinLimitResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toBe('{"ok":true}');
   });
 });
