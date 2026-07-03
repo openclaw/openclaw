@@ -12,6 +12,7 @@ import { startCodexAttemptThread } from "./attempt-startup.js";
 import { defaultLeasedCodexAppServerClientFactory } from "./client-factory.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CodexAppServerStartupAbortedError, CodexAppServerStartupTimeoutError } from "./errors.js";
 import {
   clearSharedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -256,7 +257,7 @@ describe("startCodexAttemptThread", () => {
       timeout: 2_000,
     });
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("codex app-server startup timed out");
+    expect((error as Error).message).toBe(new CodexAppServerStartupTimeoutError().message);
     expect(harness.stdinDestroyed).toBe(true);
   });
 
@@ -278,7 +279,7 @@ describe("startCodexAttemptThread", () => {
       paths,
       skipStartSpy: true,
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+    const rejected = expect(run).rejects.toThrow(CodexAppServerStartupTimeoutError);
     const threadStart = await waitForThreadStart(retained);
 
     await rejected;
@@ -301,7 +302,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("codex app-server startup timed out");
+    expect((error as Error).message).toBe(new CodexAppServerStartupTimeoutError().message);
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
       timeout: 2_000,
@@ -337,7 +338,7 @@ describe("startCodexAttemptThread", () => {
           }
         },
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+    const rejected = expect(run).rejects.toThrow(CodexAppServerStartupTimeoutError);
 
     await rejected;
     await factoryDone;
@@ -366,7 +367,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("codex app-server startup aborted");
+    expect((error as Error).message).toBe(new CodexAppServerStartupAbortedError().message);
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
