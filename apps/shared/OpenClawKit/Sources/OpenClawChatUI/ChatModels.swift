@@ -135,7 +135,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     }
 }
 
-public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
+public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID = .init()
     public let role: String
     public let content: [OpenClawChatMessageContent]

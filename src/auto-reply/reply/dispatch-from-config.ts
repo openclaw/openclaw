@@ -2206,11 +2206,13 @@ export async function dispatchReplyFromConfig(
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
-          if (
+          const isUnmentionedGroupFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !isExplicitSourceReplyCommand(ctx, cfg)
-          ) {
+            !explicitCommandTurnCtx;
+          const shouldSuppressUnmentionedFallback =
+            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
+          if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });
             commitInboundDedupeIfClaimed();

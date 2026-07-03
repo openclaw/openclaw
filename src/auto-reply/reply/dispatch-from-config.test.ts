@@ -148,10 +148,16 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 }));
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
+  entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
+  resolveSessionStoreEntry: vi.fn((params?: { sessionKey?: string }) => ({
+    existing:
+      (params?.sessionKey
+        ? sessionStoreMocks.entriesBySessionKey.get(params.sessionKey)
+        : undefined) ?? sessionStoreMocks.currentEntry,
+  })),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -1097,6 +1103,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.entriesBySessionKey.clear();
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.readSessionEntry.mockReset();
     sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
@@ -9551,6 +9558,100 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "dispatches unmentioned plugin-bound fallback in always-on groups",
+      groupRequireMention: false,
+      expectedDispatches: 1,
+    },
+    {
+      name: "suppresses unmentioned fallback when channel policy requires a mention",
+      groupRequireMention: true,
+      expectedDispatches: 0,
+    },
+  ])("$name", async ({ groupRequireMention, expectedDispatches }) => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "no_handler",
+    });
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
+    installThreadingTestPlugin({ id: "imessage" });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-imessage-always-on-fallback",
+      targetSessionKey: "plugin-binding:codex:imessage",
+      targetKind: "session",
+      conversation: {
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "chat:primary",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat:primary",
+      To: "imessage:chat:primary",
+      AccountId: "default",
+      SessionKey: "agent:main:imessage:group:chat:primary",
+      ChatType: "group",
+      GroupSubject: "Friends",
+      GroupRequireMention: groupRequireMention,
+      Body: "observed message",
+      From: "imessage:group:chat:primary",
+      WasMentioned: false,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    const claimCall = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "plugin inbound claim",
+    );
+    expect(claimCall[0]).toBe("openclaw-codex-app-server");
+    expect(claimCall[1]).toMatchObject({
+      channel: "imessage",
+      content: "observed message",
+    });
+    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
+    expect(claimContext.pluginBinding).toMatchObject({
+      bindingId: "binding-imessage-always-on-fallback",
+    });
+    expect(replyResolver).toHaveBeenCalledTimes(expectedDispatches);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.counts.block).toBe(0);
+    expect(result.counts.final).toBe(0);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 

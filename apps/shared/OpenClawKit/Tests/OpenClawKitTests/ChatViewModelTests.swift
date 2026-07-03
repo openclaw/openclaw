@@ -669,6 +669,36 @@ extension TestChatTransportState {
 }
 
 struct ChatViewModelTests {
+    @Test func `timeline revision advances when visible history changes`() async throws {
+        let history = historyPayload(
+            sessionId: "revision-session",
+            messages: [chatTextMessage(role: "user", text: "hello", timestamp: 1)])
+        let (_, vm) = await makeViewModel(historyResponses: [history])
+        let before = await MainActor.run { vm.timelineRevision }
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "revision-session")
+
+        let after = await MainActor.run { vm.timelineRevision }
+        #expect(after > before)
+    }
+
+    @Test func `timeline revision ignores identical history refresh`() async throws {
+        let message = chatTextMessage(role: "user", text: "hello", timestamp: 1)
+        let firstHistory = historyPayload(sessionId: "revision-session-1", messages: [message])
+        let secondHistory = historyPayload(sessionId: "revision-session-2", messages: [message])
+        let (_, vm) = await makeViewModel(historyResponses: [firstHistory, secondHistory])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "revision-session-1")
+        let before = await MainActor.run { vm.timelineRevision }
+
+        await MainActor.run { vm.refresh() }
+        try await waitUntil("identical history refresh") {
+            await MainActor.run { vm.sessionId == "revision-session-2" }
+        }
+
+        let after = await MainActor.run { vm.timelineRevision }
+        #expect(after == before)
+    }
+
     @Test func `displays error message fallback only for assistant error turns`() throws {
         func decodeMessage(role: String, stopReason: String, contentText: String? = nil) throws -> OpenClawChatMessage {
             let contentJSON = contentText.map { #"[{"type":"text","text":"\#($0)"}]"# } ?? "[]"

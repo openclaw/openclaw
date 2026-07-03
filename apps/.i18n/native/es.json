@@ -3144,6 +3144,11 @@
       "translated": "Imagen no disponible"
     },
     {
+      "id": "native.android.97a0b44d89402809",
+      "source": "Jump to latest",
+      "translated": "Ir a lo más reciente"
+    },
+    {
       "id": "native.android.69239493702da212",
       "source": "Loading session",
       "translated": "Cargando sesión"
@@ -3222,6 +3227,11 @@
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "Cargando sesión"
+    },
+    {
+      "id": "native.android.2c1106e1687ab258",
+      "source": "Jump to latest",
+      "translated": "Ir a lo más reciente"
     },
     {
       "id": "native.android.9df2c9d68bad169f",
@@ -12102,6 +12112,16 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "Sesiones"
+    },
+    {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "Ir a lo más reciente"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "Ir a la respuesta más reciente"
     },
     {
       "id": "native.apple.9ab586b85834705c",

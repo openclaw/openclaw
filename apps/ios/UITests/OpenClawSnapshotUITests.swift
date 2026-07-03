@@ -364,20 +364,38 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         let app = try launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
 
-        let input = app.textFields["chat-message-input"]
-        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        // Build scrollable history through the paired app before checking reader behavior.
+        for index in 0..<3 {
+            let seedMarker = "OPENCLAW_E2E_SEED_\(index)_\(Int(Date().timeIntervalSince1970 * 1000))"
+            let seedContext = String(repeating: "Reader context \(index). ", count: 6)
+            self.sendLiveGatewayMessage(
+                "\(seedContext)Reply exactly with \(seedMarker) and no other text.",
+                expecting: seedMarker,
+                in: app)
+        }
+
         let replyMarker = "OPENCLAW_E2E_OK_\(Int(Date().timeIntervalSince1970 * 1000))"
-        input.tap()
-        input.typeText("Reply exactly with \(replyMarker)")
+        self.sendLiveGatewayMessage(
+            "Reply exactly with \(replyMarker) and no other text.",
+            expecting: replyMarker,
+            in: app)
+        let jumpToLatest = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "live-gateway-chat-reply-anchored")
 
-        let send = app.buttons["chat-send-message"]
-        XCTAssertTrue(send.waitForExistence(timeout: 3))
-        XCTAssertTrue(send.isEnabled)
-        send.tap()
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts[replyMarker].exists)
+        Thread.sleep(forTimeInterval: 0.5)
+        self.attachScreenshot(named: "live-gateway-chat-jumped-to-latest")
 
-        XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
-        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
-        self.attachScreenshot(named: "live-gateway-chat-round-trip")
+        let transcript = app.scrollViews.firstMatch
+        XCTAssertTrue(transcript.exists)
+        transcript.swipeDown()
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "live-gateway-chat-manual-departure")
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
 
         let controlApp = self.relaunchConnectedLiveGatewayApp(
             initialTab: "control",
@@ -526,7 +544,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
     {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
-            "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and copy a fresh setup code to the simulator pasteboard")
+            "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and provide a fresh setup code")
+
+        if let setupCode = ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_SETUP_CODE"] {
+            UIPasteboard.general.string = setupCode
+        }
 
         let app = XCUIApplication()
         addUIInterruptionMonitor(withDescription: "Local network access") { alert in
@@ -580,6 +602,27 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.app = app
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
         return app
+    }
+
+    private func sendLiveGatewayMessage(
+        _ text: String,
+        expecting replyMarker: String,
+        in app: XCUIApplication)
+    {
+        let input = app.textFields["chat-message-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText(text)
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3))
+        XCTAssertTrue(send.isEnabled)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        send.tap()
+
+        XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
     }
 
     private func attachScreenshot(named name: String) {
