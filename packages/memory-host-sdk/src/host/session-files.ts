@@ -840,20 +840,21 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      // Mid-transcript [cron:...] fix (#98241): only the first collected
-      // message can trigger cron classification via text-pattern match.
-      // A human-typed [cron:...] after prior content is never a cron run.
+      // Text-pattern cron classification is a fallback only.  It must not
+      // override the session-store's explicit decision, and it must not
+      // fire on mid-transcript human [cron:] text after prior content.
       //
-      // First-turn [cron:...] in a .reset/.deleted archive (no prior
-      // content, allowArchiveContentCronClassification is true) still
-      // enters the text-pattern path — that is pre-existing behaviour
-      // preserved by design.  Session-store provenance (checked above
-      // via classifySessionTranscriptFromSessionStore) is the primary
-      // cron signal; this text-pattern check is only a fallback.
+      // Guard breakdown:
+      //   !generatedByCronRun — session-store didn't already classify
+      //   allowArchiveContentCronClassification — .reset/.deleted only
+      //   collected.length === 0 — first message only (mid-transcript fix)
+      //   sessionStoreClassification?.generatedByCronRun !== false —
+      //     session-store explicitly says "not cron" → don't override
       if (
         !generatedByCronRun &&
         allowArchiveContentCronClassification &&
         collected.length === 0 &&
+        sessionStoreClassification?.generatedByCronRun !== false &&
         isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
       ) {
         generatedByCronRun = true;
