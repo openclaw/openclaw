@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "Prêt"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "Configuration requise"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "Non vérifié"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "${state.provider.label} via le relais Gateway"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Catalogue de discussion Gateway non chargé"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Impossible de charger le catalogue de discussion Gateway"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway n’a pas renvoyé la configuration de ${issue.target.title}"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "Aucun fournisseur ${issue.target.title} n’est configuré sur le Gateway"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway a sélectionné un fournisseur inconnu ${issue.providerId}"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway n’a pas renvoyé l’état de préparation de ${issue.target.title}"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Configurez un fournisseur ${issue.target.title} sur le Gateway"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway n’a pas identifié le fournisseur ${issue.target.title} actif"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Choisissez un fournisseur ${issue.target.title} pris en charge sur le Gateway"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Configurez ${issue.providerLabel} sur le Gateway"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -589,9 +659,9 @@
       "translated": "Activez cette option pour Tailscale ou les hôtes publics. Le ws:// du réseau LAN privé reste pris en charge."
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "token"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "Laissez vide pour conserver le jeton enregistré"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -707,6 +777,51 @@
       "id": "native.android.732f5b59ba7e1513",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "Saisissez un endpoint manuel valide pour vous connecter."
+    },
+    {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Le code de configuration a expiré"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Jeton Gateway requis"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Jeton Gateway non configuré"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Mot de passe Gateway requis"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Mot de passe Gateway invalide"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Mot de passe Gateway non configuré"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "L’accès à Gateway doit être vérifié"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Authentification enregistrée invalide"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Identité de l’appareil requise"
     },
     {
       "id": "native.android.b44fc3039e0fb9fa",
@@ -859,9 +974,14 @@
       "translated": "Les téléphones liés et les hôtes de nœud apparaîtront ici après l’association."
     },
     {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "L’administration de l’association des appareils nécessite un accès élevé. Les nœuds connectés continuent de fonctionner."
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Approbation du nœud requise"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Exécutez sur l’hôte Gateway :"
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -999,11 +1119,6 @@
       "translated": "Dernière Gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Réessayer la connexion"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Modifier la connexion"
@@ -1064,9 +1179,24 @@
       "translated": "Continuer"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Scanner un nouveau code de configuration"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Réessayer la connexion"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "Le code de configuration a expiré. Scannez un nouveau QR de configuration."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "L’accès à Gateway doit être vérifié. Vérifiez les périmètres d’authentification de la gateway, puis réessayez."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1094,9 +1224,9 @@
       "translated": "L’authentification enregistrée n’est pas valide. Authentifiez-vous à nouveau ou réinitialisez cette connexion au Gateway."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "L’authentification du Gateway n’est pas configurée. Modifiez cette connexion et réessayez."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "L’authentification Gateway n’est pas configurée. Configurez-la sur l’hôte Gateway, puis réessayez."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1484,24 +1614,14 @@
       "translated": "Terminé"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Fournisseur en temps réel"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "Conversation en temps réel"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "En direct"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "Voix"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "Transport"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "Dictée"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -1622,6 +1742,21 @@
       "id": "native.android.53928793ec65d766",
       "source": "While Using",
       "translated": "Lors de l’utilisation"
+    },
+    {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "Remplacer la configuration de la Gateway ?"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "Remplacer la configuration"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "Annuler"
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -1752,6 +1887,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Mettre à jour"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Licences"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw remercie ses partenaires de la communauté open source."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Aucun avis de licence n’est inclus dans cette version."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "Ouvrir ${license.title}"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2619,9 +2774,9 @@
       "translated": "Arrêter la dictée"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "Fournisseur"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "Configuration vocale"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3079,11 +3234,6 @@
       "translated": "Envoi de la voix en file d’attente"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "Désactivé"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "Écoute"
@@ -3092,6 +3242,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "Prêt"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "Désactivé"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "Échec de la conversation : le fournisseur en temps réel s’est fermé de manière inattendue."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "Échec de la conversation : le fournisseur en temps réel s’est fermé : $reason"
     },
     {
       "id": "native.android.13531fe081a45711",
@@ -5234,14 +5399,14 @@
       "translated": "OpenClaw ne peut pas déterminer l’état actuel de l’autorisation de notification."
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "Choisissez l’apparence système, claire ou sombre"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "Apparence"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "Choisir l’apparence système, claire ou sombre"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5447,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "À propos"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Licences"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5632,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Aucune licence incluse"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Les fichiers de licence ne sont pas disponibles dans cette version."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw remercie ses partenaires de la communauté open source."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6484,9 @@
       "translated": "OpenClaw peut utiliser les données de mouvement pour prendre en charge des interactions et automatisations adaptées à l’appareil."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw a besoin d’accéder à votre photothèque lorsque vous choisissez des photos existantes à partager avec votre assistant."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw permet à votre assistant de lire les photos que vous autorisez et vous permet de choisir les photos à partager."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +7119,11 @@
       "translated": "Recherchez et ajoutez des contacts depuis l’assistant."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Photos"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Calendrier (Ajouter des événements)"
@@ -6962,6 +7152,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Lister, ajouter et terminer des rappels."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Limité"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Lire les photos que vous sélectionnez pour l’assistant."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Lire les photos récentes pour l’assistant."
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7279,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "Hors ligne"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "Prêt"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "Écoute"
@@ -7102,16 +7317,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "WebRTC natif"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "Hors ligne"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "Prêt"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7387,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "Mise à jour d’OpenClaw"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "Désactivé"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "En pause"
     },
     {
       "id": "native.apple.732051c3e897a9f1",

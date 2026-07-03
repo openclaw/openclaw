@@ -135,6 +135,12 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  AmbientTranscriptWatermarkKey?: string;
+  AmbientTranscriptBody?: string;
+  AmbientTranscriptMessageId?: string;
+  AmbientTranscriptTimestampMs?: number;
+  AmbientTranscriptPreviousMessageId?: string;
+  AmbientTranscriptPreviousTimestampMs?: number;
   /** Per-turn reply-threading overrides. */
   ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;

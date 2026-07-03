@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "तैयार"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "सेटअप आवश्यक"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "सत्यापित नहीं"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "Gateway रिले के माध्यम से ${state.provider.label}"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Gateway टॉक कैटलॉग लोड नहीं हुआ"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Gateway टॉक कैटलॉग लोड नहीं किया जा सका"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway ने ${issue.target.title} सेटअप नहीं लौटाया"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "Gateway पर कोई ${issue.target.title} प्रदाता कॉन्फ़िगर नहीं है"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway ने अज्ञात प्रदाता ${issue.providerId} चुना"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway ने ${issue.target.title} की तैयारी स्थिति नहीं लौटाई"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Gateway पर कोई ${issue.target.title} प्रदाता कॉन्फ़िगर करें"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway ने सक्रिय ${issue.target.title} प्रदाता की पहचान नहीं की"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Gateway पर समर्थित ${issue.target.title} प्रदाता चुनें"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Gateway पर ${issue.providerLabel} कॉन्फ़िगर करें"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -589,9 +659,9 @@
       "translated": "Tailscale या सार्वजनिक होस्ट के लिए इसे चालू करें। Private LAN ws:// समर्थित रहता है।"
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "टोकन"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "सहेजा गया टोकन बनाए रखने के लिए खाली छोड़ें"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -707,6 +777,51 @@
       "id": "native.android.732f5b59ba7e1513",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "कनेक्ट करने के लिए एक मान्य मैनुअल एंडपॉइंट दर्ज करें।"
+    },
+    {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "सेटअप कोड समाप्त हो गया"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway टोकन आवश्यक है"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway टोकन कॉन्फ़िगर नहीं किया गया"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway पासवर्ड आवश्यक है"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway पासवर्ड अमान्य है"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway पासवर्ड कॉन्फ़िगर नहीं किया गया"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway एक्सेस की समीक्षा आवश्यक है"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "सहेजा गया प्रमाणीकरण अमान्य है"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "डिवाइस पहचान आवश्यक है"
     },
     {
       "id": "native.android.b44fc3039e0fb9fa",
@@ -859,9 +974,14 @@
       "translated": "पेयरिंग के बाद लिंक किए गए फ़ोन और नोड होस्ट यहाँ दिखाई देंगे।"
     },
     {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "डिवाइस पेयरिंग एडमिन को उन्नत एक्सेस चाहिए। कनेक्टेड नोड फिर भी काम करते हैं।"
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "नोड अनुमोदन आवश्यक है"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Gateway होस्ट पर चलाएँ:"
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -999,11 +1119,6 @@
       "translated": "पिछला gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "कनेक्शन फिर से आज़माएँ"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "कनेक्शन संपादित करें"
@@ -1064,9 +1179,24 @@
       "translated": "जारी रखें"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "नया सेटअप कोड स्कैन करें"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "कनेक्शन फिर से आज़माएँ"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "सेटअप कोड की समय-सीमा समाप्त हो गई है। नया सेटअप QR स्कैन करें।"
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Gateway एक्सेस की समीक्षा आवश्यक है। Gateway प्रमाणीकरण स्कोप जाँचें, फिर पुनः प्रयास करें।"
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1094,9 +1224,9 @@
       "translated": "सहेजा गया प्रमाणीकरण अमान्य है। फिर से प्रमाणित करें या इस gateway कनेक्शन को रीसेट करें।"
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Gateway प्रमाणीकरण कॉन्फ़िगर नहीं किया गया है। इस कनेक्शन को संपादित करें और फिर से प्रयास करें।"
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Gateway प्रमाणीकरण कॉन्फ़िगर नहीं किया गया है। इसे gateway होस्ट पर कॉन्फ़िगर करें, फिर पुनः प्रयास करें।"
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1484,24 +1614,14 @@
       "translated": "हो गया"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Realtime Provider"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "रीयलटाइम टॉक"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "लाइव"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "आवाज़"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "Transport"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "डिक्टेशन"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -1622,6 +1742,21 @@
       "id": "native.android.53928793ec65d766",
       "source": "While Using",
       "translated": "उपयोग करते समय"
+    },
+    {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "Gateway सेटअप बदलें?"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "सेटअप बदलें"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "रद्द करें"
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -1752,6 +1887,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "अपडेट"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "लाइसेंस"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw ओपन-सोर्स समुदाय में अपने भागीदारों की सराहना करता है।"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "इस बिल्ड में कोई लाइसेंस नोटिस पैकेज नहीं किए गए हैं।"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} खोलें"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2619,9 +2774,9 @@
       "translated": "डिक्टेशन रोकें"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "प्रदाता"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "वॉइस सेटअप"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3079,11 +3234,6 @@
       "translated": "कतार में लगी आवाज़ भेजी जा रही है"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "बंद"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "सुन रहा है"
@@ -3092,6 +3242,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "तैयार"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "टॉक विफल: रीयलटाइम प्रदाता अप्रत्याशित रूप से बंद हो गया।"
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "टॉक विफल: रीयलटाइम प्रदाता बंद हुआ: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",
@@ -5234,14 +5399,14 @@
       "translated": "OpenClaw वर्तमान नोटिफ़िकेशन अनुमति स्थिति निर्धारित नहीं कर सकता।"
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "सिस्टम, हल्का या गहरा रूप चुनें"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "दिखावट"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "सिस्टम, लाइट या डार्क दिखावट चुनें"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5447,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "परिचय"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "लाइसेंस"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5632,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "कोई लाइसेंस शामिल नहीं है"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "इस बिल्ड में लाइसेंस फ़ाइलें उपलब्ध नहीं हैं।"
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw ओपन-सोर्स समुदाय में अपने साझेदारों की सराहना करता है।"
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6484,9 @@
       "translated": "OpenClaw device-aware इंटरैक्शन और ऑटोमेशन का समर्थन करने के लिए motion data का उपयोग कर सकता है."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "जब आप अपने सहायक के साथ साझा करने के लिए मौजूदा फ़ोटो चुनते हैं, तो OpenClaw को फ़ोटो लाइब्रेरी एक्सेस की आवश्यकता होती है।"
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw आपके असिस्टेंट को आपकी अनुमति वाली फ़ोटो पढ़ने देता है और आपको साझा करने के लिए फ़ोटो चुनने देता है।"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +7119,11 @@
       "translated": "असिस्टेंट से संपर्क खोजें और जोड़ें।"
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "फ़ोटो"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "कैलेंडर (इवेंट जोड़ें)"
@@ -6962,6 +7152,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "असिस्टेंट के लिए आपके द्वारा चुनी गई फ़ोटो पढ़ें।"
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "असिस्टेंट के लिए हाल की फ़ोटो पढ़ें।"
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7279,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "ऑफ़लाइन"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "तैयार"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "सुन रहा है"
@@ -7102,16 +7317,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "Native WebRTC"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "ऑफ़लाइन"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "तैयार"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7387,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "OpenClaw अपडेट किया जा रहा है"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "रोका गया"
     },
     {
       "id": "native.apple.732051c3e897a9f1",

@@ -538,7 +538,7 @@ function buildMessagingSection(params: {
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           groupMessageToolOnly
-            ? "- Group/channel etiquette: message-tool-only delivery does not require visible output. For stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; post only when you have concrete value to add."
+            ? "- Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private."
             : "",
           messageToolOnly
             ? params.requireExplicitMessageTarget
@@ -1314,9 +1314,8 @@ export function buildAgentSystemPrompt(params: {
   );
 
   if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     lines.push(contextHeader, extraSystemPrompt, "");
   }
   if (params.reactionGuidance) {

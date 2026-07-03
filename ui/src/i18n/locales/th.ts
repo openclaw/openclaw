@@ -1317,6 +1317,9 @@ export const th: TranslationMap = {
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
+    sidebar: {
+      allSessions: "เซสชันทั้งหมด",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

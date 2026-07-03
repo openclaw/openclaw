@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "Hazır"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "Kurulum gerekli"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "Doğrulanmamış"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "Gateway aktarması üzerinden ${state.provider.label}"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Gateway konuşma kataloğu yüklenmedi"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Gateway konuşma kataloğu yüklenemedi"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway, ${issue.target.title} kurulumunu döndürmedi"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "Gateway üzerinde hiçbir ${issue.target.title} sağlayıcısı yapılandırılmamış"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway bilinmeyen sağlayıcıyı seçti: ${issue.providerId}"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway, ${issue.target.title} hazır olma durumunu döndürmedi"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Gateway üzerinde bir ${issue.target.title} sağlayıcısı yapılandırın"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway, etkin ${issue.target.title} sağlayıcısını tanımlamadı"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Gateway üzerinde desteklenen bir ${issue.target.title} sağlayıcısı seçin"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Gateway üzerinde ${issue.providerLabel} yapılandırın"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -589,9 +659,9 @@
       "translated": "Tailscale veya herkese açık ana makineler için bunu açın. Özel LAN ws:// desteklenmeye devam eder."
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "token"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "Kaydedilen token'ı korumak için boş bırakın"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -707,6 +777,51 @@
       "id": "native.android.732f5b59ba7e1513",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "Bağlanmak için geçerli bir manuel uç nokta girin."
+    },
+    {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Kurulum kodunun süresi doldu"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway belirteci gerekli"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway belirteci yapılandırılmamış"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway parolası gerekli"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway parolası geçersiz"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway parolası yapılandırılmamış"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway erişiminin incelenmesi gerekiyor"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Kaydedilen kimlik doğrulama geçersiz"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Cihaz kimliği gerekli"
     },
     {
       "id": "native.android.b44fc3039e0fb9fa",
@@ -859,9 +974,14 @@
       "translated": "Bağlı telefonlar ve düğüm ana makineleri eşleştirmeden sonra burada görünecek."
     },
     {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "Cihaz eşleştirme yöneticisi yükseltilmiş erişime ihtiyaç duyar. Bağlı düğümler çalışmaya devam eder."
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Düğüm onayı gerekli"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Gateway ana makinesinde çalıştırın:"
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -999,11 +1119,6 @@
       "translated": "Son gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Bağlantıyı yeniden dene"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Bağlantıyı düzenle"
@@ -1064,9 +1179,24 @@
       "translated": "Devam"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Yeni kurulum kodunu tarayın"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Bağlantıyı yeniden dene"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "Kurulum kodunun süresi doldu. Yeni bir kurulum QR kodu tarayın."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Gateway erişiminin incelenmesi gerekiyor. Gateway kimlik doğrulama kapsamlarını kontrol edin, ardından yeniden deneyin."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1094,9 +1224,9 @@
       "translated": "Kaydedilmiş kimlik doğrulaması geçersiz. Yeniden kimlik doğrulaması yapın veya bu gateway bağlantısını sıfırlayın."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Gateway kimlik doğrulaması yapılandırılmamış. Bu bağlantıyı düzenleyip tekrar deneyin."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Gateway kimlik doğrulaması yapılandırılmamış. Gateway ana makinesinde yapılandırın, ardından yeniden deneyin."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1484,24 +1614,14 @@
       "translated": "Bitti"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Gerçek Zamanlı Sağlayıcı"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "Gerçek Zamanlı Konuşma"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "Canlı"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "Ses"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "Aktarım"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "Dikte"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -1622,6 +1742,21 @@
       "id": "native.android.53928793ec65d766",
       "source": "While Using",
       "translated": "Kullanım Sırasında"
+    },
+    {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "Gateway kurulumu değiştirilsin mi?"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "Kurulumu değiştir"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "İptal"
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -1752,6 +1887,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Güncelle"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Lisanslar"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw, açık kaynak topluluğundaki iş ortaklarına teşekkür eder."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Bu derlemede lisans bildirimleri paketlenmemiştir."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} öğesini aç"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2619,9 +2774,9 @@
       "translated": "Dikteyi Durdur"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "Sağlayıcı"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "Ses kurulumu"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3079,11 +3234,6 @@
       "translated": "Sıradaki ses gönderiliyor"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "Kapalı"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "Dinliyor"
@@ -3092,6 +3242,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "Hazır"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "Kapalı"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "Konuşma başarısız oldu: Gerçek zamanlı sağlayıcı beklenmedik şekilde kapandı."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "Konuşma başarısız oldu: Gerçek zamanlı sağlayıcı kapandı: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",
@@ -5234,14 +5399,14 @@
       "translated": "OpenClaw mevcut bildirim izni durumunu belirleyemiyor."
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "Sistem, açık veya koyu görünümü seçin"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "Görünüm"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "Sistem, açık veya koyu görünümü seçin"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5447,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "Hakkında"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Lisanslar"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5632,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Paketlenmiş lisans yok"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Lisans dosyaları bu derlemede mevcut değil."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw, açık kaynak topluluğundaki iş ortaklarına teşekkür eder."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6484,9 @@
       "translated": "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw, asistanınızla paylaşmak üzere mevcut fotoğrafları seçtiğinizde fotoğraf arşivi erişimine ihtiyaç duyar."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw, asistanınızın izin verdiğiniz fotoğrafları okumasını sağlar ve paylaşılacak fotoğrafları seçmenize olanak tanır."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +7119,11 @@
       "translated": "Asistandan kişi arayın ve ekleyin."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Fotoğraflar"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Takvim (Etkinlik Ekle)"
@@ -6962,6 +7152,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Anımsatıcıları listeleyin, ekleyin ve tamamlayın."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Sınırlı"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Asistan için seçtiğiniz fotoğrafları okuyun."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Asistan için son fotoğrafları okuyun."
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7279,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "Çevrimdışı"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "Hazır"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "Dinleniyor"
@@ -7102,16 +7317,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "Yerel WebRTC"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "Çevrimdışı"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "Hazır"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7387,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "OpenClaw güncelleniyor"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "Kapalı"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "Duraklatıldı"
     },
     {
       "id": "native.apple.732051c3e897a9f1",
