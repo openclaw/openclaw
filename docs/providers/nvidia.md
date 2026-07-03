@@ -96,12 +96,12 @@ hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
 
 ## Bundled fallback catalog
 
-The bundled rows mirror NVIDIA's featured-model feed exactly.
+The bundled rows track NVIDIA's featured-model catalog.
 
 | Model ref                                  | Name                  | Context   | Max output | Notes             |
 | ------------------------------------------ | --------------------- | --------- | ---------- | ----------------- |
 | `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | Nemotron 3 Ultra 550B | 1,048,576 | 8,192      | Default           |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super 120B | 1,000,000 | 8,192      | Featured fallback |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super 120B | 1,048,576 | 8,192      | Featured fallback |
 | `nvidia/z-ai/glm-5.2`                      | GLM 5.2               | 202,752   | 8,192      | Featured fallback |
 | `nvidia/moonshotai/kimi-k2.6`              | Kimi K2.6             | 262,144   | 8,192      | Featured fallback |
 | `nvidia/minimaxai/minimax-m3`              | Minimax M3            | 196,608   | 8,192      | Featured fallback |
@@ -118,7 +118,7 @@ The bundled rows mirror NVIDIA's featured-model feed exactly.
   <Accordion title="Catalog and pricing">
     OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
     configured and caches it for 24 hours. The bundled fallback catalog is static
-    and mirrors NVIDIA's featured-model feed. Costs default to `0` in source
+    and tracks NVIDIA's featured-model catalog. Costs default to `0` in source
     since NVIDIA currently offers free API access for the listed models.
   </Accordion>
 

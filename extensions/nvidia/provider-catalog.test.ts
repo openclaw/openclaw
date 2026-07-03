@@ -8,7 +8,7 @@ import {
   NVIDIA_FEATURED_MODELS_URL,
 } from "./provider-catalog.js";
 
-const EXPECTED_FEATURED_MODELS = [
+const EXPECTED_BUNDLED_MODELS = [
   {
     id: "nvidia/nemotron-3-ultra-550b-a55b",
     name: "Nemotron 3 Ultra 550B",
@@ -18,7 +18,7 @@ const EXPECTED_FEATURED_MODELS = [
   {
     id: "nvidia/nemotron-3-super-120b-a12b",
     name: "Nemotron 3 Super 120B",
-    contextWindow: 1_000_000,
+    contextWindow: 1_048_576,
     maxTokens: 8_192,
   },
   { id: "z-ai/glm-5.2", name: "GLM 5.2", contextWindow: 202_752, maxTokens: 8_192 },
@@ -36,7 +36,7 @@ const EXPECTED_FEATURED_MODELS = [
   },
 ] as const;
 
-const EXPECTED_FEATURED_MODEL_IDS = EXPECTED_FEATURED_MODELS.map((model) => model.id);
+const EXPECTED_BUNDLED_MODEL_IDS = EXPECTED_BUNDLED_MODELS.map((model) => model.id);
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -78,7 +78,7 @@ describe("nvidia provider catalog", () => {
         contextWindow,
         maxTokens,
       })),
-    ).toEqual(EXPECTED_FEATURED_MODELS);
+    ).toEqual(EXPECTED_BUNDLED_MODELS);
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
     );
@@ -94,7 +94,7 @@ describe("nvidia provider catalog", () => {
     });
     expect(provider.models[1]).toMatchObject({
       id: "nvidia/nemotron-3-super-120b-a12b",
-      contextWindow: 1_000_000,
+      contextWindow: 1_048_576,
     });
   });
 
@@ -146,7 +146,7 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual(EXPECTED_FEATURED_MODEL_IDS);
+    expect(provider.models.map((model) => model.id)).toEqual(EXPECTED_BUNDLED_MODEL_IDS);
   });
 
   it("uses only selectable live catalog rows when the featured catalog returns models", async () => {
@@ -286,7 +286,7 @@ describe("nvidia provider catalog", () => {
     const first = await buildLiveNvidiaProvider();
     const second = await buildLiveNvidiaProvider();
 
-    expect(first.models.map((model) => model.id)).toEqual(EXPECTED_FEATURED_MODEL_IDS);
+    expect(first.models.map((model) => model.id)).toEqual(EXPECTED_BUNDLED_MODEL_IDS);
     expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
