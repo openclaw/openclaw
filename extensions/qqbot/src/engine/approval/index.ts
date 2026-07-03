@@ -70,6 +70,11 @@ export function buildExecApprovalText(request: ExecApprovalRequest): string {
   if (request.request.agentId) {
     lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
   }
+  if (request.request.sessionKey) {
+    // Disambiguates concurrent sessions of one agent, matching the shared
+    // approval prompt surfaces.
+    lines.push(`\u{1f9f5} Session: ${request.request.sessionKey}`);
+  }
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${expiresIn} \u79d2`);
   return lines.join("\n");
 }
@@ -96,6 +101,10 @@ export function buildPluginApprovalText(request: PluginApprovalRequest): string 
   }
   if (request.request.agentId) {
     lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
+  }
+  if (request.request.sessionKey) {
+    // Same session disambiguation as the exec approval text above.
+    lines.push(`\u{1f9f5} Session: ${request.request.sessionKey}`);
   }
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${timeoutSec} \u79d2`);
   return lines.join("\n");

@@ -35,4 +35,19 @@ describe("buildExecApprovalText", () => {
     const codeFence = text.split("```\n")[1]?.split("\n```")[0] ?? "";
     expect(codeFence).toBe(safePrefix);
   });
+
+  it("identifies the originating session when the request carries one", () => {
+    const text = buildExecApprovalText({
+      id: "approval-123",
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+      request: {
+        command: "echo hi",
+        agentId: "main",
+        sessionKey: "agent:main:qqbot:direct:42",
+      },
+    } as never);
+
+    expect(text).toContain("Session: agent:main:qqbot:direct:42");
+  });
 });
