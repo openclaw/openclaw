@@ -2709,6 +2709,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Repo-backed seeds
   - H2: Provider mock lanes
   - H2: Transport adapters
+  - H3: Scenario ownership
   - H3: Adding a channel
   - H3: Scenario helper names
   - H2: Reporting
