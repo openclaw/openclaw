@@ -17,20 +17,23 @@ vi.mock("../../logging/subsystem.js", () => ({
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
 
-let dir: string | undefined;
+const cleanups: Array<() => void> = [];
 
 afterEach(() => {
   clearUsageBarTemplateCacheForTest();
   warnSpy.mockClear();
-  if (dir) {
-    rmSync(dir, { recursive: true, force: true });
-    dir = undefined;
-  }
+  for (const fn of cleanups.splice(0)) fn();
 });
 
+function tmpDir(): string {
+  const d = mkdtempSync(join(tmpdir(), "usage-template-"));
+  cleanups.push(() => rmSync(d, { recursive: true, force: true }));
+  return d;
+}
+
 function tmpFile(name: string, contents: string): string {
-  dir = mkdtempSync(join(tmpdir(), "usage-template-"));
-  const path = join(dir, name);
+  const d = tmpDir();
+  const path = join(d, name);
   writeFileSync(path, contents);
   return path;
 }
@@ -81,7 +84,7 @@ describe("loadUsageBarTemplate", () => {
   });
 
   it("reloads a path after an initial miss", () => {
-    dir = mkdtempSync(join(tmpdir(), "usage-template-"));
+    const dir = tmpDir();
     const missing = join(dir, "missing.json");
     expect(loadUsageBarTemplate(missing)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
     expect(warnSpy).not.toHaveBeenCalled();
@@ -110,7 +113,7 @@ describe("loadUsageBarTemplate", () => {
 
   describe("cache eviction", () => {
     it("evicts the oldest entry and closes its watcher when inserting a new key over the limit", () => {
-      dir = mkdtempSync(join(tmpdir(), "usage-template-"));
+      const dir = tmpDir();
       const paths: string[] = [];
       // Create 65 template files — one more than MAX_CACHED_TEMPLATE_FILES (64).
       for (let i = 0; i < 65; i++) {
@@ -151,7 +154,7 @@ describe("loadUsageBarTemplate", () => {
     });
 
     it("does not evict when retrying the same key after a prior miss", () => {
-      dir = mkdtempSync(join(tmpdir(), "usage-template-"));
+      const dir = tmpDir();
       // Fill the cache with 63 valid files plus 1 invalid file = 64 entries.
       const validPaths: string[] = [];
       for (let i = 0; i < 63; i++) {
