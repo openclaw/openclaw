@@ -88,7 +88,10 @@ describe("preflightCronModelProvider", () => {
       }
       if (request.auth) {
         const auth = request.auth;
-        if (auth.mode === "authorization-bearer") {
+        if (auth.mode === "provider-default") {
+          result.auth = { mode: "provider-default" };
+          hasContent = true;
+        } else if (auth.mode === "authorization-bearer") {
           const token = typeof auth.token === "string" ? auth.token.trim() : "";
           if (token) {
             result.auth = { mode: "authorization-bearer", token };
@@ -1190,6 +1193,99 @@ describe("preflightCronModelProvider", () => {
       "Authorization",
       "Bearer fallback-key-with-headers",
     );
+  });
+
+  it("treats provider-default auth mode as fallback-triggering no-auth", async () => {
+    mockReachableResponse(200);
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "provider-default-key",
+      mode: "api-key",
+      source: "env",
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            test: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              request: { auth: { mode: "provider-default" } },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "test",
+      model: "test-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    // Primary call: provider-default auth passed to resolver
+    expect(resolveProviderRequestHeadersMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        request: { auth: { mode: "provider-default" } },
+      }),
+    );
+    // Fallback call: resolved bearer auth replaces provider-default
+    expect(resolveProviderRequestHeadersMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        request: {
+          auth: { mode: "authorization-bearer", token: "provider-default-key" },
+        },
+      }),
+    );
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toHaveProperty("Authorization", "Bearer provider-default-key");
+  });
+
+  it("preserves request.headers in fallback when provider-default mode is configured", async () => {
+    mockReachableResponse(200);
+    resolveApiKeyForProviderMock.mockResolvedValueOnce({
+      apiKey: "pd-key-with-headers",
+      mode: "api-key",
+      source: "env",
+    });
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            test: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080",
+              headers: { "X-Proxy-Route": "us-east" },
+              request: {
+                auth: { mode: "provider-default" },
+                headers: { "X-Tenant-Id": "tenant-xyz" },
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "test",
+      model: "test-model",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    // Fallback call: request.headers preserved, auth replaced with bearer
+    expect(resolveProviderRequestHeadersMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        defaultHeaders: { "X-Proxy-Route": "us-east" },
+        request: {
+          headers: { "X-Tenant-Id": "tenant-xyz" },
+          auth: { mode: "authorization-bearer", token: "pd-key-with-headers" },
+        },
+      }),
+    );
+    const request = requireFetchPreflightRequest();
+    expect(request.init?.headers).toHaveProperty("Authorization", "Bearer pd-key-with-headers");
+    expect(request.init?.headers).toHaveProperty("X-Tenant-Id", "tenant-xyz");
+    expect(request.init?.headers).toHaveProperty("X-Proxy-Route", "us-east");
   });
 
   // ── Provider-level headers (P1) — verify providerConfig.headers pass through defaultHeaders ──

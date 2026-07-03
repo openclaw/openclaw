@@ -253,8 +253,12 @@ export async function preflightCronModelProvider(params: {
   // requestOverrides so proxy/tenant headers are not lost when fallback auth
   // is applied. Skip when request auth was provided — the resolver already
   // handled it, and adding a Bearer token from the credential profile would
-  // incorrectly override custom header-mode auth.
-  if (!requestOverrides?.auth) {
+  // incorrectly override custom header-mode auth. provider-default mode is
+  // treated as "use default provider auth" — the resolver does not inject
+  // headers for it, so fallback to credential lookup.
+  const hasExplicitAuth =
+    requestOverrides?.auth && requestOverrides.auth.mode !== "provider-default";
+  if (!hasExplicitAuth) {
     try {
       const resolved = await resolveApiKeyForProvider({
         provider: params.provider,
