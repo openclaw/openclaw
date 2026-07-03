@@ -21,6 +21,7 @@ export { dispatchToolDelegates } from "./delegate-dispatch.js";
 export { scheduleContinuationWork, scheduleContinuationWorkBatch } from "./work-dispatch.js";
 export {
   consumeStagedPostCompactionDelegates,
+  finalizeStagedPostCompactionDelegates,
   pendingDelegateCount,
   stagedPostCompactionDelegateCount,
 } from "./delegate-store.js";

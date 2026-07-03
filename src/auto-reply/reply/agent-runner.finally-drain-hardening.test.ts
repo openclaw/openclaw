@@ -1,7 +1,9 @@
-// I4 regression: unguarded TaskFlow calls in the agent-runner `finally` could
-// throw, masking the original run error and skipping typing.markDispatchIdle()
-// — leaking the typing keepalive loop. The stale-delegate drain is now guarded,
-// so a throwing consumePendingDelegates does not escape the finally and the
+// #1144 (r3507184829) + I4 regression: the agent-runner `finally` must NOT
+// consume/claim queued delegates. `consumePendingDelegates` is a TaskFlow claim
+// (queued -> running), not a delete, so calling it in cleanup and discarding the
+// rows would strand a delegate matured/queued during a failed turn. The finally
+// now only re-stages the in-memory preserve list; the shim `consumePendingDelegates`
+// (whose only caller was this finally) must never be invoked here, and the
 // dispatch-idle safety-net still fires.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,8 +120,10 @@ beforeEach(() => {
   runEmbeddedAgentMock.mockReset();
   runWithModelFallbackMock.mockReset();
   consumePendingDelegatesMock.mockReset();
+  // If the finally ever regressed to claiming queued delegates, this would throw
+  // and surface — but with the #1144 fix it must never be called at all.
   consumePendingDelegatesMock.mockImplementation(() => {
-    throw new Error("simulated TaskFlow drain failure");
+    throw new Error("finally must not claim queued delegates (#1144)");
   });
   runWithModelFallbackMock.mockImplementation(
     async ({
@@ -201,8 +205,8 @@ function createRun(sessionKey: string) {
   return { typing, followupRun, sessionCtx, config };
 }
 
-describe("runReplyAgent :: finally drain hardening (I4)", () => {
-  it("still marks dispatch idle when the stale-delegate drain throws", async () => {
+describe("runReplyAgent :: finally does not claim queued delegates (#1144 / I4)", () => {
+  it("does not consume/claim queued delegates in the finally, and still marks dispatch idle", async () => {
     const sessionKey = "i4-finally-drain";
     const { typing, followupRun, sessionCtx, config } = createRun(sessionKey);
     setRuntimeConfigSnapshot(config);
@@ -238,8 +242,11 @@ describe("runReplyAgent :: finally drain hardening (I4)", () => {
       }),
     ).resolves.not.toThrow();
 
-    // The drain threw, but the finally contained it and the safety-net still ran.
-    expect(consumePendingDelegatesMock).toHaveBeenCalled();
+    // #1144: the finally must NOT claim queued delegates. Its only prior caller
+    // of the shim consumePendingDelegates was this cleanup, so a call here would
+    // strand matured queued delegates in `running`. It must not be invoked.
+    expect(consumePendingDelegatesMock).not.toHaveBeenCalled();
+    // The dispatch-idle safety-net still fires.
     expect(typing.markDispatchIdle).toHaveBeenCalled();
   });
 });

@@ -65,9 +65,9 @@ import {
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import {
-  consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
+  finalizeStagedPostCompactionDelegates,
   pendingDelegateCount,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
@@ -3195,6 +3195,10 @@ export async function runReplyAgent(replyParams: {
     // consume and silently discard it (C1).
     if (continuationFeatureEnabled && sessionKey) {
       const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey);
+      // consumeStagedPostCompactionDelegates claims the TaskFlow rows to
+      // `running`; capture their handles so the finalize below finishes ONLY
+      // these rows, never other running rows for the session (#1144).
+      const claimedFlowIds = stagedCompactionDelegates.map((delegate) => delegate.flowId);
       if (stagedCompactionDelegates.length > 0) {
         try {
           await persistPendingPostCompactionDelegates({
@@ -3205,11 +3209,23 @@ export async function runReplyAgent(replyParams: {
             delegates: stagedCompactionDelegates,
           });
         } catch (err) {
-          postCompactionDelegatesToPreserve.push(...stagedCompactionDelegates);
+          // Session-store persist failed. Re-stage the delegates as fresh queued
+          // TaskFlow rows NOW — before we finalize the claimed rows — so they are
+          // durably recoverable. Finalizing against only the volatile
+          // postCompactionDelegatesToPreserve list would drop them on a crash
+          // before the finally re-stage runs (#1144).
+          for (const delegate of stagedCompactionDelegates) {
+            stagePostCompactionDelegate(sessionKey, delegate);
+          }
           defaultRuntime.log(
-            `Failed to persist post-compaction delegates for ${sessionKey} (re-staged ${stagedCompactionDelegates.length}): ${String(err)}`,
+            `Failed to persist post-compaction delegates for ${sessionKey}; re-staged ${stagedCompactionDelegates.length} to the durable queue: ${String(err)}`,
           );
         }
+        // Content is now durable (session store on success, re-staged queued rows
+        // on failure). Finish the claimed rows so they are not re-consumed; a
+        // crash before here leaves them recoverable via
+        // listRecoverableStagedPostCompactionDelegates.
+        finalizeStagedPostCompactionDelegates(claimedFlowIds);
       }
     }
 
@@ -3451,21 +3467,24 @@ export async function runReplyAgent(replyParams: {
     }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
-    // Drain any stale delegates from a failed turn — they must not leak
-    // into the next successful turn for the same session. Guard the TaskFlow
-    // calls: a throw here runs inside the finally, so it would both mask the
-    // original run error and skip markDispatchIdle() below, leaking the typing
-    // keepalive loop (I4).
-    if (sessionKey) {
+    // #1144: do NOT consume/claim queued delegates in cleanup. consume APIs are
+    // TaskFlow claims (queued -> running), not deletes; claiming here and
+    // discarding the returned rows would strand a delegate matured/queued during
+    // a failed turn in `running` until restart recovery. Durable queued delegates
+    // must survive a failed turn and be dispatched by the next turn's dispatcher
+    // or restart recovery — so leave them queued. Only re-stage the in-memory
+    // preserve list (delegates a durable handoff could not persist), which would
+    // otherwise be lost with the process. Guard the TaskFlow call: a throw here
+    // runs inside the finally, so it would both mask the original run error and
+    // skip markDispatchIdle() below, leaking the typing keepalive loop (I4).
+    if (sessionKey && postCompactionDelegatesToPreserve.length > 0) {
       try {
-        consumePendingDelegates(sessionKey);
-        consumeStagedPostCompactionDelegates(sessionKey);
         for (const delegate of postCompactionDelegatesToPreserve) {
           stagePostCompactionDelegate(sessionKey, delegate);
         }
       } catch (drainError) {
         logVerbose(
-          `failed to drain stale continuation delegates for ${sessionKey}: ${String(drainError)}`,
+          `failed to re-stage preserved post-compaction delegates for ${sessionKey}: ${String(drainError)}`,
         );
       }
     }

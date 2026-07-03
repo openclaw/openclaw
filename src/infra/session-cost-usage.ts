@@ -2229,19 +2229,32 @@ export async function discoverAllSessions(params?: {
       (isPrimaryTranscript === existingIsPrimary && file.mtimeMs >= existing.mtime);
 
     if (shouldReplace) {
+      // Preserve the newest activity timestamp when the primary transcript
+      // replaces a checkpoint-twin placeholder scanned earlier: a
+      // just-written checkpoint can carry a newer mtime than its parent
+      // primary, and dropping to the primary's older mtime would report the
+      // parent session as stale depending on directory iteration order. Keep
+      // the primary sessionFile but the max mtime of the two.
       discovered.set(sessionId, {
         sessionId,
         sessionFile: filePath,
-        mtime: file.mtimeMs,
+        mtime: existing ? Math.max(existing.mtime, file.mtimeMs) : file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
       continue;
     }
 
+    // Non-replacement path: the existing entry wins its sessionFile, but still
+    // keep the newest activity timestamp so a newer twin scanned after the
+    // primary (any directory iteration order) never regresses the session's
+    // mtime (#1144).
+    if (file.mtimeMs > existing.mtime) {
+      existing.mtime = file.mtimeMs;
+    }
     if (!existing.firstUserMessage && firstUserMessage) {
       existing.firstUserMessage = firstUserMessage;
-      discovered.set(sessionId, existing);
     }
+    discovered.set(sessionId, existing);
   }
 
   // Sort by mtime descending (most recent first)

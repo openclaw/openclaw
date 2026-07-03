@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -219,6 +216,13 @@ export type SessionPostCompactionDelegate = {
   traceparent?: string;
   /** Optional provider/model override forwarded to the released delegate; omitted => inherit parent. */
   model?: string;
+  /**
+   * Runtime-only TaskFlow claim handle for a delegate just released by
+   * consumeStagedPostCompactionDelegates. Used to finalize exactly the claimed
+   * row after a durable handoff; never persisted (stripped by
+   * normalizePostCompactionDelegate).
+   */
+  flowId?: string;
 };
 
 export type RestartRecoveryRun = {

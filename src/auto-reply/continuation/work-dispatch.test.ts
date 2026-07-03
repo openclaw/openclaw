@@ -14,6 +14,12 @@ let replyPayloadOverride: unknown;
 let activeQueueMode: "delivered" | "queued-without-proof" | "rejected" = "delivered";
 let activeQueueHandleAvailable = true;
 const mockSessionStore: Record<string, unknown> = {};
+// #1144 test state: toggle continuation enablement (disabled-gate), capture the
+// active diagnostic traceparent at reply time (traceparent re-entry), and force
+// a revision race after the turn ran (failed durable delivered-mark).
+let continuationEnabledForTest = true;
+const capturedReplyTraceparents: Array<string | undefined> = [];
+let bumpWorkRevisionOnReply = false;
 
 function removeWaiter(
   waiters: Map<string, Array<(idle: boolean) => void>>,
@@ -228,6 +234,21 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../reply/get-reply.js", () => ({
   getReplyFromConfig: vi.fn(async (context: unknown, options: unknown, cfg: unknown) => {
+    // Capture the active diagnostic traceparent so tests can assert the
+    // continuation turn re-enters the persisted work.traceparent (#1144).
+    const { formatActiveDiagnosticTraceparent } =
+      await import("../../infra/diagnostic-trace-context.js");
+    capturedReplyTraceparents.push(formatActiveDiagnosticTraceparent());
+    // Simulate a revision/cancel race landing between claim and delivered-mark:
+    // bump every continuation-work flow revision so markPendingWorkDelivered
+    // fails its expected-revision check after the turn already ran (#1144).
+    if (bumpWorkRevisionOnReply) {
+      for (const flow of mockFlows.values()) {
+        if (flow.controllerId === "core/continuation-work") {
+          flow.revision += 1;
+        }
+      }
+    }
     if (replyError) {
       throw replyError;
     }
@@ -251,6 +272,7 @@ vi.mock("../../infra/heartbeat-runner.js", () => {
 
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   isRetryableHeartbeatBusySkipReason: (reason: string) => reason === "requests-in-flight",
+  requestHeartbeatNow: vi.fn(),
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
@@ -269,7 +291,7 @@ vi.mock("./config.js", async (importOriginal) => {
   return {
     ...actual,
     resolveContinuationRuntimeConfig: () => ({
-      enabled: true,
+      enabled: continuationEnabledForTest,
       maxChainLength: 8,
       maxDelegatesPerTurn: 4,
       maxPendingWork: 32,
@@ -408,6 +430,11 @@ import {
   DEFAULT_NO_OP_REARM_THRESHOLD,
   recordNoOpRearmOutcome,
 } from "../reply/no-op-rearm-guard.js";
+import {
+  cancelPendingDelegates,
+  enqueuePendingDelegate,
+  pendingDelegateCount,
+} from "./delegate-store.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
   dispatchPendingContinuationWork,
@@ -484,6 +511,9 @@ describe("durable continuation_work dispatch", () => {
     flowCounter = 0;
     subagentRuns.clear();
     getReplyFromConfigMock.mockClear();
+    continuationEnabledForTest = true;
+    capturedReplyTraceparents.length = 0;
+    bumpWorkRevisionOnReply = false;
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
   });
@@ -496,6 +526,108 @@ describe("durable continuation_work dispatch", () => {
     resetSubagentSessionCleanupForTests();
     commandLaneIdleError = undefined;
     vi.useRealTimers();
+  });
+
+  it("honors hot-disabled continuation before consuming or driving queued work (#1144)", async () => {
+    const sessionKey = "agent:main:disabled-gate";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "disabled gate",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // Operator hot-disables continuation after the wake was armed.
+    continuationEnabledForTest = false;
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    // The queued row was not consumed/mutated, and the disabled callback left a
+    // recheck timer so hot re-enable recovers it without waiting for startup or
+    // unrelated traffic.
+    continuationEnabledForTest = true;
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => {
+      expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("re-enters the persisted work.traceparent around the continuation turn (#1144)", async () => {
+    const sessionKey = "agent:main:traceparent-reentry";
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "trace re-entry",
+      traceparent,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await dispatchPendingContinuationWork({ sessionKey });
+    await Promise.resolve();
+
+    expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    // The active diagnostic trace at reply time carries the persisted trace id.
+    expect(capturedReplyTraceparents).toHaveLength(1);
+    expect(capturedReplyTraceparents[0]).toContain("0af7651916cd43dd8448eb211c80319c");
+    // ...but the trace stays internal: it is never surfaced in the model-facing
+    // inbound context or options (#1152/#1156 boundary).
+    const grant = turnGrants[0] as { context: unknown; options: unknown };
+    expect(JSON.stringify(grant.context)).not.toContain("0af7651916cd43dd8448eb211c80319c");
+    expect(JSON.stringify(grant.options)).not.toContain("0af7651916cd43dd8448eb211c80319c");
+  });
+
+  it("does not replay a turn when the durable delivered-mark loses the revision race (#1144)", async () => {
+    const sessionKey = "agent:main:delivered-mark-race";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "delivered-mark race",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // A revision/cancel race bumps the flow revision during the turn, so the
+    // durable delivered-mark fails AFTER getReplyFromConfig already executed.
+    bumpWorkRevisionOnReply = true;
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+    await Promise.resolve();
+    expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(result.dispatched).toBe(1);
+
+    // #1144 round-6: the reconciled row is terminalized immediately, not left
+    // `running` behind a read-guard for a later consume/recovery pass. A
+    // lingering running row keeps running-flow bookkeeping non-terminal even
+    // though the provider turn is already spent.
+    const raceFlow = [...mockFlows.values()][0];
+    expect(raceFlow?.status).toBe("succeeded");
+    expect(hasLiveOrRecentlyDispatchedContinuationWork(sessionKey)).toBe(false);
+
+    // Restart recovery must NOT re-drive the already-executed turn: the row was
+    // reconciled to a delivered/succeeded (or non-retryable) terminal state.
+    bumpWorkRevisionOnReply = false;
+    await dispatchPendingContinuationWork({
+      sessionKey,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+    });
+    await Promise.resolve();
+    expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
   });
 
   it("retains a continue_delegate child session while its continue_work wake is pending", async () => {
@@ -550,6 +682,66 @@ describe("durable continuation_work dispatch", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("retains a child session while a queued continuation delegate is pending (#1144)", async () => {
+    const childSessionKey = "agent:main:continuation-delegate-child";
+    mockSessionStore[childSessionKey] = { sessionKey: childSessionKey };
+    // A delayed delegate queued under the child (e.g. a durable delayed bracket
+    // delegate) owns the child's chain/requester state until it drains.
+    enqueuePendingDelegate(childSessionKey, { task: "delayed hop", delayMs: 60_000 });
+    expect(pendingDelegateCount(childSessionKey)).toBeGreaterThan(0);
+
+    const callGateway = vi.fn();
+    await deleteSubagentSessionForCleanup({
+      callGateway: callGateway as never,
+      childSessionKey,
+      spawnMode: "run",
+    });
+    // Deletion is deferred while the delegate is queued so the child session (and
+    // its chain state) survives until the delegate's hedge fires.
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Once the delegate is gone, the deferred retry deletes the child.
+    cancelPendingDelegates(childSessionKey);
+    expect(pendingDelegateCount(childSessionKey)).toBe(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+  });
+
+  it("retains a child session while a claimed (running) continuation delegate is dispatching (#1144)", async () => {
+    const childSessionKey = "agent:main:continuation-delegate-running";
+    mockSessionStore[childSessionKey] = { sessionKey: childSessionKey };
+    enqueuePendingDelegate(childSessionKey, { task: "delayed hop", delayMs: 60_000 });
+
+    // The dispatcher/hedge claims the delegate to `running` before
+    // spawnSubagentDirect finishes; pendingDelegateCount (queued-only) drops to 0
+    // here, but the running delegate still depends on the child's chain state.
+    const flow = [...mockFlows.values()].find((entry) => entry.ownerKey === childSessionKey);
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    expect(pendingDelegateCount(childSessionKey)).toBe(0);
+
+    const callGateway = vi.fn();
+    await deleteSubagentSessionForCleanup({
+      callGateway: callGateway as never,
+      childSessionKey,
+      spawnMode: "run",
+    });
+    // Must still defer: a queued-only gate would delete the child out from under
+    // the running delegate (#1144).
+    expect(callGateway).not.toHaveBeenCalled();
+
+    // Once the delegate flow reaches a terminal state, the deferred retry deletes.
+    flow!.status = "succeeded";
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
   });
 
   it("re-arms a delayed continue_work election after simulated gateway restart", async () => {
@@ -2563,6 +2755,9 @@ describe("#1135 continue_work end-of-turn finalization park + cross-turn coalesc
     flowCounter = 0;
     subagentRuns.clear();
     getReplyFromConfigMock.mockClear();
+    continuationEnabledForTest = true;
+    capturedReplyTraceparents.length = 0;
+    bumpWorkRevisionOnReply = false;
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
   });

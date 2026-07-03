@@ -83,6 +83,11 @@ const PendingDelegateStateSchema = z
     model: z.string().min(1).optional(),
     releasedAt: z.number().int().nonnegative().optional(),
     childSessionKey: z.string().min(1).optional(),
+    // Durable chain-cost fold: the settled child's own run-token cost, written
+    // ONLY when the child chain-cost persist to the child session entry failed.
+    // Restart recovery adds it to the (stale) child-entry chain cost so the
+    // continuation cost cap is enforced against the post-run total (#1144).
+    chainTokensFold: z.number().int().nonnegative().optional(),
   })
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
@@ -162,6 +167,9 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
     ...(traceparent ? { traceparent } : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
+    ...(delegate.chainTokensFold !== undefined
+      ? { chainTokensFold: delegate.chainTokensFold }
+      : {}),
   };
 }
 
@@ -408,6 +416,7 @@ function flowToDelegate(
     ...(state.fanoutMode ? { fanoutMode: state.fanoutMode } : {}),
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.model ? { model: state.model } : {}),
+    ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };
@@ -472,7 +481,19 @@ export function listPendingDelegateSessionKeysForRecovery(): string[] {
 
 export function consumePendingDelegates(
   sessionKey: string,
-  options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
+  options: {
+    includeRunning?: boolean;
+    includeRunningUpdatedAtOrBefore?: number;
+    /**
+     * Dispatch queued delegates immediately even if their `delayMs` has not
+     * elapsed. Used as a fail-closed lever when the child chain-cost persist
+     * failed: rather than leave a delayed delegate durably queued (where restart
+     * recovery would rebuild its cost basis from the stale child entry and
+     * under-enforce the cost cap), dispatch it now on the correct in-memory
+     * folded basis (#1144).
+     */
+    ignoreDelay?: boolean;
+  } = {},
 ): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
   const now = Date.now();
@@ -495,12 +516,20 @@ export function consumePendingDelegates(
       continue;
     }
 
-    // Filter-at-consume: leave unmatured entries in `queued` so the next
+    // Filter-at-consume: leave unmatured QUEUED entries in `queued` so the next
     // response-finalize (or the hedge timer armed by the dispatch caller)
     // re-checks them. Honors `delayMs` on the tool path without threading a
     // wake-pathway timer (which would change `mode=silent` semantics).
+    // `ignoreDelay` overrides this for the fail-closed persist-failure path.
+    //
+    // The gate applies ONLY to `queued` rows. A `running` row is already claimed
+    // for dispatch (recovery includes it via `includeRunning`); re-driving it must
+    // NOT be delay-gated, or a delegate force-claimed pre-due via `ignoreDelay`
+    // and then orphaned by a crash would be skipped here on restart (now < dueAt)
+    // AND get no hedge (hedges only watch queued rows) — stranding it `running`
+    // forever (#1144).
     const dueAt = delegateDueAt(flow, state);
-    if (now < dueAt) {
+    if (!options.ignoreDelay && flow.status === "queued" && now < dueAt) {
       continue;
     }
 
@@ -620,6 +649,57 @@ export function pendingDelegateCount(sessionKey: string): number {
   return listQueuedPendingFlows(sessionKey).length;
 }
 
+/**
+ * True while this session still owns an in-flight continuation delegate — queued
+ * OR already claimed to `running` (mid-dispatch, or awaiting restart recovery).
+ * subagent-session cleanup uses this to defer deleting a child session whose
+ * chain/requester state a delayed bracket/tool delegate still depends on:
+ * {@link pendingDelegateCount} counts only queued flows, so it drops to 0 the
+ * instant the hedge/dispatcher claims the delegate to `running` — before
+ * `spawnSubagentDirect` finishes — which would let a deferred cleanup delete the
+ * child out from under the running delegate (#1144).
+ */
+export function hasRecoverablePendingDelegate(sessionKey: string): boolean {
+  return listTaskFlowsForOwnerKey(sessionKey).some(isRecoverablePendingFlow);
+}
+
+/**
+ * Record a durable chain-cost fold on every QUEUED pending delegate for a
+ * session. Called at settle when the child chain-cost persist to the child
+ * session entry failed: the fold (the settled child's own run-token cost) is
+ * then carried on the delegate rows themselves, so restart recovery — which
+ * rebuilds chain cost from the now-stale child session entry — still enforces
+ * the continuation cost cap against the post-run total. Returns the count
+ * annotated. No-op for a non-positive fold (#1144).
+ */
+export function annotateQueuedDelegatesChainTokensFold(
+  sessionKey: string,
+  chainTokensFold: number,
+): number {
+  if (!(chainTokensFold > 0)) {
+    return 0;
+  }
+  let annotated = 0;
+  for (const flow of listQueuedPendingFlows(sessionKey)) {
+    const state = decodeDelegateState(flow);
+    if (!state) {
+      continue;
+    }
+    const result = updateFlowRecordByIdExpectedRevision({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      patch: {
+        stateJson: { ...state, chainTokensFold },
+        updatedAt: Date.now(),
+      },
+    });
+    if (result.applied) {
+      annotated += 1;
+    }
+  }
+  return annotated;
+}
+
 export function getContinuationDelegateQueueDepths(
   sessionKey: string,
   now = Date.now(),
@@ -677,7 +757,17 @@ export function stagePostCompactionDelegate(
 }
 
 /**
- * Consume staged post-compaction delegates. Same lifecycle as consumePendingDelegates.
+ * Consume staged post-compaction delegates by CLAIMING them to `running`
+ * (non-terminal), mirroring {@link consumePendingDelegates}. The row is NOT
+ * finished here: terminalization waits for {@link finalizeStagedPostCompactionDelegates}
+ * after the caller has durably handed the delegate off (session-delivery row
+ * enqueued or re-staged). A crash between claim and handoff therefore leaves a
+ * recoverable `running` row — {@link listRecoverableStagedPostCompactionDelegates}
+ * surfaces it for startup re-dispatch — instead of silently losing the staged
+ * work behind a premature `finished` (#1144/#1158).
+ *
+ * At-least-once on the crash-recovery seam is intentional: a duplicate
+ * post-compaction shard is far cheaper than a dropped one.
  */
 export function consumeStagedPostCompactionDelegates(
   sessionKey: string,
@@ -702,20 +792,109 @@ export function consumeStagedPostCompactionDelegates(
       continue;
     }
 
-    const finished = finishFlow({
+    const releasedAt = Date.now();
+    const claimed = updateFlowRecordByIdExpectedRevision({
       flowId: flow.flowId,
       expectedRevision: flow.revision,
-      currentStep: "Released after compaction",
-      stateJson: { ...state, releasedAt: Date.now() },
+      patch: {
+        status: "running",
+        currentStep: "Released after compaction — awaiting durable handoff",
+        stateJson: { ...state, releasedAt },
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+        endedAt: null,
+        updatedAt: releasedAt,
+      },
     });
-    if (!finished.applied) {
+    if (!claimed.applied || !claimed.flow) {
       continue;
     }
 
-    delegates.push(flowToDelegate(flow, state));
+    delegates.push(flowToDelegate(claimed.flow, { ...state, releasedAt }));
   }
 
   return delegates;
+}
+
+/**
+ * Finalize (finish) the specific post-compaction rows a caller claimed via
+ * {@link consumeStagedPostCompactionDelegates}, once their durable handoff
+ * succeeded. Finalizes ONLY the passed flow ids and only while they are still
+ * `running` — so a row claimed by another path, or left `running` by a crash
+ * (awaiting {@link listRecoverableStagedPostCompactionDelegates}), is never
+ * terminalized out from under its owner (#1144). Returns the number of rows finalized.
+ */
+export function finalizeStagedPostCompactionDelegates(
+  flowIds: readonly (string | undefined)[],
+): number {
+  let finalized = 0;
+  for (const flowId of flowIds) {
+    if (!flowId) {
+      continue;
+    }
+    const flow = getTaskFlowById(flowId);
+    if (!flow || !isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
+      continue;
+    }
+    const state = decodeDelegateState(flow);
+    const now = Date.now();
+    const finished = finishFlow({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep: "Durably handed off after compaction",
+      stateJson: { ...(state ?? { kind: "continuation_delegate", task: "" }), releasedAt: now },
+      updatedAt: now,
+      endedAt: now,
+    });
+    if (finished.applied) {
+      finalized += 1;
+    }
+  }
+  return finalized;
+}
+
+/**
+ * List post-compaction rows left `running` by a crash between release-claim and
+ * durable handoff (#1144/#1158), so startup recovery can re-drive them to
+ * delivery WITHOUT waiting for another compaction seam. Returns the claimed
+ * delegates (with their `flowId` handle) grouped by owner session key and does
+ * NOT mutate row status — the recovery dispatcher finalizes only the rows whose
+ * spawn is accepted, leaving a failed row `running` and recoverable on the next
+ * restart. Queued (never-released, awaiting-seam) rows are intentionally
+ * excluded: releasing them here would fire a rehydration delegate before the
+ * compaction it was staged for actually happened.
+ */
+export function listRecoverableStagedPostCompactionDelegates(options?: {
+  /**
+   * Only include rows last updated at or before this cutoff. Startup recovery
+   * passes a boot-time cutoff so a post-compaction release that claims a row to
+   * `running` AFTER this process started (live traffic) is left to the live
+   * release/finalize path, not re-driven by restart recovery (duplicate work).
+   */
+  runningUpdatedAtOrBefore?: number;
+}): Array<{ sessionKey: string; delegate: PendingContinuationDelegate }> {
+  const recoverable: Array<{ sessionKey: string; delegate: PendingContinuationDelegate }> = [];
+  for (const flow of listTaskFlowRecords()) {
+    if (!isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
+      continue;
+    }
+    if (
+      options?.runningUpdatedAtOrBefore !== undefined &&
+      flow.updatedAt > options.runningUpdatedAtOrBefore
+    ) {
+      continue;
+    }
+    const state = decodeDelegateState(flow);
+    if (!state) {
+      log.warn(
+        `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} raw=${JSON.stringify(flow.stateJson).slice(0, 200)}`,
+      );
+      continue;
+    }
+    recoverable.push({ sessionKey: flow.ownerKey, delegate: flowToDelegate(flow, state) });
+  }
+  return recoverable;
 }
 
 export function stagedPostCompactionDelegateCount(sessionKey: string): number {

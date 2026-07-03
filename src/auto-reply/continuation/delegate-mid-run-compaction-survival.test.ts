@@ -24,6 +24,7 @@ import { releasePostCompactionLifecycle } from "./post-compaction-release.js";
 
 const mockState = vi.hoisted(() => ({
   consumeStagedPostCompactionDelegates: vi.fn(),
+  finalizeStagedPostCompactionDelegates: vi.fn(),
   clearContextPressureState: vi.fn(),
   checkContextPressure: vi.fn(),
   spawnSubagentDirect: vi.fn(),
@@ -32,6 +33,7 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("./lazy.runtime.js", () => ({
   consumeStagedPostCompactionDelegates: mockState.consumeStagedPostCompactionDelegates,
+  finalizeStagedPostCompactionDelegates: mockState.finalizeStagedPostCompactionDelegates,
   clearContextPressureState: mockState.clearContextPressureState,
   checkContextPressure: mockState.checkContextPressure,
 }));

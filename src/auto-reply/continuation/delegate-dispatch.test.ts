@@ -6,12 +6,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
+// Observable persisted session store for recovery persist assertions (#1158):
+// updateSessionStore mutates the entry for its storePath here so a test can read
+// back the advanced/folded chain state the hedge-fired recovery persisted.
+const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
 let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
+// #1144: recovery derives the chain cost basis from the PERSISTED session entry
+// (no explicit chainState survives a restart), so tests inject the persisted
+// store here to prove the cost cap is enforced against the post-run child total.
+const loadSessionStoreForRecoveryMock = vi.fn(
+  (_storePath: string) => ({}) as Record<string, unknown>,
+);
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
@@ -32,6 +42,26 @@ vi.mock("../../agents/subagent-registry-read.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
+}));
+
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: (storePath: string) => loadSessionStoreForRecoveryMock(storePath),
+}));
+
+vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/store.js")>()),
+  // Recovery persists advanced chain state after dispatch/rejection; keep it in
+  // an observable in-memory store keyed by path so tests exercise the
+  // derive-from-store cost basis (#1144) and can read back the advanced/folded
+  // state a hedge-fired recovery persisted (#1158) without touching disk.
+  updateSessionStore: async <T>(
+    storePath: string,
+    mutator: (store: Record<string, unknown>) => Promise<T> | T,
+  ): Promise<T> => {
+    const store = recoveryStoreByPath.get(storePath) ?? {};
+    recoveryStoreByPath.set(storePath, store);
+    return await mutator(store);
+  },
 }));
 
 vi.mock("../../logging/subsystem.js", () => {
@@ -138,10 +168,18 @@ import {
 } from "../../infra/continuation-tracer.js";
 import {
   dispatchToolDelegates,
+  recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
   resetDelegateDispatchHedgesForTests,
 } from "./delegate-dispatch.js";
-import { cancelPendingDelegates, enqueuePendingDelegate } from "./delegate-store.js";
+import {
+  cancelPendingDelegates,
+  consumeStagedPostCompactionDelegates,
+  enqueuePendingDelegate,
+  listRecoverableStagedPostCompactionDelegates,
+  stagePostCompactionDelegate,
+  stagedPostCompactionDelegateCount,
+} from "./delegate-store.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 
@@ -171,6 +209,16 @@ function continuationConfig(
     earlyWarningBand: 0.3125,
     ...overrides,
   };
+}
+
+function findPersistedRecoveryEntry(sessionKey: string): Record<string, unknown> | undefined {
+  for (const store of recoveryStoreByPath.values()) {
+    const entry = store[sessionKey];
+    if (entry) {
+      return entry as Record<string, unknown>;
+    }
+  }
+  return undefined;
 }
 
 function findQueuedSystemEvent(fragment: string): [string, unknown] {
@@ -206,11 +254,13 @@ beforeEach(() => {
   enqueueSystemEventMock.mockClear();
   loggerRecords.length = 0;
   spawnSubagentDirectMock.mockReset().mockResolvedValue({ status: "accepted" });
+  loadSessionStoreForRecoveryMock.mockReset().mockReturnValue({});
   flowIdCounter = 0;
   listTaskFlowsShouldThrow = false;
   activeRegistryChildSessionKeys.clear();
   staleRegistryChildSessionKeys.clear();
   acceptedChildSessionKeys.clear();
+  recoveryStoreByPath.clear();
   vi.useFakeTimers();
 });
 
@@ -568,6 +618,133 @@ describe("hedge timer ref/handle cleanup", () => {
       }),
     );
   });
+
+  it("advances + persists chain state across sequential hedge fires for multiple delayed delegates (#1158)", async () => {
+    // Finding r3517500714: multiple delayed delegates must advance the chain
+    // count durably across hedge fires. With the loadFresh/persist callbacks the
+    // second hedge reads the PERSISTED count (1) advanced by the first, so it
+    // spawns at hop 2 — not re-using the stale pre-spawn count (0) and bypassing
+    // maxChainLength.
+    const sessionKey = "session-hedge-sequential";
+    enqueuePendingDelegate(sessionKey, { task: "hop A", delayMs: 30_000 });
+    enqueuePendingDelegate(sessionKey, { task: "hop B", delayMs: 60_000 });
+
+    // A shared chain-state cell the loader reads and the persister writes,
+    // mimicking the child session entry the drain advances across fires.
+    let persisted = { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 0 };
+    const persistChainState = vi.fn((next: typeof persisted) => {
+      persisted = { ...next };
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { ...persisted },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+      loadFreshChainState: () => ({ ...persisted }),
+      persistChainState,
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // First hedge fires (hop A matured) → count 0 → 1, persisted.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(persisted.currentChainCount).toBe(1);
+
+    // Second hedge fires (hop B matured) → reads persisted count 1 → advances to 2.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(persisted.currentChainCount).toBe(2);
+  });
+
+  it("carries applyDelegateChainTokensFold across the hedge for a recovered delayed delegate (#1144)", async () => {
+    const sessionKey = "session-hedge-fold";
+    // A delayed delegate annotated with a durable fold after a child chain-cost
+    // persist failure, recovered as not-yet-due so it arms the hedge.
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop",
+      delayMs: 60_000,
+      chainTokensFold: 250_000,
+    });
+
+    // Recovery supplies persistChainState (see recoverPendingContinuationDelegates),
+    // so the fold is safe to defer to a hedge rather than force-dispatched (#1158).
+    const persistChainState = vi.fn();
+    const armed = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 300_000,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig({ costCapTokens: 500_000 }),
+      recoverRunningDelegates: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+      applyDelegateChainTokensFold: true,
+      persistChainState,
+      loadFreshChainState: () => ({
+        currentChainCount: 0,
+        chainStartedAt: 123,
+        accumulatedChainTokens: 300_000,
+      }),
+    });
+    expect(armed.dispatched).toBe(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // When the hedge fires, the fold flag is carried through: 300_000 (stale
+    // basis) + 250_000 (durable fold) = 550_000 > costCapTokens (500_000) →
+    // rejected. Without forwarding the flag the hedge would check 300_000 and
+    // wrongly launch the over-budget hop.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("force-dispatches a folded delayed delegate instead of arming a lossy hedge when no persist path exists (#1158)", async () => {
+    // Fail-closed: applyDelegateChainTokensFold WITHOUT a persistChainState
+    // callback means an armed hedge would fold the cost only in memory and lose
+    // it (later hops rebuild from the stale entry and bypass the cost cap).
+    // dispatchToolDelegates must consume the not-yet-due delegate immediately so
+    // the fold is enforced synchronously against the current basis, not deferred.
+    const sessionKey = "session-fold-no-persist";
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop",
+      delayMs: 60_000,
+      chainTokensFold: 250_000,
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 100_000,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig({ costCapTokens: 500_000 }),
+      recoverRunningDelegates: true,
+      includeRunningUpdatedAtOrBefore: Date.now(),
+      applyDelegateChainTokensFold: true,
+    });
+
+    // Consumed + dispatched now (100_000 + 250_000 fold = 350_000 < cap), NOT
+    // left queued behind a hedge that could not persist the folded basis.
+    expect(result.dispatched).toBe(1);
+    expect(result.chainState.accumulatedChainTokens).toBe(350_000);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    // No hedge left pending after the process-local dispatch completed.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("tool delegate dispatch contract", () => {
@@ -634,6 +811,34 @@ describe("tool delegate dispatch contract", () => {
       expect.stringContaining("maxDelegatesPerTurn exceeded (5). Task: delegate-5"),
       { sessionKey, trusted: true },
     );
+  });
+
+  it("dispatchQueuedRegardlessOfDelay force-dispatches a not-yet-due delegate (fail-closed persist-failure path) (#1144)", async () => {
+    const sessionKey = "session-force-dispatch-delayed";
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
+
+    // Without the override, an unmatured delegate is left queued (not dispatched).
+    const held = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+    expect(held.dispatched).toBe(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // With the override, it dispatches immediately despite the unelapsed delay —
+    // used when the child chain-cost persist failed so a delayed delegate is not
+    // left durably queued to recover on a stale cost basis.
+    const forced = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      dispatchQueuedRegardlessOfDelay: true,
+    });
+    expect(forced.dispatched).toBe(1);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
   it("honors resolved run config and delegate slots already consumed this turn", async () => {
@@ -706,6 +911,87 @@ describe("tool delegate dispatch contract", () => {
       wakeOnReturn: true,
       drainsContinuationDelegateQueue: true,
     });
+  });
+
+  it("inherits parent silent policy for a default-mode delegate (#1158)", async () => {
+    // Finding r3517437268: a delegate a silent parent chain queued must stay
+    // internal even though its own mode is unset. inheritedSilent (no wake) →
+    // silentAnnounce, no wakeOnReturn.
+    const sessionKey = "session-inherit-silent";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: expect.stringContaining("default child"),
+      silentAnnounce: true,
+    });
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
+  });
+
+  it("inherits parent silent+wake policy for a default-mode delegate (#1158)", async () => {
+    const sessionKey = "session-inherit-wake";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: expect.stringContaining("default child"),
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+  });
+
+  it("keeps a default-mode delegate visible without inherited policy (#1158)", async () => {
+    // Normal (non-silent) parent: the default-mode delegate stays visible.
+    const sessionKey = "session-no-inherit";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({ task: expect.stringContaining("default child") });
+    expect(spawnParams).not.toHaveProperty("silentAnnounce");
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
+  });
+
+  it("wake inheritance only applies when the parent was also silent (#1158)", async () => {
+    // inheritedWake without inheritedSilent must NOT wake — mirrors the guard
+    // semantics (parentWasSilent && wakeOnReturn), so a non-silent parent stays visible.
+    const sessionKey = "session-inherit-wake-only";
+    enqueuePendingDelegate(sessionKey, { task: "default child" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      inheritedWake: true,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).not.toHaveProperty("silentAnnounce");
+    expect(spawnParams).not.toHaveProperty("wakeOnReturn");
   });
 
   it("dispatches silent and silent-wake default returns without target fields", async () => {
@@ -1344,6 +1630,29 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
+  it("recovers a force-claimed not-yet-due running delegate instead of stranding it by due time (#1144)", async () => {
+    const sessionKey = "agent:main:force-claim-crash";
+    // A delayed delegate force-claimed to `running` pre-due (ignoreDelay), then
+    // orphaned by a crash before spawn accept — its dueAt is still in the future.
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", delayMs: 60_000 });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.currentStep = "Released to continuation scheduler";
+    flow!.revision = 1;
+
+    await recoverPendingContinuationDelegates({
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      maxChainLength: 10,
+    });
+
+    // The delay gate applies only to queued rows, so recovery re-drives this
+    // running row despite its future dueAt rather than skipping it (which would
+    // strand it `running` with no hedge to re-arm it).
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+  });
+
   it("reconciles a claimed continuation child accepted before registry registration", async () => {
     const sessionKey = "agent:main:parent";
     enqueuePendingDelegate(sessionKey, { task: "recover without duplicate spawn" });
@@ -1402,5 +1711,259 @@ describe("recoverPendingContinuationDelegates", () => {
 
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get("flow-1")?.status).toBe("running");
+  });
+
+  it("enforces the cost cap against the persisted child chain cost on recovery (#1144)", async () => {
+    // The finding: a delayed delegate queued under a child session is re-driven
+    // on restart by recoverPendingContinuationDelegates, which derives the chain
+    // cost from the PERSISTED child entry (no in-memory fold survives a restart).
+    // The child's own run cost is folded into the child entry's durable
+    // continuationChainTokens at settle (subagent-announce accumulation), so a
+    // child run that already blew past costCapTokens cannot launch the delayed
+    // hop after a restart. Recovery is invoked WITHOUT an explicit chainState
+    // (as the gateway startup path does), forcing the derive-from-store path.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:cost-recovery";
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop after restart" });
+    // Persisted child chain cost already over the cap (post-run accumulation).
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 555_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    // Cost cap enforced from the persisted basis → no spawn, delegate failed.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+  });
+
+  it("recovery applies the delegate's durable chainTokensFold over a stale child entry (#1144)", async () => {
+    // When the settle-time child chain-cost persist FAILED, the child entry is
+    // permanently stale (missing this run's tokens) and the in-memory fold does
+    // not survive a restart. The fold is instead recorded durably on the delegate
+    // (chainTokensFold); recovery must add it to the stale child-entry cost so the
+    // cost cap still holds — otherwise a child over costCapTokens launches the hop.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:fold-recovery";
+    // A delegate carrying the durable fold, orphaned to `running` by a crash.
+    enqueuePendingDelegate(sessionKey, { task: "delayed hop", chainTokensFold: 250_000 });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.revision = 1;
+    // The persisted child entry is stale: UNDER the cap without the fold.
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+
+    // 300_000 (stale entry) + 250_000 (durable fold) = 550_000 > costCapTokens
+    // (500_000) → rejected. Without the durable fold recovery would read 300_000
+    // and wrongly launch the over-budget hop.
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+  });
+
+  it("persists the folded chain state when a recovered delayed delegate's hedge fires (#1158)", async () => {
+    // The finding: recovery opts into applyDelegateChainTokensFold but, for a
+    // still-unmatured delayed delegate, only ARMS a hedge. Without a
+    // persistChainState callback the hedge folds the cost in memory and loses it
+    // on the next hop. Recovery must supply the callback so the hedge durably
+    // advances the folded chain state — otherwise the cost cap is bypassed after
+    // restart.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:hedge-fold-persist";
+    // A queued delayed delegate carrying a durable fold that survived a restart.
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop after restart",
+      delayMs: 60_000,
+      chainTokensFold: 50_000,
+    });
+    // Persisted child entry is UNDER the cap without the fold.
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 100_000,
+      },
+    });
+
+    // Recovery arms the hedge (delegate not yet due); nothing dispatched yet.
+    await recoverPendingContinuationDelegates({});
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    // Hedge fires: 100_000 (persisted) + 50_000 (fold) = 150_000 < cap → spawn,
+    // and the advanced folded state is persisted durably.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    const persisted = findPersistedRecoveryEntry(sessionKey);
+    expect(persisted).toBeDefined();
+    // Chain advanced to hop 2 and the folded post-run cost (150_000) is durable,
+    // so a later hop enforces the cap against the folded basis, not stale 100_000.
+    expect(persisted?.continuationChainCount).toBe(2);
+    expect(persisted?.continuationChainTokens).toBe(150_000);
+  });
+});
+
+describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+  });
+
+  function stageAndClaimRunning(sessionKey: string, task: string): string {
+    // Stage (queued) then consume (claim → running) to model a delegate that was
+    // mid-release when the gateway crashed before the durable handoff/finalize.
+    stagePostCompactionDelegate(sessionKey, { task, stagedAt: Date.now() });
+    const claimed = consumeStagedPostCompactionDelegates(sessionKey);
+    expect(claimed).toHaveLength(1);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    return flowId as string;
+  }
+
+  it("re-dispatches a crash-orphaned running row without a new compaction, finalizing it", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate after compaction");
+    // Queued lane is empty — the row is `running` (mid-handoff), not awaiting a seam.
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
+    spawnSubagentDirectMock.mockResolvedValue({ status: "accepted" });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    // Handed off WITHOUT waiting for another compaction seam.
+    expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnParams).toMatchObject({
+      task: "rehydrate after compaction",
+      silentAnnounce: true,
+      wakeOnReturn: true,
+      drainsContinuationDelegateQueue: true,
+    });
+    // The accepted row is finalized (terminal) so it cannot replay.
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
+
+  it("leaves a spawn-failed row running and recoverable — no terminalize, no silent drop", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover-fail";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child" },
+    });
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate that fails");
+    // Spawn/handoff fails.
+    spawnSubagentDirectMock.mockResolvedValue({ status: "rejected", error: "no capacity" });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 0, failed: 1 });
+    // The row is NOT finalized — it stays `running` so the next restart recovers
+    // it again (fails closed instead of dropping the staged work).
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    const stillRecoverable = listRecoverableStagedPostCompactionDelegates();
+    expect(stillRecoverable).toHaveLength(1);
+    expect(stillRecoverable[0]?.delegate).toMatchObject({ task: "rehydrate that fails" });
+  });
+
+  it("does not touch queued (awaiting-seam) rows — only crash-orphaned running rows", async () => {
+    const sessionKey = "agent:main:subagent:pc-awaiting-seam";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child" },
+    });
+    // A queued post-compaction row staged for a compaction that has NOT happened.
+    stagePostCompactionDelegate(sessionKey, { task: "await compaction", stagedAt: Date.now() });
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    // Nothing dispatched: releasing it now would fire before its compaction.
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+  });
+
+  it("is a no-op when continuation is disabled (deny-gate)", async () => {
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { continuation: { enabled: false } } },
+    });
+    const sessionKey = "agent:main:subagent:pc-disabled";
+    const flowId = stageAndClaimRunning(sessionKey, "should not fire while disabled");
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    // Row stays running/recoverable for when continuation is re-enabled.
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
   });
 });

@@ -97,7 +97,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       spawnCtx,
     );
 
-    expect(result).toEqual({ dispatched: 1, failed: 0 });
+    expect(result).toEqual({ dispatched: 1, failed: 0, dispatchedFlowIds: [] });
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
       {
         task: SPOOFED_DELEGATE_TASK,
@@ -121,7 +121,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       { agentSessionKey: sessionKey },
     );
 
-    expect(result).toEqual({ dispatched: 1, failed: 0 });
+    expect(result).toEqual({ dispatched: 1, failed: 0, dispatchedFlowIds: [] });
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
       expect.objectContaining({ traceparent }),
       { agentSessionKey: sessionKey },
@@ -146,7 +146,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             { agentSessionKey: sessionKey },
           );
 
-          expect(result).toEqual({ dispatched: 1, failed: 1 });
+          expect(result).toEqual({ dispatched: 1, failed: 1, dispatchedFlowIds: [] });
           expect(mockState.spawnSubagentDirect).toHaveBeenCalledTimes(1);
         },
       },
@@ -165,7 +165,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             { agentSessionKey: sessionKey },
           );
 
-          expect(result).toEqual({ dispatched: 0, failed: 1 });
+          expect(result).toEqual({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
           expect(mockState.spawnSubagentDirect).not.toHaveBeenCalled();
         },
       },
@@ -191,7 +191,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             },
           );
 
-          expect(result).toEqual({ dispatched: 0, failed: 1 });
+          expect(result).toEqual({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
           expect(mockState.spawnSubagentDirect).not.toHaveBeenCalled();
         },
       },
@@ -211,7 +211,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             { agentSessionKey: sessionKey },
           );
 
-          expect(result).toEqual({ dispatched: 0, failed: 1 });
+          expect(result).toEqual({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
           expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
             expect.objectContaining({ task: SPOOFED_DELEGATE_TASK }),
             { agentSessionKey: sessionKey },
@@ -231,7 +231,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
             { agentSessionKey: sessionKey },
           );
 
-          expect(result).toEqual({ dispatched: 0, failed: 1 });
+          expect(result).toEqual({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
           expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
             expect.objectContaining({ task: SPOOFED_DELEGATE_TASK }),
             { agentSessionKey: sessionKey },
@@ -264,7 +264,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       { agentSessionKey: sessionKey },
     );
 
-    expect(result).toEqual({ dispatched: 1, failed: 1 });
+    expect(result).toEqual({ dispatched: 1, failed: 1, dispatchedFlowIds: [] });
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledTimes(1);
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
       expect.objectContaining({ task: "first post-compaction delegate" }),
@@ -295,7 +295,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       },
     );
 
-    expect(result).toEqual({ dispatched: 0, failed: 1 });
+    expect(result).toEqual({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
     expect(mockState.spawnSubagentDirect).not.toHaveBeenCalled();
     expect(mockState.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining("chain length 1 reached"),
@@ -316,7 +316,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       spawnCtx,
     );
 
-    expect(result).toEqual({ dispatched: 0, failed: 1 });
+    expect(result).toEqual({ dispatched: 0, failed: 1, dispatchedFlowIds: [] });
     expect(mockState.spawnSubagentDirect).not.toHaveBeenCalled();
     expect(mockState.warnLog).toHaveBeenCalledWith(
       expect.stringContaining("[continuation:post-compaction-policy-rejected]"),
