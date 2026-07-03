@@ -375,9 +375,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled)
         send.tap()
 
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
-        self.attachScreenshot(named: "live-gateway-chat-round-trip")
+        let jumpToLatest = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "live-gateway-chat-reply-anchored")
+
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts[replyMarker].exists)
+        Thread.sleep(forTimeInterval: 0.5)
+        self.attachScreenshot(named: "live-gateway-chat-jumped-to-latest")
 
         let controlApp = self.relaunchConnectedLiveGatewayApp(
             initialTab: "control",
@@ -526,7 +537,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
     {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
-            "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and copy a fresh setup code to the simulator pasteboard")
+            "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and provide a fresh setup code")
+
+        if let setupCode = ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_SETUP_CODE"] {
+            UIPasteboard.general.string = setupCode
+        }
 
         let app = XCUIApplication()
         addUIInterruptionMonitor(withDescription: "Local network access") { alert in
