@@ -98,6 +98,22 @@ describe("getLoadedRuntimePluginRegistry", () => {
     ).toBeUndefined();
   });
 
+  it("surfaces the registry when only some required plugins are loaded", () => {
+    // Tool-discovery passes the manifest superset of plugin ids, which can
+    // include plugins that are not loaded in the active runtime. The registry
+    // must still surface on partial overlap ("any") rather than being dropped
+    // whole — otherwise a single unloaded id hides every plugin's tools.
+    const registry = createRegistryWithPlugin("loaded-a");
+    setActivePluginRegistry(registry, "loaded-a", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["loaded-a", "unloaded-b"],
+      }),
+    ).toBe(registry);
+  });
+
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
     setActivePluginRegistry(createRegistryWithPlugin("demo"), "demo");
 

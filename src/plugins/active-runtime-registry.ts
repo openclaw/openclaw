@@ -44,6 +44,7 @@ function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefin
 export function registryContainsRuntimePluginIds(
   registry: PluginRegistry,
   pluginIds: readonly string[] | undefined,
+  match: "all" | "any" = "all",
 ): boolean {
   if (pluginIds === undefined) {
     return true;
@@ -81,7 +82,9 @@ export function registryContainsRuntimePluginIds(
   if (pluginIds.length === 0) {
     return present.size === 0;
   }
-  return pluginIds.every((pluginId) => loaded.has(pluginId));
+  return match === "any"
+    ? pluginIds.some((pluginId) => loaded.has(pluginId))
+    : pluginIds.every((pluginId) => loaded.has(pluginId));
 }
 
 function resolveSurfaceRegistry(
@@ -128,7 +131,13 @@ export function getLoadedRuntimePluginRegistry(
   if (!registry) {
     return undefined;
   }
-  if (!registryContainsRuntimePluginIds(registry, requiredPluginIds)) {
+  // Tool-discovery enumerates plugins from the manifest snapshot, which can
+  // include plugins that are not loaded into the active runtime. Accept the
+  // registry on partial overlap ("any") — the downstream per-entry consumers
+  // filter by pluginId anyway. A strict "all" match here silently dropped the
+  // ENTIRE registry whenever the requested set contained any unloaded plugin,
+  // so plugin-registered tools failed to surface.
+  if (!registryContainsRuntimePluginIds(registry, requiredPluginIds, "any")) {
     return undefined;
   }
   return registry;
