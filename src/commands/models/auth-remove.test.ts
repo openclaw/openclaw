@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   loadModelsConfig: vi.fn(),
   removeAuthProfilesWithLock: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
+    ({ agentDir }: { agentDir: string; profileId: string }) => agentDir,
+  ),
   resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
     const agentId = rawAgentId ?? "main";
     return { agentDir: `/tmp/openclaw/agents/${agentId}`, agentId };
@@ -19,6 +22,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
   removeAuthProfilesWithLock: mocks.removeAuthProfilesWithLock,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
+  resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
   resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`,
 }));
 
@@ -82,6 +86,9 @@ describe("modelsAuthRemoveCommand", () => {
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset().mockReturnValue(createStore());
     mocks.removeAuthProfilesWithLock.mockReset().mockResolvedValue({ version: 1, profiles: {} });
     mocks.resolveAuthProfileDisplayLabel.mockClear();
+    mocks.resolvePersistedAuthProfileOwnerAgentDir
+      .mockReset()
+      .mockImplementation(({ agentDir }: { agentDir: string; profileId: string }) => agentDir);
     mocks.resolveModelsTargetAgent.mockClear();
   });
 
@@ -160,6 +167,20 @@ describe("modelsAuthRemoveCommand", () => {
     await expect(
       modelsAuthRemoveCommand({ provider: "openai", yes: true }, runtime),
     ).rejects.toThrow("without --all");
+
+    expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
+  });
+
+  it("rejects profiles inherited from the default agent store", async () => {
+    const runtime = createRuntime();
+    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue(undefined);
+
+    await expect(
+      modelsAuthRemoveCommand(
+        { profileId: "openai:user@example.com", agent: "coder", yes: true },
+        runtime,
+      ),
+    ).rejects.toThrow("is inherited from main");
 
     expect(mocks.removeAuthProfilesWithLock).not.toHaveBeenCalled();
   });

@@ -1,7 +1,9 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   removeAuthProfilesWithLock,
   resolveAuthProfileDisplayLabel,
+  resolvePersistedAuthProfileOwnerAgentDir,
   resolveAuthStatePathForDisplay,
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -100,6 +102,30 @@ function resolveProfilesToRemove(params: {
   return profileIds;
 }
 
+function assertProfilesOwnedBySelectedAgent(params: {
+  agentDir: string;
+  agentId: string;
+  defaultAgentId: string;
+  profileIds: readonly string[];
+}): void {
+  for (const profileId of params.profileIds) {
+    const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
+      agentDir: params.agentDir,
+      profileId,
+    });
+    if (ownerAgentDir === params.agentDir) {
+      continue;
+    }
+    if (!ownerAgentDir && params.agentId === params.defaultAgentId) {
+      continue;
+    }
+    const ownerAgentLabel = ownerAgentDir ? "another agent" : params.defaultAgentId;
+    throw new Error(
+      `Auth profile "${profileId}" is inherited from ${ownerAgentLabel}; remove it with ${formatCliCommand(`openclaw models auth remove ${profileId} --agent ${params.defaultAgentId}`)} instead.`,
+    );
+  }
+}
+
 async function confirmRemoval(params: {
   profileIds: readonly string[];
   dryRun?: boolean;
@@ -140,6 +166,12 @@ export async function modelsAuthRemoveCommand(
     provider: opts.provider,
     all: opts.all,
     store,
+  });
+  assertProfilesOwnedBySelectedAgent({
+    agentDir,
+    agentId,
+    defaultAgentId: resolveDefaultAgentId(cfg),
+    profileIds,
   });
   const profiles = profileIds.map((profileId) =>
     summarizeProfile({

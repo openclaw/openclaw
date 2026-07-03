@@ -189,7 +189,9 @@ filter to one provider, such as `openai`, and `--json` for scripting.
 agent store and prunes matching order, last-good, and usage state. Use
 `--dry-run` to preview the target without writing. To remove every saved profile
 for a provider, pass both `--provider <id>` and `--all`; `--provider` alone only
-lists the matching candidates in the error message.
+lists the matching candidates in the error message. Profiles inherited from the
+default agent remain owned by that default agent store; remove them with
+`--agent <default-agent-id>` instead of from the inheriting agent.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
