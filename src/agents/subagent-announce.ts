@@ -51,6 +51,8 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
@@ -232,6 +234,194 @@ async function wakeSubagentRunAfterDescendants(params: {
     // post-restart redispatch reconstructs the correct prompt.
     task: wakeMessage,
   });
+}
+
+type SettledRunSummary = Pick<
+  SubagentRunRecord,
+  "runId" | "childSessionKey" | "createdAt" | "startedAt" | "endedAt"
+>;
+
+// Two runs are part of the same parallel wave when their lifetimes overlap.
+// A strictly sequential child (spawned after its predecessor ended) never
+// overlaps, which keeps the settle wake away from one-at-a-time usage.
+function runIntervalsOverlap(a: SettledRunSummary, b: SettledRunSummary): boolean {
+  const aStart = a.startedAt ?? a.createdAt;
+  const bStart = b.startedAt ?? b.createdAt;
+  const aEnd = typeof a.endedAt === "number" ? a.endedAt : Number.MAX_SAFE_INTEGER;
+  const bEnd = typeof b.endedAt === "number" ? b.endedAt : Number.MAX_SAFE_INTEGER;
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
+function buildRequesterSettleWakeMessage(params: { findings?: string }): string {
+  return [
+    "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
+    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive.",
+    "[Subagent Context] Review the completion results and send your consolidated final answer to the user now.",
+    `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+    "",
+    params.findings ??
+      "(each child result was announced individually in earlier completion events)",
+  ].join("\n");
+}
+
+/**
+ * Wakes a registry-less top-level requester once its last spawned child
+ * reaches a terminal settle (announce delivered, given up, or suspended).
+ *
+ * Nested orchestrators are excluded: an orchestrator that is itself a subagent
+ * has a run record and is woken through `wakeSubagentRunAfterDescendants` /
+ * `wakeOnDescendantSettle`. A top-level chat session has no run record, so
+ * without this wake it only ever receives the passive per-child announces and
+ * can park indefinitely after the final one (mis-tracking "who is still out",
+ * or never hearing about children whose announce gave up).
+ */
+export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  settledEntry: SettledRunSummary;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  if (params.signal?.aborted) {
+    return false;
+  }
+  const requesterSessionKey = params.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return false;
+  }
+  if (isCronSessionKey(requesterSessionKey)) {
+    return false;
+  }
+
+  // This runs on every child-run settle fleet-wide, so the in-memory registry
+  // gating comes first; session-store reads (depth, requester entry) are
+  // deferred until a drained wave actually qualifies for a wake.
+  let registryRuntime: Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>;
+  try {
+    registryRuntime = await subagentAnnounceDeps.loadSubagentRegistryRuntime();
+  } catch {
+    return false;
+  }
+  if (
+    typeof registryRuntime.hasDescendantRunAwaitingSettle !== "function" ||
+    typeof registryRuntime.listSubagentRunsForRequester !== "function"
+  ) {
+    return false;
+  }
+  // Race-safe drain check: exclude the settling run itself — its terminal
+  // bookkeeping may not be visible yet when this fires from the finalize path.
+  if (
+    registryRuntime.hasDescendantRunAwaitingSettle(requesterSessionKey, params.settledEntry.runId)
+  ) {
+    return false;
+  }
+
+  const requesterRuns = registryRuntime.listSubagentRunsForRequester(requesterSessionKey);
+  // The wake batch is the parallel wave the settling child belonged to: the
+  // connected component of lifetime overlaps seeded at the settling run.
+  // Membership is transitive, not direct-overlap-only — in a staggered
+  // fan-out where A overlaps B and B overlaps C but A never overlaps C, the
+  // wake fired at C's settle must still carry A's results, and every possible
+  // last-settler must compute the same component so the idempotency key stays
+  // batch-stable. Children from earlier spawns whose lifetimes never chain
+  // into this wave stay out, so a later one-off completion does not keep
+  // re-waking the requester about old results. The runId match keeps the
+  // settling run itself in the batch even when its own recorded timestamps
+  // are inconsistent (endedAt before startedAt), where self-overlap would be
+  // false.
+  const unclaimed = new Set(
+    (Array.isArray(requesterRuns) ? requesterRuns : []).filter((entry) =>
+      hasSubagentRunEnded(entry),
+    ),
+  );
+  const settledBatch: SubagentRunRecord[] = [];
+  const frontier: SettledRunSummary[] = [params.settledEntry];
+  for (const entry of unclaimed) {
+    if (entry.runId === params.settledEntry.runId) {
+      unclaimed.delete(entry);
+      settledBatch.push(entry);
+      frontier.push(entry);
+      break;
+    }
+  }
+  for (let pivot = frontier.pop(); pivot; pivot = frontier.pop()) {
+    for (const entry of unclaimed) {
+      if (runIntervalsOverlap(entry, pivot)) {
+        unclaimed.delete(entry);
+        settledBatch.push(entry);
+        frontier.push(entry);
+      }
+    }
+  }
+  if (settledBatch.length === 0) {
+    return false;
+  }
+  // Keep the wake out of the already-working paths: a single required child
+  // whose completion announce was delivered carried its result into a
+  // requester turn, and fire-and-forget children never promised delivery.
+  // Fan-outs (N >= 2 required completions) need the wake even when every
+  // announce was delivered — the incident class is the requester mis-tracking
+  // outstanding children across turns — and any undelivered required
+  // completion needs it because the requester never heard the result at all.
+  const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
+  if (requiredSettled.length === 0) {
+    return false;
+  }
+  const hasUndeliveredRequiredCompletion = requiredSettled.some(
+    (entry) => entry.delivery?.status !== "delivered",
+  );
+  if (requiredSettled.length < 2 && !hasUndeliveredRequiredCompletion) {
+    return false;
+  }
+
+  // Scope guard: nested orchestrators (depth >= 1) are owned by the
+  // descendant-settle wake; this wake is only for the registry-less top level.
+  if (getSubagentDepthFromSessionStore(requesterSessionKey) >= 1) {
+    return false;
+  }
+  const { entry: requesterEntry } = loadRequesterSessionEntry(requesterSessionKey);
+  if (!hasUsableSessionEntry(requesterEntry)) {
+    return false;
+  }
+
+  const findings = buildChildCompletionFindings(
+    dedupeLatestChildCompletionRows(
+      filterCurrentDirectChildCompletionRows(settledBatch, {
+        requesterSessionKey,
+        getLatestSubagentRunByChildSessionKey:
+          registryRuntime.getLatestSubagentRunByChildSessionKey,
+      }),
+    ),
+  );
+  const wakeMessage = buildRequesterSettleWakeMessage({ findings });
+  // One wake per drained batch: concurrent last-sibling settles compute the
+  // same signature and dedupe on the idempotency key instead of double-waking.
+  const batchSignature = settledBatch
+    .map((entry) => entry.runId)
+    .toSorted()
+    .join(",");
+  const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
+
+  const delivery = await deliverSubagentAnnouncement({
+    requesterSessionKey,
+    triggerMessage: wakeMessage,
+    steerMessage: wakeMessage,
+    summaryLine: "all spawned subagents settled",
+    requesterSessionOrigin,
+    requesterOrigin: requesterSessionOrigin,
+    directOrigin,
+    sourceSessionKey: params.settledEntry.childSessionKey,
+    sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+    sourceTool: "subagent_announce",
+    targetRequesterSessionKey: requesterSessionKey,
+    requesterIsSubagent: false,
+    expectsCompletionMessage: false,
+    directIdempotencyKey: buildAnnounceIdempotencyKey(
+      `requester-settle:${requesterSessionKey}:${batchSignature}`,
+    ),
+    signal: params.signal,
+  });
+  return delivery.delivered;
 }
 
 export async function runSubagentAnnounceFlow(params: {

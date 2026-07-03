@@ -79,6 +79,8 @@ import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
 type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
+type MaybeWakeRequesterAfterAllChildrenSettled =
+  (typeof import("./subagent-announce.js"))["maybeWakeRequesterAfterAllChildrenSettled"];
 type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),
   "cleanupBrowserSessionsForLifecycleEnd"
@@ -190,6 +192,7 @@ export function createSubagentRegistryLifecycleController(params: {
   captureSubagentCompletionReply: CaptureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd?: typeof cleanupBrowserSessionsForLifecycleEnd;
   runSubagentAnnounceFlow: RunSubagentAnnounceFlow;
+  maybeWakeRequesterAfterAllChildrenSettled: MaybeWakeRequesterAfterAllChildrenSettled;
   warn(message: string, meta?: Record<string, unknown>): void;
 }) {
   const scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -753,6 +756,30 @@ export function createSubagentRegistryLifecycleController(params: {
     return true;
   };
 
+  // Fire-and-forget: once a child reaches a terminal settle, let the announce
+  // layer decide whether its requester's batch has fully drained and, if so,
+  // wake the registry-less top-level requester to synthesize. Failures are
+  // logged only — settle bookkeeping must never block on the wake.
+  const scheduleRequesterSettleWake = (runId: string, entry: SubagentRunRecord) => {
+    const requesterSessionKey = entry.requesterSessionKey?.trim();
+    if (!requesterSessionKey) {
+      return;
+    }
+    void params
+      .maybeWakeRequesterAfterAllChildrenSettled({
+        requesterSessionKey,
+        requesterOrigin: entry.requesterOrigin,
+        settledEntry: entry,
+      })
+      .catch((error: unknown) => {
+        params.warn("requester settle wake failed", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(runId),
+          requesterSessionKey: maskSessionKey(requesterSessionKey),
+        });
+      });
+  };
+
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
@@ -785,6 +812,9 @@ export function createSubagentRegistryLifecycleController(params: {
     });
     logAnnounceGiveUp(args.entry, args.reason);
     params.persist();
+    // Suspension is terminal for automatic retries, so it settles this child
+    // for requester-drain purposes even though cleanup stays incomplete.
+    scheduleRequesterSettleWake(args.runId, args.entry);
   };
 
   const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
@@ -968,6 +998,10 @@ export function createSubagentRegistryLifecycleController(params: {
     completedAt: number;
     preserveTranscript?: boolean;
     provisionalKill?: boolean;
+    // Set by the suspended-delivery discard path: the settle wake already ran
+    // when the delivery was suspended, so a discard hours later must not
+    // re-evaluate the requester drain.
+    skipRequesterSettleWake?: boolean;
   }) => {
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // These best-effort tails can outlive the durable registry transition,
@@ -1014,6 +1048,9 @@ export function createSubagentRegistryLifecycleController(params: {
       params.runs.delete(cleanupParams.runId);
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
+      if (!cleanupParams.skipRequesterSettleWake) {
+        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
+      }
       return;
     }
     if (!cleanupParams.provisionalKill) {
@@ -1036,6 +1073,9 @@ export function createSubagentRegistryLifecycleController(params: {
       params.runs.delete(cleanupParams.runId);
       params.persist();
       retryDeferredCompletedAnnounces(cleanupParams.runId);
+      if (!cleanupParams.skipRequesterSettleWake) {
+        scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
+      }
       return;
     }
     if (!cleanupParams.provisionalKill) {
@@ -1043,6 +1083,9 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     params.persist();
     retryDeferredCompletedAnnounces(cleanupParams.runId);
+    if (!cleanupParams.skipRequesterSettleWake) {
+      scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
+    }
   };
 
   const retireRunModeBundleMcpRuntime = async (cleanupParams: {

@@ -73,7 +73,9 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
+  countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
+  hasDescendantRunAwaitingSettleFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listRunsForControllerFromRuns,
   listDescendantRunsForRequesterFromRuns,
@@ -112,7 +114,9 @@ const log = createSubsystemLogger("agents/subagent-registry");
 
 type SubagentAnnounceModule = Pick<
   typeof import("./subagent-announce.js"),
-  "captureSubagentCompletionReply" | "runSubagentAnnounceFlow"
+  | "captureSubagentCompletionReply"
+  | "maybeWakeRequesterAfterAllChildrenSettled"
+  | "runSubagentAnnounceFlow"
 >;
 type BrowserCleanupModule = Pick<
   typeof import("../browser-lifecycle-cleanup.js"),
@@ -132,6 +136,7 @@ type SubagentRegistryDeps = {
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
+  maybeWakeRequesterAfterAllChildrenSettled: SubagentAnnounceModule["maybeWakeRequesterAfterAllChildrenSettled"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: (
     params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
@@ -175,6 +180,8 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: async (params) =>
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
+  maybeWakeRequesterAfterAllChildrenSettled: async (params) =>
+    (await loadSubagentAnnounceModule()).maybeWakeRequesterAfterAllChildrenSettled(params),
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
@@ -763,6 +770,8 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   cleanupBrowserSessionsForLifecycleEnd: (args) =>
     subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
+  maybeWakeRequesterAfterAllChildrenSettled: (args) =>
+    subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled(args),
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -1085,6 +1094,8 @@ async function discardSuspendedPendingFinalDelivery(
     entry,
     cleanup: entry.cleanup,
     completedAt: now,
+    // The requester settle wake already ran when this delivery was suspended.
+    skipRequesterSettleWake: true,
   });
   if (
     entry.expectsCompletionMessage === true &&
@@ -1983,6 +1994,28 @@ export function countPendingDescendantRuns(rootSessionKey: string): number {
   return countPendingDescendantRunsFromRuns(
     subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
+  );
+}
+
+export function countPendingDescendantRunsExcludingRun(
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  return countPendingDescendantRunsExcludingRunFromRuns(
+    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
+  );
+}
+
+export function hasDescendantRunAwaitingSettle(
+  rootSessionKey: string,
+  excludeRunId?: string,
+): boolean {
+  return hasDescendantRunAwaitingSettleFromRuns(
+    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
   );
 }
 

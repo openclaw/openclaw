@@ -204,6 +204,7 @@ function createLifecycleController({
       (await gatewayMocks.callGateway(opts)) as T,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     runSubagentAnnounceFlow: vi.fn(async () => true),
+    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
     warn: vi.fn(),
   };
   Object.assign(params, overrides);
@@ -3403,6 +3404,167 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]).toMatchObject({
       outcome: { status: "timeout" },
+    });
+  });
+});
+
+describe("requester settle wake trigger", () => {
+  beforeEach(() => {
+    helperMocks.safeRemoveAttachmentsDir.mockClear();
+    helperMocks.logAnnounceGiveUp.mockClear();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
+  });
+
+  it("fires the settle wake from keep-cleanup bookkeeping", () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: undefined,
+      settledEntry: entry,
+    });
+  });
+
+  it("fires the settle wake from delete-cleanup bookkeeping after the run is removed", () => {
+    const entry = createRunEntry({ endedAt: 4_000, cleanup: "delete" });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "delete",
+      completedAt: 5_000,
+    });
+
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:main",
+        settledEntry: entry,
+      }),
+    );
+  });
+
+  it("skips the settle wake when the caller opts out (suspended-delivery discard)", () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+      skipRequesterSettleWake: true,
+    });
+
+    expect(settleWake).not.toHaveBeenCalled();
+  });
+
+  it("fires the settle wake when an announce give-up suspends the delivery", async () => {
+    // Suspension leaves cleanup incomplete and nothing retries it, so it is
+    // the child's terminal settle for requester-drain purposes.
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok" },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:main",
+        settledEntry: entry,
+      }),
+    );
+  });
+
+  it("fires the settle wake exactly once for a non-suspending announce give-up", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "timeout" },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("failed");
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(settleWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps settle bookkeeping resilient to a rejecting wake", () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    const warn = vi.fn();
+    const settleWake = vi.fn(async () => {
+      throw new Error("wake exploded");
+    });
+    const controller = createLifecycleController({
+      entry,
+      warn,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    expect(() =>
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      }),
+    ).not.toThrow();
+
+    return vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything());
     });
   });
 });
