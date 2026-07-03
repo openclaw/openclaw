@@ -14,6 +14,7 @@ import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -90,15 +91,7 @@ function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
     return DEFAULT_TAIL_COUNT;
   }
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value >= 0 ? value : null;
-  }
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  return parseStrictNonNegativeInteger(value) ?? null;
 }
 
 function toOptionalString(value: unknown): string | undefined {
