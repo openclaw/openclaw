@@ -74,7 +74,7 @@ async function runAntigravityOAuthSetup(ctx: ProviderAuthContext) {
       userDataDir
         ? `Using ANTIGRAVITY_USER_DATA_DIR=${userDataDir}.`
         : "Using the default Antigravity app session directory.",
-      "OpenClaw will create a local Antigravity auth profile and route Antigravity models through the Antigravity CLI backend.",
+      "OpenClaw will create a local Antigravity auth profile for the Antigravity CLI desktop handoff.",
     ].join("\n"),
     "Google Antigravity OAuth",
   );
@@ -98,10 +98,9 @@ async function runAntigravityOAuthSetup(ctx: ProviderAuthContext) {
   return {
     profiles: [{ profileId: PROFILE_ID, credential: buildAntigravityCredential(userDataDir) }],
     configPatch: buildAntigravityConfigPatch(),
-    defaultModel: DEFAULT_MODEL,
     notes: [
       "Uses Antigravity-owned app session state. No OpenClaw-owned Google OAuth callback is started.",
-      "Routes google-antigravity models through the Antigravity CLI backend.",
+      "Registers the Antigravity CLI desktop handoff. Current Antigravity CLI builds launch the desktop app and return no stdout model text.",
     ],
   };
 }
