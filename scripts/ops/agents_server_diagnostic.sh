@@ -250,6 +250,15 @@ if [[ -f "$MODEL_ISSUES_FILE" && -n "$(find "$MODEL_ISSUES_FILE" -mmin -360 2>/d
   grep '^ISSUE|' "$MODEL_ISSUES_FILE" >>"$TMP" 2>/dev/null || true
 fi
 
+# ── Merge dependency-audit issues (state file from deps-audit-cron.sh, 05:45;
+#    an absent/stale file is itself a P2 — silence must not hide a dead audit) ─
+DEPS_ISSUES_FILE="${DEPS_ISSUES_FILE:-/var/tmp/agentglob-deps-issues.txt}"
+if [[ -f "$DEPS_ISSUES_FILE" && -n "$(find "$DEPS_ISSUES_FILE" -mmin -360 2>/dev/null)" ]]; then
+  grep '^ISSUE|' "$DEPS_ISSUES_FILE" >>"$TMP" 2>/dev/null || true
+else
+  echo "ISSUE|P2|deps|-|Dependency audit missing|state file absent or >6h old — the 05:45 deps-audit cron did not run or failed." >>"$TMP"
+fi
+
 # ── A+B report ───────────────────────────────────────────────────────────────
 echo; echo "════════ A+B. SERVER HEALTH & AGENT STATUS ════════"
 for h in $SELECT; do

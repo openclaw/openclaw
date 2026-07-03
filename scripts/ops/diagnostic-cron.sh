@@ -92,6 +92,12 @@ if command -v msmtp >/dev/null 2>&1; then
     if [[ -f "$MODELS_REPORT_FILE" && -n "$(find "$MODELS_REPORT_FILE" -mmin -360 2>/dev/null)" ]]; then
       printf '═══════ MODEL CONNECTIVITY (05:50 UTC run) ═══════\n%s\n\n' "$(cat "$MODELS_REPORT_FILE")"
     fi
+    DEPS_REPORT_FILE=/var/tmp/agentglob-deps-report.txt
+    if [[ -f "$DEPS_REPORT_FILE" && -n "$(find "$DEPS_REPORT_FILE" -mmin -360 2>/dev/null)" ]]; then
+      printf '═══════ DEPENDENCY AUDIT (05:45 UTC run) ═══════\n%s\n\n' "$(cat "$DEPS_REPORT_FILE")"
+    else
+      printf '═══════ DEPENDENCY AUDIT ═══════\n⚠ report missing or stale (>6h) — the 05:45 deps-audit cron produced no fresh output; see /var/log/agentglob-deps.log\n\n'
+    fi
     printf 'Bug list: %s\n' "$BUG_LIST_URL"
   } | msmtp "$EMAIL_TO" \
       && echo "→ summary emailed to $EMAIL_TO" \
