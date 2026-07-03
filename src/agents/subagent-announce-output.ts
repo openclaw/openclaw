@@ -183,14 +183,56 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   return snapshot;
 }
 
+export function isUnsafeSubagentDeliverableText(text: string | null | undefined): boolean {
+  const trimmed = text?.trim() ?? "";
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") || trimmed.includes("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")) {
+    return true;
+  }
+  if (trimmed.includes("<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>") || trimmed.includes("<<<END_UNTRUSTED_CHILD_RESULT>>>")) {
+    return true;
+  }
+  if (trimmed.includes("<<<EXTERNAL_UNTRUSTED_CONTENT") || trimmed.includes("<<<END_EXTERNAL_UNTRUSTED_CONTENT")) {
+    return true;
+  }
+  if (/SECURITY NOTICE:\s*The following content is from an EXTERNAL, UNTRUSTED source/i.test(trimmed)) {
+    return true;
+  }
+  if (/"externalContent"\s*:\s*\{/.test(trimmed) && /"untrusted"\s*:\s*true/.test(trimmed)) {
+    return true;
+  }
+  if (/"sourceTool"\s*:\s*"subagent_announce"/.test(trimmed)) {
+    return true;
+  }
+  if (/^\s*\{[\s\S]*"url"\s*:[\s\S]*"status"\s*:[\s\S]*"contentType"\s*:[\s\S]*"text"\s*:/.test(trimmed)) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      const externalContent = record.externalContent;
+      if (externalContent && typeof externalContent === "object" && (externalContent as Record<string, unknown>).untrusted === true) {
+        return true;
+      }
+      if (typeof record.url === "string" && (typeof record.status === "number" || typeof record.status === "string") && typeof record.contentType === "string" && typeof record.text === "string") {
+        return true;
+      }
+    }
+  } catch {}
+  return false;
+}
+
 function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | undefined {
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
-  if (snapshot.latestSilentText) {
+  if (snapshot.latestSilentText && !isUnsafeSubagentDeliverableText(snapshot.latestSilentText)) {
     return snapshot.latestSilentText;
   }
-  if (snapshot.latestAssistantText) {
+  if (snapshot.latestAssistantText && !isUnsafeSubagentDeliverableText(snapshot.latestAssistantText)) {
     return snapshot.latestAssistantText;
   }
   if (snapshot.latestToolCallCount && snapshot.latestToolCallCount > 0) {
@@ -335,7 +377,7 @@ function formatChildResultData(resultText?: string | null): string {
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: resultText?.trim() || "(no output)",
+      text: typeof resultText === "string" && resultText.trim() ? resultText : "(no output)",
     }) || "Child result: (no output)"
   );
 }
