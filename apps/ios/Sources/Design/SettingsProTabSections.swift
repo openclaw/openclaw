@@ -154,6 +154,7 @@ extension SettingsProTab {
         Section {
             self.settingsListRow(
                 icon: "doc.text",
+                iconColor: .gray,
                 title: "Licenses",
                 route: .licenses)
                 .accessibilityIdentifier("settings-licenses-row")
