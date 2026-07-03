@@ -912,6 +912,46 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("fails closed on unknown item status values with rate-limited warnings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+
+    // Simulate an item with an unknown status value
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-unknown-status",
+          command: "echo test",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "unknown_status_value", // Unknown status should fail closed
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 1,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // Verify that unknown status is treated as failed (fail closed)
+    expect(result.replayMetadata.hadPotentialSideEffects).toBe(true);
+    expect(result.replayMetadata.replaySafe).toBe(false);
+
+    // Verify that a warning was logged
+    expect(warn).toHaveBeenCalledWith(
+      "codex event projector: unknown item status treated as failed",
+      expect.objectContaining({
+        status: "unknown_status_value",
+        itemType: "commandExecution",
+        itemId: "cmd-unknown-status",
+      }),
+    );
+  });
+
   it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
     const projector = await createProjector();
 

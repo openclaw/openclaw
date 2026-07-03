@@ -2234,6 +2234,10 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
+const UNKNOWN_STATUS_WARNING_INTERVAL_MS = 60_000;
+let lastUnknownStatusWarningTime = 0;
+let unknownStatusWarningCount = 0;
+
 function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed") {
@@ -2245,7 +2249,23 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   if (status === "inProgress" || status === "running") {
     return "running";
   }
-  return "completed";
+  if (status === "completed") {
+    return "completed";
+  }
+  // Fail closed on unknown status values to avoid false success states
+  // during Codex protocol upgrades. Rate-limit warnings to avoid log spam.
+  const now = Date.now();
+  if (now - lastUnknownStatusWarningTime >= UNKNOWN_STATUS_WARNING_INTERVAL_MS) {
+    embeddedAgentLog.warn("codex event projector: unknown item status treated as failed", {
+      status,
+      itemType: item?.type,
+      itemId: item?.id,
+      previousWarningCount: unknownStatusWarningCount,
+    });
+    lastUnknownStatusWarningTime = now;
+    unknownStatusWarningCount += 1;
+  }
+  return "failed";
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {
