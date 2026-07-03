@@ -2,9 +2,15 @@ import OpenClawKit
 import SwiftUI
 import VisionKit
 
+enum QRScannerResult {
+    case gatewayLink(GatewayConnectDeepLink)
+    case setupCode(String)
+}
+
 struct QRScannerView: UIViewControllerRepresentable {
-    let onGatewayLink: (GatewayConnectDeepLink) -> Void
-    let onSetupCode: (String) -> Void
+    static let dismissalSettlingNanoseconds: UInt64 = 350_000_000
+
+    let onResult: (QRScannerResult) -> Void
     let onError: (String) -> Void
     let onDismiss: () -> Void
 
@@ -59,7 +65,11 @@ struct QRScannerView: UIViewControllerRepresentable {
             }
         }
 
-        func dataScanner(_: DataScannerViewController, didAdd items: [RecognizedItem], allItems _: [RecognizedItem]) {
+        func dataScanner(
+            _ scanner: DataScannerViewController,
+            didAdd items: [RecognizedItem],
+            allItems _: [RecognizedItem])
+        {
             guard !self.handled else { return }
             for item in items {
                 guard case let .barcode(barcode) = item,
@@ -67,19 +77,23 @@ struct QRScannerView: UIViewControllerRepresentable {
                 else { continue }
 
                 if let link = GatewayConnectDeepLink.fromSetupInput(payload) {
-                    self.handled = true
-                    Task { @MainActor in
-                        self.parent.onGatewayLink(link)
-                    }
+                    self.deliver(.gatewayLink(link), scanner: scanner)
                     return
                 }
                 if AppleReviewDemoMode.isSetupCode(payload) {
-                    self.handled = true
-                    Task { @MainActor in
-                        self.parent.onSetupCode(payload)
-                    }
+                    self.deliver(.setupCode(payload), scanner: scanner)
                     return
                 }
+            }
+        }
+
+        private func deliver(_ result: QRScannerResult, scanner: DataScannerViewController) {
+            self.handled = true
+            // VisionKit recommends stopping the scanner before dismissal. Pairing can
+            // present UIKit alerts, so camera teardown must start before that handoff.
+            scanner.stopScanning()
+            Task { @MainActor in
+                self.parent.onResult(result)
             }
         }
 

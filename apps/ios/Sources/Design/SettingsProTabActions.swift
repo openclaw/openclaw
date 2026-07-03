@@ -292,35 +292,25 @@ extension SettingsProTab {
         self.showQRScanner = true
     }
 
-    func queueScannedGatewayLink(_ link: GatewayConnectDeepLink) {
-        self.pendingScannedSetupCode = nil
-        self.pendingScannedGatewayLink = link
-        self.setupStatusText = "QR loaded. Closing scanner..."
-        self.showQRScanner = false
-    }
-
-    func queueScannedSetupCode(_ code: String) {
-        self.pendingScannedGatewayLink = nil
-        self.pendingScannedSetupCode = code
+    func queueScannedResult(_ result: QRScannerResult) {
+        self.pendingScannerResult = result
         self.setupStatusText = "QR loaded. Closing scanner..."
         self.showQRScanner = false
     }
 
     func processQueuedScannerResult() {
-        guard self.pendingScannedGatewayLink != nil || self.pendingScannedSetupCode != nil else { return }
+        guard self.pendingScannerResult != nil else { return }
         self.pendingScannerResultTask?.cancel()
         self.pendingScannerResultTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(nanoseconds: QRScannerView.dismissalSettlingNanoseconds)
             guard !Task.isCancelled, !self.showQRScanner else { return }
+            guard let result = self.pendingScannerResult else { return }
+            self.pendingScannerResult = nil
 
-            if let link = self.pendingScannedGatewayLink {
-                self.pendingScannedGatewayLink = nil
+            switch result {
+            case let .gatewayLink(link):
                 self.handleScannedGatewayLink(link)
-                return
-            }
-
-            if let code = self.pendingScannedSetupCode {
-                self.pendingScannedSetupCode = nil
+            case let .setupCode(code):
                 self.handleScannedSetupCode(code)
             }
         }

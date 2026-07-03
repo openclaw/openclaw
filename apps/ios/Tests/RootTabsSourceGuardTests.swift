@@ -770,6 +770,20 @@ struct RootTabsSourceGuardTests {
         let trustSource = try String(contentsOf: Self.gatewayTrustPromptAlertSourceURL(), encoding: .utf8)
         let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let scannerSource = try String(contentsOf: Self.qrScannerSourceURL(), encoding: .utf8)
+        let settingsScannerSheet = try Self.extract(
+            settingsSource,
+            from: "isPresented: self.$showQRScanner,",
+            to: ".sheet(isPresented: self.$showNotificationRelayDisclosure)")
+        let settingsOnDismiss = try #require(settingsScannerSheet.range(of: "onDismiss: {"))
+        let settingsProcessing = try #require(settingsScannerSheet.range(of: "self.processQueuedScannerResult()"))
+        let settingsContent = try #require(settingsScannerSheet.range(of: "content: {"))
+        let scannerDelivery = try Self.extract(
+            scannerSource,
+            from: "private func deliver(_ result: QRScannerResult",
+            to: "func dataScanner(_: DataScannerViewController, didRemove")
+        let stopScanning = try #require(scannerDelivery.range(of: "scanner.stopScanning()"))
+        let deliverResult = try #require(scannerDelivery.range(of: "self.parent.onResult(result)"))
         let activeProblemToast = try Self.extract(
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
@@ -830,8 +844,12 @@ struct RootTabsSourceGuardTests {
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
         #expect(settingsSource.contains("QRScannerView("))
-        #expect(settingsSource.contains("onDismiss: {\n                    self.processQueuedScannerResult()"))
+        #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
+        #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
+        #expect(actionsSource.contains("case let .gatewayLink(link):"))
+        #expect(actionsSource.contains("case let .setupCode(code):"))
+        #expect(stopScanning.lowerBound < deliverResult.lowerBound)
         #expect(trustSource.contains("Trust this gateway?"))
         #expect(trustSource.contains("Trust and connect"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
@@ -844,6 +862,13 @@ struct RootTabsSourceGuardTests {
         let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
         let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
         let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+        let onboardingScannerSheet = try Self.extract(
+            onboardingSource,
+            from: "isPresented: self.$showQRScanner,",
+            to: ".sheet(isPresented: self.$showGatewayProblemDetails)")
+        let onboardingOnDismiss = try #require(onboardingScannerSheet.range(of: "onDismiss: {"))
+        let onboardingProcessing = try #require(onboardingScannerSheet.range(of: "self.processQueuedScannerResult()"))
+        let onboardingContent = try #require(onboardingScannerSheet.range(of: "content: {"))
 
         #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
         #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
@@ -861,7 +886,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
         #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
-        #expect(onboardingSource.contains("onDismiss: {\n                    self.processQueuedScannerResult()"))
+        #expect(onboardingOnDismiss.lowerBound < onboardingProcessing.lowerBound)
+        #expect(onboardingProcessing.lowerBound < onboardingContent.lowerBound)
         #expect(!onboardingSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource
             .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
@@ -1071,6 +1097,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func qrScannerSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Onboarding/QRScannerView.swift")
     }
 
     private static func openClawAppSourceURL() -> URL {

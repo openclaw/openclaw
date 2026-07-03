@@ -43,8 +43,7 @@ struct SettingsProTab: View {
     @State var setupStatusText: String?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
-    @State var pendingScannedGatewayLink: GatewayConnectDeepLink?
-    @State var pendingScannedSetupCode: String?
+    @State var pendingScannerResult: QRScannerResult?
     @State var pendingScannerResultTask: Task<Void, Never>?
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
@@ -207,11 +206,8 @@ struct SettingsProTab: View {
                 content: {
                     NavigationStack {
                         QRScannerView(
-                            onGatewayLink: { link in
-                                self.queueScannedGatewayLink(link)
-                            },
-                            onSetupCode: { code in
-                                self.queueScannedSetupCode(code)
+                            onResult: { result in
+                                self.queueScannedResult(result)
                             },
                             onError: { error in
                                 self.showQRScanner = false
