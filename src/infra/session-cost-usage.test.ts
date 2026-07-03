@@ -2919,6 +2919,38 @@ example
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it("defaults timestamp to 0 when a malformed timestamp string is unparseable", async () => {
+    const root = await makeSessionCostRoot("logs-malformed-timestamp");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-malformed.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "not-a-valid-date-string",
+          message: { role: "user", content: "bad timestamp entry" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "assistant", content: "valid timestamp entry" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+    expect(logs).toHaveLength(2);
+    // Malformed timestamp should default to 0 (not NaN)
+    expect(logs?.[0]?.timestamp).toBe(0);
+    // Valid timestamp should parse correctly
+    expect(logs?.[1]?.timestamp).toBeGreaterThan(0);
+    expect(Number.isFinite(logs?.[1]?.timestamp ?? NaN)).toBe(true);
+  });
+
   it("buckets hourly message counts into UTC quarter-hour slots", async () => {
     const root = await makeSessionCostRoot("cost-quarter");
     const sessionFile = path.join(root, "session.jsonl");
