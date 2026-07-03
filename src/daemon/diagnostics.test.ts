@@ -7,6 +7,7 @@ import { readLastGatewayErrorLine } from "./diagnostics.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 const tempDirs: string[] = [];
+const DIAGNOSTIC_TAIL_BYTES = 256 * 1024;
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -68,6 +69,24 @@ describe("readLastGatewayErrorLine", () => {
         "gateway stdout current",
         "",
       ].join("\n"),
+      "utf8",
+    );
+
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
+      "gateway stdout current",
+    );
+  });
+
+  it("ignores a matching partial line at the bounded tail boundary", async () => {
+    const stateDir = makeTempStateDir();
+    const homeDir = makeTempStateDir();
+    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
+    const stateLogs = resolveGatewayLogPaths(env);
+    fs.mkdirSync(stateLogs.logDir, { recursive: true });
+    fs.writeFileSync(
+      stateLogs.stdoutPath,
+      `${"x".repeat(DIAGNOSTIC_TAIL_BYTES + 1)} gateway start blocked: partial stale reason\n` +
+        "gateway stdout current\n",
       "utf8",
     );
 
