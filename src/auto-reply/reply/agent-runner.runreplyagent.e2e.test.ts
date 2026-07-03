@@ -1820,6 +1820,45 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("preserves before-agent hook block payloads instead of applying the Discord guard", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Blocked by policy hook", isError: true }],
+      meta: {
+        error: { kind: "hook_block" },
+        finalPromptText: "blocked prompt",
+        stopReason: "stop",
+      },
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        allowEmptyAssistantReplyAsSilent: true,
+      },
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+        ChatType: "channel",
+        WasMentioned: true,
+        MessageSid: "1503645939964055592",
+      },
+    });
+
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Blocked by policy hook");
+    expect(payload?.text).not.toContain("Discord delivery guard");
+    expect(getReplyPayloadMetadata(payload ?? {})).toEqual(
+      expect.objectContaining({
+        beforeAgentRunBlocked: true,
+      }),
+    );
+  });
+
   it("surfaces the Discord guard instead of a substantive message-tool-only final when the model skipped message.send", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final should surface" }],

@@ -2121,6 +2121,7 @@ export async function runReplyAgent(params: {
     const hasDirectBlockProgress = (directlySentBlockKeys?.size ?? 0) > 0;
     const hasSubstantiveDirectBlockReply = (directlySentBlockPayloads?.length ?? 0) > 0;
     const hasRunToolActivity = (runResult.meta?.toolSummary?.calls ?? 0) > 0;
+    const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -2163,6 +2164,7 @@ export async function runReplyAgent(params: {
       // Native approval prompts are emitted through the current source route.
       runResult.didSendDeterministicApprovalPrompt === true;
     const shouldApplyDiscordMessageToolOnlyDeliveryGuard =
+      !isHookBlockedRun &&
       isDiscordMessageToolOnlyReplyGuardCandidate({
         followupRun,
         sessionCtx,
@@ -2542,7 +2544,6 @@ export async function runReplyAgent(params: {
       }
     }
     const prefixPayloads = [...prefixNotices];
-    const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const rawUserText = isHookBlockedRun
       ? runResult.meta?.finalPromptText
       : (runResult.meta?.finalPromptText ??
