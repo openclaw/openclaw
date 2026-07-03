@@ -47,10 +47,11 @@ openclaw hooks info session-memory
 
 Hooks subscribe to a specific key from this table, or to a bare family name
 (`command`, `session`, `agent`, `gateway`, `message`) to receive every action
-in that family. Any other event name never fires: the hook loader logs a
-warning for unknown names (typos like `command:nwe`), and
-`openclaw hooks info <name>` flags them, so a hook that silently never runs is
-diagnosable.
+in that family. OpenClaw core emits nothing else, so any other name is almost
+always a typo that leaves the hook silently dead (only a plugin emitting a
+custom event could fire it). The hook loader logs a warning for such names
+(for example `command:nwe`), and `openclaw hooks info <name>` flags them, so a
+hook that never runs is diagnosable.
 
 | Event                    | When it fires                                              |
 | ------------------------ | ---------------------------------------------------------- |

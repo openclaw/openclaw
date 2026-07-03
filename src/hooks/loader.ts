@@ -169,14 +169,16 @@ export async function loadInternalHooks(
           continue;
         }
 
-        // Core is the only emitter of internal hook events, so a key outside
-        // the known set can never fire — surface the typo instead of letting
-        // the hook register silently dead. Still registered: advisory only.
+        // Core never emits keys outside the known set, so these are almost
+        // always typos that leave the hook silently dead (a plugin could emit
+        // custom keys via plugin-sdk/hook-runtime, hence advisory: warn but
+        // still register).
         const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
         if (unknownEvents.length > 0) {
           log.warn(
-            `Hook '${safeLogValue(entry.hook.name)}' subscribes to unknown event${unknownEvents.length === 1 ? "" : "s"} ` +
-              `${unknownEvents.map((event) => safeLogValue(event)).join(", ")} that will never fire. ` +
+            `Hook '${safeLogValue(entry.hook.name)}' subscribes to event${unknownEvents.length === 1 ? "" : "s"} ` +
+              `${unknownEvents.map((event) => safeLogValue(event)).join(", ")} not emitted by OpenClaw core — ` +
+              `likely a typo; unless a plugin emits it, the hook never fires. ` +
               `Known events: https://docs.openclaw.ai/automation/hooks`,
           );
         }

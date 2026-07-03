@@ -36,7 +36,7 @@ export type HookStatusEntry = {
   emoji?: string;
   homepage?: string;
   events: string[];
-  /** Declared events that no core trigger site emits (typos — they never fire). */
+  /** Declared events no core trigger site emits (likely typos; fire only if a plugin emits them). */
   unknownEvents: string[];
   always: boolean;
   enabledByConfig: boolean;

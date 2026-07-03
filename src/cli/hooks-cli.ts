@@ -304,7 +304,7 @@ export function formatHookInfo(
   if (hook.unknownEvents.length > 0) {
     lines.push(
       theme.warn(
-        `  ⚠ Unknown event${hook.unknownEvents.length === 1 ? "" : "s"} (never fire): ${hook.unknownEvents.join(", ")}`,
+        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
       ),
     );
   }

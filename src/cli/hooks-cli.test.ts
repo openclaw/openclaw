@@ -96,7 +96,7 @@ describe("hooks cli formatting", () => {
     };
 
     const output = formatHookInfo(typoReport, "typo-hook", {});
-    expect(output).toContain("Unknown event (never fire): command:nwe");
+    expect(output).toContain("Event not emitted by core (likely typo): command:nwe");
   });
 
   it("shows plugin-managed details in hook info", () => {

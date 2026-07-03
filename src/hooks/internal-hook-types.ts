@@ -13,7 +13,9 @@ const KNOWN_INTERNAL_HOOK_EVENT_FAMILIES = [
  * Event keys emitted by core trigger sites (see docs/automation/hooks.md
  * events table — keep both in sync when adding a trigger). Hooks can also
  * subscribe to a bare family key to receive every action of that family.
- * Anything outside this set never fires, so loader/status flag it as a typo.
+ * Plugins can emit additional keys via the deprecated plugin-sdk/hook-runtime
+ * barrel, so anything outside this set is flagged as a likely typo
+ * (advisory), not rejected.
  */
 export const KNOWN_INTERNAL_HOOK_EVENT_KEYS = [
   "agent:bootstrap",
