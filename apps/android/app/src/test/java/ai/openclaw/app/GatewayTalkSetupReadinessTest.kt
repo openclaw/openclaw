@@ -148,6 +148,28 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
+  fun authoritativeUnknownActiveProviderRequiresSetup() {
+    val readiness =
+      parseGatewayTalkSetupReadiness(
+        catalog(
+          realtime =
+            providerGroup(
+              id = "google",
+              label = "Google Live",
+              configured = true,
+              activeProvider = "removed-provider",
+              ready = false,
+            ),
+          transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
+        ),
+      )
+
+    val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
+    assertEquals("Choose a supported Realtime Talk provider on the Gateway", realtime.reason)
+    assertTrue(readiness.realtimeTalk.requiresSetup)
+  }
+
+  @Test
   fun unknownActiveProviderWithEmptyRegistryStaysUnverified() {
     val readiness =
       parseGatewayTalkSetupReadiness(

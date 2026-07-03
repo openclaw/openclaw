@@ -104,7 +104,11 @@ private fun parseTalkCatalogGroup(
     // Match Gateway registry precedence: canonical ids win before alias fallback.
     providers.firstOrNull { it.matchesId(activeProviderId) }
       ?: providers.firstOrNull { it.matchesAlias(activeProviderId) }
-      ?: return GatewayTalkSetupState.Unverified("Gateway selected unknown provider $activeProviderId")
+      ?: return if (ready == false) {
+        GatewayTalkSetupState.NeedsSetup("Choose a supported $title provider on the Gateway")
+      } else {
+        GatewayTalkSetupState.Unverified("Gateway selected unknown provider $activeProviderId")
+      }
   val provider = GatewayTalkProvider(id = selected.id, label = selected.label)
   return when (ready) {
     true -> GatewayTalkSetupState.Ready(provider)
