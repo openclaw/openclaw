@@ -79,6 +79,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { isCronDispatchPaused, updateCronStallPause } from "./stall-detection.js";
 import type { CronEvent, CronServiceState, CronSystemEventEnqueueResult } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import {
@@ -1226,6 +1227,23 @@ export function armTimer(state: CronServiceState) {
     state.deps.log.warn({}, "cron: armTimer skipped - restart recovery pending");
     return;
   }
+  if (isCronDispatchPaused(state, state.deps.nowMs())) {
+    const pausedUntil = state.pausedUntil as number;
+    const delay = Math.max(pausedUntil - state.deps.nowMs(), MIN_REFIRE_GAP_MS);
+    state.timer = setTimeout(
+      () => {
+        void onTimer(state).catch((err: unknown) => {
+          state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+        });
+      },
+      Math.min(delay, MAX_TIMER_DELAY_MS),
+    );
+    state.deps.log.debug(
+      { pausedUntil, delayMs: delay },
+      "cron: armTimer deferred - cron dispatch paused (event-loop stall)",
+    );
+    return;
+  }
   const nextAt = nextWakeAtMs(state);
   if (!nextAt) {
     const jobCount = state.store?.jobs.length ?? 0;
@@ -1296,6 +1314,15 @@ export async function onTimer(state: CronServiceState) {
   }
   if (state.restartRecoveryPending) {
     state.deps.log.warn({}, "cron: timer tick skipped - restart recovery pending");
+    return;
+  }
+  updateCronStallPause(state);
+  if (isCronDispatchPaused(state, state.deps.nowMs())) {
+    // Skip this tick's job dispatch entirely while paused; armTimer defers
+    // the next tick until the pause window elapses (see the pause branch in
+    // armTimer above). Schedules are untouched - only the next-fire time is
+    // deferred, matching the reference contract's pause semantics.
+    armTimer(state);
     return;
   }
   if (state.running) {

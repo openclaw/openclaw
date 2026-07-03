@@ -220,6 +220,18 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
+  /**
+   * Epoch ms until which all cron dispatch (timer arming and job execution)
+   * is paused. Set by event-loop stall detection (see stall-detection.ts).
+   * `null` means no active pause.
+   */
+  pausedUntil: number | null;
+  /**
+   * Lazily-created event-loop delay sampler used for stall detection.
+   * Left untyped-strict here (declared in stall-detection.ts) to avoid an
+   * import cycle; see stall-detection.ts for the concrete shape.
+   */
+  stallDetector?: { sample: () => { delayP99Ms: number; delayMaxMs: number }; stop: () => void };
 };
 
 /** Creates mutable cron service state with a concrete clock dependency. */
@@ -240,6 +252,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
+    pausedUntil: null,
   };
 }
 
