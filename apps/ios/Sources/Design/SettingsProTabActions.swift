@@ -192,13 +192,40 @@ extension SettingsProTab {
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
             await MainActor.run {
+                let desiredMode = self.reconciledLocationModeForRefresh(
+                    modeOverride: modeOverride,
+                    locationServicesEnabled: locationServicesEnabled,
+                    authorizationStatus: authorizationStatus)
                 self.locationPermissionSummary = LocationPermissionSummary(
-                    desiredMode: mode,
+                    desiredMode: desiredMode,
                     locationServicesEnabled: locationServicesEnabled,
                     authorizationStatus: authorizationStatus,
                     accuracyAuthorization: accuracyAuthorization)
             }
         }
+    }
+
+    private func reconciledLocationModeForRefresh(
+        modeOverride: OpenClawLocationMode?,
+        locationServicesEnabled: Bool,
+        authorizationStatus: CLAuthorizationStatus) -> OpenClawLocationMode
+    {
+        if let modeOverride { return modeOverride }
+        let currentMode = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+        let reconciledMode = LocationPermissionSummary.reconciledDesiredMode(
+            currentMode: currentMode,
+            locationServicesEnabled: locationServicesEnabled,
+            authorizationStatus: authorizationStatus)
+        guard reconciledMode != currentMode else { return currentMode }
+
+        self.locationStatusText = nil
+        self.previousLocationModeRaw = reconciledMode.rawValue
+        self.locationModeRaw = reconciledMode.rawValue
+        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+        Task {
+            _ = await self.appModel.requestLocationPermissions(mode: reconciledMode)
+        }
+        return reconciledMode
     }
 
     private static func locationServicesEnabled() async -> Bool {

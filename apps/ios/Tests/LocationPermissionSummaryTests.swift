@@ -88,6 +88,42 @@ import Testing
         #expect(summary.detailText == "Location Services are off in iOS Settings.")
     }
 
+    @Test func `external ios always grant promotes disabled app mode`() {
+        let mode = LocationPermissionSummary.reconciledDesiredMode(
+            currentMode: .off,
+            locationServicesEnabled: true,
+            authorizationStatus: .authorizedAlways)
+
+        #expect(mode == .always)
+    }
+
+    @Test func `external ios while using grant promotes disabled app mode`() {
+        let mode = LocationPermissionSummary.reconciledDesiredMode(
+            currentMode: .off,
+            locationServicesEnabled: true,
+            authorizationStatus: .authorizedWhenInUse)
+
+        #expect(mode == .whileUsing)
+    }
+
+    @Test func `ios while using grant preserves always intent for mismatch warning`() {
+        let mode = LocationPermissionSummary.reconciledDesiredMode(
+            currentMode: .always,
+            locationServicesEnabled: true,
+            authorizationStatus: .authorizedWhenInUse)
+
+        #expect(mode == .always)
+    }
+
+    @Test func `disabled location services preserve selected app mode for warning`() {
+        let mode = LocationPermissionSummary.reconciledDesiredMode(
+            currentMode: .always,
+            locationServicesEnabled: false,
+            authorizationStatus: .authorizedAlways)
+
+        #expect(mode == .always)
+    }
+
     @MainActor @Test func `off mode stops significant location monitoring`() async {
         let locationService = MockLocationService(authorizationStatus: .authorizedAlways)
         let appModel = NodeAppModel(locationService: locationService)
