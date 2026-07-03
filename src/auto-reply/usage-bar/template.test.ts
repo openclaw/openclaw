@@ -22,7 +22,9 @@ const cleanups: Array<() => void> = [];
 afterEach(() => {
   clearUsageBarTemplateCacheForTest();
   warnSpy.mockClear();
-  for (const fn of cleanups.splice(0)) fn();
+  for (const fn of cleanups.splice(0)) {
+    fn();
+  }
 });
 
 function tmpDir(): string {
