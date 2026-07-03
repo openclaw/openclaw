@@ -66,6 +66,24 @@ function writeStdout(value: string): void {
   }
 }
 
+/**
+ * Non-throwing JSON serialization for runtime output.
+ * Tries JSON.stringify first; falls back to String(value) for ordinary
+ * circular references; returns "[unserializable]" as a last resort for
+ * null-prototype objects where even String() throws.
+ */
+export function safeJsonOutput(value: unknown, space?: number): string {
+  try {
+    return JSON.stringify(value, null, space && space > 0 ? space : undefined) ?? "null";
+  } catch {
+    try {
+      return JSON.stringify(String(value));
+    } catch {
+      return '"[unserializable]"';
+    }
+  }
+}
+
 function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdout" | "writeJson"> {
   return {
     log: (...args: Parameters<typeof console.log>) => {
@@ -81,15 +99,7 @@ function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdou
     },
     writeStdout,
     writeJson: (value: unknown, space = 2) => {
-      try {
-        writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
-      } catch {
-        try {
-          writeStdout(JSON.stringify(String(value)));
-        } catch {
-          writeStdout('"[unserializable]"');
-        }
-      }
+      writeStdout(safeJsonOutput(value, space));
     },
   };
 }
@@ -121,13 +131,5 @@ export function writeRuntimeJson(
     runtime.writeJson(value, space);
     return;
   }
-  try {
-    runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-  } catch {
-    try {
-      runtime.log(JSON.stringify(String(value)));
-    } catch {
-      runtime.log('"[unserializable]"');
-    }
-  }
+  runtime.log(safeJsonOutput(value, space));
 }

@@ -43,4 +43,32 @@ describe("resolveRuntimeEnv", () => {
     expect(logger.info).toHaveBeenCalledWith("plain");
     expect(logger.info).toHaveBeenCalledWith('{\n  "ok": true\n}');
   });
+
+  it("handles circular references in logger-backed writeJson", () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+    };
+    const obj: Record<string, unknown> = {};
+    obj.self = obj;
+
+    const resolved = resolveRuntimeEnv({ logger });
+    resolved.writeJson(obj);
+
+    expect(logger.info).toHaveBeenCalledWith('"[object Object]"');
+  });
+
+  it("handles null-prototype circular in logger-backed writeJson", () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+    };
+    const obj = Object.create(null);
+    obj.self = obj;
+
+    const resolved = resolveRuntimeEnv({ logger });
+    resolved.writeJson(obj);
+
+    expect(logger.info).toHaveBeenCalledWith('"[unserializable]"');
+  });
 });

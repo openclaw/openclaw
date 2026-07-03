@@ -5,6 +5,7 @@
 
 import { format } from "node:util";
 import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
+import { safeJsonOutput } from "../runtime.js";
 
 /** Minimal logger contract accepted by runtime-adapter helpers. */
 type LoggerLike = {
@@ -28,7 +29,7 @@ export function createLoggerBackedRuntime(params: {
       params.logger.info(value);
     },
     writeJson: (value, space = 2) => {
-      params.logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+      params.logger.info(safeJsonOutput(value, space));
     },
     exit: (code: number): never => {
       throw params.exitError?.(code) ?? new Error(`exit ${code}`);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntime, writeRuntimeJson } from "./runtime.js";
+import { createNonExitingRuntime, safeJsonOutput, writeRuntimeJson } from "./runtime.js";
 import type { RuntimeEnv } from "./runtime.js";
 
 function circularValue() {
@@ -14,22 +14,44 @@ function nullProtoCircular() {
   return obj;
 }
 
+describe("safeJsonOutput", () => {
+  it("serializes plain objects with default spacing", () => {
+    expect(safeJsonOutput({ ok: true }, 2)).toBe('{\n  "ok": true\n}');
+  });
+
+  it("serializes compact without space", () => {
+    expect(safeJsonOutput({ ok: true })).toBe('{"ok":true}');
+  });
+
+  it("serializes with custom space", () => {
+    expect(safeJsonOutput({ a: 1 }, 0)).toBe('{"a":1}');
+  });
+
+  it("falls back to String(value) for circular references", () => {
+    expect(safeJsonOutput(circularValue())).toBe('"[object Object]"');
+  });
+
+  it("falls back to constant for null-prototype circular references", () => {
+    expect(safeJsonOutput(nullProtoCircular())).toBe('"[unserializable]"');
+  });
+});
+
 describe("writeRuntimeJson", () => {
-  it("serializes plain objects", () => {
+  it("serializes plain objects via writeJson", () => {
     const runtime = createNonExitingRuntime();
     const spy = vi.spyOn(runtime, "writeJson");
     writeRuntimeJson(runtime, { ok: true });
     expect(spy).toHaveBeenCalledWith({ ok: true }, 2);
   });
 
-  it("falls back to String(value) for circular references", () => {
+  it("handles circular references via writeJson", () => {
     const runtime = createNonExitingRuntime();
     const spy = vi.spyOn(runtime, "writeJson");
     writeRuntimeJson(runtime, circularValue());
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to constant for null-prototype circular references", () => {
+  it("handles null-prototype circular references via writeJson", () => {
     const runtime = createNonExitingRuntime();
     const spy = vi.spyOn(runtime, "writeJson");
     writeRuntimeJson(runtime, nullProtoCircular());
