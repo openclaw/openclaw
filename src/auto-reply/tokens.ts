@@ -42,14 +42,7 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
-/**
- * Strip leading and trailing punctuation characters.
- * Unicode-aware: uses \p{P} for all punctuation categories.
- * This prevents stray punctuation (e.g. ".NO_REPLY", "*NO_REPLY*") from
- * causing token-only silent-reply detection to fail, while preserving
- * substantive content like emoji or symbols before the token.
- */
-function stripEdgePunct(text: string): string {
+function stripEdgePunctuation(text: string): string {
   return text.replace(/^\p{P}+|\p{P}+$/gu, "");
 }
 
@@ -63,12 +56,11 @@ export function isSilentReplyText(
   }
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  // Try exact match first to preserve custom-token punctuation semantics, then fall back
-  // to edge-punctuation-stripped match so ".NO_REPLY" and "*NO_REPLY*" are caught (#98166).
-  // Trim whitespace before stripping edge punct so " .NO_REPLY " is also caught.
+  // Models sometimes wrap the token in punctuation. Preserve exact custom-token matching,
+  // but keep symbols such as emoji substantive so they are still delivered.
   return (
     getSilentExactRegex(token).test(text) ||
-    getSilentExactRegex(token).test(stripEdgePunct(text.trim()))
+    getSilentExactRegex(token).test(stripEdgePunctuation(text.trim()))
   );
 }
 

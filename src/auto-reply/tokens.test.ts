@@ -110,36 +110,29 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
   });
 
-  it("returns true for token with stray leading punctuation (#98166)", () => {
-    expect(isSilentReplyText(".NO_REPLY")).toBe(true);
-    expect(isSilentReplyText("*NO_REPLY")).toBe(true);
-    expect(isSilentReplyText("...NO_REPLY")).toBe(true);
+  it.each([
+    ".NO_REPLY",
+    "*NO_REPLY",
+    "...NO_REPLY",
+    "NO_REPLY.",
+    "NO_REPLY*",
+    "NO_REPLY...",
+    "*NO_REPLY*",
+    '"NO_REPLY"',
+    ".NO_REPLY.",
+    " .NO_REPLY ",
+    " NO_REPLY. ",
+    " *NO_REPLY* ",
+  ])("returns true for punctuation-wrapped token-only text: %j (#98166)", (text) => {
+    expect(isSilentReplyText(text)).toBe(true);
   });
 
-  it("returns true for token with stray trailing punctuation (#98166)", () => {
-    expect(isSilentReplyText("NO_REPLY.")).toBe(true);
-    expect(isSilentReplyText("NO_REPLY*")).toBe(true);
-    expect(isSilentReplyText("NO_REPLY...")).toBe(true);
-  });
-
-  it("returns true for token with punctuation on both sides (#98166)", () => {
-    expect(isSilentReplyText("*NO_REPLY*")).toBe(true);
-    expect(isSilentReplyText("\"NO_REPLY\"")).toBe(true);
-    expect(isSilentReplyText(".NO_REPLY.")).toBe(true);
-  });
-
-  it("still returns false for substantive text with stray punctuation before token", () => {
-    // "the sentinel is NO_REPLY, fyi" should remain false
-    expect(isSilentReplyText("the sentinel is NO_REPLY, fyi")).toBe(false);
-  });
-
-  it("returns true for punctuation with surrounding whitespace (#98166)", () => {
-    expect(isSilentReplyText(" .NO_REPLY")).toBe(true);
-    expect(isSilentReplyText(".NO_REPLY ")).toBe(true);
-    expect(isSilentReplyText(" .NO_REPLY ")).toBe(true);
-    expect(isSilentReplyText(" NO_REPLY. ")).toBe(true);
-    expect(isSilentReplyText(" *NO_REPLY* ")).toBe(true);
-  });
+  it.each(["the sentinel is NO_REPLY, fyi", "💬NO_REPLY", "NO_REPLY👍"])(
+    "keeps substantive punctuation or symbols: %j",
+    (text) => {
+      expect(isSilentReplyText(text)).toBe(false);
+    },
+  );
 
   it("preserves exact custom-token matches with punctuation-edged tokens", () => {
     // Custom tokens whose first/last character is punctuation must still match
