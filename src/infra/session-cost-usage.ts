@@ -169,6 +169,19 @@ function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);
 }
 
+function invalidateUsageCostCacheIfPricingChanged(
+  cache: UsageCostCacheFile,
+  currentFingerprint: string,
+): void {
+  if (
+    cache.pricingFingerprint !== undefined &&
+    cache.pricingFingerprint !== "" &&
+    cache.pricingFingerprint !== currentFingerprint
+  ) {
+    cache.files = {};
+  }
+}
+
 function resolveUsageCostCachePath(agentId?: string): string {
   return path.join(resolveSessionTranscriptsDirForAgent(agentId), USAGE_COST_CACHE_FILE);
 }
@@ -310,7 +323,7 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
 
 function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
   if (!raw || typeof raw !== "object") {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, pricingFingerprint: "", files: {} };
   }
   const record = raw as Record<string, unknown>;
   if (
@@ -318,7 +331,7 @@ function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
     !record.files ||
     typeof record.files !== "object"
   ) {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, pricingFingerprint: "", files: {} };
   }
   const files = record.files as Record<string, UsageCostCacheFileEntry>;
   // Lift the pricing fingerprint from entries to file level so it is
@@ -358,7 +371,7 @@ async function readUsageCostCache(cachePath: string): Promise<UsageCostCacheFile
     const raw = await fs.promises.readFile(cachePath, "utf-8");
     return normalizeUsageCostCache(JSON.parse(raw));
   } catch {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, pricingFingerprint: "", files: {} };
   }
 }
 
@@ -1657,12 +1670,7 @@ async function refreshCostUsageCacheForPath(params?: {
     await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
-    // When the pricing model changes, cached entries were computed under an
-    // old fingerprint and must be rescanned.  Clear them so stale detection
-    // rebuilds them instead of preserving stale cost data.
-    if (cache.pricingFingerprint !== undefined && cache.pricingFingerprint !== pricingFingerprint) {
-      cache.files = {};
-    }
+    invalidateUsageCostCacheIfPricingChanged(cache, pricingFingerprint);
     cache.pricingFingerprint = pricingFingerprint;
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
