@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { resolveCronStyleNow } from "../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
@@ -563,6 +564,12 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
 
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
+  // Live wall-clock line for the status card. The field/render slot existed but
+  // was never populated, so the model (told to call session_status for the date/
+  // time) got none back and would guess. Derive from `now` + config timezone so
+  // every render path (/status command and session_status tool) surfaces it.
+  const timeLine =
+    args.timeLine ?? (args.config ? resolveCronStyleNow(args.config, now).timeLine : undefined);
   const entry = args.sessionEntry;
   const selectionConfig = {
     agents: {
@@ -1113,7 +1120,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   return [
     versionLine,
-    args.timeLine,
+    timeLine,
     args.uptimeLine,
     ...modelLines,
     configuredFallbacksLine,

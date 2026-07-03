@@ -1152,7 +1152,7 @@ export function buildAgentSystemPrompt(params: {
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
       userTimezone
-        ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
+        ? "Never assume or guess the current date, time, or day of week; your training data is stale. Whenever anything depends on the present moment (scheduling, deadlines, age/elapsed math, or words like today/now/tomorrow/this week), first run session_status (📊 session_status) and use its `Current time` value."
         : "",
       "## Workspace",
       `Your working directory is: ${displayWorkspaceDir}`,
