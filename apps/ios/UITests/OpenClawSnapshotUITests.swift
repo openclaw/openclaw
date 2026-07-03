@@ -468,8 +468,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
         request.tap()
         self.app?.tap()
 
+        // The limited picker is an out-of-process system surface without stable accessibility identifiers.
+        // Normalized taps are confined to this opt-in simulator test; app-owned state proves completion below.
+        let screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.17, dy: 0.43)).tap()
+        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.16)).tap()
+
         self.app?.activate()
-        XCTAssertTrue(self.app?.staticTexts["Limited"].waitForExistence(timeout: 8) == true)
+        let limitedStatus = try XCTUnwrap(self.app?.staticTexts.matching(
+            NSPredicate(
+                format: "identifier == %@ AND label == %@",
+                "privacy-access-Photos-status",
+                "Limited")).firstMatch)
+        XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
+        XCTAssertEqual(self.app?.buttons["privacy-access-Photos-action"].label, "Manage Access")
         self.attachScreenshot(named: "photos-limited-access")
     }
 

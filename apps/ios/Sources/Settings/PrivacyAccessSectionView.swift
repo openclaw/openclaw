@@ -78,6 +78,7 @@ struct PrivacyAccessSectionView: View {
                 Text(status)
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(self.statusColor(for: status))
+                    .accessibilityIdentifier("privacy-access-\(title)-status")
             }
             Text(detail)
                 .font(.footnote)
