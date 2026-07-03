@@ -41,48 +41,12 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 // category Lo, so \p{C}\p{Z} alone would let them splice sensitive key names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
-// Bot API credential path segments must be redacted even in diagnostic/log URLs.
-// Require the real Telegram token shape (\u22656 digits, colon or %3A, \u226520 secret chars)
-// so ordinary `/bot` application routes are not hidden.
+// Telegram Bot API credentials live in `/bot<token>/...` path segments rather
+// than userinfo or query params. Keep this shape aligned with logging/redact.ts.
 const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
 
-function redactTelegramBotTokenPath(value: string): string {
+function redactSensitiveUrlPath(value: string): string {
   return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
-}
-
-// Universal bot token path redactors applied to every URL regardless of hostname.
-// The regex is strict enough (≥6-digit id + ≥20-char secret) to avoid false positives
-// on ordinary /bot application routes, so hostname-gating is unnecessary.
-const UNIVERSAL_BOT_TOKEN_PATH_REDACTORS: Array<(value: string) => string> = [
-  redactTelegramBotTokenPath,
-];
-
-// Registry of hostname-specific Bot API path-token redactors for future extensibility.
-// A matching hostname entry runs in addition to the universal redactors above.
-const BOT_TOKEN_PATH_REDACTORS: Record<string, (value: string) => string> = {};
-
-/**
- * Redact known Bot API credential path segments from a URL string.
- * Universal redactors (Telegram bot token path) always apply.
- * When `hostname` is provided and matches a hostname-specific policy, that
- * policy also runs. When omitted, all hostname-specific policies run too.
- */
-export function redactBotTokenPath(value: string, hostname?: string): string {
-  let result = value;
-  for (const redactor of UNIVERSAL_BOT_TOKEN_PATH_REDACTORS) {
-    result = redactor(result);
-  }
-  if (hostname) {
-    const hostRedactor = BOT_TOKEN_PATH_REDACTORS[hostname];
-    if (hostRedactor) {
-      result = hostRedactor(result);
-    }
-  } else {
-    for (const redactor of Object.values(BOT_TOKEN_PATH_REDACTORS)) {
-      result = redactor(result);
-    }
-  }
-  return result;
 }
 
 function normalizeUrlQueryParamName(name: string): string {
@@ -126,6 +90,11 @@ export function redactSensitiveUrl(value: string): string {
   try {
     const parsed = new URL(value);
     let mutated = false;
+    const redactedPath = redactSensitiveUrlPath(parsed.pathname);
+    if (redactedPath !== parsed.pathname) {
+      parsed.pathname = redactedPath;
+      mutated = true;
+    }
     if (parsed.username || parsed.password) {
       parsed.username = parsed.username ? "***" : "";
       parsed.password = parsed.password ? "***" : "";
@@ -149,9 +118,10 @@ export function redactSensitiveUrlLikeString(value: string): string {
   if (redactedUrl !== value) {
     return redactedUrl;
   }
-  return value
+  const redactedFallback = value
     .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
     .replace(/([?&])([^=&]+)=([^&]*)/g, (match, prefix: string, key: string) =>
       isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
     );
+  return redactSensitiveUrlPath(redactedFallback);
 }
