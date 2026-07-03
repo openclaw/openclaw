@@ -63,6 +63,32 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
     expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("test-key");
   });
 
+  it("does not reset continue_delegate admission before entering the session lane", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    let enqueueCalls = 0;
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-1159-budget-reset-lane",
+      config: {
+        agents: { defaults: { continuation: { enabled: true } } },
+      },
+      enqueue: async (task) => {
+        enqueueCalls += 1;
+        if (enqueueCalls === 1) {
+          expect(resetContinueDelegateTurnBudgetMock).not.toHaveBeenCalled();
+        }
+        return await task();
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(enqueueCalls).toBeGreaterThanOrEqual(1);
+    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("test-key");
+  });
+
   it("forwards continueWorkOpts to runEmbeddedAttempt", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 

@@ -471,22 +471,26 @@ async function drainChildContinuationQueue(params: {
       try {
         const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
         const storePath = resolveStorePathLazy(cfg.session?.store, { agentId });
-        await updateSessionStoreLazy(storePath, (store) => {
-          const existing = store[params.childSessionKey];
-          if (!existing) {
-            return;
-          }
-          wroteDurableEntry = true;
-          store[params.childSessionKey] = {
-            ...existing,
-            continuationChainCount: advanced.currentChainCount,
-            continuationChainStartedAt: advanced.chainStartedAt,
-            continuationChainTokens: advanced.accumulatedChainTokens,
-            // Persist the chain id to disk too so it survives gateway restart /
-            // cache eviction and the next drain does not re-mint a fresh id.
-            ...(advanced.chainId ? { continuationChainId: advanced.chainId } : {}),
-          };
-        });
+        await updateSessionStoreLazy(
+          storePath,
+          (store) => {
+            const existing = store[params.childSessionKey];
+            if (!existing) {
+              return;
+            }
+            wroteDurableEntry = true;
+            store[params.childSessionKey] = {
+              ...existing,
+              continuationChainCount: advanced.currentChainCount,
+              continuationChainStartedAt: advanced.chainStartedAt,
+              continuationChainTokens: advanced.accumulatedChainTokens,
+              // Persist the chain id to disk too so it survives gateway restart /
+              // cache eviction and the next drain does not re-mint a fresh id.
+              ...(advanced.chainId ? { continuationChainId: advanced.chainId } : {}),
+            };
+          },
+          { requireWriteSuccess: true },
+        );
       } catch (writeErr) {
         defaultRuntime.error?.(
           `[continuation:drain-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,

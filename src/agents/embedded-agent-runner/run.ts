@@ -651,9 +651,6 @@ async function runEmbeddedAgentInternal(
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
   };
-  if (params.sessionKey && params.config?.agents?.defaults?.continuation?.enabled === true) {
-    resetContinueDelegateTurnBudget(params.sessionKey);
-  }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -802,6 +799,9 @@ async function runEmbeddedAgentInternal(
 
   return enqueueSession(async () => {
     throwIfAborted();
+    if (params.sessionKey && params.config?.agents?.defaults?.continuation?.enabled === true) {
+      resetContinueDelegateTurnBudget(params.sessionKey);
+    }
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.

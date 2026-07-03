@@ -649,17 +649,21 @@ export async function recoverPendingContinuationDelegates(
     const persistRecoveredChainState = params.chainState
       ? undefined
       : async (nextState: ChainState): Promise<void> => {
-          await updateSessionStore(storePath, (store) => {
-            const sessionEntry = store[sessionKey] ?? {};
-            persistContinuationChainState({
-              sessionEntry,
-              count: nextState.currentChainCount,
-              startedAt: nextState.chainStartedAt,
-              tokens: nextState.accumulatedChainTokens,
-              ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
-            });
-            store[sessionKey] = sessionEntry;
-          });
+          await updateSessionStore(
+            storePath,
+            (store) => {
+              const sessionEntry = store[sessionKey] ?? {};
+              persistContinuationChainState({
+                sessionEntry,
+                count: nextState.currentChainCount,
+                startedAt: nextState.chainStartedAt,
+                tokens: nextState.accumulatedChainTokens,
+                ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+              });
+              store[sessionKey] = sessionEntry;
+            },
+            { requireWriteSuccess: true },
+          );
           const inMemoryEntry = sessionStore[sessionKey] ?? {};
           persistContinuationChainState({
             sessionEntry: inMemoryEntry,
