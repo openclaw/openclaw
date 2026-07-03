@@ -277,6 +277,11 @@ export function sanitizeBinaryOutput(text: string): string {
       continue;
     }
     if (code < 0x20) {
+      // Escape control characters to hex form instead of deleting them. This
+      // preserves context (e.g. SSH banners, ANSI escape sequences, terminal
+      // control codes) without letting raw binary bytes pollute the rendered
+      // output or trigger a binary/MIME fallback that renders as a placeholder.
+      chunks.push(`\\x${code.toString(16).padStart(2, "0")}`);
       continue;
     }
     chunks.push(char);

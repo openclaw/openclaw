@@ -12,6 +12,7 @@ import {
   resolveShellFromPath,
   resolveShellFromWhich,
   resolveWindowsBashPath,
+  sanitizeBinaryOutput,
 } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -394,5 +395,41 @@ describe("resolvePowerShellPath", () => {
     delete process.env.WINDIR;
 
     expect(resolvePowerShellPath()).toBe(ps51Path);
+  });
+});
+
+describe("sanitizeBinaryOutput", () => {
+  it("leaves printable text unchanged", () => {
+    expect(sanitizeBinaryOutput("hello world")).toBe("hello world");
+  });
+
+  it("preserves tab, newline, and carriage return", () => {
+    expect(sanitizeBinaryOutput("line1\tline2\nline3\rline4")).toBe("line1\tline2\nline3\rline4");
+  });
+
+  it("strips Format and Surrogate code points", () => {
+    // U+200C (ZERO WIDTH NON-JOINER) is a Format character.
+    expect(sanitizeBinaryOutput("a\u200Cb")).toBe("ab");
+  });
+
+  it("escapes control characters to hex form instead of deleting them", () => {
+    // ESC (27) and BEL (7) should become visible escapes, not disappear.
+    const input = "SSH banner: \x1B[0m alert \x07";
+    const output = sanitizeBinaryOutput(input);
+    expect(output).toContain("\\x1b");
+    expect(output).toContain("\\x07");
+    expect(output).toContain("SSH banner:");
+    expect(output).toContain("alert");
+    expect(output).not.toContain("\x1B");
+    expect(output).not.toContain("\x07");
+  });
+
+  it("keeps output non-empty when only control characters are present", () => {
+    // Previously this would return an empty string, causing binary/MIME fallback.
+    expect(sanitizeBinaryOutput("\x1B\x07\x08")).toBe("\\x1b\\x07\\x08");
+  });
+
+  it("escapes NUL bytes", () => {
+    expect(sanitizeBinaryOutput("a\x00b")).toBe("a\\x00b");
   });
 });
