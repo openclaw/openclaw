@@ -37,6 +37,7 @@ import {
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
+  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -251,16 +252,10 @@ function countContentBlockChars(
 ): number {
   let chars = 0;
   for (const block of content) {
-    if (block.type === "text" && block.text) {
-      chars += block.text.length;
-    } else if (block.type === "image") {
+    if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
-    } else if (block.type === "toolResult" || block.type === "tool_result") {
-      if (block.text) {
-        chars += block.text.length;
-      } else if (typeof block.content === "string") {
-        chars += block.content.length;
-      }
+    } else {
+      chars += getCompactionContentBlockText(block).length;
     }
   }
   return chars;

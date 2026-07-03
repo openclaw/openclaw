@@ -41,18 +41,19 @@ function toolResultText(text: string, timestamp: number): AgentMessage {
   };
 }
 
-function codexToolResultText(text: string, timestamp: number): AgentMessage {
+function nestedToolResult(
+  block: { type: string; content?: unknown; text?: string },
+  timestamp: number,
+): AgentMessage {
   return {
     role: "toolResult",
     toolCallId: "call-1",
     toolName: "codex_progress",
     content: [
       {
-        type: "toolResult",
         id: "call-1",
         toolUseId: "call-1",
-        content: text,
-        text,
+        ...block,
       },
     ],
     isError: false,
@@ -101,15 +102,20 @@ describe("findCutPoint with a trailing oversized tool result", () => {
     expect(result.firstKeptEntryIndex).toBe(3);
   });
 
-  it("counts Codex nested toolResult block content", () => {
-    const trailing = codexToolResultText(LARGE_TOOL_OUTPUT, 5);
+  it.each([
+    {
+      name: "Codex toolResult text",
+      block: { type: "toolResult", content: "duplicate", text: LARGE_TOOL_OUTPUT },
+    },
+    {
+      name: "snake-case tool_result content",
+      block: { type: "tool_result", content: LARGE_TOOL_OUTPUT },
+    },
+  ])("counts and trims the prefix for $name", ({ block }) => {
+    const trailing = nestedToolResult(block, 5);
+    const entries = buildTranscriptWithToolResult(trailing);
 
     expect(estimateTokens(trailing)).toBeGreaterThanOrEqual(KEEP_RECENT_TOKENS);
-  });
-
-  it("trims the prefix for Codex nested toolResult block content", () => {
-    const entries = buildTranscriptWithToolResult(codexToolResultText(LARGE_TOOL_OUTPUT, 5));
-
     const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
 
     expect(result.firstKeptEntryIndex).toBeGreaterThan(0);

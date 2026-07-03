@@ -109,7 +109,12 @@ function truncateForSummary(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
-function toolResultBlockText(block: { type: string; content?: unknown; text?: string }): string {
+/** Extract text that compaction both estimates and includes in summary prompts. */
+export function getCompactionContentBlockText(block: {
+  type: string;
+  content?: unknown;
+  text?: string;
+}): string {
   if (block.type === "text" && block.text) {
     return block.text;
   }
@@ -167,7 +172,7 @@ export function serializeConversation(messages: Message[]): string {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
       }
     } else if (msg.role === "toolResult") {
-      const content = msg.content.map(toolResultBlockText).join("");
+      const content = msg.content.map(getCompactionContentBlockText).join("");
       if (content) {
         parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }
