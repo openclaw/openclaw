@@ -37,6 +37,8 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   "claude-opus-4.6",
   "claude-opus-4-7",
   "claude-opus-4.7",
+  "claude-sonnet-5",
+  "claude-sonnet-5.0",
   "claude-sonnet-4-6",
   "claude-sonnet-4.6",
 ] as const;
