@@ -304,6 +304,10 @@ describe("runPreparedReply media-only handling", () => {
     updateSessionStore.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
+    vi.mocked(buildDirectChatContext).mockReturnValue("");
+    vi.mocked(buildGroupChatContext).mockReturnValue("");
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValue("");
+    vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     replyRunTesting.resetReplyRunRegistry();
   });
 
@@ -2525,7 +2529,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {
-    vi.mocked(buildGroupChatContext).mockImplementationOnce(({ sessionCtx }) =>
+    vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx }) =>
       [`group`, sessionCtx.Provider, sessionCtx.ChatType, sessionCtx.GroupChannel].join(":"),
     );
 
@@ -2585,6 +2589,207 @@ describe("runPreparedReply media-only handling", () => {
     expect(groupContextParams?.sessionCtx?.GroupChannel).toBe("#ops");
     expect(call?.followupRun.run.chatType).toBe("channel");
     expect(call?.followupRun.run.extraSystemPromptStatic).toBe("group:discord:channel:#ops");
+  });
+
+  it.each([
+    {
+      name: "automatic config",
+      stableMode: "automatic",
+      expectedPrompt: "group:telegram:group:automatic",
+    },
+    {
+      name: "message-tool config",
+      stableMode: "message_tool_only",
+      expectedPrompt: "group:telegram:group:message_tool_only",
+    },
+  ] as const)(
+    "keeps CLI binding facts stable across room-event, primary, and heartbeat assembly for $name",
+    async ({ stableMode, expectedPrompt }) => {
+      vi.mocked(buildGroupChatContext).mockImplementation(
+        ({ sessionCtx, sourceReplyDeliveryMode }) =>
+          [
+            "group",
+            sessionCtx.Provider,
+            sessionCtx.ChatType,
+            sourceReplyDeliveryMode ?? "automatic",
+          ].join(":"),
+      );
+      const sessionEntry: SessionEntry = {
+        sessionId: "session-telegram-group",
+        updatedAt: 1,
+        systemSent: true,
+        chatType: "group",
+        channel: "telegram",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        origin: {
+          provider: "telegram",
+          surface: "telegram",
+          chatType: "group",
+          to: "-100123",
+        },
+      };
+
+      await runPreparedReply(
+        baseParams({
+          opts: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            sessionPromptSourceReplyDeliveryMode: stableMode,
+          },
+          isNewSession: false,
+          systemSent: true,
+          sessionEntry,
+          ctx: {
+            Body: "@bot check this",
+            RawBody: "@bot check this",
+            CommandBody: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            MessageSid: "msg-1",
+          },
+          sessionCtx: {
+            Body: "@bot check this",
+            BodyStripped: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            InboundEventKind: "room_event",
+            MessageSid: "msg-1",
+          },
+        }),
+      );
+      await runPreparedReply(
+        baseParams({
+          opts: {
+            sourceReplyDeliveryMode: stableMode,
+            sessionPromptSourceReplyDeliveryMode: stableMode,
+          },
+          isNewSession: false,
+          systemSent: true,
+          sessionEntry,
+          ctx: {
+            Body: "@bot check this",
+            RawBody: "@bot check this",
+            CommandBody: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            MessageSid: "msg-2",
+          },
+          sessionCtx: {
+            Body: "@bot check this",
+            BodyStripped: "@bot check this",
+            Provider: "telegram",
+            Surface: "telegram",
+            ChatType: "group",
+            MessageSid: "msg-2",
+          },
+        }),
+      );
+      await runPreparedReply(
+        baseParams({
+          opts: {
+            isHeartbeat: true,
+            sourceReplyDeliveryMode: stableMode,
+            sessionPromptSourceReplyDeliveryMode: stableMode,
+          },
+          isNewSession: false,
+          systemSent: true,
+          sessionEntry,
+          ctx: {
+            Body: "scheduled wake",
+            RawBody: "scheduled wake",
+            CommandBody: "scheduled wake",
+            Provider: "cron-event",
+            SessionKey: "agent:main:telegram:-100123",
+          },
+          sessionCtx: {
+            Body: "scheduled wake",
+            BodyStripped: "scheduled wake",
+            Provider: "cron-event",
+          },
+        }),
+      );
+
+      const roomEventRun = requireRunReplyAgentCall(0).followupRun.run;
+      const primaryRun = requireRunReplyAgentCall(1).followupRun.run;
+      const heartbeatRun = requireRunReplyAgentCall(2).followupRun.run;
+      expect(roomEventRun.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(primaryRun.sourceReplyDeliveryMode).toBe(stableMode);
+      expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
+      expect(roomEventRun.extraSystemPrompt).toBe(expectedPrompt);
+      expect(requireRunReplyAgentCall(0).followupRun.currentInboundContext?.text).toContain(
+        "your final text here stays private either way",
+      );
+      expect(roomEventRun.extraSystemPromptStatic).toBe(expectedPrompt);
+      expect(primaryRun.extraSystemPromptStatic).toBe(roomEventRun.extraSystemPromptStatic);
+      expect(heartbeatRun.extraSystemPromptStatic).toBe(roomEventRun.extraSystemPromptStatic);
+      expect(roomEventRun.cliSessionBindingFacts).toEqual({
+        extraSystemPromptStatic: expectedPrompt,
+        sourceReplyDeliveryMode: stableMode,
+      });
+      expect(primaryRun.cliSessionBindingFacts).toEqual(roomEventRun.cliSessionBindingFacts);
+      expect(heartbeatRun.cliSessionBindingFacts).toEqual(roomEventRun.cliSessionBindingFacts);
+    },
+  );
+
+  it("keeps per-message room-event metadata out of CLI binding facts", async () => {
+    vi.mocked(buildGroupChatContext).mockImplementation(({ sessionCtx, sourceReplyDeliveryMode }) =>
+      [
+        "group",
+        sessionCtx.Provider,
+        sessionCtx.ChatType,
+        sourceReplyDeliveryMode ?? "automatic",
+      ].join(":"),
+    );
+    const baseRoomEvent = {
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        sessionPromptSourceReplyDeliveryMode: "automatic" as const,
+      },
+      isNewSession: false,
+      systemSent: true,
+      ctx: {
+        Body: "@bot check this",
+        RawBody: "@bot check this",
+        CommandBody: "@bot check this",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      },
+      sessionCtx: {
+        Body: "@bot check this",
+        BodyStripped: "@bot check this",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        InboundEventKind: "room_event" as const,
+      },
+    };
+
+    await runPreparedReply(
+      baseParams({
+        ...baseRoomEvent,
+        ctx: { ...baseRoomEvent.ctx, MessageSid: "msg-1", Timestamp: 1_710_000_000_000 },
+        sessionCtx: { ...baseRoomEvent.sessionCtx, MessageSid: "msg-1" },
+      }),
+    );
+    await runPreparedReply(
+      baseParams({
+        ...baseRoomEvent,
+        ctx: { ...baseRoomEvent.ctx, MessageSid: "msg-2", Timestamp: 1_710_000_005_000 },
+        sessionCtx: { ...baseRoomEvent.sessionCtx, MessageSid: "msg-2" },
+      }),
+    );
+
+    const firstRun = requireRunReplyAgentCall(0).followupRun.run;
+    const secondRun = requireRunReplyAgentCall(1).followupRun.run;
+    expect(firstRun.cliSessionBindingFacts).toEqual({
+      extraSystemPromptStatic: "group:telegram:group:automatic",
+      sourceReplyDeliveryMode: "automatic",
+    });
+    expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
   });
 
   it.each([

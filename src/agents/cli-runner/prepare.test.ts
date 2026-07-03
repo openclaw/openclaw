@@ -2012,6 +2012,111 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it.each([
+    {
+      name: "automatic config",
+      stableMode: "automatic",
+      staticPrompt: "group:telegram:group:automatic",
+      expectedStrongPrompt: false,
+    },
+    {
+      name: "message-tool config",
+      stableMode: "message_tool_only",
+      staticPrompt: "group:telegram:group:message_tool_only",
+      expectedStrongPrompt: true,
+    },
+  ] as const)(
+    "reuses CLI session bindings across new inbound messages with stable binding facts for $name",
+    async ({ stableMode, staticPrompt, expectedStrongPrompt }) => {
+      const { dir, sessionFile } = createSessionFile();
+      try {
+        const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        }));
+        const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+          agentId: "main",
+          tools: [
+            {
+              name: "message",
+              label: "Message",
+              description: "Send a message",
+              parameters: { type: "object", properties: {} },
+              execute: vi.fn(),
+            },
+          ],
+        }));
+        setCliRunnerPrepareTestDeps({
+          getActiveMcpLoopbackRuntime,
+          resolveMcpLoopbackScopedTools,
+        });
+        const cliSessionBindingFacts = {
+          extraSystemPromptStatic: staticPrompt,
+          sourceReplyDeliveryMode: stableMode,
+        };
+        const first = await prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "first ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-stable-binding-facts-a",
+          extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentMessageId: "msg-1",
+          cliSessionBindingFacts,
+          config: createCliBackendConfig({ bundleMcp: true }),
+        });
+        const second = await prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "second ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-stable-binding-facts-b",
+          extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
+          sourceReplyDeliveryMode: stableMode,
+          currentMessageId: "msg-2",
+          cliSessionBindingFacts,
+          cliSessionBinding: {
+            sessionId: "cli-session",
+            extraSystemPromptHash: first.extraSystemPromptHash,
+            messageToolPolicyHash: first.messageToolPolicyHash,
+            promptToolNamesHash: first.promptToolNamesHash,
+            cwdHash: hashCliSessionText(dir),
+          },
+          config: createCliBackendConfig({ bundleMcp: true }),
+        });
+
+        expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+        expect(first.messageToolPolicyHash).toBeDefined();
+        expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+        expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+        expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+        if (expectedStrongPrompt) {
+          expect(first.systemPrompt).toContain(
+            "use `message(action=send)` for visible source-channel output",
+          );
+        } else {
+          expect(first.systemPrompt).toContain("final text normally routes to the source channel");
+          expect(first.systemPrompt).toContain(
+            "if current-turn context says final text stays private, use `message(action=send)`",
+          );
+        }
+        expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("prepares raw-tail history for safe invalidations only when the backend opts in", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {

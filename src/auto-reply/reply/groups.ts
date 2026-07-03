@@ -258,7 +258,7 @@ export function buildGroupChatContext(params: {
     );
   } else {
     lines.push(
-      `Your text replies are automatically sent to ${destinationLabel}. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
+      `Your text replies are automatically sent to ${destinationLabel} unless the current-turn context says final replies stay private. For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send). Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
     );
   }
   lines.push(
@@ -319,7 +319,9 @@ export function buildDirectChatContext(params: {
     );
     return lines.join(" ");
   }
-  lines.push("Your replies are automatically sent to this conversation.");
+  lines.push(
+    "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
+  );
   return lines.join(" ");
 }
 

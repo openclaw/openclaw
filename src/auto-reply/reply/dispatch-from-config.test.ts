@@ -627,6 +627,13 @@ const automaticGroupReplyConfig = {
     },
   },
 } as const satisfies OpenClawConfig;
+const messageToolGroupReplyConfig = {
+  messages: {
+    groupChat: {
+      visibleReplies: "message_tool",
+    },
+  },
+} as const satisfies OpenClawConfig;
 const automaticDirectReplyConfig = {
   messages: {
     visibleReplies: "automatic",
@@ -3542,6 +3549,75 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "automatic",
+      cfg: automaticGroupReplyConfig,
+      expectedUserRequestMode: "automatic",
+      expectedStableMode: "automatic",
+    },
+    {
+      name: "message-tool",
+      cfg: messageToolGroupReplyConfig,
+      expectedUserRequestMode: "message_tool_only",
+      expectedStableMode: "message_tool_only",
+    },
+  ] as const)(
+    "threads $name session-stable source delivery mode to reply runs",
+    async ({ cfg, expectedUserRequestMode, expectedStableMode }) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      type CapturedReplyOptions = GetReplyOptions & {
+        sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
+      };
+      const seen: Array<{
+        effective?: GetReplyOptions["sourceReplyDeliveryMode"];
+        stable?: GetReplyOptions["sourceReplyDeliveryMode"];
+      }> = [];
+      const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: CapturedReplyOptions) => {
+        seen.push({
+          effective: opts?.sourceReplyDeliveryMode,
+          stable: opts?.sessionPromptSourceReplyDeliveryMode,
+        });
+        return { text: "done" } satisfies ReplyPayload;
+      });
+      const baseCtx = {
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        From: "telegram:group:-100123",
+        SessionKey: "agent:main:telegram:group:-100123",
+      };
+
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          ...baseCtx,
+          Body: "@bot check this",
+          CommandBody: "@bot check this",
+        }),
+        cfg,
+        dispatcher,
+        replyResolver,
+      });
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          ...baseCtx,
+          Body: "@bot check this",
+          CommandBody: "@bot check this",
+          InboundEventKind: "room_event",
+        }),
+        cfg,
+        dispatcher,
+        replyResolver,
+      });
+
+      expect(seen).toEqual([
+        { effective: expectedUserRequestMode, stable: expectedStableMode },
+        { effective: "message_tool_only", stable: expectedStableMode },
+      ]);
+    },
+  );
 
   it("forwards channel-owned room-event progress callbacks while source delivery is suppressed", async () => {
     setNoAbort();
