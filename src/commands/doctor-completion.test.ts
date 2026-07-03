@@ -6,13 +6,27 @@ import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
+  doctorShellCompletion,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
 const tempDirs: string[] = [];
+
+/** Minimal prompter that auto-confirms and reports repair mode. */
+const noopPrompter: DoctorPrompter = {
+  confirm: async () => true,
+  confirmAutoFix: async () => true,
+  confirmAggressiveAutoFix: async () => true,
+  confirmRuntimeRepair: async () => true,
+  select: async (_params, fallback) => fallback,
+  shouldRepair: true,
+  shouldForce: false,
+  repairMode: "fix" as const,
+};
 
 afterEach(async () => {
   originalEnv.restore();
@@ -100,5 +114,57 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([]);
+  });
+});
+
+describe("doctorShellCompletion EACCES handling", () => {
+  it("does not throw when the shell profile is read-only during install", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-eacces-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-state-eacces-"));
+    tempDirs.push(homeDir, stateDir);
+
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    // Create read-only .bashrc
+    const bashrcPath = path.join(homeDir, ".bashrc");
+    await fs.writeFile(bashrcPath, "# readonly profile\n", "utf-8");
+    await fs.chmod(bashrcPath, 0o444);
+
+    // Create completion cache so installCompletion proceeds past cache check
+    const cacheDir = path.join(stateDir, "completions");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(path.join(cacheDir, "openclaw.bash"), "# mock cache\n", "utf-8");
+
+    // doctorShellCompletion should catch the EACCES and emit a note instead of throwing
+    await expect(doctorShellCompletion({} as never, noopPrompter)).resolves.toBeUndefined();
+  });
+
+  it("does not throw when the shell profile is read-only during slow-pattern upgrade", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-slow-eacces-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-state-slow-eacces-"));
+    tempDirs.push(homeDir, stateDir);
+
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    // Create read-only .bashrc with slow dynamic completion pattern
+    const bashrcPath = path.join(homeDir, ".bashrc");
+    await fs.writeFile(
+      bashrcPath,
+      "# slow dynamic completion\nsource <(openclaw completion bash)\n",
+      "utf-8",
+    );
+    await fs.chmod(bashrcPath, 0o444);
+
+    // Create completion cache
+    const cacheDir = path.join(stateDir, "completions");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(path.join(cacheDir, "openclaw.bash"), "# mock cache\n", "utf-8");
+
+    // doctorShellCompletion should catch EACCES during slow-pattern upgrade
+    await expect(doctorShellCompletion({} as never, noopPrompter)).resolves.toBeUndefined();
   });
 });
