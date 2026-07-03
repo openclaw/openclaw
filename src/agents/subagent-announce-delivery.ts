@@ -77,6 +77,7 @@ import type { DeliveryContext } from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import { isUnsafeSubagentDeliverableText } from "./subagent-announce-output.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 type SubagentAnnounceDeliveryDeps = {
@@ -1020,7 +1021,7 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
       continue;
     }
     const result = typeof event.result === "string" ? event.result.trim() : "";
-    if (result && result !== "(no output)") {
+    if (result && result !== "(no output)" && !isUnsafeSubagentDeliverableText(result)) {
       return result;
     }
   }
