@@ -32,6 +32,56 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts model-provider request rate limits", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          request: {
+            rateLimit: {
+              requestsPerMinute: 60,
+              minIntervalMs: 25,
+              maxQueueSize: 2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid model-provider request rate limits", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          request: {
+            rateLimit: {
+              requestsPerMinute: 0,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects model-provider request rate limits without active pacing", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          request: {
+            rateLimit: {
+              maxQueueSize: 2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts google-vertex as a model API from MODEL_APIS", () => {
     const result = ModelsConfigSchema.safeParse({
       providers: {
