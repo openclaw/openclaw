@@ -1368,6 +1368,31 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
   note(formatHealthFindings(findings), "Doctor warnings");
 }
 
+async function runAgentModelRuntimePoliciesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
+  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
+  const { note } = await loadNoteModule();
+
+  registerCoreHealthChecks();
+  const check = getHealthCheck("core/doctor/agent-model-runtime-policies");
+  if (!check) {
+    return;
+  }
+  const findings = await check.detect({
+    mode: "doctor",
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
+    configPath: ctx.configPath,
+  });
+  if (findings.length === 0) {
+    return;
+  }
+  ctx.healthOk = false;
+  note(formatHealthFindings(findings), "Doctor warnings");
+}
+
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
@@ -1821,6 +1846,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:agent-model-runtime-policies",
+      label: "Agent model runtime policies",
+      healthCheckIds: ["core/doctor/agent-model-runtime-policies"],
+      run: runAgentModelRuntimePoliciesHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:tool-result-cap",

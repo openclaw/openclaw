@@ -1,5 +1,6 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
@@ -45,6 +46,7 @@ import type {
 } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
+const AGENT_MODEL_RUNTIME_POLICIES_CHECK_ID = "core/doctor/agent-model-runtime-policies";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
@@ -505,6 +507,261 @@ function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): Health
     },
   };
 }
+
+type ModelRefSlot = {
+  path: string;
+  value: string;
+};
+
+type RuntimePolicySlot = {
+  key: string;
+  path: string;
+};
+
+function asReadonlyRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+function collectModelConfigRefs(params: { path: string; value: unknown }): ModelRefSlot[] {
+  const direct = normalizeOptionalString(params.value);
+  if (direct) {
+    return [{ path: params.path, value: direct }];
+  }
+  const record = asReadonlyRecord(params.value);
+  if (!record) {
+    return [];
+  }
+  const refs: ModelRefSlot[] = [];
+  const primary = normalizeOptionalString(record.primary);
+  if (primary) {
+    refs.push({ path: `${params.path}.primary`, value: primary });
+  }
+  if (Array.isArray(record.fallbacks)) {
+    for (const [index, fallback] of record.fallbacks.entries()) {
+      const value = normalizeOptionalString(fallback);
+      if (value) {
+        refs.push({ path: `${params.path}.fallbacks.${index}`, value });
+      }
+    }
+  }
+  return refs;
+}
+
+function collectAgentRuntimeModelRefs(params: {
+  agent: unknown;
+  path: string;
+  inherited?: readonly ModelRefSlot[];
+}): ModelRefSlot[] {
+  const agent = asReadonlyRecord(params.agent);
+  const refs: ModelRefSlot[] = [];
+  if (agent && Object.hasOwn(agent, "model")) {
+    refs.push(...collectModelConfigRefs({ path: `${params.path}.model`, value: agent.model }));
+  } else {
+    refs.push(
+      ...(params.inherited?.filter((ref) => ref.path.startsWith("agents.defaults.model")) ?? []),
+    );
+  }
+  const heartbeat = asReadonlyRecord(agent?.heartbeat);
+  const heartbeatModel = normalizeOptionalString(heartbeat?.model);
+  if (heartbeatModel) {
+    refs.push({ path: `${params.path}.heartbeat.model`, value: heartbeatModel });
+  } else {
+    refs.push(
+      ...(params.inherited?.filter((ref) => ref.path === "agents.defaults.heartbeat.model") ?? []),
+    );
+  }
+  const subagents = asReadonlyRecord(agent?.subagents);
+  if (subagents && Object.hasOwn(subagents, "model")) {
+    refs.push(
+      ...collectModelConfigRefs({
+        path: `${params.path}.subagents.model`,
+        value: subagents.model,
+      }),
+    );
+  } else {
+    refs.push(
+      ...(params.inherited?.filter((ref) =>
+        ref.path.startsWith("agents.defaults.subagents.model"),
+      ) ?? []),
+    );
+  }
+  return refs;
+}
+
+function collectRuntimePolicySlots(params: { models: unknown; path: string }): RuntimePolicySlot[] {
+  const models = asReadonlyRecord(params.models);
+  if (!models) {
+    return [];
+  }
+  const slots: RuntimePolicySlot[] = [];
+  for (const [key, entry] of Object.entries(models)) {
+    const runtimeId = normalizeOptionalString(
+      asReadonlyRecord(asReadonlyRecord(entry)?.agentRuntime)?.id,
+    );
+    if (runtimeId) {
+      slots.push({ key, path: `${params.path}.${key}.agentRuntime.id` });
+    }
+  }
+  return slots;
+}
+
+function runtimePolicyMatchesModelRef(policy: RuntimePolicySlot, modelKeyValue: string): boolean {
+  const key = policy.key.trim();
+  if (!key.endsWith("/*")) {
+    return key === modelKeyValue;
+  }
+  const provider = key.slice(0, -2).trim();
+  return Boolean(provider) && modelKeyValue.startsWith(`${provider}/`);
+}
+
+function formatAgentPath(path: string): string {
+  return path === "agents.defaults" ? "agents.defaults" : path.replace(/^agents\.list\./, "agent ");
+}
+
+async function collectAgentModelRuntimePolicyFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const { DEFAULT_PROVIDER } = await import("../agents/defaults.js");
+  const { buildModelAliasIndex, modelKey, resolveModelRefFromString } =
+    await import("../agents/model-selection.js");
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    allowPluginNormalization: false,
+  });
+  const canonicalize = (ref: ModelRefSlot): ModelRefSlot | undefined => {
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw: ref.value,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+      allowPluginNormalization: false,
+    });
+    if (!resolved) {
+      return undefined;
+    }
+    return { path: ref.path, value: modelKey(resolved.ref.provider, resolved.ref.model) };
+  };
+  const canonicalizeRefs = (refs: readonly ModelRefSlot[]) =>
+    refs.map(canonicalize).filter((ref): ref is ModelRefSlot => Boolean(ref));
+  const findings: HealthFinding[] = [];
+  const addMissingPolicyFindings = (params: {
+    agentPath: string;
+    refs: readonly ModelRefSlot[];
+    policies: readonly RuntimePolicySlot[];
+  }) => {
+    if (params.policies.length === 0) {
+      return;
+    }
+    for (const ref of params.refs) {
+      if (params.policies.some((policy) => runtimePolicyMatchesModelRef(policy, ref.value))) {
+        continue;
+      }
+      findings.push({
+        checkId: AGENT_MODEL_RUNTIME_POLICIES_CHECK_ID,
+        severity: "warning",
+        message: `${ref.path} selects ${ref.value}, but ${formatAgentPath(
+          params.agentPath,
+        )} has explicit agentRuntime policies with no matching model key.`,
+        path: ref.path,
+        target: ref.value,
+        requirement: "Active agent model refs should have matching explicit runtime policies.",
+        fixHint:
+          "Add an agentRuntime policy for this model ref, or remove stale per-model runtime policies from the agent.",
+      });
+    }
+  };
+  const addUnusedPolicyFindings = (params: {
+    agentPath: string;
+    refs: readonly ModelRefSlot[];
+    policies: readonly RuntimePolicySlot[];
+  }) => {
+    const referencedKeys = new Set(params.refs.map((ref) => ref.value));
+    for (const policy of params.policies) {
+      if ([...referencedKeys].some((key) => runtimePolicyMatchesModelRef(policy, key))) {
+        continue;
+      }
+      findings.push({
+        checkId: AGENT_MODEL_RUNTIME_POLICIES_CHECK_ID,
+        severity: "warning",
+        message: `${policy.path} sets a runtime for ${policy.key}, but no active model ref in ${formatAgentPath(
+          params.agentPath,
+        )} uses that model key.`,
+        path: policy.path,
+        target: policy.key,
+        requirement:
+          "Per-model agentRuntime policies should correspond to active agent model refs.",
+        fixHint:
+          "Move the runtime policy to the active model key, or remove it if this agent no longer uses the model.",
+      });
+    }
+  };
+
+  const defaults = cfg.agents?.defaults;
+  const defaultRefs = collectAgentRuntimeModelRefs({
+    agent: defaults,
+    path: "agents.defaults",
+  });
+  const canonicalDefaultRefs = canonicalizeRefs(defaultRefs);
+  const defaultPolicies = collectRuntimePolicySlots({
+    models: defaults?.models,
+    path: "agents.defaults.models",
+  });
+  const allCanonicalRefs: ModelRefSlot[] = [...canonicalDefaultRefs];
+  addMissingPolicyFindings({
+    agentPath: "agents.defaults",
+    refs: canonicalDefaultRefs,
+    policies: defaultPolicies,
+  });
+  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+    const agentRecord = asReadonlyRecord(agent);
+    if (!agentRecord) {
+      continue;
+    }
+    const id = normalizeOptionalString(agentRecord.id) ?? String(index);
+    const agentPath = `agents.list.${id}`;
+    const refs = canonicalizeRefs(
+      collectAgentRuntimeModelRefs({
+        agent: agentRecord,
+        path: agentPath,
+        inherited: defaultRefs,
+      }),
+    );
+    allCanonicalRefs.push(...refs);
+    const policies = collectRuntimePolicySlots({
+      models: agentRecord.models,
+      path: `${agentPath}.models`,
+    });
+    addMissingPolicyFindings({
+      agentPath,
+      refs,
+      policies: [...defaultPolicies, ...policies],
+    });
+    addUnusedPolicyFindings({
+      agentPath,
+      refs,
+      policies,
+    });
+  }
+  addUnusedPolicyFindings({
+    agentPath: "agents.defaults",
+    refs: allCanonicalRefs,
+    policies: defaultPolicies,
+  });
+  return findings;
+}
+
+const agentModelRuntimePoliciesCheck: HealthCheck = {
+  id: AGENT_MODEL_RUNTIME_POLICIES_CHECK_ID,
+  kind: "core",
+  description: "Agent model refs and explicit agentRuntime policies describe the same routes.",
+  source: "doctor",
+  async detect(ctx) {
+    return collectAgentModelRuntimePolicyFindings(ctx.cfg);
+  },
+};
 
 function normalizeDoctorNoteLine(line: string): string {
   return line.replace(/^- /, "").trim();
@@ -1078,6 +1335,7 @@ function createConvertedWorkflowChecks(
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
+    agentModelRuntimePoliciesCheck,
     bootstrapSizeCheck,
     createProviderCatalogProjectionCheck(deps),
     createRuntimeToolSchemaCheck(deps),
