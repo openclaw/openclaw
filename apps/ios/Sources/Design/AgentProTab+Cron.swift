@@ -98,6 +98,7 @@ extension AgentProTab {
                         Task { await self.runCronJob(job) }
                     } label: {
                         Label("Run", systemImage: "play.fill")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(busy || !self.liveGatewayConnected)
 
@@ -105,6 +106,7 @@ extension AgentProTab {
                         Task { await self.setCronJob(job, enabled: !job.enabled) }
                     } label: {
                         Label(job.enabled ? "Pause" : "Enable", systemImage: job.enabled ? "pause.fill" : "checkmark")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(busy || !self.liveGatewayConnected)
                 }

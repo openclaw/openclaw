@@ -71,8 +71,11 @@ struct IPadSkillWorkshopScreen: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
+                        Button {
                             self.presentedProposalRoute = nil
+                        } label: {
+                            Text("Done")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
@@ -118,6 +121,7 @@ struct IPadSkillWorkshopScreen: View {
                         Task { await self.loadProposals(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -177,6 +181,7 @@ struct IPadSkillWorkshopScreen: View {
                         Task { await self.loadProposals(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -226,12 +231,18 @@ struct IPadSkillWorkshopScreen: View {
                 .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("Default agent") {
+                Button {
                     self.selectedAgentScopeID = ""
+                } label: {
+                    Text("Default agent")
+                        .font(OpenClawType.subhead)
                 }
                 ForEach(self.agentScopeOptions, id: \.id) { option in
-                    Button(option.title) {
+                    Button {
                         self.selectedAgentScopeID = option.id
+                    } label: {
+                        Text(option.title)
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
@@ -347,42 +358,60 @@ struct IPadSkillWorkshopScreen: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button("Inspect") {
+                        Button {
                             self.selectProposal(
                                 proposal,
                                 opensSheet: true,
                                 forceInspect: true)
+                        } label: {
+                            Text("Inspect")
+                                .font(OpenClawType.subhead)
                         }
                         if proposal.status == "pending" {
-                            Button("Apply") {
+                            Button {
                                 Task { await self.run(.apply, proposal: proposal) }
+                            } label: {
+                                Text("Apply")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
-                            Button("Reject", role: .destructive) {
+                            Button(role: .destructive) {
                                 Task { await self.run(.reject, proposal: proposal) }
+                            } label: {
+                                Text("Reject")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if proposal.status == "pending" {
-                            Button("Apply") {
+                            Button {
                                 Task { await self.run(.apply, proposal: proposal) }
+                            } label: {
+                                Text("Apply")
+                                    .font(OpenClawType.subhead)
                             }
                             .tint(OpenClawBrand.ok)
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
-                            Button("Reject", role: .destructive) {
+                            Button(role: .destructive) {
                                 Task { await self.run(.reject, proposal: proposal) }
+                            } label: {
+                                Text("Reject")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
                         }
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        Button("Inspect") {
+                        Button {
                             self.selectProposal(
                                 proposal,
                                 opensSheet: true,
                                 forceInspect: true)
+                        } label: {
+                            Text("Inspect")
+                                .font(OpenClawType.subhead)
                         }
                         .tint(OpenClawBrand.accent)
                     }
@@ -482,6 +511,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.run(.apply, proposal: proposal) }
         } label: {
             Label("Apply", systemImage: "checkmark.circle")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.borderedProminent)
@@ -494,6 +524,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.run(.reject, proposal: proposal) }
         } label: {
             Label("Reject", systemImage: "xmark.circle")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
@@ -506,6 +537,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.inspect(proposalID: proposal.id, force: true) }
         } label: {
             Label("Inspect", systemImage: "doc.text.magnifyingglass")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
@@ -976,6 +1008,7 @@ private struct IPadSkillProposalKanbanCard: View {
                 if self.proposal.status == "pending" {
                     Button(action: self.apply) {
                         Image(systemName: "checkmark.circle")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .accessibilityLabel("Apply Proposal")
                     .buttonStyle(.bordered)
@@ -984,6 +1017,7 @@ private struct IPadSkillProposalKanbanCard: View {
 
                     Button(role: .destructive, action: self.reject) {
                         Image(systemName: "xmark.circle")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .accessibilityLabel("Reject Proposal")
                     .buttonStyle(.bordered)
@@ -993,6 +1027,7 @@ private struct IPadSkillProposalKanbanCard: View {
 
                 Button(action: self.inspect) {
                     Image(systemName: "doc.text.magnifyingglass")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .accessibilityLabel("Inspect Proposal")
                 .buttonStyle(.bordered)
@@ -1006,12 +1041,21 @@ private struct IPadSkillProposalKanbanCard: View {
             in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Inspect", action: self.inspect)
+            Button(action: self.inspect) {
+                Text("Inspect")
+                    .font(OpenClawType.subhead)
+            }
             if self.proposal.status == "pending" {
-                Button("Apply", action: self.apply)
-                    .disabled(!self.canApplyProposalMutations || self.isBusy)
-                Button("Reject", role: .destructive, action: self.reject)
-                    .disabled(!self.canApplyProposalMutations || self.isBusy)
+                Button(action: self.apply) {
+                    Text("Apply")
+                        .font(OpenClawType.subhead)
+                }
+                .disabled(!self.canApplyProposalMutations || self.isBusy)
+                Button(role: .destructive, action: self.reject) {
+                    Text("Reject")
+                        .font(OpenClawType.subhead)
+                }
+                .disabled(!self.canApplyProposalMutations || self.isBusy)
             }
         }
     }

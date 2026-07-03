@@ -40,6 +40,7 @@ extension AgentProTab {
         .refreshable {
             await self.refreshOverview(force: true)
         }
+        .font(OpenClawType.body)
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
@@ -70,6 +71,7 @@ extension AgentProTab {
                     self.skillsList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -113,6 +115,7 @@ extension AgentProTab {
                     self.cronJobsList(limit: nil)
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -142,6 +145,7 @@ extension AgentProTab {
                     self.usageDailyList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)

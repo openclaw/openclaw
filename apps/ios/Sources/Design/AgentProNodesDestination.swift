@@ -23,6 +23,7 @@ struct AgentProNodesDestination: View {
                     self.nodesList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refresh()
@@ -208,6 +209,7 @@ struct AgentProNodesDestination: View {
                     self.nodeListCard(title: "Tags", values: entry.tags ?? [])
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }

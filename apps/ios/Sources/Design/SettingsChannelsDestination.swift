@@ -22,6 +22,7 @@ struct SettingsChannelsDestination: View {
             }
             self.channelsCard
         }
+        .font(OpenClawType.body)
         .task(id: self.refreshID) {
             await self.loadChannels(force: false)
         }
@@ -380,6 +381,7 @@ private struct SettingsChannelRow: View {
     private func accountRow(_ account: SettingsChannelAccount) -> some View {
         HStack(spacing: 10) {
             Image(systemName: account.running || account.connected ? "checkmark.circle.fill" : "circle")
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(account.color)
                 .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 2) {
@@ -393,22 +395,32 @@ private struct SettingsChannelRow: View {
             Spacer(minLength: 8)
             Menu {
                 if account.running {
-                    Button("Stop") {
+                    Button {
                         self.stop(account.id)
+                    } label: {
+                        Text("Stop")
+                            .font(OpenClawType.subhead)
                     }
                 } else {
-                    Button("Start") {
+                    Button {
                         self.start(account.id)
+                    } label: {
+                        Text("Start")
+                            .font(OpenClawType.subhead)
                     }
                     .disabled(!account.configured || !account.enabled)
                 }
                 if account.linked {
-                    Button("Logout", role: .destructive) {
+                    Button(role: .destructive) {
                         self.logout(account.id)
+                    } label: {
+                        Text("Logout")
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
                 Image(systemName: self.actionMenuIcon(account))
+                    .font(OpenClawType.captionSemiBold)
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)

@@ -241,6 +241,7 @@ extension SettingsProTab {
                 }
                 .padding(.top, 18)
                 .padding(.bottom, OpenClawProMetric.bottomScrollInset)
+                .font(OpenClawType.body)
             }
         }
         .navigationTitle(self.title(for: route))
@@ -335,6 +336,7 @@ extension SettingsProTab {
                         self.openNotificationsRouteFromApprovals()
                     } label: {
                         Label("Open Notifications", systemImage: "bell.badge")
+                            .font(OpenClawType.captionSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -369,6 +371,7 @@ extension SettingsProTab {
                             Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
                         } label: {
                             Label("Allow", systemImage: "checkmark")
+                                .font(OpenClawType.captionSemiBold)
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(self.appModel.pendingExecApprovalPromptResolving)
@@ -380,6 +383,7 @@ extension SettingsProTab {
                                 }
                             } label: {
                                 Label("Always", systemImage: "checkmark.shield")
+                                    .font(OpenClawType.captionSemiBold)
                             }
                             .buttonStyle(.bordered)
                             .disabled(self.appModel.pendingExecApprovalPromptResolving)
@@ -389,6 +393,7 @@ extension SettingsProTab {
                             Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
                         } label: {
                             Label("Deny", systemImage: "xmark")
+                                .font(OpenClawType.captionSemiBold)
                         }
                         .buttonStyle(.bordered)
                         .disabled(self.appModel.pendingExecApprovalPromptResolving)
@@ -530,6 +535,7 @@ extension SettingsProTab {
                         Label(
                             self.notificationActionText,
                             systemImage: self.notificationStatus.actionIcon)
+                            .font(OpenClawType.captionSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
@@ -710,9 +716,15 @@ extension SettingsProTab {
                 }
 
                 Picker("Location", selection: self.$locationModeRaw) {
-                    Text("Off").tag(OpenClawLocationMode.off.rawValue)
-                    Text("While Using").tag(OpenClawLocationMode.whileUsing.rawValue)
-                    Text("Always").tag(OpenClawLocationMode.always.rawValue)
+                    Text("Off")
+                        .font(OpenClawType.captionSemiBold)
+                        .tag(OpenClawLocationMode.off.rawValue)
+                    Text("While Using")
+                        .font(OpenClawType.captionSemiBold)
+                        .tag(OpenClawLocationMode.whileUsing.rawValue)
+                    Text("Always")
+                        .font(OpenClawType.captionSemiBold)
+                        .tag(OpenClawLocationMode.always.rawValue)
                 }
                 .pickerStyle(.segmented)
                 .disabled(self.isChangingLocationMode)
@@ -793,12 +805,16 @@ extension SettingsProTab {
                 Text("Default Agent")
                     .font(OpenClawType.subheadSemiBold)
                 Picker("Agent", selection: self.$selectedAgentPickerId) {
-                    Text("Default").tag("")
+                    Text("Default")
+                        .font(OpenClawType.subhead)
+                        .tag("")
                     let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
                         let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                        Text(name.isEmpty ? agent.id : name).tag(agent.id)
+                        Text(name.isEmpty ? agent.id : name)
+                            .font(OpenClawType.subhead)
+                            .tag(agent.id)
                     }
                 }
                 Text("Used for new Chat and Talk sessions.")
@@ -817,6 +833,7 @@ extension SettingsProTab {
                 TextField("Paste setup code", text: self.$setupCode)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 HStack(spacing: 10) {
                     self.gatewayActionButton(
@@ -893,6 +910,7 @@ extension SettingsProTab {
                     ProgressView().controlSize(.small)
                 } else {
                     Text("Connect")
+                        .font(OpenClawType.captionSemiBold)
                 }
             }
             .buttonStyle(.bordered)
@@ -907,9 +925,11 @@ extension SettingsProTab {
                 TextField("Host", text: self.$manualGatewayHost)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 TextField("Port", text: self.manualPortBinding)
                     .keyboardType(.numberPad)
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 self.settingsButtonToggle("Use TLS", isOn: self.$manualGatewayTLS)
                 self.gatewayActionButton(
@@ -934,13 +954,16 @@ extension SettingsProTab {
                 SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 SecureField("Gateway Password", text: self.$gatewayPassword)
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 Button(role: .destructive) {
                     self.showResetOnboardingAlert = true
                 } label: {
                     Label("Reset Onboarding", systemImage: "arrow.counterclockwise")
+                        .font(OpenClawType.captionSemiBold)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -966,7 +989,9 @@ extension SettingsProTab {
                 .disabled(self.appModel.isAppleReviewDemoModeEnabled)
                 Picker("Speech Language", selection: self.$talkSpeechLocale) {
                     ForEach(TalkSpeechLocale.supportedOptions()) { option in
-                        Text(option.label).tag(option.id)
+                        Text(option.label)
+                            .font(OpenClawType.subhead)
+                            .tag(option.id)
                     }
                 }
                 self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
@@ -999,14 +1024,20 @@ extension SettingsProTab {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("Provider", selection: self.talkProviderSelectionBinding) {
                         ForEach(TalkModeProviderSelection.allCases) { option in
-                            Text(option.label).tag(option.rawValue)
+                            Text(option.label)
+                                .font(OpenClawType.subhead)
+                                .tag(option.rawValue)
                         }
                     }
                     if self.shouldShowRealtimeVoicePicker {
                         Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
-                            Text("Gateway Default").tag("")
+                            Text("Gateway Default")
+                                .font(OpenClawType.subhead)
+                                .tag("")
                             ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
-                                Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                                Text(TalkModeRealtimeVoiceSelection.label(for: voice))
+                                    .font(OpenClawType.subhead)
+                                    .tag(voice)
                             }
                         }
                     }
@@ -1030,15 +1061,20 @@ extension SettingsProTab {
     var shareSettingsCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle("Show Talk Control", isOn: self.$talkButtonEnabled)
+                Toggle(isOn: self.$talkButtonEnabled) {
+                    Text("Show Talk Control")
+                        .font(OpenClawType.subhead)
+                }
                 TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                     .lineLimit(2...5)
                     .textInputAutocapitalization(.sentences)
+                    .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
                 Button {
                     Task { await self.appModel.runSharePipelineSelfTest() }
                 } label: {
                     Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .buttonStyle(.bordered)
                 Text(self.appModel.lastShareEventText)
@@ -1089,10 +1125,13 @@ extension SettingsProTab {
         isOn: Binding<Bool>,
         onChange: ((Bool) -> Void)? = nil) -> some View
     {
-        Toggle(title, isOn: isOn)
-            .onChange(of: isOn.wrappedValue) { _, enabled in
-                onChange?(enabled)
-            }
+        Toggle(isOn: isOn) {
+            Text(title)
+                .font(OpenClawType.subhead)
+        }
+        .onChange(of: isOn.wrappedValue) { _, enabled in
+            onChange?(enabled)
+        }
     }
 
     func settingsButtonToggle(

@@ -21,18 +21,27 @@ extension AgentProTab {
                 }
 
                 HStack(spacing: 8) {
-                    Button("Enable All") {
+                    Button {
                         Task { await self.enableAllSkills() }
+                    } label: {
+                        Text("Enable All")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(self.skillMutationBusy)
 
-                    Button("Disable All", role: .destructive) {
+                    Button(role: .destructive) {
                         Task { await self.disableAllSkills() }
+                    } label: {
+                        Text("Disable All")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(self.skillMutationBusy)
 
-                    Button("Reset") {
+                    Button {
                         Task { await self.resetSkillPolicy() }
+                    } label: {
+                        Text("Reset")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(self.skillMutationBusy || self.agentSkillFilter == nil)
                 }
@@ -77,7 +86,9 @@ extension AgentProTab {
                 }
                 Picker("Status", selection: self.$skillStatusFilter) {
                     ForEach(SkillStatusFilter.allCases) { filter in
-                        Text(filter.title).tag(filter)
+                        Text(filter.title)
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -381,8 +392,11 @@ extension AgentProTab {
                 .navigationTitle("Skill")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") {
+                        Button {
                             self.skillEditorSelection = nil
+                        } label: {
+                            Text("Close")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
@@ -407,8 +421,11 @@ extension AgentProTab {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
+                    Button {
                         self.skillEditorSelection = nil
+                    } label: {
+                        Text("Close")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }
@@ -459,6 +476,7 @@ extension AgentProTab {
                             Task { await self.saveSkillAPIKey(skill) }
                         } label: {
                             Label("Save key", systemImage: "key")
+                                .font(OpenClawType.captionSemiBold)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -523,6 +541,7 @@ extension AgentProTab {
                         Task { await self.installSkillRequirements(skill) }
                     } label: {
                         Label(install.label, systemImage: "wrench.and.screwdriver")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

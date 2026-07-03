@@ -87,6 +87,7 @@ struct GatewayQuickSetupSheet: View {
 
                 Spacer()
             }
+            .font(OpenClawType.body)
             .padding()
             .navigationTitle("Quick Setup")
             .navigationBarTitleDisplayMode(.inline)
@@ -97,6 +98,7 @@ struct GatewayQuickSetupSheet: View {
                         self.dismiss()
                     } label: {
                         Text("Close")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }
@@ -119,20 +121,23 @@ struct GatewayQuickSetupSheet: View {
     }
 
     private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
-        Toggle(title, isOn: isOn)
-            .contentShape(Rectangle())
-            .overlay {
-                // Keep Toggle semantics for accessibility while making the full visual row tappable.
-                Button {
-                    isOn.wrappedValue.toggle()
-                } label: {
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityHidden(true)
+        Toggle(isOn: isOn) {
+            Text(title)
+                .font(OpenClawType.subhead)
+        }
+        .contentShape(Rectangle())
+        .overlay {
+            // Keep Toggle semantics for accessibility while making the full visual row tappable.
+            Button {
+                isOn.wrappedValue.toggle()
+            } label: {
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityHidden(true)
+        }
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {

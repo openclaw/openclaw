@@ -48,6 +48,7 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                     self.content
                 }
                 .padding(.vertical, self.isCompactHeight ? 10 : 18)
+                .font(OpenClawType.body)
             }
             .safeAreaPadding(.bottom, self.bottomScrollInset)
         }

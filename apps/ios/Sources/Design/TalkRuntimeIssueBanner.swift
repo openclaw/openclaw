@@ -60,9 +60,12 @@ struct TalkRuntimeIssueDetailsSheet: View {
                         .font(OpenClawType.monoFootnote)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
-                    Button("Copy diagnostics") {
+                    Button {
                         UIPasteboard.general.string = self.issue.technicalDetails
                         self.copyFeedback = "Copied diagnostics"
+                    } label: {
+                        Text("Copy diagnostics")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
 
@@ -79,15 +82,21 @@ struct TalkRuntimeIssueDetailsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if let onOpenSettings {
-                        Button("Open Settings") {
+                        Button {
                             self.dismiss()
                             onOpenSettings()
+                        } label: {
+                            Text("Open Settings")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button {
                         self.dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }

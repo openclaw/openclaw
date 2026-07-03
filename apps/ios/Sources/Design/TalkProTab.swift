@@ -60,8 +60,11 @@ struct TalkProTab: View {
                     .navigationTitle("Enable Talk")
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Not Now") {
+                            Button {
                                 self.showPermissionPrompt = false
+                            } label: {
+                                Text("Not Now")
+                                    .font(OpenClawType.subheadSemiBold)
                             }
                         }
                     }

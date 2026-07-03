@@ -47,9 +47,11 @@ struct ProSectionHeader: View {
             Spacer()
             if let actionTitle {
                 if let action {
-                    Button(actionTitle, action: action)
-                        .font(OpenClawType.footnoteMedium)
-                        .foregroundStyle(OpenClawBrand.accent)
+                    Button(action: action) {
+                        Text(actionTitle)
+                            .font(OpenClawType.footnoteMedium)
+                    }
+                    .foregroundStyle(OpenClawBrand.accent)
                 } else {
                     Text(actionTitle)
                         .font(OpenClawType.footnoteMedium)
@@ -134,19 +136,23 @@ private struct OpenClawGlassButtonModifier: ViewModifier {
         if #available(iOS 26.0, *) {
             if self.prominent {
                 content
+                    .font(OpenClawType.subheadSemiBold)
                     .buttonStyle(.glassProminent)
                     .tint(self.tint ?? OpenClawBrand.accent)
             } else {
                 content
+                    .font(OpenClawType.subheadSemiBold)
                     .buttonStyle(.glass)
                     .tint(self.tint)
             }
         } else if self.prominent {
             content
+                .font(OpenClawType.subheadSemiBold)
                 .buttonStyle(.borderedProminent)
                 .tint(self.tint ?? OpenClawBrand.accent)
         } else {
             content
+                .font(OpenClawType.subheadSemiBold)
                 .buttonStyle(.bordered)
                 .tint(self.tint)
         }
@@ -362,14 +368,20 @@ struct OpenClawNoticeBanner: View {
                     OpenClawGlassControlGroup {
                         HStack(spacing: 10) {
                             if let primaryActionTitle, let onPrimaryAction {
-                                Button(primaryActionTitle, action: onPrimaryAction)
-                                    .openClawGlassButton(prominent: true)
-                                    .controlSize(.small)
+                                Button(action: onPrimaryAction) {
+                                    Text(primaryActionTitle)
+                                        .font(OpenClawType.captionSemiBold)
+                                }
+                                .openClawGlassButton(prominent: true)
+                                .controlSize(.small)
                             }
                             if let secondaryActionTitle, let onSecondaryAction {
-                                Button(secondaryActionTitle, action: onSecondaryAction)
-                                    .openClawGlassButton()
-                                    .controlSize(.small)
+                                Button(action: onSecondaryAction) {
+                                    Text(secondaryActionTitle)
+                                        .font(OpenClawType.captionSemiBold)
+                                }
+                                .openClawGlassButton()
+                                .controlSize(.small)
                             }
                         }
                     }
@@ -795,9 +807,11 @@ struct ProPanelHeader: View {
                 .accessibilityLabel(self.actionAccessibilityLabel ?? actionTitle ?? self.title)
                 .disabled(self.isActionDisabled)
             } else if let actionTitle {
-                Button(actionTitle, action: action)
-                    .font(OpenClawType.captionSemiBold)
-                    .disabled(self.isActionDisabled)
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(OpenClawType.captionSemiBold)
+                }
+                .disabled(self.isActionDisabled)
             }
         }
     }
@@ -830,10 +844,12 @@ struct ProStatusRow: View {
                     ProValuePill(value: value, color: self.color)
                 }
                 if let actionTitle, let action {
-                    Button(actionTitle, action: action)
-                        .font(OpenClawType.captionSemiBold)
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
+                    Button(action: action) {
+                        Text(actionTitle)
+                            .font(OpenClawType.captionSemiBold)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
                 }
             }
         }

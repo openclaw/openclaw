@@ -49,6 +49,7 @@ struct AgentProDreamingDestination: View {
                     self.dreamingPhasesCard
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refresh()
@@ -194,6 +195,7 @@ struct AgentProDreamingDestination: View {
                             Task { await self.runDreamAction(action) }
                         } label: {
                             Label(action.title, systemImage: self.dreamActionBusy == action ? "hourglass" : action.icon)
+                                .font(OpenClawType.captionSemiBold)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)

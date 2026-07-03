@@ -14,7 +14,7 @@ struct PrivacyAccessSectionView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        DisclosureGroup("Privacy & Access") {
+        DisclosureGroup {
             self.permissionRow(
                 title: "Contacts",
                 icon: "person.crop.circle",
@@ -54,7 +54,11 @@ struct PrivacyAccessSectionView: View {
                 detail: "List, add, and complete reminders.",
                 actionTitle: self.remindersActionTitle,
                 action: self.handleRemindersAction)
+        } label: {
+            Text("Privacy & Access")
+                .font(OpenClawType.subheadSemiBold)
         }
+        .font(OpenClawType.body)
         .onAppear { self.refreshAll() }
         .onChange(of: self.scenePhase) { _, phase in
             if phase == .active {
@@ -74,6 +78,7 @@ struct PrivacyAccessSectionView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label(title, systemImage: icon)
+                    .font(OpenClawType.subheadSemiBold)
                 Spacer()
                 OpenClawStatusBadge(label: status, tone: self.statusTone(for: status))
                     .accessibilityIdentifier("privacy-access-\(title)-status")
@@ -82,10 +87,12 @@ struct PrivacyAccessSectionView: View {
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .font(OpenClawType.footnote)
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("privacy-access-\(title)-action")
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(OpenClawType.footnoteSemiBold)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("privacy-access-\(title)-action")
             }
         }
         .padding(.vertical, 2)

@@ -89,6 +89,63 @@ struct OpenClawTypographyTests {
         #expect(!watchSource.contains(".font(.title"))
     }
 
+    @Test func `listed iOS app surfaces enforce branded control typography`() throws {
+        let proComponents = try String(
+            contentsOf: Self.sourceURL("Design/OpenClawProComponents.swift"),
+            encoding: .utf8)
+        let quickSetup = try String(contentsOf: Self.sourceURL("Gateway/GatewayQuickSetupSheet.swift"), encoding: .utf8)
+        let settingsSections = try String(
+            contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
+            encoding: .utf8)
+        let privacyAccess = try String(
+            contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
+            encoding: .utf8)
+        let skillWorkshop = try String(
+            contentsOf: Self.sourceURL("Design/IPadSkillWorkshopScreen.swift"),
+            encoding: .utf8)
+        let agentDestinations = try String(
+            contentsOf: Self.sourceURL("Design/AgentProTab+Destinations.swift"),
+            encoding: .utf8)
+        let dreaming = try String(
+            contentsOf: Self.sourceURL("Design/AgentProDreamingDestination.swift"),
+            encoding: .utf8)
+        let instances = try String(contentsOf: Self.sourceURL("Design/AgentProNodesDestination.swift"), encoding: .utf8)
+        let channels = try String(
+            contentsOf: Self.sourceURL("Design/SettingsChannelsDestination.swift"),
+            encoding: .utf8)
+        let docs = try String(contentsOf: Self.sourceURL("Design/OpenClawDocsScreen.swift"), encoding: .utf8)
+
+        #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(proComponents.contains("Text(primaryActionTitle)"))
+        #expect(proComponents.contains("Text(secondaryActionTitle)"))
+
+        #expect(!quickSetup.contains("Button(\"Close\")"))
+        #expect(quickSetup.contains("Text(\"Close\")"))
+        #expect(quickSetup.contains(".font(OpenClawType.subheadSemiBold)"))
+
+        #expect(settingsSections.contains(".font(OpenClawType.body)"))
+        #expect(settingsSections.contains("Toggle(isOn: self.$talkButtonEnabled)"))
+        #expect(settingsSections.contains("Text(\"Show Talk Control\")"))
+        #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
+        #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
+
+        #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
+        #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
+        #expect(privacyAccess.contains("Text(actionTitle)"))
+        #expect(privacyAccess.contains(".font(OpenClawType.footnoteSemiBold)"))
+
+        #expect(!skillWorkshop.contains("Button(\"Done\")"))
+        #expect(skillWorkshop.contains("Label(\"Refresh\", systemImage: \"arrow.clockwise\")"))
+        #expect(skillWorkshop.contains("Text(\"Default agent\")"))
+        #expect(skillWorkshop.contains("Text(\"Inspect\")"))
+        #expect(skillWorkshop.contains("Text(\"Apply\")"))
+        #expect(skillWorkshop.contains("Text(\"Reject\")"))
+
+        for source in [agentDestinations, dreaming, instances, channels, docs] {
+            #expect(source.contains(".font(OpenClawType.body)"))
+        }
+    }
+
     private static let bundledFontFiles = [
         "RedHatDisplay[wght].ttf",
         "Inter[opsz,wght].ttf",
@@ -116,6 +173,10 @@ struct OpenClawTypographyTests {
 
     private static func watchInboxSourceURL() -> URL {
         self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchInboxView.swift")
+    }
+
+    private static func sourceURL(_ relativePath: String) -> URL {
+        self.iosRootURL().appendingPathComponent("Sources/\(relativePath)")
     }
 
     private static func iosRootURL() -> URL {

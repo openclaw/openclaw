@@ -106,9 +106,12 @@ struct GatewayProblemDetailsSheet: View {
                         Text(verbatim: requestId)
                             .font(OpenClawType.mono)
                             .textSelection(.enabled)
-                        Button("Copy request ID") {
+                        Button {
                             UIPasteboard.general.string = requestId
                             self.copyFeedback = "Copied request ID"
+                        } label: {
+                            Text("Copy request ID")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
@@ -118,9 +121,12 @@ struct GatewayProblemDetailsSheet: View {
                         Text(verbatim: actionCommand)
                             .font(OpenClawType.mono)
                             .textSelection(.enabled)
-                        Button("Copy command") {
+                        Button {
                             UIPasteboard.general.string = actionCommand
                             self.copyFeedback = "Copied command"
+                        } label: {
+                            Text("Copy command")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
@@ -129,6 +135,7 @@ struct GatewayProblemDetailsSheet: View {
                     Section("Help") {
                         Link(destination: docsURL) {
                             Label("Open docs", systemImage: "book")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                         Text(verbatim: docsURL.absoluteString)
                             .font(OpenClawType.footnote)
@@ -159,15 +166,21 @@ struct GatewayProblemDetailsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if let primaryActionTitle, let onPrimaryAction {
-                        Button(primaryActionTitle) {
+                        Button {
                             self.dismiss()
                             onPrimaryAction()
+                        } label: {
+                            Text(primaryActionTitle)
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button {
                         self.dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                 }
             }

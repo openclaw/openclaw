@@ -29,6 +29,7 @@ struct OpenClawDocsScreen: View {
                     self.linkCard
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
         }
         .navigationTitle("Docs")
@@ -39,6 +40,7 @@ struct OpenClawDocsScreen: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: gatewayAction) {
                         Image(systemName: "antenna.radiowaves.left.and.right")
+                            .font(OpenClawType.subheadSemiBold)
                     }
                     .accessibilityLabel("Gateway settings")
                 }

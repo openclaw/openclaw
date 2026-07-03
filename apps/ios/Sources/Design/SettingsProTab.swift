@@ -119,6 +119,7 @@ struct SettingsProTab: View {
             self.gatewaySection
             self.settingsListSection
         }
+        .font(OpenClawType.body)
         .listStyle(.insetGrouped)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.large)
@@ -216,9 +217,15 @@ struct SettingsProTab: View {
                         .ignoresSafeArea()
                         .navigationTitle("Scan QR Code")
                         .navigationBarTitleDisplayMode(.inline)
+                        .font(OpenClawType.body)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Cancel") { self.showQRScanner = false }
+                                Button {
+                                    self.showQRScanner = false
+                                } label: {
+                                    Text("Cancel")
+                                        .font(OpenClawType.subheadSemiBold)
+                                }
                             }
                         }
                 }
@@ -294,17 +301,23 @@ struct HostedPushRelayDisclosureSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .font(OpenClawType.body)
             }
             VStack(spacing: 10) {
                 Button {
                     self.dismiss()
                     self.onContinue()
                 } label: {
-                    Text("Continue").frame(maxWidth: .infinity)
+                    Text("Continue")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Not Now", role: .cancel) {
+                Button(role: .cancel) {
                     self.dismiss()
+                } label: {
+                    Text("Not Now")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .buttonStyle(.bordered)
                 .frame(maxWidth: .infinity)
