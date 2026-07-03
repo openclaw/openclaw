@@ -1,3 +1,9 @@
+export function isBuildReadyForRestart(
+  cwd: string,
+  fs: { existsSync: (path: string) => boolean; readFileSync?: (path: string, encoding?: string) => string },
+  resolveHead?: (opts: { cwd: string }) => string | null,
+): boolean;
+
 export function runWatchMain(params?: {
   spawn?: (
     cmd: string,
@@ -35,4 +41,5 @@ export function runWatchMain(params?: {
   args?: string[];
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  fs?: { existsSync: (path: string) => boolean; readFileSync?: (path: string, encoding?: string) => string };
 }): Promise<number>;

@@ -6,7 +6,7 @@ import path from "node:path";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
-import { runWatchMain } from "../../scripts/watch-node.mjs";
+import { isBuildReadyForRestart, runWatchMain } from "../../scripts/watch-node.mjs";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
@@ -18,6 +18,11 @@ type WatchRunParams = NonNullable<Parameters<typeof runWatchMain>[0]> & {
   lockDisabled?: boolean;
   signalProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
   sleep?: (ms: number) => Promise<void>;
+};
+
+type MockFs = {
+  existsSync: (path: string) => boolean;
+  readFileSync?: (path: string, encoding?: string) => string;
 };
 
 const runWatch = (params: WatchRunParams) => runWatchMain(params);
@@ -71,10 +76,12 @@ const startWatchRun = ({
   args = ["gateway", "--force"],
   env,
   spawn,
+  fs: fsOption,
 }: {
   args?: string[];
   env?: WatchRunParams["env"];
   spawn: NonNullable<WatchRunParams["spawn"]>;
+  fs?: WatchRunParams["fs"];
 }) => {
   const watcher = Object.assign(new EventEmitter(), {
     close: vi.fn(async () => {}),
@@ -85,6 +92,7 @@ const startWatchRun = ({
     args,
     createWatcher,
     env,
+    fs: fsOption ?? ({ existsSync: () => true } as MockFs),
     lockDisabled: true,
     process: fakeProcess,
     spawn,
@@ -418,6 +426,154 @@ describe("watch-node script", () => {
     expect(exitCode).toBe(130);
     expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
     expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Build readiness guard (#99603) ────────────────────────────────────
+
+  it("isBuildReadyForRestart returns false when entry.js does not exist", () => {
+    const fsMock = { existsSync: vi.fn().mockReturnValue(false) } as MockFs;
+    expect(isBuildReadyForRestart("/tmp/test-cwd", fsMock)).toBe(false);
+    expect(fsMock.existsSync).toHaveBeenCalledWith("/tmp/test-cwd/dist/entry.js");
+  });
+
+  it("isBuildReadyForRestart returns true when entry exists and no readFileSync (fallback)", () => {
+    const fsMock = { existsSync: vi.fn().mockReturnValue(true) } as MockFs;
+    expect(isBuildReadyForRestart("/tmp/test-cwd", fsMock)).toBe(true);
+  });
+
+  it("isBuildReadyForRestart returns false when build stamp HEAD mismatches git HEAD", () => {
+    const fakeHead = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const readFileSync = vi.fn().mockReturnValue(JSON.stringify({ head: fakeHead, builtAt: Date.now() }));
+    const fsMock = {
+      existsSync: vi.fn((p: string) => p.includes("entry.js") || p.includes(".buildstamp")),
+      readFileSync,
+    } as MockFs;
+    // Mock resolveHead to return a different HEAD than the stamp
+    const mockResolveHead = vi.fn().mockReturnValue("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(isBuildReadyForRestart("/tmp/test-cwd", fsMock, mockResolveHead)).toBe(false);
+    expect(mockResolveHead).toHaveBeenCalledWith({ cwd: "/tmp/test-cwd" });
+  });
+
+  it("isBuildReadyForRestart returns true when build is fresh (entry + stamp + runtime stamp)", () => {
+    const now = Date.now();
+    const sharedHead = "cccccccccccccccccccccccccccccccccccccccc";
+    const readFileSync = vi.fn().mockImplementation((p: string) => {
+      if (p.includes(".runtime-postbuildstamp")) return JSON.stringify({ head: sharedHead, builtAt: now });
+      return JSON.stringify({ head: sharedHead, builtAt: now });
+    });
+    const fsMock = {
+      existsSync: vi.fn((p: string) =>
+        p.includes("entry.js") || p.includes(".buildstamp") || p.includes(".runtime-postbuildstamp")
+      ),
+      readFileSync,
+    } as MockFs;
+    const mockResolveHead = vi.fn().mockReturnValue(sharedHead);
+    expect(isBuildReadyForRestart("/tmp/test-cwd", fsMock, mockResolveHead)).toBe(true);
+  });
+
+  it("isBuildReadyForRestart returns false when build stamp file is missing (with readFileSync available)", () => {
+    const readFileSync = vi.fn();
+    const fsMock = {
+      // entry.js exists, .buildstamp does NOT exist
+      existsSync: vi.fn((p: string) => p.includes("entry.js") && !p.includes(".buildstamp")),
+      readFileSync,
+    } as MockFs;
+    expect(isBuildReadyForRestart("/tmp/test-cwd", fsMock)).toBe(false);
+  });
+
+  it("defers restart when build not ready (requestRestart guard)", async () => {
+    const childA = createKillableChild();
+    const childB = createAutoExitChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const mockFs = { existsSync: vi.fn().mockReturnValue(false) } as MockFs;
+    const { watcher, fakeProcess, runPromise } = startWatchRun({
+      spawn,
+      fs: mockFs,
+    });
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    // First change — build not ready, should NOT kill child
+    watcher.emit("change", "src/infra/watch-node.ts");
+    await new Promise((resolve) => { setImmediate(resolve); });
+    expect(childA.kill).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    // Now make build "ready" — polling should pick this up within 2s
+    mockFs.existsSync = vi.fn().mockReturnValue(true);
+    // Also need readFileSync to pass isBuildReadyForRestart (early return without it)
+    // Without readFileSync, the function returns true when entry exists (fallback)
+    await vi.waitFor(() => {
+      expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+    }, { timeout: 3000, interval: 100 });
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    await runPromise;
+  });
+
+  it("defers restart in exit handler when build not ready", async () => {
+    const childA = Object.assign(new EventEmitter(), {
+      kill: vi.fn(),
+    });
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const mockFs = { existsSync: vi.fn().mockReturnValue(false) } as MockFs;
+    const { watcher, fakeProcess, runPromise } = startWatchRun({
+      spawn,
+      fs: mockFs,
+    });
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    // Child exits with SIGTERM code while build not ready -> should NOT restart
+    childA.emit("exit", 143, null);
+    await new Promise((resolve) => { setImmediate(resolve); });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(143);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts in exit handler when build is ready (guard does not block)", async () => {
+    const childA = Object.assign(new EventEmitter(), {
+      kill: vi.fn(),
+    });
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const mockFs = { existsSync: vi.fn().mockReturnValue(true) } as MockFs;
+    const { fakeProcess, runPromise } = startWatchRun({
+      spawn,
+      fs: mockFs,
+    });
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    childA.emit("exit", 143, null);
+    await new Promise((resolve) => { setImmediate(resolve); });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(childB.kill).not.toHaveBeenCalled();
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+  });
+
+  it("restarts normally via watcher change when build is ready (guard does not block)", async () => {
+    const childA = createKillableChild();
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const { watcher, fakeProcess, runPromise } = startWatchRun({
+      spawn,
+      fs: { existsSync: () => true } as MockFs,
+    });
+
+    watcher.emit("change", "src/infra/watch-node.ts");
+    await new Promise((resolve) => { setImmediate(resolve); });
+    expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    await runPromise;
   });
 
   it("forces no-respawn for watch children even when supervisor hints are inherited", async () => {
