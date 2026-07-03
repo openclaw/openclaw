@@ -242,6 +242,21 @@ type ContinuationChainSource = {
   continuationChainId?: string;
 };
 
+function mergeContinuationChainStateFloor(
+  current: ContinuationChainState,
+  floor: ContinuationChainState,
+): ContinuationChainState {
+  return {
+    currentChainCount: Math.max(current.currentChainCount, floor.currentChainCount),
+    chainStartedAt:
+      current.currentChainCount > 0 || current.accumulatedChainTokens > 0
+        ? current.chainStartedAt
+        : floor.chainStartedAt,
+    accumulatedChainTokens: Math.max(current.accumulatedChainTokens, floor.accumulatedChainTokens),
+    ...((current.chainId ?? floor.chainId) ? { chainId: current.chainId ?? floor.chainId } : {}),
+  };
+}
+
 type ContinuationStateModule = {
   loadContinuationChainState: (
     source: ContinuationChainSource | undefined,
@@ -423,6 +438,9 @@ async function drainChildContinuationQueue(params: {
               baseChainState.accumulatedChainTokens + params.additionalChainTokens,
           }
         : baseChainState;
+    let chainStateFloor = chainState;
+    const loadFreshChildChainState = (): ContinuationChainState =>
+      mergeContinuationChainStateFloor(loadContinuationChainState(childEntry), chainStateFloor);
     const childEntryForWrite = childEntry as
       | (ContinuationChainSource & Record<string, unknown>)
       | undefined;
@@ -437,6 +455,7 @@ async function drainChildContinuationQueue(params: {
     const persistAdvancedChildChainState = async (
       advanced: ContinuationChainState,
     ): Promise<void> => {
+      chainStateFloor = mergeContinuationChainStateFloor(advanced, chainStateFloor);
       // In-memory mirror so any post-drain reads of the same entry (incl. the
       // hedge's loadFreshChainState) see the advanced state immediately.
       persistContinuationChainState({
@@ -472,6 +491,9 @@ async function drainChildContinuationQueue(params: {
         );
       }
     };
+    if (params.chainStateOverride) {
+      await persistAdvancedChildChainState(chainState);
+    }
     const dispatchResult = await dispatchToolDelegates({
       sessionKey: params.childSessionKey,
       chainState,
@@ -487,7 +509,7 @@ async function drainChildContinuationQueue(params: {
       // A hedge-fired dispatch (delayed delegate) runs with no enclosing runner
       // frame, so supply the fresh-load + persist callbacks the shared hedge
       // needs to advance the child chain state durably across fires (#1158).
-      loadFreshChainState: () => loadContinuationChainState(childEntry),
+      loadFreshChainState: loadFreshChildChainState,
       persistChainState: persistAdvancedChildChainState,
       // Descendants of a silent/wake parent chain must stay internal even though
       // this drain runs before the later parentWasSilent chain-hop guards (#1158).
@@ -1299,7 +1321,7 @@ export async function runSubagentAnnounceFlow(params: {
 
     // Track whether a bracket delegate was consumed from findings — must
     // capture BEFORE stripping mutates findings (P0-1 from review).
-    let bracketDelegateConsumed = false;
+    let bracketDelegateReservedCurrentHop = false;
 
     if (continuationEnabled && (findings !== "(no output)" || toolDelegates.length > 0)) {
       const continuationResult = stripContinuationSignal(findings);
@@ -1322,7 +1344,6 @@ export async function runSubagentAnnounceFlow(params: {
           cfg,
         });
       } else if (continuationResult.signal?.kind === "delegate") {
-        bracketDelegateConsumed = true;
         findings = continuationResult.text || "(no output)";
         const chainSignal = continuationResult.signal;
         const chainTask = chainSignal.task;
@@ -1494,6 +1515,7 @@ export async function runSubagentAnnounceFlow(params: {
                 defaultRuntime.log(
                   `[subagent-chain-hop] Child chain-cost persist failed for ${params.childSessionKey}; spawning the delayed bracket delegate immediately (no durable delay) to avoid stale-cost restart recovery`,
                 );
+                bracketDelegateReservedCurrentHop = true;
                 doChainSpawn().catch((err: unknown) => {
                   defaultRuntime.log(
                     `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
@@ -1536,6 +1558,7 @@ export async function runSubagentAnnounceFlow(params: {
                   ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
                   ...(chainSignal.model ? { model: chainSignal.model } : {}),
                 });
+                bracketDelegateReservedCurrentHop = true;
                 void drainChildContinuationQueue({
                   childSessionKey: params.childSessionKey,
                   requesterOrigin: targetRequesterOrigin,
@@ -1550,6 +1573,7 @@ export async function runSubagentAnnounceFlow(params: {
               }
             } else {
               // Fire-and-forget — don't block the announce flow
+              bracketDelegateReservedCurrentHop = true;
               doChainSpawn().catch((err: unknown) => {
                 defaultRuntime.log(
                   `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
@@ -1570,8 +1594,10 @@ export async function runSubagentAnnounceFlow(params: {
         } = subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
         const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
         const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
-        // Use the flag captured before findings was mutated (not re-parsing stripped text).
-        const bracketConsumedHop = bracketDelegateConsumed ? 1 : 0;
+        // Use the current-chain reservation flag captured before findings was
+        // mutated. A post-compaction bracket delegate is only staged for a later
+        // compaction seam, so it must not charge the child chain's tool delegates now.
+        const bracketConsumedHop = bracketDelegateReservedCurrentHop ? 1 : 0;
         let toolHopBase = childChainHop + bracketConsumedHop;
 
         const parentWasSilent = params.silentAnnounce === true;
@@ -1750,7 +1776,7 @@ export async function runSubagentAnnounceFlow(params: {
         const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
         const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
         const chainState = buildChildContinuationSpawnState(
-          childChainHop + (bracketDelegateConsumed ? 1 : 0),
+          childChainHop + (bracketDelegateReservedCurrentHop ? 1 : 0),
         );
         void drainChildContinuationQueue({
           childSessionKey: params.childSessionKey,

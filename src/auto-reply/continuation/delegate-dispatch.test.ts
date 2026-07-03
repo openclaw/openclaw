@@ -2055,14 +2055,14 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
   });
 
-  it("leaves a spawn-failed row running and recoverable — no terminalize, no silent drop", async () => {
+  it("leaves a transient spawn-failed row running and recoverable — no terminalize, no silent drop", async () => {
     const sessionKey = "agent:main:subagent:pc-recover-fail";
     loadSessionStoreForRecoveryMock.mockReturnValue({
       [sessionKey]: { sessionId: "session-child" },
     });
     const flowId = stageAndClaimRunning(sessionKey, "rehydrate that fails");
     // Spawn/handoff fails.
-    spawnSubagentDirectMock.mockResolvedValue({ status: "rejected", error: "no capacity" });
+    spawnSubagentDirectMock.mockResolvedValue({ status: "error", error: "gateway unavailable" });
 
     const result = await recoverAndReleaseStagedPostCompactionDelegates({
       runningUpdatedAtOrBefore: Date.now(),
@@ -2075,6 +2075,45 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     const stillRecoverable = listRecoverableStagedPostCompactionDelegates();
     expect(stillRecoverable).toHaveLength(1);
     expect(stillRecoverable[0]?.delegate).toMatchObject({ task: "rehydrate that fails" });
+  });
+
+  it("finalizes accepted rows, fails deterministic rejections, and keeps transient failures recoverable", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 2,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:pc-mixed-recover";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const acceptedFlowId = stageAndClaimRunning(sessionKey, "accepted rehydrate");
+    const transientFlowId = stageAndClaimRunning(sessionKey, "transient spawn outage");
+    const rejectedFlowId = stageAndClaimRunning(sessionKey, "over per-turn cap");
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({ status: "accepted" })
+      .mockResolvedValueOnce({ status: "error", error: "gateway unavailable" });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 2 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(mockFlows.get(acceptedFlowId)).toMatchObject({ status: "succeeded" });
+    expect(mockFlows.get(transientFlowId)).toMatchObject({ status: "running" });
+    expect(mockFlows.get(rejectedFlowId)).toMatchObject({ status: "failed" });
+    const recoverableFlowIds = listRecoverableStagedPostCompactionDelegates().map(
+      ({ delegate }) => delegate.flowId,
+    );
+    expect(recoverableFlowIds).toEqual([transientFlowId]);
   });
 
   it("leaves staged post-compaction rows recoverable when the session store cannot load", async () => {

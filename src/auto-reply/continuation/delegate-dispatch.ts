@@ -219,8 +219,8 @@ function hasAcceptedContinuationChildRun(childSessionKey: string, flowId: string
 function markDelegateFailed(
   delegate: { flowId?: string; expectedRevision?: number; task: string },
   summary: string,
-): void {
-  markPendingDelegateFailed(delegate, summary);
+): boolean {
+  return markPendingDelegateFailed(delegate, summary);
 }
 
 export async function dispatchToolDelegates(params: {
@@ -742,11 +742,15 @@ export async function dispatchStagedPostCompactionDelegates(
   dispatched: number;
   failed: number;
   dispatchedFlowIds: string[];
+  terminalRejectedFlowIds: string[];
+  transientFailedFlowIds: string[];
   chainState: ChainState;
 }> {
   let dispatched = 0;
   let failed = 0;
   const dispatchedFlowIds: string[] = [];
+  const terminalRejectedFlowIds: string[] = [];
+  const transientFailedFlowIds: string[] = [];
   const config = resolveContinuationRuntimeConfig();
   const chainStartedAt = options?.chainState?.chainStartedAt ?? Date.now();
   const accumulatedChainTokens = options?.chainState?.accumulatedChainTokens ?? 0;
@@ -759,7 +763,25 @@ export async function dispatchStagedPostCompactionDelegates(
     `[continuation:compaction-delegate] Consuming ${delegates.length} compaction delegate(s) for session ${sessionKey}`,
   );
 
+  const markTerminalRejected = (
+    delegate: { flowId?: string; expectedRevision?: number; task: string },
+    summary: string,
+  ): void => {
+    failed++;
+    if (markPendingDelegateFailed(delegate, summary, "Post-compaction delegate rejected")) {
+      terminalRejectedFlowIds.push(delegate.flowId!);
+    }
+  };
+
+  const noteTransientFailure = (delegate: { flowId?: string }): void => {
+    failed++;
+    if (delegate.flowId) {
+      transientFailedFlowIds.push(delegate.flowId);
+    }
+  };
+
   for (const dropped of delegatesOverLimit) {
+    const summary = `Post-compaction delegate rejected: maxDelegatesPerTurn exceeded (${config.maxDelegatesPerTurn}).`;
     postCompactionLog.warn(
       `[continuation:post-compaction-policy-rejected] cap.delegates_per_turn maxDelegatesPerTurn=${config.maxDelegatesPerTurn} session=${sessionKey} task=${dropped.task.slice(0, 80)}`,
     );
@@ -777,7 +799,7 @@ export async function dispatchStagedPostCompactionDelegates(
       reason: dropped.task,
       log: (message) => postCompactionLog.warn(message),
     });
-    failed++;
+    markTerminalRejected(dropped, summary);
   }
 
   for (const delegate of delegatesWithinLimit) {
@@ -802,7 +824,10 @@ export async function dispatchStagedPostCompactionDelegates(
         reason: delegate.task,
         log: (message) => postCompactionLog.warn(message),
       });
-      failed++;
+      markTerminalRejected(
+        delegate,
+        "Post-compaction delegate rejected: cross-session targeting is disabled by policy.",
+      );
       continue;
     }
 
@@ -838,7 +863,7 @@ export async function dispatchStagedPostCompactionDelegates(
         reason: delegate.task,
         log: (message) => postCompactionLog.warn(message),
       });
-      failed++;
+      markTerminalRejected(delegate, `Post-compaction delegate rejected: ${summary}.`);
       continue;
     }
 
@@ -890,7 +915,7 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation] Post-compaction delegate spawn ${spawnResult.status}: ${spawnResult.error ?? "delegation was not accepted."}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
-      failed++;
+      noteTransientFailure(delegate);
     } catch (err) {
       postCompactionLog.warn(
         `[continuation:post-compaction-spawn-failed] error=${err instanceof Error ? err.message : String(err)} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
@@ -899,7 +924,7 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation] Post-compaction delegate spawn failed: ${String(err)}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
-      failed++;
+      noteTransientFailure(delegate);
     }
   }
 
@@ -907,6 +932,8 @@ export async function dispatchStagedPostCompactionDelegates(
     dispatched,
     failed,
     dispatchedFlowIds,
+    terminalRejectedFlowIds,
+    transientFailedFlowIds,
     chainState: {
       currentChainCount,
       chainStartedAt,
@@ -927,9 +954,10 @@ export async function dispatchStagedPostCompactionDelegates(
  * delivery immediately at startup WITHOUT waiting for another compaction seam:
  * it dispatches only the crash-orphaned `running` rows (never queued
  * awaiting-seam rows, which are staged for a compaction that has not happened),
- * finalizes ONLY the rows whose spawn was accepted, and leaves a failed row
- * `running` so it stays recoverable on the next restart — no silent drop, no
- * premature terminalize. At-least-once on the crash seam is intentional.
+ * finalizes ONLY the rows whose spawn was accepted, terminalizes deterministic
+ * policy/cap rejections as failed, and leaves transient spawn failures `running`
+ * so they stay recoverable on the next restart — no silent drop, no premature
+ * terminalize. At-least-once on the crash seam is intentional.
  *
  * Honors the continuation deny-gate: when continuation is disabled, recovery is
  * a no-op (rows stay recoverable for when it is re-enabled), matching
@@ -996,10 +1024,11 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     });
     dispatched += result.dispatched;
     failed += result.failed;
-    // Finalize ONLY the rows whose spawn was accepted. A row whose spawn failed
-    // keeps its `running` status and unchanged updatedAt (at/before this boot
-    // cutoff), so the next restart recovers it again — never a silent drop or a
-    // premature finish.
+    // Finalize ONLY the rows whose spawn was accepted. Deterministic policy/cap
+    // rejections were failed by dispatchStagedPostCompactionDelegates; transient
+    // spawn failures keep `running` status and unchanged updatedAt (at/before
+    // this boot cutoff), so the next restart recovers them again — never a
+    // silent drop or premature finish.
     if (result.dispatchedFlowIds.length > 0) {
       await updateSessionStore(storePath, (store) => {
         const sessionEntry = store[sessionKey] ?? {};

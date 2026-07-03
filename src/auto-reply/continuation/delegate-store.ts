@@ -614,20 +614,21 @@ export function markPendingDelegateFailed(
   delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
   blockedSummary: string,
   currentStep = "Delegate spawn failed",
-): void {
+): boolean {
   if (!delegate.flowId || delegate.expectedRevision === undefined) {
     log.warn(
       "[continuation:delegate-fail-missing-flow] cannot mark consumed delegate failed because flow metadata is missing",
     );
-    return;
+    return false;
   }
-  failFlow({
+  const failed = failFlow({
     flowId: delegate.flowId,
     expectedRevision: delegate.expectedRevision,
     currentStep,
     blockedSummary,
     updatedAt: Date.now(),
   });
+  return failed.applied;
 }
 
 /**
