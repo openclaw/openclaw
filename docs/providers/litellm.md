@@ -175,8 +175,9 @@ without a global private-network override. For a LAN-hosted proxy, set
     - LiteLLM runs on `http://localhost:4000` by default.
     - OpenClaw connects through LiteLLM's proxy-style OpenAI-compatible `/v1` endpoint.
     - Native-OpenAI-only request shaping does not apply through a configured LiteLLM base URL:
-      no `service_tier`, no Responses `store`, no prompt-cache hints, no OpenAI reasoning-effort
-      payload shaping.
+      no `service_tier`, no Responses `store`, no OpenAI reasoning-effort payload shaping. Anthropic
+      `cache_control` prompt-cache hints are only forwarded for Claude model IDs when
+      `cacheRetention` is explicitly set.
     - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) are only sent to
       verified native OpenAI endpoints, so they are not injected on a custom LiteLLM base URL.
   </Accordion>
