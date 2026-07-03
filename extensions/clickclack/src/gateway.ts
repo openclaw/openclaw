@@ -204,7 +204,7 @@ export async function startClickClackGatewayAccount(
               event,
               botUserId: account.botUserId ?? "",
             });
-          })().catch((e) =>
+          })().catch((e: unknown) =>
             reject(
               e instanceof Error ? e : new Error("ClickClack ws message failed", { cause: e }),
             ),
