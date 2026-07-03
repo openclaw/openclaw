@@ -26,6 +26,7 @@ import {
 } from "../infra/exec-approvals.js";
 import {
   parseOpenClawChannelsLoginShellCommand,
+  rejectUnsafeExecBroadSearchShellCommand,
   rejectUnsafeExecControlShellCommand,
 } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -1763,6 +1764,12 @@ export function createExecTool(
         scriptPreflightCwd = workdirResolution.hostCwd;
       } else {
         workdir = workdirResolution.remoteCwd;
+      }
+      if ((host === "gateway" || host === "sandbox") && workdir) {
+        await rejectUnsafeExecBroadSearchShellCommand({
+          command: params.command,
+          workdir,
+        });
       }
       let run: ExecProcessHandle;
       let effectiveTimeout: number;

@@ -432,6 +432,17 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/requires a sandbox runtime/);
   });
 
+  it("blocks broad protected-root searches before gateway execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-broad-search", {
+        command: "rg timeout",
+        workdir: os.homedir(),
+      }),
+    ).rejects.toThrow(/exec blocked broad recursive rg search over protected root/);
+  });
+
   it.each([
     "echo ok && /approve abc123 allow-once",
     "echo ok | /approve abc123 deny",
