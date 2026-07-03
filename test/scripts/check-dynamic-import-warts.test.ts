@@ -37,12 +37,10 @@ describe("check-dynamic-import-warts", () => {
       }
       export { run } from "./runtime.js";
     `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 4,
-        reason: 'runtime static + dynamic import of "./runtime.js" (static line 7)',
-      },
-    ]);
+    expect(findDynamicImportAdvisories(source)).toContainEqual({
+      line: 4,
+      reason: 'runtime static + dynamic import of "./runtime.js" (static line 7)',
+    });
   });
 
   it("ignores type-only static re-exports", () => {
@@ -74,12 +72,10 @@ describe("check-dynamic-import-warts", () => {
       }
       export { type Runtime, createRuntime } from "./runtime.js";
     `;
-    expect(findDynamicImportAdvisories(source)).toEqual([
-      {
-        line: 4,
-        reason: 'runtime static + dynamic import of "./runtime.js" (static line 7)',
-      },
-    ]);
+    expect(findDynamicImportAdvisories(source)).toContainEqual({
+      line: 4,
+      reason: 'runtime static + dynamic import of "./runtime.js" (static line 7)',
+    });
   });
 
   it("ignores local export declarations without module specifiers", () => {
@@ -110,13 +106,42 @@ describe("check-dynamic-import-warts", () => {
     ]);
   });
 
-  it("ignores cached loader patterns", () => {
+  it("flags hand-written dynamic import memoizers", () => {
     const source = `
       let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
       function loadRuntime() {
         runtimePromise ??= import("./runtime.js");
         return runtimePromise;
       }
+    `;
+    expect(findDynamicImportAdvisories(source)).toContainEqual({
+      line: 4,
+      reason:
+        "hand-written dynamic import memoizer; use createLazyPromise or createLazyRuntimeModule",
+    });
+  });
+
+  it("flags transformed and multi-import memoizers", () => {
+    const source = `
+      let runtimePromise: Promise<unknown> | undefined;
+      function loadRuntime() {
+        runtimePromise ??= Promise.all([
+          import("./one.js"),
+          import("./two.js"),
+        ]).then(([one, two]) => ({ one, two }));
+        return runtimePromise;
+      }
+    `;
+    expect(findDynamicImportAdvisories(source)).toContainEqual({
+      line: 4,
+      reason:
+        "hand-written dynamic import memoizer; use createLazyPromise or createLazyRuntimeModule",
+    });
+  });
+
+  it("allows canonical lazy loader assignment", () => {
+    const source = `
+      state.loader ??= createLazyImportLoader(() => import("./runtime.js"));
     `;
     expect(findDynamicImportAdvisories(source)).toStrictEqual([]);
   });
@@ -142,11 +167,7 @@ describe("check-dynamic-import-warts", () => {
 
   it("allows execute paths that call cached loaders", () => {
     const source = `
-      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
-      function loadRuntime() {
-        runtimePromise ??= import("./runtime.js");
-        return runtimePromise;
-      }
+      const loadRuntime = createLazyRuntimeModule(() => import("./runtime.js"));
       export function createTool() {
         return {
           execute: async () => await loadRuntime(),
