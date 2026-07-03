@@ -1498,6 +1498,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: gateway usage-cost
   - H3: gateway stability
   - H3: gateway diagnostics export
+  - H3: gateway diagnostics node-approvals
   - H3: gateway status
   - H3: gateway probe
   - H4: Remote over SSH (Mac app parity)
