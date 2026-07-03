@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
-import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
+import {
+  clearUsageBarTemplateCacheForTest,
+  loadUsageBarTemplate,
+} from "./template.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 
@@ -103,5 +106,80 @@ describe("loadUsageBarTemplate", () => {
 
     clearUsageBarTemplateCacheForTest();
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+  });
+
+  describe("cache eviction", () => {
+    it("evicts the oldest entry and closes its watcher when inserting a new key over the limit", () => {
+      dir = mkdtempSync(join(tmpdir(), "usage-template-"));
+      const paths: string[] = [];
+      // Create 65 template files — one more than MAX_CACHED_TEMPLATE_FILES (64).
+      for (let i = 0; i < 65; i++) {
+        const path = join(dir, `tpl-${i}.json`);
+        writeFileSync(path, JSON.stringify({ segments: [{ text: `v1-${i}` }] }));
+        paths.push(path);
+      }
+
+      // Load the first 64 files to fill the cache.
+      for (let i = 0; i < 64; i++) {
+        expect(loadUsageBarTemplate(paths[i])).toMatchObject({
+          segments: [{ text: `v1-${i}` }],
+        });
+      }
+
+      // Insert the 65th file — should evict the oldest (paths[0]) and close
+      // its watcher before allocating a watcher for paths[64].
+      expect(loadUsageBarTemplate(paths[64])).toMatchObject({
+        segments: [{ text: "v1-64" }],
+      });
+
+      // paths[1] was NOT evicted: it still returns the cached value.
+      // Must check BEFORE re-accessing paths[0], because re-inserting the
+      // evicted path into a full cache would evict the next-oldest entry.
+      expect(loadUsageBarTemplate(paths[1])).toMatchObject({
+        segments: [{ text: "v1-1" }],
+      });
+
+      // Modify the evicted file on disk then re-access it. Because the entry
+      // was evicted and its watcher closed, the next access must re-read from
+      // disk — not return stale in-memory data. This proves both eviction and
+      // watcher closure. Re-accessing paths[0] may evict another entry, but
+      // the non-evicted check above has already completed.
+      writeFileSync(paths[0], JSON.stringify({ segments: [{ text: "v2-0" }] }));
+      expect(loadUsageBarTemplate(paths[0])).toMatchObject({
+        segments: [{ text: "v2-0" }],
+      });
+    });
+
+    it("does not evict when retrying the same key after a prior miss", () => {
+      dir = mkdtempSync(join(tmpdir(), "usage-template-"));
+      // Fill the cache with 63 valid files plus 1 invalid file = 64 entries.
+      const validPaths: string[] = [];
+      for (let i = 0; i < 63; i++) {
+        const path = join(dir, `good-${i}.json`);
+        writeFileSync(path, JSON.stringify({ segments: [{ text: `v1-${i}` }] }));
+        validPaths.push(path);
+      }
+      const invalidPath = join(dir, "bad.json");
+      writeFileSync(invalidPath, "{ not json");
+
+      // Load 63 valid + 1 invalid = 64 entries in cache (cache full).
+      for (const p of validPaths) {
+        expect(loadUsageBarTemplate(p)).toMatchObject({
+          segments: [{ text: expect.any(String) }],
+        });
+      }
+      expect(loadUsageBarTemplate(invalidPath)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+
+      // Fix the invalid file and retry. This is the SAME key, so it must NOT
+      // evict the oldest valid entry (validPaths[0]).
+      writeFileSync(invalidPath, JSON.stringify(tplB));
+      expect(loadUsageBarTemplate(invalidPath)).toMatchObject(tplB);
+
+      // validPaths[0] should still be cached — not evicted by the retry.
+      writeFileSync(validPaths[0], JSON.stringify({ segments: [{ text: "changed" }] }));
+      expect(loadUsageBarTemplate(validPaths[0])).toMatchObject({
+        segments: [{ text: `v1-0` }],
+      });
+    });
   });
 });
