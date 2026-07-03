@@ -1064,6 +1064,18 @@ function findJsonRootSuffix(
   return null;
 }
 
+function warnOnConfigPermissionHardeningFailure(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  context: string;
+  error: unknown;
+}): void {
+  const detail = params.error instanceof Error ? params.error.message : String(params.error);
+  params.deps.logger.warn(
+    `Config permission hardening failed (${params.context}): ${params.configPath}: ${detail}`,
+  );
+}
+
 async function persistPrefixedConfigRecovery(params: {
   deps: Required<ConfigIoDeps>;
   configPath: string;
@@ -1081,7 +1093,14 @@ async function persistPrefixedConfigRecovery(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+  await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch((error: unknown) => {
+    warnOnConfigPermissionHardeningFailure({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "prefix recovery",
+      error,
+    });
+  });
   params.deps.logger.warn(
     `Config auto-stripped non-JSON prefix: ${params.configPath}` +
       (clobberedPath ? ` (original saved as ${clobberedPath})` : ""),

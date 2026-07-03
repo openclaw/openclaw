@@ -568,6 +568,7 @@ export async function executePreparedCliRun(
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
+      await context.preparedBackend.beforeExecution?.();
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
@@ -1026,14 +1027,7 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          const liveSessionOwnsRunArtifacts = context.mcpDeliveryCapture !== true;
-          fallbackClaudeSkillsPluginCleanupOwned = liveSessionOwnsRunArtifacts;
-          const ownedPreparedBackendCleanup = liveSessionOwnsRunArtifacts
-            ? context.preparedBackend.cleanup
-            : undefined;
-          if (liveSessionOwnsRunArtifacts) {
-            context.preparedBackend.cleanup = undefined;
-          }
+          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -1050,15 +1044,9 @@ export async function executePreparedCliRun(
                 ? emitCliCommentaryText
                 : undefined,
             onMcpCaptureReady: beginGatewayCapture,
-            cleanup: liveSessionOwnsRunArtifacts
-              ? async () => {
-                  try {
-                    await fallbackClaudeSkillsPlugin?.cleanup();
-                  } finally {
-                    await ownedPreparedBackendCleanup?.();
-                  }
-                }
-              : async () => {},
+            cleanup: async () => {
+              await fallbackClaudeSkillsPlugin?.cleanup();
+            },
           });
           const rawText = liveResult.output.text;
           runOutput = {
@@ -1175,6 +1163,18 @@ export async function executePreparedCliRun(
           streamingParser?.finish();
           if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
             throw createCliAbortError();
+          }
+          const streamingParserErrorText =
+            outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+          if (streamingParserErrorText) {
+            throw new FailoverError(streamingParserErrorText, {
+              reason: "format",
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus("format"),
+            });
           }
 
           const stdout = stdoutParseBuffer.toString("utf8").trim();
@@ -1300,12 +1300,14 @@ export async function executePreparedCliRun(
             reason = reason ?? "unknown";
             const status = resolveFailoverStatus(reason);
             const retryCode =
-              reason === "unknown" &&
-              result.reason === "exit" &&
-              errorCandidates.length === 0 &&
-              !observedCliActivity
-                ? "cli_unknown_empty_failure"
-                : undefined;
+              reason === "context_overflow"
+                ? "cli_context_overflow"
+                : reason === "unknown" &&
+                    result.reason === "exit" &&
+                    errorCandidates.length === 0 &&
+                    !observedCliActivity
+                  ? "cli_unknown_empty_failure"
+                  : undefined;
             throw new FailoverError(err, {
               reason,
               provider: params.provider,
@@ -1346,6 +1348,7 @@ export async function executePreparedCliRun(
           if (parsed.errorText) {
             const reason =
               classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
             throw new FailoverError(parsed.errorText, {
               reason,
               provider: params.provider,
@@ -1353,6 +1356,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus(reason),
+              code,
             });
           }
           const rawText = parsed.text;

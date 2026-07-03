@@ -125,6 +125,33 @@ describe("handleQaInbound", () => {
     expect(ctxPayload?.SenderId).toBe("alice");
   });
 
+  it("routes native commands through a separate slash session to the conversation session", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          text: "/stop",
+          nativeCommand: { name: "stop" },
+        },
+      }),
+    );
+
+    const assembled = firstRunAssembledParams(runtime);
+    expect(assembled.ctxPayload).toMatchObject({
+      CommandAuthorized: true,
+      CommandSource: "native",
+      CommandTargetSessionKey: assembled.routeSessionKey,
+      CommandTurn: {
+        body: "/stop",
+        source: "native",
+      },
+    });
+    expect(assembled.ctxPayload.SessionKey).toContain("qa-channel:slash:alice");
+    expect(assembled.ctxPayload.SessionKey).not.toBe(assembled.routeSessionKey);
+  });
+
   it("skips malformed inline attachment base64 without dropping the message", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);

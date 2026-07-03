@@ -4,6 +4,7 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -23,14 +24,9 @@ import {
 } from "./message-handler/debounce-key.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
-type SlackMessagePipeline = typeof import("./message-handler/pipeline.runtime.js");
-
-let slackMessagePipelinePromise: Promise<SlackMessagePipeline> | undefined;
-
-function loadSlackMessagePipeline(): Promise<SlackMessagePipeline> {
-  slackMessagePipelinePromise ??= import("./message-handler/pipeline.runtime.js");
-  return slackMessagePipelinePromise;
-}
+const loadSlackMessagePipeline = createLazyRuntimeModule(
+  () => import("./message-handler/pipeline.runtime.js"),
+);
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,

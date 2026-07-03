@@ -1368,6 +1368,11 @@ export const vi: TranslationMap = {
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
     },
+    pairingQrExpired: {
+      title: "Mã QR ghép nối đã hết hạn",
+      reason: "Chạy /pair qr một lần nữa để tạo mã thiết lập mới.",
+      badge: "Đã hết hạn",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

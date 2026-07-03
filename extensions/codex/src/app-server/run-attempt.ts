@@ -1066,6 +1066,7 @@ export async function runCodexAppServerAttempt(
       developerInstructions,
       messages: codexModelInputHistoryMessages,
       ctx: hookContext,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
       ...("beforeAgentStartResult" in params
         ? { beforeAgentStartResult: params.beforeAgentStartResult }
         : {}),
@@ -1620,6 +1621,7 @@ export async function runCodexAppServerAttempt(
     );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
+    params.runTimeoutOverrideMs,
   );
   const turnAttemptIdleTimeoutMs = Math.max(100, Math.floor(params.timeoutMs));
   let nativeHookRelayLastRenewedAt = 0;
@@ -2884,12 +2886,13 @@ export async function runCodexAppServerAttempt(
     queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
       activeSteeringQueue.queue(text, optionsLocal),
     isStreaming: () => !completed && !runAbortController.signal.aborted,
+    isStopped: () => completed || timedOut || runAbortController.signal.aborted,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => runAbortController.abort("cancelled"),
     abort: () => runAbortController.abort("aborted"),
   };
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
   void mirrorPromptAtTurnStartBestEffort({
     params,
@@ -3098,6 +3101,11 @@ export async function runCodexAppServerAttempt(
     if (activeContextEngine) {
       const activeContextEnginePluginIdLocal =
         resolveContextEngineOwnerPluginId(activeContextEngine);
+      // Gateway command runs use a generic `user` trigger, so the bootstrap run
+      // kind is the canonical heartbeat lifecycle signal at this boundary.
+      const isHeartbeatLifecycleRun =
+        params.bootstrapContextRunKind === "heartbeat" ||
+        params.bootstrapContextRunKind === "commitment-only";
       const finalMessages =
         (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
         historyMessages.concat(result.messagesSnapshot);
@@ -3132,7 +3140,7 @@ export async function runCodexAppServerAttempt(
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
-        isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+        isHeartbeat: isHeartbeatLifecycleRun,
       });
     }
     runAgentHarnessLlmOutputHook({
@@ -3274,7 +3282,7 @@ export async function runCodexAppServerAttempt(
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     steeringQueueRef.current?.cancel();
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
   }
 }
 

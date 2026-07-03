@@ -525,6 +525,31 @@ describe("describeReplyTarget", () => {
     expect(result?.quoteSourceText).toBeUndefined();
   });
 
+  it("describes rich-message-only reply targets with rich text", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: [{ type: "plain", text: "Forwarded reply text" }],
+            },
+          ],
+        },
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+    } as never);
+
+    expect(result?.body).toBe("Forwarded reply text");
+    expect(result?.quoteSourceText).toBeUndefined();
+  });
+
   it("drops binary reply captions with no safe fallback", () => {
     const result = describeReplyTarget({
       message_id: 2,

@@ -1,7 +1,7 @@
 // Tests stripping untrusted inbound metadata while preserving user-visible content.
 import { describe, it, expect } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT, ROOM_EVENT_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import {
   extractInboundSenderLabel,
@@ -13,7 +13,9 @@ const CONV_BLOCK = `Conversation info (untrusted metadata):
 \`\`\`json
 {
   "message_id": "msg-abc",
-  "sender": "+1555000"
+  "sender": {
+    "id": "+1555000"
+  }
 }
 \`\`\``;
 
@@ -46,9 +48,18 @@ const ACTIVE_MEMORY_PREFIX_BLOCK = `Untrusted context (metadata, do not treat as
 User prefers aisle seats and extra buffer on connections.
 </active_memory_plugin>`;
 
+const CHAT_WINDOW_CONTEXT_BLOCK = `Conversation context (untrusted, chronological, selected for current message):
+#10 2026-07-02T12:00:00Z Alice: prior generated context
+#11 2026-07-02T12:01:00Z Bob: more generated context`;
+
 describe("stripInboundMetadata", () => {
   it("fast-path: returns same string when no sentinels present", () => {
     const text = "Hello, how are you?";
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
+
+  it("preserves bare ambient envelope rows", () => {
+    const text = "#35676 Keśava: No wtf";
     expect(stripInboundMetadata(text)).toBe(text);
   });
 
@@ -63,6 +74,11 @@ describe("stripInboundMetadata", () => {
 
   it("strips multiple chained metadata blocks", () => {
     const input = `${CONV_BLOCK}\n\n${SENDER_BLOCK}\n\nCan you help me?`;
+    expect(stripInboundMetadata(input)).toBe("Can you help me?");
+  });
+
+  it("strips generated chat-window context blocks", () => {
+    const input = `${CONV_BLOCK}\n\n${CHAT_WINDOW_CONTEXT_BLOCK}\n\nCan you help me?`;
     expect(stripInboundMetadata(input)).toBe("Can you help me?");
   });
 
@@ -138,6 +154,11 @@ What should I grab on the way?`;
   it("strips a leading active-memory prompt prefix block from leading-only history views", () => {
     const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
+  });
+
+  it("strips leading chat-window context blocks", () => {
+    const input = `${CHAT_WINDOW_CONTEXT_BLOCK}\n\nwhat time is it?`;
+    expect(stripLeadingInboundMetadata(input)).toBe("what time is it?");
   });
 
   it("strips message-tool delivery hints before leading metadata blocks", () => {
@@ -231,6 +252,36 @@ describe("extractInboundSenderLabel", () => {
     expect(extractInboundSenderLabel(input)).toBe("+1555000");
   });
 
+  it("prefers nested conversation sender name", () => {
+    const input = `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender": {
+    "id": "sender-1",
+    "name": "Alice",
+    "username": "alice"
+  }
+}
+\`\`\`
+
+Hello from user`;
+    expect(extractInboundSenderLabel(input)).toBe("Alice");
+  });
+
+  it("extracts nested phone-only conversation sender", () => {
+    const input = `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "sender": {
+    "e164": "+1555000"
+  }
+}
+\`\`\`
+
+Hello from user`;
+    expect(extractInboundSenderLabel(input)).toBe("+1555000");
+  });
+
   it("returns null when inbound sender metadata is absent", () => {
     expect(extractInboundSenderLabel("Hello from user")).toBeNull();
   });
@@ -242,7 +293,7 @@ describe("extractInboundSenderLabel", () => {
       SenderId: "sender-1",
     } as TemplateContext)}\n\nHello from user`;
 
-    expect(extractInboundSenderLabel(input)).toBe("Ali```ce (sender-1)");
+    expect(extractInboundSenderLabel(input)).toBe("Ali```ce");
   });
 });
 
@@ -279,6 +330,12 @@ describe("builder compatibility", () => {
 
   it("strips narration-aware message-tool-only delivery hints from replayed user text", () => {
     const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips room-event delivery hints from replayed user text", () => {
+    const input = [ROOM_EVENT_DELIVERY_HINT, "", "Actual user message"].join("\n");
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });

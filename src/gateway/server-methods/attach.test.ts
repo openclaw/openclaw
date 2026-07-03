@@ -36,8 +36,21 @@ describe("attach gateway methods", () => {
     expect(body.token).toMatch(/^[0-9a-f]{64}$/);
     expect(body.mcpConfig).toBeTruthy();
     expect(body.env.OPENCLAW_MCP_TOKEN).toBe(body.token);
-    expect(body.env.OPENCLAW_MCP_SESSION_KEY).toBe("agent:main:attach-method");
+    expect(Object.keys(body.env)).toEqual(["OPENCLAW_MCP_TOKEN"]);
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
+  });
+
+  it("returns an attach MCP config whose env placeholders are all supplied", async () => {
+    const respond = vi.fn();
+    await attachHandlers["attach.grant"](grantOpts("agent:main:attach-method", respond));
+
+    const body = respond.mock.calls[0][1] as {
+      mcpConfig: unknown;
+      env: Record<string, string>;
+    };
+    const configText = JSON.stringify(body.mcpConfig);
+    const placeholders = [...configText.matchAll(/\$\{([A-Z0-9_]+)\}/gu)].map((match) => match[1]);
+    expect(new Set(placeholders)).toEqual(new Set(Object.keys(body.env)));
   });
 
   it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async () => {

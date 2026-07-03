@@ -106,11 +106,9 @@ Upload to Cloudflare R2/S3 and generate secure presigned download links. Useful 
 </Card>
 
 <Card title="iOS app via Telegram" icon="mobile">
-  **@coard** • `ios` `xcode` `testflight`
+  **@coard** • `ios` `xcode` `app-store`
 
-Built a complete iOS app with maps and voice recording, deployed to TestFlight entirely via Telegram chat.
-
-  <img src="/assets/showcase/ios-testflight.jpg" alt="iOS app on TestFlight" />
+Built a complete iOS app with maps and voice recording, prepared for App Store distribution entirely via Telegram chat.
 </Card>
 
 <Card title="Oura Ring health assistant" icon="heart-pulse">
