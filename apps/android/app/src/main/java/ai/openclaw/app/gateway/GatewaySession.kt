@@ -1352,6 +1352,8 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
         )
     )
   }
+  // Gateway rate limits last minutes; generic retry advice must not trigger the short reconnect loop.
+  if (code == "AUTH_RATE_LIMITED") return true
   when (details?.recommendedNextStep) {
     "wait_then_retry" -> return false
     "retry_with_device_token" -> return !pendingDeviceTokenRetry
@@ -1369,7 +1371,6 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
     "AUTH_PASSWORD_MISMATCH",
     "AUTH_PASSWORD_NOT_CONFIGURED",
     "AUTH_SCOPE_MISMATCH",
-    "AUTH_RATE_LIMITED",
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true

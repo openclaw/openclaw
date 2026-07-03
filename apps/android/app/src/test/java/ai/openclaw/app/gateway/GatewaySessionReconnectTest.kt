@@ -440,6 +440,31 @@ class GatewaySessionReconnectTest {
   }
 
   @Test
+  fun authRateLimitPausesDespiteRetryAdvice() {
+    val error =
+      GatewaySession.ErrorShape(
+        code = "INVALID_REQUEST",
+        message = "authentication rate limited",
+        details =
+          GatewayConnectErrorDetails(
+            code = "AUTH_RATE_LIMITED",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = "wait_then_retry",
+          ),
+      )
+
+    assertTrue(
+      shouldPauseGatewayReconnectAfterAuthFailure(
+        error = error,
+        hasBootstrapToken = false,
+        role = "operator",
+        scopes = listOf("operator.read"),
+        pendingDeviceTokenRetry = false,
+      ),
+    )
+  }
+
+  @Test
   fun protocolMismatchPausesReconnect() {
     val error =
       GatewaySession.ErrorShape(
