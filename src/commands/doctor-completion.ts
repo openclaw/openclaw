@@ -25,6 +25,15 @@ export type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
 
+function isEaccesError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if ("code" in err && (err as NodeJS.ErrnoException).code === "EACCES") return true;
+  if ("cause" in err && err.cause instanceof Error) {
+    return isEaccesError(err.cause);
+  }
+  return false;
+}
+
 function resolveCompletionReloadPath(shell: CompletionShell): string {
   if (shell === "powershell") {
     return resolveCompletionProfilePath("powershell");
@@ -199,11 +208,15 @@ export async function doctorShellCompletion(
       await installCompletion(status.shell, true, cliName);
       note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      note(
-        `Shell completion not upgraded: ${message} — run \`${cliName} completion --install\` against a writable shell profile.`,
-        "Shell completion",
-      );
+      if (isEaccesError(err)) {
+        const profilePath = resolveCompletionProfilePath(status.shell);
+        note(
+          `Shell completion not upgraded: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+          "Shell completion",
+        );
+        return;
+      }
+      throw err;
     }
     return;
   }
@@ -249,11 +262,15 @@ export async function doctorShellCompletion(
         await installCompletion(status.shell, true, cliName);
         note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        note(
-          `Shell completion not installed: ${message} — run \`${cliName} completion --install\` against a writable shell profile.`,
-          "Shell completion",
-        );
+        if (isEaccesError(err)) {
+          const profilePath = resolveCompletionProfilePath(status.shell);
+          note(
+            `Shell completion not installed: ${profilePath} is not writable. Run \`${cliName} completion --install\` against a writable profile file.`,
+            "Shell completion",
+          );
+          return;
+        }
+        throw err;
       }
     }
   }

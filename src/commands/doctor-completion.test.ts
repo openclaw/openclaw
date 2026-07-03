@@ -140,6 +140,10 @@ describe("doctorShellCompletion", () => {
       "Shell completion",
     );
     expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("is not writable"),
+      "Shell completion",
+    );
+    expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining("completion --install"),
       "Shell completion",
     );
