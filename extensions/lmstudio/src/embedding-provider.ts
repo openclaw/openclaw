@@ -11,7 +11,10 @@ import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
-import { resolveLmstudioInferenceBase } from "./models.js";
+import {
+  normalizeLmstudioConfiguredCatalogEntries,
+  resolveLmstudioInferenceBase,
+} from "./models.js";
 import {
   buildLmstudioAuthHeaders,
   resolveLmstudioProviderHeaders,
@@ -120,6 +123,10 @@ export async function createLmstudioEmbeddingProvider(
     ssrfPolicy,
   };
 
+  const configuredModels = normalizeLmstudioConfiguredCatalogEntries(providerConfig?.models);
+  const matchedModel = configuredModels.find((m) => normalizeLmstudioModel(m.id) === model);
+  const requestedContextLength = matchedModel?.contextTokens ?? matchedModel?.contextWindow;
+
   try {
     await ensureLmstudioModelLoaded({
       baseUrl,
@@ -127,6 +134,7 @@ export async function createLmstudioEmbeddingProvider(
       headers: headerOverrides,
       ssrfPolicy,
       modelKey: model,
+      requestedContextLength,
       timeoutMs: 120_000,
     });
   } catch (error) {
