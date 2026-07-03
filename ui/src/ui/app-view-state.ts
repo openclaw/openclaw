@@ -47,7 +47,7 @@ import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";
-import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
+import type { SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,

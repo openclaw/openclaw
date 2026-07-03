@@ -1,52 +1,55 @@
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
+  createSkillWorkshopState,
   loadSkillWorkshopProposalDetail,
   loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
   runSkillWorkshopLifecycleAction,
+  type SkillWorkshopContext,
   type SkillWorkshopState,
-} from "./data.ts";
+} from "./proposals.ts";
 import type { SkillWorkshopProposal } from "./view.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 const ISO_NOW = "2026-06-16T12:00:00.000Z";
 
-function createState(overrides: Partial<SkillWorkshopState> = {}): {
+function createFixture(
+  overrides: Partial<SkillWorkshopState> = {},
+  snapshotOverrides: Partial<ApplicationGatewaySnapshot> = {},
+): {
   state: SkillWorkshopState;
+  context: SkillWorkshopContext;
   request: ReturnType<typeof vi.fn<TestRequest>>;
+  snapshot: ApplicationGatewaySnapshot;
 } {
   const request = vi.fn<TestRequest>();
-  const state: SkillWorkshopState = {
-    client: { request } as unknown as SkillWorkshopState["client"],
+  const snapshot: ApplicationGatewaySnapshot = {
+    client: { request } as unknown as ApplicationGatewaySnapshot["client"],
     connected: true,
-    assistantAgentId: "research",
-    agentsList: { defaultId: "main", mainKey: "main" },
     hello: null,
+    assistantAgentId: "research",
     sessionKey: "global",
-    skillWorkshopAgentId: null,
-    skillWorkshopLoading: false,
-    skillWorkshopLoaded: false,
-    skillWorkshopError: null,
-    skillWorkshopInspectingKey: null,
-    skillWorkshopProposals: [],
-    skillWorkshopSelectedKey: null,
-    skillWorkshopActionBusy: null,
-    skillWorkshopActionNotice: null,
-    skillWorkshopActionNoticeTimer: null,
-    skillWorkshopRevisionKey: null,
-    skillWorkshopRevisionDraft: "",
-    skillWorkshopStatusFilter: "pending",
-    skillWorkshopQuery: "",
-    skillWorkshopFilePreviewKey: null,
-    skillWorkshopFilePreviewQuery: "",
-    skillWorkshopQueueWidth: 360,
-    skillWorkshopMode: "today",
-    skillWorkshopUseCurrentChatForRevisions: false,
-    ...overrides,
+    lastError: null,
+    lastErrorCode: null,
+    ...snapshotOverrides,
   };
-  return { state, request };
+  const context: SkillWorkshopContext = {
+    gateway: {
+      get snapshot() {
+        return snapshot;
+      },
+      connection: { gatewayUrl: "", token: "", password: "" },
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      subscribeEvents: vi.fn(() => () => {}),
+    },
+  };
+  return { state: { ...createSkillWorkshopState(), ...overrides }, context, request, snapshot };
 }
 
 function manifest(status: SkillWorkshopProposal["status"] = "pending") {
@@ -130,7 +133,7 @@ function clearNoticeTimer(state: SkillWorkshopState): void {
 
 describe("Skill Workshop proposal RPCs", () => {
   it("lists proposals with the selected agent id and carries it into the initial inspect", async () => {
-    const { state, request } = createState({ assistantAgentId: "research" });
+    const { state, context, request } = createFixture();
     request.mockImplementation(async (method: string) => {
       if (method === "skills.proposals.list") {
         return manifest();
@@ -141,7 +144,7 @@ describe("Skill Workshop proposal RPCs", () => {
       return {};
     });
 
-    await loadSkillWorkshopProposals(state);
+    await loadSkillWorkshopProposals(state, context);
 
     expect(request).toHaveBeenNthCalledWith(1, "skills.proposals.list", {
       agentId: "research",
@@ -153,14 +156,13 @@ describe("Skill Workshop proposal RPCs", () => {
   });
 
   it("inspects proposals with the current agent from the selected session", async () => {
-    const { state, request } = createState({
-      assistantAgentId: "research",
-      sessionKey: "agent:ops-team:main",
-      skillWorkshopProposals: [proposal({ body: "" })],
-    });
+    const { state, context, request } = createFixture(
+      { skillWorkshopProposals: [proposal({ body: "" })] },
+      { sessionKey: "agent:ops-team:main" },
+    );
     request.mockResolvedValue(inspectResult());
 
-    await loadSkillWorkshopProposalDetail(state, "proposal-1");
+    await loadSkillWorkshopProposalDetail(state, context, "proposal-1");
 
     expect(request).toHaveBeenCalledWith("skills.proposals.inspect", {
       agentId: "ops-team",
@@ -174,11 +176,13 @@ describe("Skill Workshop proposal RPCs", () => {
   ] as const)(
     "%s sends the selected agent id and refreshes that agent scope",
     async (action, method, status) => {
-      const { state, request } = createState({
-        assistantAgentId: "reviewer",
-        skillWorkshopProposals: [proposal()],
-        skillWorkshopSelectedKey: "proposal-1",
-      });
+      const { state, context, request } = createFixture(
+        {
+          skillWorkshopProposals: [proposal()],
+          skillWorkshopSelectedKey: "proposal-1",
+        },
+        { assistantAgentId: "reviewer" },
+      );
       request.mockImplementation(async (calledMethod: string) => {
         if (calledMethod === method) {
           return {};
@@ -193,7 +197,7 @@ describe("Skill Workshop proposal RPCs", () => {
       });
 
       try {
-        await runSkillWorkshopLifecycleAction(state, action, "proposal-1");
+        await runSkillWorkshopLifecycleAction(state, context, action, "proposal-1");
       } finally {
         clearNoticeTimer(state);
       }
@@ -213,12 +217,14 @@ describe("Skill Workshop proposal RPCs", () => {
   );
 
   it("reloads proposals when the selected session changes agent scope", async () => {
-    const { state, request } = createState({
-      sessionKey: "agent:ops:main",
-      skillWorkshopAgentId: "research",
-      skillWorkshopLoaded: true,
-      skillWorkshopProposals: [proposal()],
-    });
+    const { state, context, request } = createFixture(
+      {
+        skillWorkshopAgentId: "research",
+        skillWorkshopLoaded: true,
+        skillWorkshopProposals: [proposal()],
+      },
+      { sessionKey: "agent:ops:main" },
+    );
     request.mockImplementation(async (method: string) => {
       if (method === "skills.proposals.list") {
         return manifest();
@@ -229,7 +235,7 @@ describe("Skill Workshop proposal RPCs", () => {
       return {};
     });
 
-    await loadSkillWorkshopProposals(state);
+    await loadSkillWorkshopProposals(state, context);
 
     expect(state.skillWorkshopAgentId).toBe("ops");
     expect(request).toHaveBeenNthCalledWith(1, "skills.proposals.list", { agentId: "ops" });
@@ -241,8 +247,7 @@ describe("Skill Workshop proposal RPCs", () => {
 
   it("clears stale proposals when the agent changes during an in-flight reload", async () => {
     const researchList = createDeferred<ReturnType<typeof manifest>>();
-    const { state, request } = createState({
-      assistantAgentId: "research",
+    const { state, context, request, snapshot } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopLoaded: true,
       skillWorkshopProposals: [proposal()],
@@ -256,9 +261,9 @@ describe("Skill Workshop proposal RPCs", () => {
         : manifest();
     });
 
-    const researchReload = loadSkillWorkshopProposals(state, { force: true });
-    state.assistantAgentId = "ops";
-    await loadSkillWorkshopProposals(state);
+    const researchReload = loadSkillWorkshopProposals(state, context, { force: true });
+    snapshot.assistantAgentId = "ops";
+    await loadSkillWorkshopProposals(state, context);
 
     expect(state.skillWorkshopAgentId).toBe("ops");
     expect(state.skillWorkshopProposals).toEqual([]);
@@ -274,15 +279,14 @@ describe("Skill Workshop proposal RPCs", () => {
   });
 
   it("preserves the loaded proposal agent for originless revisions", async () => {
-    const { state } = createState({
-      assistantAgentId: "main",
+    const { state, context } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopProposals: [proposal()],
       skillWorkshopRevisionDraft: "Tighten the trigger.",
     });
     const sendRevisionRequest = vi.fn(async () => {});
 
-    await requestSkillWorkshopRevision(state, "proposal-1", sendRevisionRequest);
+    await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
 
     expect(sendRevisionRequest).toHaveBeenCalledWith(
       "Tighten the trigger.",
@@ -293,13 +297,13 @@ describe("Skill Workshop proposal RPCs", () => {
 
   it("discards proposal detail that resolves after the agent scope changes", async () => {
     const detail = createDeferred<ReturnType<typeof inspectResult>>();
-    const { state, request } = createState({
+    const { state, context, request } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopProposals: [proposal({ body: "" })],
     });
     request.mockReturnValueOnce(detail.promise);
 
-    const loading = loadSkillWorkshopProposalDetail(state, "proposal-1");
+    const loading = loadSkillWorkshopProposalDetail(state, context, "proposal-1");
     state.skillWorkshopAgentId = "ops";
     state.skillWorkshopProposals = [proposal({ body: "Ops proposal." })];
     state.skillWorkshopInspectingKey = "proposal-1";
@@ -312,7 +316,7 @@ describe("Skill Workshop proposal RPCs", () => {
 
   it("does not send an originless revision after the agent scope changes", async () => {
     const detail = createDeferred<ReturnType<typeof inspectResult>>();
-    const { state, request } = createState({
+    const { state, context, request } = createFixture({
       skillWorkshopAgentId: "research",
       skillWorkshopProposals: [proposal({ body: "" })],
       skillWorkshopRevisionDraft: "Tighten the trigger.",
@@ -320,7 +324,12 @@ describe("Skill Workshop proposal RPCs", () => {
     request.mockReturnValueOnce(detail.promise);
     const sendRevisionRequest = vi.fn(async () => {});
 
-    const revision = requestSkillWorkshopRevision(state, "proposal-1", sendRevisionRequest);
+    const revision = requestSkillWorkshopRevision(
+      state,
+      context,
+      "proposal-1",
+      sendRevisionRequest,
+    );
     state.skillWorkshopAgentId = "ops";
     detail.resolve(inspectResult());
 

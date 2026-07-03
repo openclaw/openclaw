@@ -116,7 +116,7 @@ import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../page
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";
 import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
-import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
+import { type SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
 import {
   loadSkillWorkshopMode,
   loadSkillWorkshopUseCurrentChatForRevisions,
