@@ -52,6 +52,7 @@ class GatewayTalkSetupReadinessTest {
           """
           {
             "realtime": {
+              "ready": true,
               "activeProvider": "google",
               "providers": [
                 {"id":"bridge","aliases":["google"],"label":"Bridge","configured":false},
@@ -113,7 +114,7 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun olderCatalogWithoutSelectionReadinessStaysUnverified() {
+  fun olderCatalogRowStateStaysUnverified() {
     val readiness =
       parseGatewayTalkSetupReadiness(
         catalog(
@@ -122,7 +123,7 @@ class GatewayTalkSetupReadinessTest {
               id = "openai",
               label = "OpenAI Realtime",
               configured = false,
-              activeProvider = null,
+              ready = null,
             ),
           transcription = providerGroup(id = "deepgram", label = "Deepgram", configured = true),
         ),
@@ -183,7 +184,7 @@ class GatewayTalkSetupReadinessTest {
     configured: Boolean,
     activeProvider: String? = id,
     aliases: List<String> = emptyList(),
-    ready: Boolean? = null,
+    ready: Boolean? = configured,
   ): String {
     val active = activeProvider?.let { "\"activeProvider\":\"$it\"," }.orEmpty()
     val readiness = ready?.let { "\"ready\":$it," }.orEmpty()

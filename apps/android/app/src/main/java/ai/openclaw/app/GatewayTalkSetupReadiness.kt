@@ -106,13 +106,14 @@ private fun parseTalkCatalogGroup(
       ?: providers.firstOrNull { it.matchesAlias(activeProviderId) }
       ?: return GatewayTalkSetupState.Unverified("Gateway selected unknown provider $activeProviderId")
   val provider = GatewayTalkProvider(id = selected.id, label = selected.label)
-  return if (ready ?: selected.configured) {
-    GatewayTalkSetupState.Ready(provider)
-  } else {
-    GatewayTalkSetupState.NeedsSetup(
-      reason = "Configure ${selected.label} on the Gateway",
-      provider = provider,
-    )
+  return when (ready) {
+    true -> GatewayTalkSetupState.Ready(provider)
+    false ->
+      GatewayTalkSetupState.NeedsSetup(
+        reason = "Configure ${selected.label} on the Gateway",
+        provider = provider,
+      )
+    null -> GatewayTalkSetupState.Unverified("Gateway did not return $title readiness")
   }
 }
 

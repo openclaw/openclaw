@@ -85,8 +85,9 @@ function resolveCatalogProviderSelection(
 ): { activeProvider?: string; ready: boolean } {
   // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
   try {
+    const resolvedProvider = resolveAutomaticProvider();
     return {
-      activeProvider: configuredProvider ?? resolveAutomaticProvider(),
+      activeProvider: configuredProvider ?? resolvedProvider,
       ready: true,
     };
   } catch {

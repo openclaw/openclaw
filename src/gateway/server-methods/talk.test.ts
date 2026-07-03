@@ -489,6 +489,52 @@ describe("talk.catalog handler", () => {
     expect(catalog.realtime).toMatchObject({ ready: false });
     expect(catalog.realtime).not.toHaveProperty("activeProvider");
   });
+
+  it("validates explicitly selected providers before reporting readiness", async () => {
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      {
+        id: "transcription",
+        label: "Transcription",
+        isConfigured: vi.fn(() => false),
+      },
+    ] as never);
+    mocks.listRealtimeVoiceProviders.mockReturnValue([
+      {
+        id: "realtime",
+        label: "Realtime",
+        isConfigured: vi.fn(() => false),
+        createBridge: vi.fn(),
+      },
+    ] as never);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockImplementation(() => {
+      throw new Error("Realtime provider is not configured");
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.catalog"]({
+      req: { type: "req", id: "1", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: { realtime: { provider: "realtime" } },
+            plugins: {
+              entries: {
+                "voice-call": { config: { streaming: { provider: "transcription" } } },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      transcription: { ready: false, activeProvider: "transcription" },
+      realtime: { ready: false, activeProvider: "realtime" },
+    });
+  });
 });
 
 describe("talk.speak handler", () => {
