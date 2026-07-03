@@ -1836,6 +1836,31 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(mockFlows.get("flow-1")).toMatchObject({ status: "queued" });
     expect(mockFlows.get("flow-2")).toMatchObject({ status: "running" });
+  });
+
+  it("leaves pending delegates recoverable when the session row is missing", async () => {
+    const sessionKey = "agent:main:missing-session-row";
+    enqueuePendingDelegate(sessionKey, { task: "queued remains recoverable" });
+    enqueuePendingDelegate(sessionKey, { task: "running remains recoverable" });
+    const runningFlow = mockFlows.get("flow-2");
+    expect(runningFlow).toBeDefined();
+    runningFlow!.status = "running";
+    runningFlow!.currentStep = "Released to continuation scheduler";
+    runningFlow!.revision = 1;
+    loadSessionStoreForRecoveryMock.mockReturnValue({});
+
+    const result = await recoverPendingContinuationDelegates({});
+
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "queued" });
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "running" });
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("delegate-recovery-session-missing"),
+      }),
+    );
     expect(loggerRecords).toContainEqual(
       expect.objectContaining({
         level: "warn",
@@ -2135,6 +2160,27 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
       expect.objectContaining({
         level: "warn",
         message: expect.stringContaining("leaving staged delegates recoverable"),
+      }),
+    );
+  });
+
+  it("leaves staged post-compaction rows recoverable when the session row is missing", async () => {
+    const sessionKey = "agent:main:subagent:pc-missing-session-row";
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate after missing row");
+    loadSessionStoreForRecoveryMock.mockReturnValue({});
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(1);
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("post-compaction-recovery-session-missing"),
       }),
     );
   });

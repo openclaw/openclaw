@@ -634,6 +634,12 @@ export async function recoverPendingContinuationDelegates(
       }
       storeByPath.set(storePath, sessionStore);
     }
+    if (!params.chainState && !sessionStore[sessionKey]) {
+      log.warn(
+        `[continuation:delegate-recovery-session-missing] path=${storePath} session=${sessionKey} leaving queued/running delegates recoverable`,
+      );
+      continue;
+    }
     recoveredSessions++;
     // Persist the advanced chain state to BOTH the durable store and the
     // in-memory copy this recovery loop reads. The in-memory mirror keeps
@@ -1006,8 +1012,14 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
       }
       storeByPath.set(storePath, sessionStore);
     }
-    recoveredSessions++;
     const entry = sessionStore[sessionKey];
+    if (!entry) {
+      postCompactionLog.warn(
+        `[continuation:post-compaction-recovery-session-missing] path=${storePath} session=${sessionKey} leaving staged delegates recoverable`,
+      );
+      continue;
+    }
+    recoveredSessions++;
     const chainState = loadContinuationChainState(entry);
     const deliveryContext = entry?.deliveryContext;
     const spawnCtx: PostCompactionSpawnContext = {
