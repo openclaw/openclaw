@@ -924,8 +924,8 @@ At the architecture level, the split is:
 - YAML scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
 - `qa coverage` requires one owner per scenario ID across YAML and legacy live
   catalogs. Use `coverage.primary` only for product-boundary evidence and
-  `coverage.secondary` for supporting tests. Remove legacy owners only after
-  YAML parity; keep existing `openclaw qa <transport>` aliases.
+  `coverage.secondary` for supporting tests. Existing
+  `openclaw qa <transport>` aliases remain available.
 
 ### Adding a channel
 
