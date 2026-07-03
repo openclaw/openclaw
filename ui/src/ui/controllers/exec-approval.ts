@@ -1,6 +1,11 @@
 // Control UI controller manages exec approval gateway state.
 import { normalizeOptionalString } from "../string-coerce.ts";
 
+export type ExecApprovalAllowAlwaysUnavailableReason =
+  | "policy-ask-always"
+  | "one-shot-command"
+  | "unavailable";
+
 export type ExecApprovalRequestPayload = {
   command: string;
   cwd?: string | null;
@@ -14,6 +19,8 @@ export type ExecApprovalRequestPayload = {
     startIndex: number;
     endIndex: number;
   }[];
+  unavailableDecisions?: readonly "allow-always"[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
@@ -103,6 +110,24 @@ function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefin
   return decisions.length > 0 ? decisions : undefined;
 }
 
+function parseUnavailableDecisions(value: unknown): "allow-always"[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const decisions = value.filter(
+    (decision): decision is "allow-always" => decision === "allow-always",
+  );
+  return decisions.length > 0 ? decisions : undefined;
+}
+
+function parseAllowAlwaysUnavailableReason(
+  value: unknown,
+): ExecApprovalAllowAlwaysUnavailableReason | null {
+  return value === "policy-ask-always" || value === "one-shot-command" || value === "unavailable"
+    ? value
+    : null;
+}
+
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -134,6 +159,10 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
+      unavailableDecisions: parseUnavailableDecisions(request.unavailableDecisions),
+      allowAlwaysUnavailableReason: parseAllowAlwaysUnavailableReason(
+        request.allowAlwaysUnavailableReason,
+      ),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
     },
     createdAtMs,

@@ -5,9 +5,11 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approval-unavailable-copy.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type {
   ExecAsk,
+  ExecApprovalUnavailableDecision,
   ExecHost,
   ExecMode,
   ExecSecurity,
@@ -140,6 +142,9 @@ export type ExecToolDetails =
       approvalSlug: string;
       expiresAtMs: number;
       allowedDecisions?: readonly ExecApprovalDecision[];
+      ask?: string | null;
+      unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+      allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
       host: ExecHost;
       command: string;
       cwd?: string;

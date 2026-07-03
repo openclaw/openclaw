@@ -30,4 +30,28 @@ describe("buildPendingApprovalView", () => {
     }
     expect(view.commandAnalysis?.warningLines).toEqual(["Contains inline-eval: python -c"]);
   });
+
+  it("passes allow-always unavailable metadata through exec approval views", () => {
+    const request: ExecApprovalRequest = {
+      id: "approval-id",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        command: "openclaw --version 2>&1",
+        host: "gateway",
+        ask: "on-miss",
+        unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "one-shot-command",
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+
+    expect(view.approvalKind).toBe("exec");
+    if (view.approvalKind !== "exec") {
+      throw new Error("expected exec approval view");
+    }
+    expect(view.unavailableDecisions).toEqual(["allow-always"]);
+    expect(view.allowAlwaysUnavailableReason).toBe("one-shot-command");
+  });
 });

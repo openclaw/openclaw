@@ -8,6 +8,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
+import { resolveExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approval-unavailable-copy.js";
 import {
   type AllowAlwaysPersistenceDecision,
   commandRequiresSecurityAuditSuppressionApproval,
@@ -597,6 +598,11 @@ export async function processGatewayAllowlist(
     ask: hostAsk,
     allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
+  const allowAlwaysUnavailableReason = resolveExecApprovalAllowAlwaysUnavailableReason({
+    ask: hostAsk,
+    unavailableDecisions: approvalUnavailableDecisions,
+    allowedDecisions: approvalAllowedDecisions,
+  });
   const unavailableDecisionRequestParams =
     approvalUnavailableDecisions.length > 0
       ? { unavailableDecisions: approvalUnavailableDecisions }
@@ -690,6 +696,7 @@ export async function processGatewayAllowlist(
         security: hostSecurity,
         ask: hostAsk,
         ...unavailableDecisionRequestParams,
+        ...(allowAlwaysUnavailableReason ? { allowAlwaysUnavailableReason } : {}),
         commandHighlighting: params.commandHighlighting,
         warningText: params.warnings.join("\n").trim() || undefined,
         ...buildExecApprovalRequesterContext({
@@ -1015,6 +1022,9 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        ask: hostAsk,
+        unavailableDecisions: approvalUnavailableDecisions,
+        allowAlwaysUnavailableReason: allowAlwaysUnavailableReason ?? undefined,
       }),
     };
   }

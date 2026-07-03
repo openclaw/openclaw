@@ -88,6 +88,8 @@ type MatrixExecApprovalMetadata = MatrixApprovalMetadataBase & {
   host?: string;
   nodeId?: string;
   sessionKey?: string;
+  unavailableDecisions?: readonly string[];
+  allowAlwaysUnavailableReason?: string;
 };
 type MatrixPluginApprovalSeverity = Extract<
   PendingApprovalView,
@@ -288,6 +290,12 @@ function buildMatrixApprovalMetadata(params: {
     ...(params.view.host != null ? { host: params.view.host } : {}),
     ...(params.view.nodeId != null ? { nodeId: params.view.nodeId } : {}),
     ...(params.view.sessionKey != null ? { sessionKey: params.view.sessionKey } : {}),
+    ...(params.view.unavailableDecisions != null
+      ? { unavailableDecisions: params.view.unavailableDecisions }
+      : {}),
+    ...(params.view.allowAlwaysUnavailableReason != null
+      ? { allowAlwaysUnavailableReason: params.view.allowAlwaysUnavailableReason }
+      : {}),
   };
 }
 
@@ -322,6 +330,8 @@ function buildPendingApprovalContent(params: {
           ask: params.view.ask ?? undefined,
           agentId: params.view.agentId ?? undefined,
           allowedDecisions,
+          unavailableDecisions: params.view.unavailableDecisions,
+          allowAlwaysUnavailableReason: params.view.allowAlwaysUnavailableReason,
           command: params.view.commandText,
           cwd: params.view.cwd ?? undefined,
           host: params.view.host === "node" ? "node" : "gateway",

@@ -12,14 +12,16 @@ import {
   type ExecApprovalInitiatingSurfaceState,
   resolveExecApprovalInitiatingSurfaceState,
 } from "../infra/exec-approval-surface.js";
+import type { ExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approval-unavailable-copy.js";
 import {
   minSecurity,
   maxAsk,
-  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovals,
   resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
+  type ExecApprovalUnavailableDecision,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
@@ -507,9 +509,17 @@ export function buildExecApprovalPendingToolResult(params: {
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  ask?: string | null;
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   nodeId?: string;
 }): AgentToolResult<ExecToolDetails> {
-  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
+  const allowedDecisions =
+    params.allowedDecisions ??
+    resolveExecApprovalRequestAllowedDecisions({
+      ask: params.ask,
+      unavailableDecisions: params.unavailableDecisions,
+    });
   return {
     content: [
       {
@@ -529,6 +539,9 @@ export function buildExecApprovalPendingToolResult(params: {
                 approvalSlug: params.approvalSlug,
                 approvalId: params.approvalId,
                 allowedDecisions,
+                ask: params.ask,
+                unavailableDecisions: params.unavailableDecisions,
+                allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
                 command: params.command,
                 cwd: params.cwd,
                 host: params.host,
@@ -557,6 +570,9 @@ export function buildExecApprovalPendingToolResult(params: {
             approvalSlug: params.approvalSlug,
             expiresAtMs: params.expiresAtMs,
             allowedDecisions,
+            ask: params.ask,
+            unavailableDecisions: params.unavailableDecisions,
+            allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
             host: params.host,
             command: params.command,
             cwd: params.cwd,

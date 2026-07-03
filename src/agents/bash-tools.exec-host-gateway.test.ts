@@ -811,6 +811,7 @@ describe("processGatewayAllowlist", () => {
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
+        allowAlwaysUnavailableReason: "one-shot-command",
       }),
     );
   });

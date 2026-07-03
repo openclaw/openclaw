@@ -143,10 +143,33 @@ function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApp
   if (active.request.allowedDecisions?.length) {
     return active.request.allowedDecisions;
   }
-  if (active.kind === "exec" && active.request.ask === "always") {
-    return ["allow-once", "deny"];
+  const decisions: readonly ExecApprovalDecision[] =
+    active.kind === "exec" && active.request.ask === "always"
+      ? ["allow-once", "deny"]
+      : DEFAULT_EXEC_APPROVAL_DECISIONS;
+  if (active.kind !== "exec" || !active.request.unavailableDecisions?.includes("allow-always")) {
+    return decisions;
   }
-  return DEFAULT_EXEC_APPROVAL_DECISIONS;
+  return decisions.filter((decision) => decision !== "allow-always");
+}
+
+function resolveAllowAlwaysUnavailableWarning(active: ExecApprovalRequest): string {
+  if (
+    active.request.ask === "always" ||
+    active.request.allowAlwaysUnavailableReason === "policy-ask-always"
+  ) {
+    return t("execApproval.allowAlwaysUnavailable");
+  }
+  if (active.request.allowAlwaysUnavailableReason === "one-shot-command") {
+    return "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.";
+  }
+  if (active.request.allowAlwaysUnavailableReason === "unavailable") {
+    return "Allow Always is unavailable for this request.";
+  }
+  if (active.request.unavailableDecisions?.includes("allow-always")) {
+    return "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.";
+  }
+  return t("execApproval.allowAlwaysUnavailable");
 }
 
 function renderUnavailableDecisionWarning(
@@ -155,7 +178,9 @@ function renderUnavailableDecisionWarning(
 ) {
   return active.kind !== "exec" || decisions.includes("allow-always")
     ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+    : html`<div class="exec-approval-warning">
+        ${resolveAllowAlwaysUnavailableWarning(active)}
+      </div>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {

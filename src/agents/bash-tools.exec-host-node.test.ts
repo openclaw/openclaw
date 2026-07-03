@@ -1791,9 +1791,13 @@ describe("executeNodeHostCommand", () => {
       },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "policy-ask-always",
+    );
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
+        allowAlwaysUnavailableReason: "policy-ask-always",
       }),
     );
   });
@@ -1840,6 +1844,9 @@ describe("executeNodeHostCommand", () => {
       },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "policy-ask-always",
+    );
   });
 
   it("offers allow-always for prepared node commands with complete node coverage", async () => {
@@ -2247,9 +2254,13 @@ describe("executeNodeHostCommand", () => {
       allowAlwaysPersistence: { kind: "one-shot", reasons: ["unplanned"] },
     });
     expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+    expect(requireRegisteredApprovalRequest().allowAlwaysUnavailableReason).toBe(
+      "one-shot-command",
+    );
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
+        allowAlwaysUnavailableReason: "one-shot-command",
       }),
     );
   });

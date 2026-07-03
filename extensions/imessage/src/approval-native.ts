@@ -311,6 +311,8 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
     ask: params.request.request.ask ?? null,
     agentId: params.request.request.agentId ?? null,
     allowedDecisions,
+    unavailableDecisions: params.request.request.unavailableDecisions,
+    allowAlwaysUnavailableReason: params.request.request.allowAlwaysUnavailableReason,
     command,
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",

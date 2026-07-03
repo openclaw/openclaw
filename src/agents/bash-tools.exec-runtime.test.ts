@@ -27,6 +27,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
+let buildApprovalPendingMessage: typeof import("./bash-tools.exec-runtime.js").buildApprovalPendingMessage;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
@@ -37,6 +38,7 @@ let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess
 beforeAll(async () => {
   ({ markBackgrounded } = await import("./bash-process-registry.js"));
   ({
+    buildApprovalPendingMessage,
     buildExecExitOutcome,
     detectCursorKeyMode,
     formatExecFailureReason,
@@ -380,6 +382,43 @@ describe("renderExecUpdateText", () => {
   it("combines warnings with non-empty output", () => {
     expect(renderExecUpdateText({ tailText: "hello", warnings: ["Warning: retrying"] })).toBe(
       "Warning: retrying\n\nhello",
+    );
+  });
+});
+
+describe("buildApprovalPendingMessage", () => {
+  const baseParams = {
+    approvalSlug: "req-1",
+    approvalId: "req-1-full",
+    command: "openclaw --version 2>&1",
+    cwd: "/tmp/project",
+    host: "gateway" as const,
+  };
+
+  it("explains ask=always with the effective policy copy", () => {
+    const message = buildApprovalPendingMessage({
+      ...baseParams,
+      ask: "always",
+    });
+
+    expect(message).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(message).not.toContain("allow-once|allow-always|deny");
+    expect(message).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+  });
+
+  it("explains one-shot commands when allow-always cannot be saved", () => {
+    const message = buildApprovalPendingMessage({
+      ...baseParams,
+      ask: "on-miss",
+      unavailableDecisions: ["allow-always"],
+    });
+
+    expect(message).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(message).not.toContain("The effective approval policy requires approval every time");
+    expect(message).toContain(
+      "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.",
     );
   });
 });

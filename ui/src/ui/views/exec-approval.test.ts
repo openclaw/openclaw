@@ -158,6 +158,46 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("explains one-shot commands when allow-always is unavailable", async () => {
+    const request = createExecRequest();
+    request.request.ask = "on-miss";
+    request.request.unavailableDecisions = ["allow-always"];
+    request.request.allowAlwaysUnavailableReason = "one-shot-command";
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.",
+    );
+  });
+
+  it("keeps explicit generic allow-always unavailable copy ahead of request fallback", async () => {
+    const request = createExecRequest();
+    request.request.ask = "on-miss";
+    request.request.unavailableDecisions = ["allow-always"];
+    request.request.allowAlwaysUnavailableReason = "unavailable";
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Allow Always is unavailable for this request.",
+    );
+  });
+
   it("falls back to ask when exec approval decisions are omitted", async () => {
     const request = createExecRequest();
     request.request.ask = "always";

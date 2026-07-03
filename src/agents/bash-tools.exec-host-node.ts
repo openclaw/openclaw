@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import type { InterpreterInlineEvalHit } from "../infra/command-analysis/inline-eval.js";
+import { resolveExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approval-unavailable-copy.js";
 import {
   type ExecSecurity,
   maxAsk,
@@ -142,6 +143,11 @@ export async function executeNodeHostCommand(
     ask: approvalDecisionAsk,
     allowAlwaysPersistence,
   });
+  const allowAlwaysUnavailableReason = resolveExecApprovalAllowAlwaysUnavailableReason({
+    ask: approvalDecisionAsk,
+    unavailableDecisions,
+    allowedDecisions,
+  });
   const unavailableDecisionRequestParams =
     unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
   const requiresAsk =
@@ -173,6 +179,7 @@ export async function executeNodeHostCommand(
       security: hostSecurity,
       ask: hostAsk,
       ...unavailableDecisionRequestParams,
+      ...(allowAlwaysUnavailableReason ? { allowAlwaysUnavailableReason } : {}),
       commandHighlighting: params.commandHighlighting,
       ...buildExecApprovalRequesterContext({
         agentId: prepared.agentId,
@@ -456,6 +463,9 @@ export async function executeNodeHostCommand(
           sentApproverDms,
           unavailableReason,
           allowedDecisions,
+          ask: approvalDecisionAsk,
+          unavailableDecisions,
+          allowAlwaysUnavailableReason: allowAlwaysUnavailableReason ?? undefined,
           nodeId: target.nodeId,
         });
       }

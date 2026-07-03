@@ -185,7 +185,10 @@ describe("matrixApprovalNativeRuntime", () => {
       roomId: "!room:example.org",
     });
     const reactMessage = vi.fn().mockResolvedValue(undefined);
-    const view = buildExecApprovalView();
+    const view = buildExecApprovalView({
+      unavailableDecisions: ["allow-always"],
+      allowAlwaysUnavailableReason: "one-shot-command",
+    });
     const pendingPayload = await buildPendingPayload(view);
 
     await matrixApprovalNativeRuntime.transport.deliverPending({
@@ -224,6 +227,8 @@ describe("matrixApprovalNativeRuntime", () => {
       cwd: "/repo",
       agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny"],
+      unavailableDecisions: ["allow-always"],
+      allowAlwaysUnavailableReason: "one-shot-command",
     });
   });
 

@@ -368,6 +368,26 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("explains one-shot command persistence when allow-always is unavailable for the request", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one-shot",
+      ask: "on-miss",
+      unavailableDecisions: ["allow-always"],
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toMatchObject({
+      execApproval: { allowedDecisions: ["allow-once", "deny"] },
+    });
+    expect(payload.text).toContain("```txt\n/approve slug-one-shot allow-once\n```");
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.",
+    );
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",

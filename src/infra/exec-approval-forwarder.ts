@@ -32,6 +32,7 @@ import {
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
+import { resolveExecApprovalAllowAlwaysUnavailableText } from "./exec-approval-unavailable-copy.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
@@ -289,10 +290,14 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
       : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
-  if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+  const allowAlwaysUnavailableText = resolveExecApprovalAllowAlwaysUnavailableText({
+    ask: request.request.ask,
+    unavailableDecisions: request.request.unavailableDecisions,
+    allowedDecisions,
+    allowAlwaysUnavailableReason: request.request.allowAlwaysUnavailableReason,
+  });
+  if (allowAlwaysUnavailableText) {
+    lines.push(allowAlwaysUnavailableText);
   }
   return lines.join("\n");
 }

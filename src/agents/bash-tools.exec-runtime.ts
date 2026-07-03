@@ -11,11 +11,14 @@ import {
   resolveEventSessionKeyForPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import type { ExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approval-unavailable-copy.js";
+import { resolveExecApprovalAllowAlwaysUnavailableText } from "../infra/exec-approval-unavailable-copy.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
-  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecHost,
   type ExecApprovalDecision,
+  type ExecApprovalUnavailableDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -372,6 +375,9 @@ export function buildApprovalPendingMessage(params: {
   approvalSlug: string;
   approvalId: string;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  ask?: string | null;
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   command: string;
   cwd: string | undefined;
   host: "gateway" | "node";
@@ -383,7 +389,12 @@ export function buildApprovalPendingMessage(params: {
   }
   const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
   const lines: string[] = [];
-  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
+  const allowedDecisions =
+    params.allowedDecisions ??
+    resolveExecApprovalRequestAllowedDecisions({
+      ask: params.ask,
+      unavailableDecisions: params.unavailableDecisions,
+    });
   const decisionText = allowedDecisions.join("|");
   const warningText = params.warningText?.trim();
   if (warningText) {
@@ -404,10 +415,14 @@ export function buildApprovalPendingMessage(params: {
       : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
-  if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+  const allowAlwaysUnavailableText = resolveExecApprovalAllowAlwaysUnavailableText({
+    ask: params.ask,
+    unavailableDecisions: params.unavailableDecisions,
+    allowedDecisions,
+    allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
+  });
+  if (allowAlwaysUnavailableText) {
+    lines.push(allowAlwaysUnavailableText);
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");

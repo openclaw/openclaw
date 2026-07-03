@@ -129,4 +129,33 @@ describe("exec approvals protocol validators", () => {
       ).toBe(false);
     }
   });
+
+  it("accepts only known allow-always unavailable reasons", () => {
+    for (const allowAlwaysUnavailableReason of [
+      "policy-ask-always",
+      "one-shot-command",
+      "unavailable",
+    ]) {
+      expect(
+        validateExecApprovalRequestParams({
+          command: "echo hi",
+          allowAlwaysUnavailableReason,
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        allowAlwaysUnavailableReason: null,
+      }),
+    ).toBe(true);
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        allowAlwaysUnavailableReason: "policy",
+      }),
+    ).toBe(false);
+  });
 });

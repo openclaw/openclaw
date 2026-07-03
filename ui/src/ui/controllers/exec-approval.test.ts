@@ -74,6 +74,33 @@ describe("parseExecApprovalRequested", () => {
 
     expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny", "allow-always"]);
   });
+
+  it("preserves allow-always unavailable reason metadata", () => {
+    const result = parseExecApprovalRequested({
+      id: "exec-1",
+      request: {
+        command: "openclaw --version 2>&1",
+        unavailableDecisions: ["allow-always", "deny"],
+        allowAlwaysUnavailableReason: "one-shot-command",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+
+    expect(result?.request.unavailableDecisions).toEqual(["allow-always"]);
+    expect(result?.request.allowAlwaysUnavailableReason).toBe("one-shot-command");
+
+    const invalid = parseExecApprovalRequested({
+      id: "exec-2",
+      request: {
+        command: "pwd",
+        allowAlwaysUnavailableReason: "policy",
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+    expect(invalid?.request.allowAlwaysUnavailableReason).toBeNull();
+  });
 });
 
 describe("parsePluginApprovalRequested", () => {

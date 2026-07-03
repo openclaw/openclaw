@@ -2848,6 +2848,39 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
+  it("returns allow-always unavailable metadata from exec.approval.get", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+      },
+    });
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    const getRespond = vi.fn();
+    await getExecApproval({ handlers, id, respond: getRespond });
+
+    expect(mockCallArg(getRespond)).toBe(true);
+    const approval = mockCallArg(getRespond, 0, 1) as Record<string, unknown>;
+    expect(approval.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(approval.unavailableDecisions).toEqual(["allow-always"]);
+    expect(approval.allowAlwaysUnavailableReason).toBe("one-shot-command");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
   it("attaches shared command analysis to gateway exec approval requests", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -3398,7 +3431,8 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, ask: "always" },
     });
-    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+    expect(request.allowAlwaysUnavailableReason).toBe("policy-ask-always");
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -3413,7 +3447,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     });
 
     const denyRespond = vi.fn();
@@ -3441,7 +3475,8 @@ describe("exec approval handlers", () => {
         unavailableDecisions: ["allow-always"],
       },
     });
-    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+    expect(request.allowAlwaysUnavailableReason).toBe("one-shot-command");
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -3456,7 +3491,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.",
     });
 
     const allowOnceRespond = vi.fn();

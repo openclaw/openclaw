@@ -17,6 +17,7 @@ export {
   type ExecApprovalReplyMetadata,
 } from "../infra/exec-approval-reply.js";
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
+export type { ExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approval-unavailable-copy.js";
 export {
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalRequestAllowedDecisions,

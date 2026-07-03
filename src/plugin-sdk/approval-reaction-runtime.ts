@@ -12,6 +12,7 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { resolveExecApprovalAllowAlwaysUnavailableText } from "../infra/exec-approval-unavailable-copy.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   buildApprovalPendingReplyPayload,
@@ -208,12 +209,23 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 function buildManualInstructionSection(params: {
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  view: PendingApprovalView;
 }): string[] {
   const lines: string[] = [];
-  if (!params.allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+  const allowAlwaysUnavailableText =
+    params.view.approvalKind === "exec"
+      ? resolveExecApprovalAllowAlwaysUnavailableText({
+          ask: params.view.ask,
+          unavailableDecisions: params.view.unavailableDecisions,
+          allowedDecisions: params.allowedDecisions,
+          allowAlwaysUnavailableReason: params.view.allowAlwaysUnavailableReason,
+        })
+      : resolveExecApprovalAllowAlwaysUnavailableText({
+          allowedDecisions: params.allowedDecisions,
+          allowAlwaysUnavailableReason: "policy-ask-always",
+        });
+  if (allowAlwaysUnavailableText) {
+    lines.push(allowAlwaysUnavailableText);
   }
   if (params.allowedDecisions.length > 0) {
     lines.push(
@@ -307,6 +319,7 @@ function buildApprovalReactionPromptText(params: {
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,
     allowedDecisions,
+    view,
   });
   if (manualInstructions.length > 0) {
     sections.push(manualInstructions.join("\n"));
@@ -410,6 +423,8 @@ export function buildApprovalReactionPendingContent(params: {
             approvalCommandId: params.request.id,
             warningText: params.view.warningText ?? undefined,
             ask: params.view.ask ?? null,
+            unavailableDecisions: params.view.unavailableDecisions,
+            allowAlwaysUnavailableReason: params.view.allowAlwaysUnavailableReason,
             agentId: params.view.agentId ?? null,
             allowedDecisions: reactionPayload.allowedDecisions,
             command: params.view.commandText,

@@ -138,6 +138,31 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
+  it("explains one-shot exec approvals when allow-always is unavailable", () => {
+    const content = buildApprovalReactionPendingContentForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          ask: "on-miss",
+          unavailableDecisions: ["allow-always"] as const,
+          allowAlwaysUnavailableReason: "one-shot-command",
+          allowedDecisions: ["allow-once", "deny"] as const,
+        },
+      },
+      nowMs: 1_000,
+    });
+
+    expect(content.reactionPayload.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(content.reactionPayload.text).not.toContain("♾️ Allow Always");
+    expect(content.reactionPayload.text).toContain(
+      "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.",
+    );
+    expect(content.manualFallbackPayload.text).toContain(
+      "Allow Always is unavailable because this command is one-shot and cannot be saved as a reusable approval.",
+    );
+  });
+
   it("sanitizes cwd before embedding it in reaction prompts", () => {
     const payload = buildApprovalReactionPromptPayloadForRequest({
       request: {
@@ -174,7 +199,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(payload.text).toContain("Allow Once: /approve plugin:approval-123 allow-once");
     expect(payload.text).toContain("Deny: /approve plugin:approval-123 deny");
     expect(payload.text).toContain(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
     expect(
       payload.text?.trim().endsWith("Reply with: /approve plugin:approval-123 allow-once|deny"),

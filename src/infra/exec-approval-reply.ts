@@ -17,9 +17,11 @@ import {
   listNativeExecApprovalClientLabels,
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
+import { resolveExecApprovalAllowAlwaysUnavailableText } from "./exec-approval-unavailable-copy.js";
 import {
-  resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
+  type ExecApprovalUnavailableDecision,
   type ExecHost,
 } from "./exec-approvals.js";
 
@@ -53,6 +55,8 @@ export type ExecApprovalPendingReplyParams = {
   ask?: string | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
+  allowAlwaysUnavailableReason?: string | null;
   command: string;
   cwd?: string;
   host: ExecHost;
@@ -91,8 +95,15 @@ function buildGenericNativeExecApprovalFallbackText(params?: { excludeChannel?: 
 function resolveAllowedDecisions(params: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
 }): readonly ExecApprovalReplyDecision[] {
-  return params.allowedDecisions ?? resolveExecApprovalAllowedDecisions({ ask: params.ask });
+  return (
+    params.allowedDecisions ??
+    resolveExecApprovalRequestAllowedDecisions({
+      ask: params.ask,
+      unavailableDecisions: params.unavailableDecisions,
+    })
+  );
 }
 
 function buildApprovalCommandFence(
@@ -115,6 +126,7 @@ export function buildExecApprovalActionDescriptors(params: {
   approvalCommandId: string;
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
 }): ExecApprovalActionDescriptor[] {
   const approvalCommandId = params.approvalCommandId.trim();
   if (!approvalCommandId) {
@@ -375,10 +387,14 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push("Other options:");
     lines.push(secondaryFence);
   }
-  if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+  const allowAlwaysUnavailableText = resolveExecApprovalAllowAlwaysUnavailableText({
+    ask: params.ask,
+    unavailableDecisions: params.unavailableDecisions,
+    allowedDecisions,
+    allowAlwaysUnavailableReason: params.allowAlwaysUnavailableReason,
+  });
+  if (allowAlwaysUnavailableText) {
+    lines.push(allowAlwaysUnavailableText);
   }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);

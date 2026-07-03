@@ -6584,6 +6584,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let ask: AnyCodable?
     public let warningtext: AnyCodable?
     public let unavailabledecisions: [String]?
+    public let allowalwaysunavailablereason: AnyCodable?
     public let commandspans: [[String: AnyCodable]]?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
@@ -6611,6 +6612,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         ask: AnyCodable?,
         warningtext: AnyCodable?,
         unavailabledecisions: [String]?,
+        allowalwaysunavailablereason: AnyCodable?,
         commandspans: [[String: AnyCodable]]?,
         agentid: AnyCodable? = nil,
         resolvedpath: AnyCodable?,
@@ -6637,6 +6639,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.ask = ask
         self.warningtext = warningtext
         self.unavailabledecisions = unavailabledecisions
+        self.allowalwaysunavailablereason = allowalwaysunavailablereason
         self.commandspans = commandspans
         self.agentid = agentid
         self.resolvedpath = resolvedpath
@@ -6665,6 +6668,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case ask
         case warningtext = "warningText"
         case unavailabledecisions = "unavailableDecisions"
+        case allowalwaysunavailablereason = "allowAlwaysUnavailableReason"
         case commandspans = "commandSpans"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"

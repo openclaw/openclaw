@@ -60,6 +60,8 @@ function restoreProcessPlatformForTest(): void {
 type ApprovalRequestPayload = {
   approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+  unavailableDecisions?: readonly string[];
+  allowAlwaysUnavailableReason?: string;
 };
 
 function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
@@ -175,6 +177,25 @@ describe("exec approval requests", () => {
 
     const payload = requireApprovalRequestPayload(0);
     expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
+  });
+
+  it("passes allow-always unavailable metadata into host approval registration payloads", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: "openclaw --version 2>&1",
+      unavailableDecisions: ["allow-always"],
+      allowAlwaysUnavailableReason: "one-shot-command",
+      workdir: "/tmp/project",
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.unavailableDecisions).toEqual(["allow-always"]);
+    expect(payload?.allowAlwaysUnavailableReason).toBe("one-shot-command");
   });
 
   it("does not generate command spans by default", async () => {

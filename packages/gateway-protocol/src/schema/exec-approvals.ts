@@ -157,6 +157,12 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
         maxItems: 1,
       }),
     ),
+    allowAlwaysUnavailableReason: Type.Optional(
+      Type.Union([
+        Type.String({ enum: ["policy-ask-always", "one-shot-command", "unavailable"] }),
+        Type.Null(),
+      ]),
+    ),
     commandSpans: Type.Optional(
       Type.Array(
         Type.Object(

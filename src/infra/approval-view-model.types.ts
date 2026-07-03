@@ -6,6 +6,7 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalResolved,
+  ExecApprovalUnavailableDecision,
 } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -41,6 +42,8 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   ask?: string | null;
   agentId?: string | null;
   warningText?: string | null;
+  allowAlwaysUnavailableReason?: string | null;
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   commandAnalysis?: CommandExplanationSummary | null;
   commandText: string;
   commandPreview?: string | null;
