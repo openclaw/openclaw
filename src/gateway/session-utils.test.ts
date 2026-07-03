@@ -2510,6 +2510,34 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
   });
+
+  test.each([
+    {
+      name: "uses a label before the first user message",
+      fields: { label: "Label via /name" },
+      firstUserMessage: "Hello, what can you do?",
+      expected: "Label via /name",
+    },
+    {
+      name: "prefers an explicit label over display and group metadata",
+      fields: {
+        displayName: "Display Name",
+        subject: "Group Subject",
+        label: "Label via /name",
+      },
+      firstUserMessage: undefined,
+      expected: "Label via /name",
+    },
+    {
+      name: "ignores a blank label",
+      fields: { label: "   " },
+      firstUserMessage: "Hello!",
+      expected: "Hello!",
+    },
+  ])("$name", ({ fields, firstUserMessage, expected }) => {
+    const entry = { sessionId: "abc123", updatedAt: Date.now(), ...fields } as SessionEntry;
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe(expected);
+  });
 });
 
 describe("resolveGatewayModelSupportsImages", () => {

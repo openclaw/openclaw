@@ -1,7 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -257,9 +257,7 @@ fun OnboardingFlow(
     val gatewayConnectionProblem = gatewayConnectionDisplay.problem
     val isConnected = gatewayConnectionDisplay.isConnected
     val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-    val nodeCapabilityApprovalState by viewModel.nodeCapabilityApprovalState.collectAsState()
-    val nodeCapabilityConnected by viewModel.nodeCapabilityConnected.collectAsState()
-    val nodeCapabilityApprovalRequestId by viewModel.nodeCapabilityApprovalRequestId.collectAsState()
+    val nodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
     val nodesDevicesRefreshing by viewModel.nodesDevicesRefreshing.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
     val gateways by viewModel.gateways.collectAsState()
@@ -272,8 +270,8 @@ fun OnboardingFlow(
     val ready =
       canFinishOnboarding(
         isConnected = isConnected,
-        isNodeConnected = isNodeConnected || nodeCapabilityConnected,
-        nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+        isNodeConnected = isNodeConnected,
+        nodeCapabilityApproval = nodeCapabilityApproval,
       )
 
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
@@ -417,12 +415,12 @@ fun OnboardingFlow(
       }
     }
 
-    LaunchedEffect(step, ready, nodeCapabilityApprovalState, nodeApprovalAutoContinueEnabled) {
+    LaunchedEffect(step, ready, nodeCapabilityApproval, nodeApprovalAutoContinueEnabled) {
       if (
         nodeApprovalShouldAutoContinue(
           step = step,
           ready = ready,
-          nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+          nodeCapabilityApproval = nodeCapabilityApproval,
           autoContinueEnabled = nodeApprovalAutoContinueEnabled,
         )
       ) {
@@ -434,10 +432,10 @@ fun OnboardingFlow(
       }
     }
 
-    LaunchedEffect(step, nodeCapabilityApprovalState, nodesDevicesRefreshing) {
+    LaunchedEffect(step, nodeCapabilityApproval, nodesDevicesRefreshing) {
       if (
         step != OnboardingStep.NodeApproval ||
-        !nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState) ||
+        !nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval) ||
         nodesDevicesRefreshing
       ) {
         return@LaunchedEffect
@@ -467,7 +465,7 @@ fun OnboardingFlow(
       when (
         gatewayPairingContinueDestination(
           ready = ready,
-          nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+          nodeCapabilityApproval = nodeCapabilityApproval,
         )
       ) {
         OnboardingStep.Permissions -> {
@@ -778,7 +776,7 @@ fun OnboardingFlow(
             isConnected &&
               gatewayPairingContinueDestination(
                 ready = ready,
-                nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+                nodeCapabilityApproval = nodeCapabilityApproval,
               ) != null,
           gatewayConnectionProblem = gatewayConnectionProblem,
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
@@ -793,8 +791,7 @@ fun OnboardingFlow(
       OnboardingStep.NodeApproval ->
         NodeApprovalScreen(
           modifier = modifier,
-          requestId = nodeCapabilityApprovalRequestId,
-          approvalState = nodeCapabilityApprovalState,
+          approval = nodeCapabilityApproval,
           checkingApproval =
             nodeApprovalCheckingInProgress(
               checkRequested = nodeApprovalCheckRequested,
@@ -819,7 +816,7 @@ fun OnboardingFlow(
               permissionContinueNeedsNodeApproval(
                 ready = ready,
                 requiresNodeApprovalAfterApply = requiresNodeSurfaceRefresh,
-                nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+                nodeCapabilityApproval = nodeCapabilityApproval,
               )
             ) {
               val reapprovalBackSteps =
@@ -1898,8 +1895,7 @@ private fun GatewayRecoveryIcon(state: GatewayRecoveryUiState) {
 
 @Composable
 private fun NodeApprovalScreen(
-  requestId: String?,
-  approvalState: GatewayNodeApprovalState,
+  approval: GatewayNodeCapabilityApproval,
   checkingApproval: Boolean,
   checkRequested: Boolean,
   ready: Boolean,
@@ -1908,7 +1904,7 @@ private fun NodeApprovalScreen(
   onCheckApproval: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val approveCommand = recoveryNodeApprovalCommand(requestId)
+  val approveCommand = recoveryNodeApprovalCommand(approvalRequestId(approval))
   var waitingDialogDismissed by rememberSaveable { mutableStateOf(false) }
   LaunchedEffect(checkingApproval) {
     if (checkingApproval) {
@@ -1919,7 +1915,7 @@ private fun NodeApprovalScreen(
     checkRequested &&
       !checkingApproval &&
       !ready &&
-      nodeCapabilityApprovalNeedsUserAction(approvalState) &&
+      nodeCapabilityApprovalNeedsUserAction(approval) &&
       !waitingDialogDismissed
 
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
@@ -2556,12 +2552,12 @@ internal fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): String =
   if (ready) {
     remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
-  } else if (nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)) {
+  } else if (nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)) {
     "Gateway paired. Waiting for node capability approval."
   } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
     recoveryGatewayApprovalCommand(gatewayConnectionProblem)
@@ -2571,7 +2567,7 @@ internal fun recoveryGatewayDetail(
     "Gateway approval is in progress. OpenClaw will retry automatically."
   } else if (gatewayConnectionProblem != null) {
     recoveryGatewayAuthDetail(gatewayConnectionProblem)
-  } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+  } else if (nodeCapabilityApproval == GatewayNodeCapabilityApproval.Loading) {
     "Gateway paired. Checking node capability approval."
   } else if (statusText.contains("operator offline", ignoreCase = true)) {
     "Gateway paired. Waiting for operator access."
@@ -2656,18 +2652,25 @@ internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String {
   }
 }
 
-internal fun nodeCapabilityApprovalNeedsUserAction(state: GatewayNodeApprovalState): Boolean =
-  state == GatewayNodeApprovalState.PendingApproval ||
-    state == GatewayNodeApprovalState.PendingReapproval ||
-    state == GatewayNodeApprovalState.Unapproved
+private fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
+  when (approval) {
+    is GatewayNodeCapabilityApproval.PendingApproval -> approval.requestId
+    is GatewayNodeCapabilityApproval.PendingReapproval -> approval.requestId
+    else -> null
+  }
+
+internal fun nodeCapabilityApprovalNeedsUserAction(approval: GatewayNodeCapabilityApproval): Boolean =
+  approval is GatewayNodeCapabilityApproval.PendingApproval ||
+    approval is GatewayNodeCapabilityApproval.PendingReapproval ||
+    approval == GatewayNodeCapabilityApproval.Unapproved
 
 internal fun gatewayPairingContinueDestination(
   ready: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): OnboardingStep? =
   when {
     ready -> OnboardingStep.Permissions
-    nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState) -> OnboardingStep.NodeApproval
+    nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval) -> OnboardingStep.NodeApproval
     else -> null
   }
 
@@ -2723,26 +2726,26 @@ internal fun nodeApprovalCheckCanContinue(
 internal fun nodeApprovalShouldAutoContinue(
   step: OnboardingStep,
   ready: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
   autoContinueEnabled: Boolean,
 ): Boolean =
   step == OnboardingStep.NodeApproval &&
     autoContinueEnabled &&
     ready &&
-    !nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)
+    !nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)
 
 internal fun permissionContinueNeedsNodeApproval(
   ready: Boolean,
   requiresNodeApprovalAfterApply: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): Boolean =
   (
     requiresNodeApprovalAfterApply &&
-      nodeCapabilityApprovalState != GatewayNodeApprovalState.Unsupported
+      nodeCapabilityApproval != GatewayNodeCapabilityApproval.Unsupported
   ) ||
     (
       !ready &&
-        nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApprovalState)
+        nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval)
     )
 
 private fun copyApprovalCommand(
@@ -2775,18 +2778,18 @@ private class PermissionState(
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): Boolean =
   isConnected &&
     isNodeConnected &&
-    when (nodeCapabilityApprovalState) {
-      GatewayNodeApprovalState.PendingApproval,
-      GatewayNodeApprovalState.PendingReapproval,
-      GatewayNodeApprovalState.Unapproved,
-      GatewayNodeApprovalState.Loading,
+    when (nodeCapabilityApproval) {
+      is GatewayNodeCapabilityApproval.PendingApproval,
+      is GatewayNodeCapabilityApproval.PendingReapproval,
+      GatewayNodeCapabilityApproval.Unapproved,
+      GatewayNodeCapabilityApproval.Loading,
       -> false
-      GatewayNodeApprovalState.Approved,
-      GatewayNodeApprovalState.Unsupported,
+      GatewayNodeCapabilityApproval.Approved,
+      GatewayNodeCapabilityApproval.Unsupported,
       -> true
     }
 

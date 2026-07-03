@@ -165,6 +165,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     "sendInbound",
     "sendNativeCommand",
     "waitForOutbound",
+    "waitForOutboundSequence",
     "waitForNoOutbound",
   ] as const) {
     if (name in action) {

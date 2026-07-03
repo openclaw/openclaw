@@ -123,12 +123,8 @@ class GatewayNodeApprovalStateTest {
 
     assertEquals(2, nodes.size)
     assertEquals(
-      GatewayNodeApprovalStatus(
-        state = GatewayNodeApprovalState.Approved,
-        connected = true,
-        pendingRequestId = null,
-      ),
-      currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "self"),
+      GatewayNodeCapabilityApproval.Approved,
+      currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "self"),
     )
   }
 
@@ -142,8 +138,8 @@ class GatewayNodeApprovalStateTest {
     requireNotNull(node)
     assertEquals(GatewayNodeApprovalState.Unsupported, node.approvalState)
     assertEquals(
-      GatewayNodeApprovalState.Unsupported,
-      currentNodeCapabilityApprovalState(nodes = listOf(node), selfNodeId = "android-node"),
+      GatewayNodeCapabilityApproval.Unsupported,
+      currentNodeCapabilityApproval(nodes = listOf(node), selfNodeId = "android-node"),
     )
     assertNull(node.pendingRequestId)
   }
@@ -181,28 +177,12 @@ class GatewayNodeApprovalStateTest {
       )
 
     assertEquals(
-      GatewayNodeApprovalState.PendingApproval,
-      currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "self"),
+      GatewayNodeCapabilityApproval.PendingApproval("request-self"),
+      currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "self"),
     )
     assertEquals(
-      GatewayNodeApprovalStatus(
-        state = GatewayNodeApprovalState.PendingApproval,
-        connected = true,
-        pendingRequestId = "request-self",
-      ),
-      currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "self"),
-    )
-    assertEquals(
-      GatewayNodeApprovalState.Loading,
-      currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "missing"),
-    )
-    assertEquals(
-      GatewayNodeApprovalStatus(
-        state = GatewayNodeApprovalState.Loading,
-        connected = false,
-        pendingRequestId = null,
-      ),
-      currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "missing"),
+      GatewayNodeCapabilityApproval.Loading,
+      currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "missing"),
     )
   }
 

@@ -1,7 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import android.Manifest
@@ -302,53 +302,53 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun blocksFinishWhenGatewayHasNotReportedNodeConnected() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhenDisconnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhenOnlyNodeIsConnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhenNodeCapabilityApprovalIsPending() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval))
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval))
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unapproved))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null)))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(null)))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unapproved))
   }
 
   @Test
   fun allowsFinishWhenOperatorNodeAndCapabilityApprovalAreReady() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhileDelayedNodeListResolvesPendingApproval() =
     runTest {
-      val delayedNodeList = CompletableDeferred<GatewayNodeApprovalState>()
-      var approvalState = GatewayNodeApprovalState.Loading
+      val delayedNodeList = CompletableDeferred<GatewayNodeCapabilityApproval>()
+      var approvalState: GatewayNodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading
       val refresh = launch { approvalState = delayedNodeList.await() }
 
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
 
-      delayedNodeList.complete(GatewayNodeApprovalState.PendingApproval)
+      delayedNodeList.complete(GatewayNodeCapabilityApproval.PendingApproval(null))
       refresh.join()
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
     }
 
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
   }
 
   @Test
   fun blocksFinishForLegacyNodeListUntilNodeConnects() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
   }
 
   @Test
@@ -423,12 +423,12 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun nodeCapabilityApprovalNeedsUserActionOnlyForPendingStates() {
-    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeApprovalState.PendingApproval))
-    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeApprovalState.PendingReapproval))
-    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeApprovalState.Unapproved))
-    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeApprovalState.Approved))
-    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeApprovalState.Loading))
-    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeApprovalState.Unsupported))
+    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.PendingApproval(null)))
+    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.PendingReapproval(null)))
+    assertTrue(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Unapproved))
+    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Approved))
+    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Loading))
+    assertFalse(nodeCapabilityApprovalNeedsUserAction(GatewayNodeCapabilityApproval.Unsupported))
   }
 
   @Test
@@ -437,46 +437,46 @@ class OnboardingFlowLogicTest {
       OnboardingStep.Permissions,
       gatewayPairingContinueDestination(
         ready = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null),
       ),
     )
     assertEquals(
       OnboardingStep.NodeApproval,
       gatewayPairingContinueDestination(
         ready = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null),
       ),
     )
     assertEquals(
       OnboardingStep.NodeApproval,
       gatewayPairingContinueDestination(
         ready = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(null),
       ),
     )
     assertEquals(
       OnboardingStep.NodeApproval,
       gatewayPairingContinueDestination(
         ready = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unapproved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unapproved,
       ),
     )
     assertNull(
       gatewayPairingContinueDestination(
         ready = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
       ),
     )
     assertNull(
       gatewayPairingContinueDestination(
         ready = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
     assertNull(
       gatewayPairingContinueDestination(
         ready = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported,
       ),
     )
   }
@@ -487,35 +487,35 @@ class OnboardingFlowLogicTest {
       permissionContinueNeedsNodeApproval(
         ready = false,
         requiresNodeApprovalAfterApply = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(null),
       ),
     )
     assertTrue(
       permissionContinueNeedsNodeApproval(
         ready = false,
         requiresNodeApprovalAfterApply = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
     assertTrue(
       permissionContinueNeedsNodeApproval(
         ready = true,
         requiresNodeApprovalAfterApply = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
     assertFalse(
       permissionContinueNeedsNodeApproval(
         ready = true,
         requiresNodeApprovalAfterApply = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported,
       ),
     )
     assertFalse(
       permissionContinueNeedsNodeApproval(
         ready = true,
         requiresNodeApprovalAfterApply = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
@@ -638,7 +638,7 @@ class OnboardingFlowLogicTest {
       nodeApprovalShouldAutoContinue(
         step = OnboardingStep.NodeApproval,
         ready = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         autoContinueEnabled = true,
       ),
     )
@@ -646,7 +646,7 @@ class OnboardingFlowLogicTest {
       nodeApprovalShouldAutoContinue(
         step = OnboardingStep.NodeApproval,
         ready = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(null),
         autoContinueEnabled = true,
       ),
     )
@@ -654,7 +654,7 @@ class OnboardingFlowLogicTest {
       nodeApprovalShouldAutoContinue(
         step = OnboardingStep.Permissions,
         ready = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         autoContinueEnabled = true,
       ),
     )
@@ -662,7 +662,7 @@ class OnboardingFlowLogicTest {
       nodeApprovalShouldAutoContinue(
         step = OnboardingStep.NodeApproval,
         ready = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         autoContinueEnabled = false,
       ),
     )
@@ -841,7 +841,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         remoteAddress = null,
         statusText = "Connected (node offline)",
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -864,7 +864,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         remoteAddress = "wss://gateway.example.test",
         statusText = "Connected (node offline)",
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "AUTH_DEVICE_TOKEN_MISMATCH",
@@ -887,7 +887,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         remoteAddress = "wss://gateway.example.test",
         statusText = "Connected (node offline)",
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "AUTH_DEVICE_TOKEN_MISMATCH",

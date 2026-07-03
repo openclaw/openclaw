@@ -2723,13 +2723,7 @@ export function renderChat(props: ChatProps) {
         : nothing}
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !props.connected || isBusy || showAbortableUi,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatGoal(activeSession?.goal)}
+        ${renderCompactionIndicator(props.compactionStatus)} ${renderChatGoal(activeSession?.goal)}
       </div>
 
       <input
@@ -2874,6 +2868,11 @@ export function renderChat(props: ChatProps) {
         ${composerControls && composerControls !== nothing
           ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
           : nothing}
+        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+          compactBusy,
+          compactDisabled: !props.connected || isBusy || showAbortableUi,
+          onCompact: props.onCompact,
+        })}
         ${renderChatRunControls({
           canAbort: showAbortableUi,
           connected: props.connected,

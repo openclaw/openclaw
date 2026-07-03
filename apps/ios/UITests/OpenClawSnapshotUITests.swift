@@ -392,6 +392,99 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(controlApp.state, .runningForeground)
     }
 
+    func testManualAuthRetryUsesEditedToken() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_RETRY_E2E"] == "1",
+            "Set OPENCLAW_IOS_RETRY_E2E=1 with a local token-auth Gateway on port 18920")
+        let token = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_RETRY_TOKEN"])
+
+        let app = XCUIApplication()
+        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        app.launchArguments += ["--openclaw-reset-onboarding"]
+        app.launch()
+        self.app = app
+
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
+        app.tap()
+        XCTAssertTrue(app.buttons["Set Up Manually"].waitForExistence(timeout: 8))
+        app.buttons["Set Up Manually"].tap()
+        let developerMode = app.buttons["Developer mode"]
+        if developerMode.value as? String != "On" {
+            developerMode.tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Same Machine (Dev)")).firstMatch.tap()
+        app.buttons["Continue"].tap()
+
+        let port = app.textFields["Port"]
+        XCTAssertTrue(port.waitForExistence(timeout: 5))
+        port.tap()
+        port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
+        app.buttons["Connect"].tap()
+
+        let tokenField = app.secureTextFields["Gateway Auth Token"]
+        XCTAssertTrue(tokenField.waitForExistence(timeout: 20))
+        tokenField.tap()
+        tokenField.typeText(token)
+        app.buttons["Done"].tap()
+        app.buttons["Retry Connection"].tap()
+
+        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 30))
+        self.attachScreenshot(named: "manual-auth-retry-connected")
+    }
+
+    func testPhotosLimitedAccess() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_PHOTOS_E2E"] == "1",
+            "Set OPENCLAW_IOS_PHOTOS_E2E=1 to exercise the system Photos prompt")
+        addUIInterruptionMonitor(withDescription: "Photos access") { alert in
+            for title in ["Limit Access…", "Select Photos…"] where alert.buttons[title].exists {
+                alert.buttons[title].tap()
+                return true
+            }
+            return false
+        }
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "photos-limited-access"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let privacy = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Privacy & Access").firstMatch)
+        XCTAssertTrue(privacy.waitForExistence(timeout: 8))
+        privacy.tap()
+
+        let request = try XCTUnwrap(self.app?.buttons["privacy-access-Photos-action"])
+        XCTAssertTrue(request.waitForExistence(timeout: 5))
+        request.tap()
+        self.app?.tap()
+
+        // The limited picker is an out-of-process system surface without stable accessibility identifiers.
+        // Normalized taps are confined to this opt-in simulator test; app-owned state proves completion below.
+        let screen = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.17, dy: 0.43)).tap()
+        screen.coordinate(withNormalizedOffset: CGVector(dx: 0.90, dy: 0.16)).tap()
+
+        self.app?.activate()
+        let limitedStatus = try XCTUnwrap(self.app?.staticTexts.matching(
+            NSPredicate(
+                format: "identifier == %@ AND label == %@",
+                "privacy-access-Photos-status",
+                "Limited")).firstMatch)
+        XCTAssertTrue(limitedStatus.waitForExistence(timeout: 8))
+        XCTAssertEqual(self.app?.buttons["privacy-access-Photos-action"].label, "Manage Access")
+        self.attachScreenshot(named: "photos-limited-access")
+    }
+
     private func launchApp(for target: ScreenshotTarget, appearance: String? = "dark") {
         self.app?.terminate()
 

@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -65,6 +66,19 @@ class SettingsScreensTest {
     assertEquals(true, text.contains("approve new phone pairing"))
     assertEquals(true, text.contains("Node capability approval is separate"))
     assertEquals(true, text.contains("nodes approve <request id>"))
+  }
+
+  @Test
+  fun nodeApprovalCommandUsesOnlyASafeExactRequestId() {
+    assertEquals(
+      "openclaw nodes approve request-1",
+      gatewayNodeApprovalCommand(GatewayNodeCapabilityApproval.PendingApproval("request-1")),
+    )
+    assertEquals(
+      "openclaw nodes status",
+      gatewayNodeApprovalCommand(GatewayNodeCapabilityApproval.PendingReapproval("request-1; unsafe")),
+    )
+    assertEquals(null, gatewayNodeApprovalCommand(GatewayNodeCapabilityApproval.Approved))
   }
 
   private fun authProblem(code: String): GatewayConnectionProblem =
