@@ -208,6 +208,8 @@
     "RUSTUP_UPDATE_ROOT",
     "CARGO_HOME",
     "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV",
     "LUA_PATH",
     "LUA_CPATH",
     "GEM_HOME",
