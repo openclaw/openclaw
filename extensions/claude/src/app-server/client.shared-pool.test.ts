@@ -47,9 +47,10 @@ const flush = () =>
 
 /**
  * Real-runtime regression test for openclaw-7ss: the shared client cache
- * must be a keyed pool, not a single slot, so two harness extensions with
- * different spawn env (e.g. real Anthropic vs Z.ai) can run concurrently
- * without tearing each other's process down. Drives the real
+ * must be a keyed pool with an EXPLICIT caller-supplied key (Eddie's
+ * 2026-07-02 design call — robust even if extensions/claude and a future
+ * extensions/glm-bridge end up sharing a compiled module), not a single
+ * slot and not an implicit spawn-options-derived key. Drives the real
  * getSharedClaudeAppServerClient/clearSharedClaudeAppServerClient/
  * peekSharedClaudeAppServerClient — no mocking of the pool logic itself,
  * only the child_process boundary.
@@ -92,28 +93,31 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
     return child;
   }
 
-  it("returns the same client for the same spawn options (no re-spawn)", async () => {
+  const ANTHROPIC_KEY = "claude-bridge:anthropic";
+  const ZAI_KEY = "claude-bridge:zai";
+
+  it("returns the same client for the same key and same opts (no re-spawn)", async () => {
     const opts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
-    const clientA = getSharedClaudeAppServerClient(opts);
+    const clientA = getSharedClaudeAppServerClient(ANTHROPIC_KEY, opts);
     await startAndInitialize(clientA);
     await clientA.start(); // already initialized; must resolve immediately
 
-    const clientB = getSharedClaudeAppServerClient(opts);
+    const clientB = getSharedClaudeAppServerClient(ANTHROPIC_KEY, opts);
     expect(clientB).toBe(clientA);
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("spawns a SECOND independent client for different env WITHOUT stopping the first (the core fix)", async () => {
+  it("spawns a SECOND independent client for a different key WITHOUT stopping the first (the core fix)", async () => {
     const anthropicOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
     const zaiOpts = {
       command: "fake-bridge",
       env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: "zai-key" },
     };
 
-    const anthropicClient = getSharedClaudeAppServerClient(anthropicOpts);
+    const anthropicClient = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
     const anthropicChild = await startAndInitialize(anthropicClient);
 
-    const zaiClient = getSharedClaudeAppServerClient(zaiOpts);
+    const zaiClient = getSharedClaudeAppServerClient(ZAI_KEY, zaiOpts);
     await startAndInitialize(zaiClient);
 
     // Two distinct clients, two distinct spawned children.
@@ -128,10 +132,32 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
     expect(anthropicClient.isRunning()).toBe(true);
     expect(zaiClient.isRunning()).toBe(true);
 
-    // Re-requesting the anthropic client by its original options still
+    // Re-requesting the anthropic client by its original key/opts still
     // returns the SAME still-running instance — it was never touched.
-    const anthropicAgain = getSharedClaudeAppServerClient(anthropicOpts);
+    const anthropicAgain = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
     expect(anthropicAgain).toBe(anthropicClient);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("respawns when the SAME key gets different opts (config-change reconfiguration stays cheap)", async () => {
+    const originalOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "old-key" } };
+    const client1 = getSharedClaudeAppServerClient(ANTHROPIC_KEY, originalOpts);
+    const child1 = await startAndInitialize(client1);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // Same explicit key, but the operator changed the configured env — must
+    // tear down the stale process and spawn a fresh one under the same key,
+    // exactly like the old single-slot design did on any opts change.
+    const changedOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "new-key" } };
+    const client2 = getSharedClaudeAppServerClient(ANTHROPIC_KEY, changedOpts);
+    expect(client2).not.toBe(client1);
+    expect(child1.stdin.destroyed).toBe(true);
+    await startAndInitialize(client2);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+
+    // And it's now the one returned for that key going forward.
+    const client3 = getSharedClaudeAppServerClient(ANTHROPIC_KEY, changedOpts);
+    expect(client3).toBe(client2);
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
@@ -141,23 +167,23 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
 
     expect(peekSharedClaudeAppServerClient()).toBeNull();
 
-    const anthropicClient = getSharedClaudeAppServerClient(anthropicOpts);
+    const anthropicClient = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
     await startAndInitialize(anthropicClient);
     expect(peekSharedClaudeAppServerClient()?.running).toBe(true);
 
-    const zaiClient = getSharedClaudeAppServerClient(zaiOpts);
+    const zaiClient = getSharedClaudeAppServerClient(ZAI_KEY, zaiOpts);
     await startAndInitialize(zaiClient);
     expect(peekSharedClaudeAppServerClient()?.running).toBe(true);
   });
 
-  it("clearSharedClaudeAppServerClient stops every pool entry, not just one", async () => {
+  it("clearSharedClaudeAppServerClient() with no key stops every pool entry", async () => {
     const anthropicOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
     const zaiOpts = { command: "fake-bridge", env: { ANTHROPIC_AUTH_TOKEN: "zai-key" } };
 
-    const anthropicClient = getSharedClaudeAppServerClient(anthropicOpts);
+    const anthropicClient = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
     const anthropicChild = await startAndInitialize(anthropicClient);
 
-    const zaiClient = getSharedClaudeAppServerClient(zaiOpts);
+    const zaiClient = getSharedClaudeAppServerClient(ZAI_KEY, zaiOpts);
     const zaiChild = await startAndInitialize(zaiClient);
 
     await clearSharedClaudeAppServerClient();
@@ -165,5 +191,27 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
     expect(anthropicChild.stdin.destroyed).toBe(true);
     expect(zaiChild.stdin.destroyed).toBe(true);
     expect(peekSharedClaudeAppServerClient()).toBeNull();
+  });
+
+  it("clearSharedClaudeAppServerClient(key) stops only that one slot", async () => {
+    const anthropicOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
+    const zaiOpts = { command: "fake-bridge", env: { ANTHROPIC_AUTH_TOKEN: "zai-key" } };
+
+    const anthropicClient = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
+    const anthropicChild = await startAndInitialize(anthropicClient);
+
+    const zaiClient = getSharedClaudeAppServerClient(ZAI_KEY, zaiOpts);
+    const zaiChild = await startAndInitialize(zaiClient);
+
+    await clearSharedClaudeAppServerClient(ANTHROPIC_KEY);
+
+    expect(anthropicChild.stdin.destroyed).toBe(true);
+    expect(zaiChild.stdin.destroyed).toBe(false);
+    expect(zaiClient.isRunning()).toBe(true);
+
+    // The cleared key gets a fresh client on next request; the untouched
+    // key's client is unaffected.
+    const anthropicAgain = getSharedClaudeAppServerClient(ANTHROPIC_KEY, anthropicOpts);
+    expect(anthropicAgain).not.toBe(anthropicClient);
   });
 });

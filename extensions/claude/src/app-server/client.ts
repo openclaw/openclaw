@@ -655,24 +655,34 @@ export function assertSupportedBridgeVersion(
 /**
  * Keyed pool, not a single slot. Two (or more) distinct app-server harness
  * extensions built on this same client (e.g. `extensions/claude` pointed at
- * real Anthropic, `extensions/glm-bridge` pointed at Z.ai) each resolve to a
- * *different* spawn key — because their `env` differs — and must be able to
+ * real Anthropic, `extensions/glm-bridge` pointed at Z.ai) must be able to
  * run their own bridge process concurrently without tearing each other's
- * down. A single caller with stable options always resolves to the same key
- * every time, so this is exactly equivalent to the old single-slot behavior
- * for any one extension acting alone (openclaw-7ss).
+ * down.
+ *
+ * The pool key is CALLER-SUPPLIED (explicit), not derived from spawn options.
+ * Explicit keys stay robust even if `extensions/claude` and `extensions/glm-bridge`
+ * end up importing this pool from the same compiled module (e.g. after a
+ * future `packages/*` extraction) — an implicit spawn-options-derived key
+ * would silently collapse two extensions onto one slot if their options ever
+ * happened to match, whereas an explicit key names the slot directly and
+ * can't drift. Callers should key on the same identity that already governs
+ * provider-owned session semantics — e.g. `` `claude-bridge:${modelProvider}` ``
+ * — so "same provider identity" and "same pool slot" stay the same question
+ * (openclaw-7ss design decision, confirmed by Eddie 2026-07-02).
+ *
+ * Each slot separately fingerprints its own spawn options so an operator
+ * config change (env, command, args) for a given key still triggers a clean
+ * respawn — the same "reconfiguration is cheap" property the old single-slot
+ * design had — without that fingerprint being the identity of the slot
+ * itself.
  */
-const sharedClients = new Map<string, ClaudeAppServerClient>();
+type SharedClientPoolEntry = { client: ClaudeAppServerClient; optsFingerprint: string };
+const sharedClients = new Map<string, SharedClientPoolEntry>();
 let lastAccessedKey: string | null = null;
 
-function computeSharedClientKey(
+function computeOptsFingerprint(
   opts: Pick<ClaudeAppServerStartOptions, "command" | "args" | "env">,
 ): string {
-  // Spawn options form the key; if they change for a given caller we tear
-  // down that caller's old client and start fresh. This keeps reconfiguration
-  // cheap from the operator's side. `command` is the already-resolved managed
-  // (or override) path from resolveManagedClaudeBridgeStartOptions, so the
-  // key is stable across turns for a given extension/config.
   return JSON.stringify({
     command: opts.command ?? DEFAULT_COMMAND,
     args: opts.args ?? [],
@@ -681,31 +691,49 @@ function computeSharedClientKey(
 }
 
 export function getSharedClaudeAppServerClient(
+  key: string,
   opts: ClaudeAppServerStartOptions,
 ): ClaudeAppServerClient {
-  const key = computeSharedClientKey(opts);
+  const fingerprint = computeOptsFingerprint(opts);
   const existing = sharedClients.get(key);
-  if (existing && existing.isRunning()) {
+  if (existing && existing.client.isRunning() && existing.optsFingerprint === fingerprint) {
     lastAccessedKey = key;
-    return existing;
+    return existing.client;
   }
   if (existing) {
     try {
-      existing.stop();
+      existing.client.stop();
     } catch {
       /* ignore */
     }
   }
   const client = new ClaudeAppServerClient(opts);
-  sharedClients.set(key, client);
+  sharedClients.set(key, { client, optsFingerprint: fingerprint });
   lastAccessedKey = key;
   return client;
 }
 
-export async function clearSharedClaudeAppServerClient(): Promise<void> {
-  for (const client of sharedClients.values()) {
+/** Stop and remove one pool slot by key, or every slot when `key` is omitted. */
+export async function clearSharedClaudeAppServerClient(key?: string): Promise<void> {
+  if (key !== undefined) {
+    const entry = sharedClients.get(key);
+    if (!entry) {
+      return;
+    }
     try {
-      client.stop();
+      entry.client.stop();
+    } catch {
+      /* ignore */
+    }
+    sharedClients.delete(key);
+    if (lastAccessedKey === key) {
+      lastAccessedKey = null;
+    }
+    return;
+  }
+  for (const entry of sharedClients.values()) {
+    try {
+      entry.client.stop();
     } catch {
       /* ignore */
     }
@@ -721,8 +749,7 @@ export async function clearSharedClaudeAppServerClient(): Promise<void> {
  * (`lastAccessedKey`) — exact for the common single-extension case; with two
  * concurrently-active harness extensions (openclaw-7ss), this reflects
  * whichever ran a turn most recently, not a specific one. A future caller
- * that needs a specific entry can compute its own key via
- * {@link computeSharedClientKey}-equivalent options and look it up directly.
+ * that needs a specific entry can look it up directly by its own key.
  */
 export function peekSharedClaudeAppServerClient(): {
   running: boolean;
@@ -734,15 +761,15 @@ export function peekSharedClaudeAppServerClient(): {
   if (!lastAccessedKey) {
     return null;
   }
-  const client = sharedClients.get(lastAccessedKey);
-  if (!client) {
+  const entry = sharedClients.get(lastAccessedKey);
+  if (!entry) {
     return null;
   }
   return {
-    running: client.isRunning(),
-    pendingRequests: client.pendingRequestCount(),
-    command: client.commandDescription(),
-    lastError: client.lastErrorMessage(),
-    runningVersion: client.getServerInfo()?.version,
+    running: entry.client.isRunning(),
+    pendingRequests: entry.client.pendingRequestCount(),
+    command: entry.client.commandDescription(),
+    lastError: entry.client.lastErrorMessage(),
+    runningVersion: entry.client.getServerInfo()?.version,
   };
 }

@@ -64,7 +64,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
-import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
+import {
+  DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
+  resolveClaudeAppServerConfig,
+  type ResolvedClaudeAppServerConfig,
+} from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { ClaudeAppServerEventProjector, extractItemName } from "./event-projector.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
@@ -141,7 +145,14 @@ export async function runClaudeAppServerAttempt(
         resolvedApiKey: params.resolvedApiKey,
       }),
     });
-    client = getSharedClaudeAppServerClient(startOptions);
+    // Pool key is the provider identity, not the spawn options — this is
+    // the same identity that already governs provider-owned session
+    // semantics (openclaw-pg9), so "same provider" and "same pool slot"
+    // stay the same question. A second bridge-backed extension pointed at a
+    // different provider (e.g. glm-bridge → Z.ai) resolves to a distinct
+    // key here and gets its own concurrently-running process (openclaw-7ss).
+    const poolKey = `claude-bridge:${cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER}`;
+    client = getSharedClaudeAppServerClient(poolKey, startOptions);
     await client.start();
     // 1. Resolve sandbox + effective workspace once so dynamic-tool
     //    materialization, thread/start cwd, and runTurn cwd all agree on
