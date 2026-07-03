@@ -9,6 +9,7 @@ export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
+const MAX_TEMPLATE_CACHE_SIZE = 32;
 const warnedTemplateOverrides = new Set<string>();
 const usageTemplateLog = createSubsystemLogger("usage-template");
 
@@ -141,6 +142,14 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
       entry.watcher = watcher;
     } catch {
       // Cache remains valid without live refresh.
+    }
+  }
+  if (fileCache.size >= MAX_TEMPLATE_CACHE_SIZE) {
+    const oldestKey = fileCache.keys().next().value;
+    if (oldestKey) {
+      const oldest = fileCache.get(oldestKey);
+      oldest?.watcher?.close();
+      fileCache.delete(oldestKey);
     }
   }
   fileCache.set(path, entry);
