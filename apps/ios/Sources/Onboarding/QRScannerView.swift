@@ -8,7 +8,10 @@ enum QRScannerResult {
 }
 
 struct QRScannerView: UIViewControllerRepresentable {
-    static let dismissalSettlingNanoseconds: UInt64 = 350_000_000
+    /// Older physical devices can still be unwinding VisionKit/SwiftUI presentation
+    /// state when the sheet's onDismiss callback fires. Pairing may immediately show
+    /// TLS trust UI, so leave a longer buffer than the animation duration.
+    static let dismissalSettlingNanoseconds: UInt64 = 1_200_000_000
 
     let onResult: (QRScannerResult) -> Void
     let onError: (String) -> Void

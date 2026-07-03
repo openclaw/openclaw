@@ -784,6 +784,7 @@ struct RootTabsSourceGuardTests {
             to: "func dataScanner(_: DataScannerViewController, didRemove")
         let stopScanning = try #require(scannerDelivery.range(of: "scanner.stopScanning()"))
         let deliverResult = try #require(scannerDelivery.range(of: "self.parent.onResult(result)"))
+        #expect(scannerSource.contains("static let dismissalSettlingNanoseconds: UInt64 = 1_200_000_000"))
         let activeProblemToast = try Self.extract(
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
