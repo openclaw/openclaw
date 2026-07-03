@@ -8,8 +8,8 @@ extension AgentProTab {
             OpenClawAdaptiveHeaderRow(
                 title: self.headerTitle,
                 subtitle: "\(self.sortedAgents.count) total",
-                titleFont: .system(size: 28, weight: .bold),
-                subtitleFont: .subheadline,
+                titleFont: OpenClawType.title2SemiBold,
+                subtitleFont: OpenClawType.subheadMedium,
                 subtitleLineLimit: 1)
             {
                 if let headerLeadingAction {
@@ -64,7 +64,9 @@ extension AgentProTab {
         HStack(spacing: 10) {
             Picker("Agent status", selection: self.$agentRosterFilter) {
                 ForEach(AgentRosterFilter.allCases) { filter in
-                    Text(filter.title).tag(filter)
+                    Text(filter.title)
+                        .font(OpenClawType.captionSemiBold)
+                        .tag(filter)
                 }
             }
             .pickerStyle(.segmented)

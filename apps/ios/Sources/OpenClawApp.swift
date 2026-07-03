@@ -628,6 +628,7 @@ struct OpenClawApp: App {
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
+        OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
@@ -658,6 +659,7 @@ struct OpenClawApp: App {
         WindowGroup {
             RootTabs()
                 .tint(OpenClawBrand.accent)
+                .font(OpenClawType.body)
                 .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)

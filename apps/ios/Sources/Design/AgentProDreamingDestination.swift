@@ -65,8 +65,8 @@ struct AgentProDreamingDestination: View {
             OpenClawAdaptiveHeaderRow(
                 title: "Dreaming",
                 subtitle: self.dreamingDetail,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             } accessory: {

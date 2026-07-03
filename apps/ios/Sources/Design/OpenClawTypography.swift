@@ -151,6 +151,39 @@ enum OpenClawType {
         Mono.semiBold,
     ]
 
+    @MainActor
+    static func installUIKitAppearance() {
+        let inlineNavigationTitleFont = self.scaledDisplayUIFont(
+            weight: Display.opticalSemiBold,
+            size: 17,
+            relativeTo: .headline)
+        let largeNavigationTitleFont = self.scaledDisplayUIFont(
+            weight: Display.heavyTitle,
+            size: 34,
+            relativeTo: .largeTitle)
+        let tabBarNormalFont = self.scaledBodyUIFont(weight: Body.medium, size: 11, relativeTo: .caption2)
+        let tabBarSelectedFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 11, relativeTo: .caption2)
+        let segmentedNormalFont = self.scaledBodyUIFont(weight: Body.medium, size: 13, relativeTo: .footnote)
+        let segmentedSelectedFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 13, relativeTo: .footnote)
+
+        let navigationBar = UINavigationBar.appearance()
+        var titleAttributes = navigationBar.titleTextAttributes ?? [:]
+        titleAttributes[.font] = inlineNavigationTitleFont
+        navigationBar.titleTextAttributes = titleAttributes
+
+        var largeTitleAttributes = navigationBar.largeTitleTextAttributes ?? [:]
+        largeTitleAttributes[.font] = largeNavigationTitleFont
+        navigationBar.largeTitleTextAttributes = largeTitleAttributes
+
+        let tabBarItem = UITabBarItem.appearance()
+        tabBarItem.setTitleTextAttributes([.font: tabBarNormalFont], for: .normal)
+        tabBarItem.setTitleTextAttributes([.font: tabBarSelectedFont], for: .selected)
+
+        let segmentedControl = UISegmentedControl.appearance()
+        segmentedControl.setTitleTextAttributes([.font: segmentedNormalFont], for: .normal)
+        segmentedControl.setTitleTextAttributes([.font: segmentedSelectedFont], for: .selected)
+    }
+
     private enum Display {
         static let postScriptName = "RedHatDisplay-Regular"
         static let opticalSemiBold: CGFloat = 650
@@ -181,11 +214,11 @@ enum OpenClawType {
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle) -> Font
     {
-        self.scaledVariableFont(
-            name: Display.postScriptName,
-            size: size,
-            relativeTo: textStyle,
-            variations: [self.fontWeightAxis: weight])
+        Font(
+            self.scaledDisplayUIFont(
+                weight: weight,
+                size: size,
+                relativeTo: textStyle))
     }
 
     private static func scaledBody(
@@ -193,14 +226,11 @@ enum OpenClawType {
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle) -> Font
     {
-        self.scaledVariableFont(
-            name: Body.postScriptName,
-            size: size,
-            relativeTo: textStyle,
-            variations: [
-                self.fontWeightAxis: weight,
-                self.opticalSizeAxis: min(max(size, 14), 32),
-            ])
+        Font(
+            self.scaledBodyUIFont(
+                weight: weight,
+                size: size,
+                relativeTo: textStyle))
     }
 
     private static func scaledMono(
@@ -211,16 +241,42 @@ enum OpenClawType {
         self.scaledFont(name: name, size: size, relativeTo: textStyle)
     }
 
-    private static func scaledVariableFont(
+    private static func scaledDisplayUIFont(
+        weight: CGFloat,
+        size: CGFloat,
+        relativeTo textStyle: UIFont.TextStyle) -> UIFont
+    {
+        self.scaledVariableUIFont(
+            name: Display.postScriptName,
+            size: size,
+            relativeTo: textStyle,
+            variations: [self.fontWeightAxis: weight])
+    }
+
+    private static func scaledBodyUIFont(
+        weight: CGFloat,
+        size: CGFloat,
+        relativeTo textStyle: UIFont.TextStyle) -> UIFont
+    {
+        self.scaledVariableUIFont(
+            name: Body.postScriptName,
+            size: size,
+            relativeTo: textStyle,
+            variations: [
+                self.fontWeightAxis: weight,
+                self.opticalSizeAxis: min(max(size, 14), 32),
+            ])
+    }
+
+    private static func scaledVariableUIFont(
         name: String,
         size: CGFloat,
         relativeTo textStyle: UIFont.TextStyle,
-        variations: [NSNumber: CGFloat]) -> Font
+        variations: [NSNumber: CGFloat]) -> UIFont
     {
         guard UIFont(name: name, size: size) != nil else {
             let fallback = UIFont.systemFont(ofSize: size)
-            let scaledFallback = UIFontMetrics(forTextStyle: textStyle).scaledFont(for: fallback)
-            return Font(scaledFallback)
+            return UIFontMetrics(forTextStyle: textStyle).scaledFont(for: fallback)
         }
 
         let descriptor = UIFontDescriptor(fontAttributes: [
@@ -228,8 +284,7 @@ enum OpenClawType {
             kCTFontVariationAttribute as UIFontDescriptor.AttributeName: variations,
         ])
         let base = UIFont(descriptor: descriptor, size: size)
-        let scaled = UIFontMetrics(forTextStyle: textStyle).scaledFont(for: base)
-        return Font(scaled)
+        return UIFontMetrics(forTextStyle: textStyle).scaledFont(for: base)
     }
 
     private static func scaledFont(

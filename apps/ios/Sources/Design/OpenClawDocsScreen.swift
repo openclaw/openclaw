@@ -51,8 +51,8 @@ struct OpenClawDocsScreen: View {
             OpenClawAdaptiveHeaderRow(
                 title: "Docs",
                 subtitle: "Gateway setup, pairing, channels, and mobile node reference.",
-                titleFont: .headline,
-                subtitleFont: .caption)
+                titleFont: OpenClawType.headline,
+                subtitleFont: OpenClawType.caption)
             {
                 HStack(alignment: .top, spacing: 12) {
                     if let headerLeadingAction {

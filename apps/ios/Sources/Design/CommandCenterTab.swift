@@ -120,8 +120,8 @@ struct CommandCenterTab: View {
         OpenClawAdaptiveHeaderRow(
             title: self.headerTitle,
             subtitle: self.gatewaySubtitle,
-            titleFont: .title3.weight(.semibold),
-            subtitleFont: .caption,
+            titleFont: OpenClawType.title3SemiBold,
+            subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
         {
             if let headerLeadingAction {

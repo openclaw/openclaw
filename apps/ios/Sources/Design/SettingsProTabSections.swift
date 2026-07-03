@@ -145,7 +145,7 @@ extension SettingsProTab {
                 route: .voice)
         }
 
-        Section("Device") {
+        Section {
             self.appearanceRow
             self.settingsListRow(
                 icon: "stethoscope",
@@ -166,6 +166,10 @@ extension SettingsProTab {
                 icon: "info.circle",
                 title: "About",
                 route: .about)
+        } header: {
+            Text("Device")
+                .font(OpenClawType.captionSemiBold)
+                .foregroundStyle(.secondary)
         }
 
         Section {

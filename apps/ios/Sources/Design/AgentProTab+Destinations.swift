@@ -172,8 +172,8 @@ extension AgentProTab {
             OpenClawAdaptiveHeaderRow(
                 title: title,
                 subtitle: subtitle,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             } accessory: {

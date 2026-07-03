@@ -33,6 +33,8 @@ struct RootTabsPhoneControlHub: View {
                     } header: {
                         if let title = self.sectionTitle(for: group) {
                             Text(title)
+                                .font(OpenClawType.captionSemiBold)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

@@ -39,8 +39,8 @@ struct AgentProNodesDestination: View {
             OpenClawAdaptiveHeaderRow(
                 title: "Instances",
                 subtitle: self.instancesDetail,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             } accessory: {
