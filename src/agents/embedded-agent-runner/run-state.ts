@@ -18,9 +18,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
  */
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
+  runId?: string;
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
+  isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -59,6 +61,8 @@ const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");
 
 const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
+  activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
+  retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
   sessionIdsByFile: new Map<string, string>(),
@@ -71,6 +75,12 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
 export const ACTIVE_EMBEDDED_RUNS =
   embeddedRunState.activeRuns ??
   (embeddedRunState.activeRuns = new Map<string, EmbeddedAgentQueueHandle>());
+export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
+  embeddedRunState.activeRunsByRunId ??
+  (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
+export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
+  embeddedRunState.retainedAbortabilityRunIds ??
+  (embeddedRunState.retainedAbortabilityRunIds = new Set<string>());
 export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
   embeddedRunState.snapshots ??
   (embeddedRunState.snapshots = new Map<string, ActiveEmbeddedRunSnapshot>());

@@ -22,16 +22,6 @@
     <string name="password">Hasło</string>
     <string name="run_onboarding_again">Uruchom ponownie wdrażanie</string>
     <string name="resolved_endpoint">Rozpoznany punkt końcowy</string>
-    <string name="gateway_setup">Konfiguracja bramy</string>
-    <string name="connect_to_gateway">Połącz ze swoją bramą</string>
-    <string name="scan_setup_code">Zeskanuj kod konfiguracji</string>
-    <string name="use_gateway_qr">Użyj kodu QR bramy lub kodu konfiguracji</string>
-    <string name="nearby_gateway">Pobliska brama</string>
-    <string name="enter_gateway_url">Wprowadź URL bramy</string>
-    <string name="connect_manual_url">Połącz, używając ręcznego URL</string>
-    <string name="permissions">Uprawnienia</string>
-    <string name="done">Gotowe</string>
     <string name="gateway_trust_first_seen">Sprawdź odcisk certyfikatu, zanim zaufasz tej bramie.\n\n%1$s</string>
     <string name="gateway_trust_changed">Certyfikat bramy uległ zmianie. Kontynuuj tylko wtedy, gdy oczekujesz tej zmiany.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s</string>
-    <string name="gateway_recovery">Odzyskiwanie bramy</string>
 </resources>

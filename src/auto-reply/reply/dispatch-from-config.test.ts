@@ -46,7 +46,12 @@ import {
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+type AbortResult = {
+  handled: boolean;
+  aborted: boolean;
+  rejectionReason?: "finalizing";
+  stoppedSubagents?: number;
+};
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
@@ -143,10 +148,16 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 }));
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
+  entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
+  resolveSessionStoreEntry: vi.fn((params?: { sessionKey?: string }) => ({
+    existing:
+      (params?.sessionKey
+        ? sessionStoreMocks.entriesBySessionKey.get(params.sessionKey)
+        : undefined) ?? sessionStoreMocks.currentEntry,
+  })),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -1092,6 +1103,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.entriesBySessionKey.clear();
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.readSessionEntry.mockReset();
     sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
@@ -3083,6 +3095,8 @@ describe("dispatchReplyFromConfig", () => {
     const onToolStart = vi.fn();
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -3092,6 +3106,8 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -3105,12 +3121,56 @@ describe("dispatchReplyFromConfig", () => {
         onToolStart,
         onItemEvent,
         onCommandOutput,
+        onCompactionStart,
+        onCompactionEnd,
       },
     });
 
     expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onCompactionStart).toHaveBeenCalledTimes(1);
+    expect(onCompactionEnd).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not forward compaction lifecycle feedback while verbose is off by default", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    });
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onCompactionStart,
+        onCompactionEnd,
+      },
+    });
+
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -4942,6 +5002,30 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
+    });
+  });
+
+  it("reports when a fast abort is rejected during finalization", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: false,
+      rejectionReason: "finalizing",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Body: "/stop" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      formatAbortReplyTextResolver: (_stopped, rejectionReason) =>
+        rejectionReason === "finalizing" ? "already finalizing" : "aborted",
+    });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "already finalizing",
     });
   });
 
@@ -9477,7 +9561,18 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("dispatches unmentioned plugin-bound fallback in always-on groups", async () => {
+  it.each([
+    {
+      name: "dispatches unmentioned plugin-bound fallback in always-on groups",
+      groupRequireMention: false,
+      expectedDispatches: 1,
+    },
+    {
+      name: "suppresses unmentioned fallback when channel policy requires a mention",
+      groupRequireMention: true,
+      expectedDispatches: 0,
+    },
+  ])("$name", async ({ groupRequireMention, expectedDispatches }) => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -9511,15 +9606,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       updatedAt: 0,
       sendPolicy: "allow",
     };
-    const cfg = {
-      channels: {
-        imessage: {
-          groups: {
-            "chat:primary": { requireMention: false },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
@@ -9529,8 +9615,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       OriginatingTo: "imessage:chat:primary",
       To: "imessage:chat:primary",
       AccountId: "default",
+      SessionKey: "agent:main:imessage:group:chat:primary",
       ChatType: "group",
       GroupSubject: "Friends",
+      GroupRequireMention: groupRequireMention,
       Body: "observed message",
       From: "imessage:group:chat:primary",
       WasMentioned: false,
@@ -9538,7 +9626,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     const result = await dispatchReplyFromConfig({
       ctx,
-      cfg,
+      cfg: emptyConfig,
       dispatcher,
       replyResolver,
       replyOptions: {
@@ -9559,7 +9647,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(claimContext.pluginBinding).toMatchObject({
       bindingId: "binding-imessage-always-on-fallback",
     });
-    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(replyResolver).toHaveBeenCalledTimes(expectedDispatches);
     expect(result.queuedFinal).toBe(false);
     expect(result.counts.block).toBe(0);
     expect(result.counts.final).toBe(0);

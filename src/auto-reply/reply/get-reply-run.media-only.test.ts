@@ -386,6 +386,39 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.thinkLevel).toBe("off");
   });
 
+  it("reports unsupported explicit one-turn thinking overrides", async () => {
+    const result = await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "xhigh",
+        opts: { thinkingLevelOverride: "xhigh" },
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog: async () => [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              reasoning: false,
+            },
+          ],
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(Array.isArray(result) ? undefined : result?.text).toContain(
+      'Thinking level "xhigh" is not supported',
+    );
+    expect(runReplyAgent).not.toHaveBeenCalled();
+  });
+
   it("does not persist turn-local thinking fallback over a stored session override", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-thinking",

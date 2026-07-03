@@ -1044,14 +1044,44 @@
       "translated": "Online"
     },
     {
-      "id": "native.android.d42fe72f8e76b450",
-      "source": "OPENCLAW",
-      "translated": "OPENCLAW"
+      "id": "native.android.9ac2d4498b17d478",
+      "source": "Trust",
+      "translated": "Zaufaj"
     },
     {
-      "id": "native.android.a5c2d7f27576f0c4",
-      "source": "Your personal AI assistant.\nExfoliate! Exfoliate!",
-      "translated": "Twój osobisty asystent AI.\nZłuszczaj! Złuszczaj!"
+      "id": "native.android.e26ee07a1d1911be",
+      "source": "Cancel",
+      "translated": "Anuluj"
+    },
+    {
+      "id": "native.android.64c8db13ef91513c",
+      "source": "Welcome to OpenClaw",
+      "translated": "Witamy w OpenClaw"
+    },
+    {
+      "id": "native.android.cc878f72a6b70b23",
+      "source": "Connect to your Gateway",
+      "translated": "Połącz się z Gateway"
+    },
+    {
+      "id": "native.android.bf3750bf264f0063",
+      "source": "Choose device permissions",
+      "translated": "Wybierz uprawnienia urządzenia"
+    },
+    {
+      "id": "native.android.3bfe29d4d13d3c3e",
+      "source": "Use OpenClaw from your phone",
+      "translated": "Używaj OpenClaw z telefonu"
+    },
+    {
+      "id": "native.android.c0b539eeb4612f5d",
+      "source": "Security notice",
+      "translated": "Informacja o bezpieczeństwie"
+    },
+    {
+      "id": "native.android.5aed4b5c8d6b246d",
+      "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
+      "translated": "Połączony agent OpenClaw może korzystać z włączonych przez Ciebie funkcji urządzenia. Kontynuuj tylko wtedy, gdy ufasz Gateway i agentowi, z którym się łączysz."
     },
     {
       "id": "native.android.63c31ee564d63347",
@@ -1059,19 +1089,134 @@
       "translated": "Połącz Gateway"
     },
     {
-      "id": "native.android.afdd3e2c10f56b75",
-      "source": "Setup code issue",
-      "translated": "Problem z kodem konfiguracji"
+      "id": "native.android.58d80589d9d4b7ff",
+      "source": "Could not open setup guide.",
+      "translated": "Nie udało się otworzyć przewodnika konfiguracji."
     },
     {
-      "id": "native.android.084eda7046e91737",
-      "source": "Advanced",
-      "translated": "Zaawansowane"
+      "id": "native.android.18d6dd32cfcc1c9a",
+      "source": "Scan QR or setup code",
+      "translated": "Zeskanuj kod QR lub kod konfiguracji"
+    },
+    {
+      "id": "native.android.8b8acc5b98b8c99f",
+      "source": "Set up manually",
+      "translated": "Skonfiguruj ręcznie"
+    },
+    {
+      "id": "native.android.debd7b3e59db6ab2",
+      "source": "Before you start",
+      "translated": "Zanim zaczniesz"
+    },
+    {
+      "id": "native.android.9cfcf68aae2c05c6",
+      "source": "Access to the Gateway device",
+      "translated": "Dostęp do urządzenia Gateway"
+    },
+    {
+      "id": "native.android.71ce00f359981a0b",
+      "source": "Phone can reach the Gateway",
+      "translated": "Telefon może połączyć się z Gateway"
+    },
+    {
+      "id": "native.android.68a31cee94a9db86",
+      "source": "Android setup guide",
+      "translated": "Przewodnik konfiguracji Androida"
+    },
+    {
+      "id": "native.android.d514a981f80779e9",
+      "source": "Setup Gateway",
+      "translated": "Skonfiguruj Gateway"
+    },
+    {
+      "id": "native.android.6a45e2dae35ab5a7",
+      "source": "Start your Gateway.",
+      "translated": "Uruchom Gateway."
+    },
+    {
+      "id": "native.android.c6f9da7008df05a6",
+      "source": "Generate a QR code.",
+      "translated": "Wygeneruj kod QR."
+    },
+    {
+      "id": "native.android.96d40475de2885d6",
+      "source": "Choose from gallery",
+      "translated": "Wybierz z galerii"
+    },
+    {
+      "id": "native.android.fd83bd36419ef526",
+      "source": "QR code not accepted",
+      "translated": "Kod QR nie został zaakceptowany"
+    },
+    {
+      "id": "native.android.4dde43318559c65d",
+      "source": "Choose another image",
+      "translated": "Wybierz inny obraz"
+    },
+    {
+      "id": "native.android.54bab6e4054484d0",
+      "source": "Scan QR code",
+      "translated": "Zeskanuj kod QR"
+    },
+    {
+      "id": "native.android.05987e822ac102ec",
+      "source": "Open the camera and frame the code from openclaw qr.",
+      "translated": "Otwórz aparat i wykadruj kod z openclaw qr."
+    },
+    {
+      "id": "native.android.90fa932d2e0adbd9",
+      "source": "Align the QR code inside the square.",
+      "translated": "Wyrównaj kod QR wewnątrz kwadratu."
+    },
+    {
+      "id": "native.android.7a817ddf54373dbf",
+      "source": "Camera access is needed to scan the setup QR.",
+      "translated": "Dostęp do aparatu jest potrzebny do zeskanowania kodu QR konfiguracji."
+    },
+    {
+      "id": "native.android.c8d5f12cb28f3853",
+      "source": "Allow camera",
+      "translated": "Zezwól na aparat"
+    },
+    {
+      "id": "native.android.7efba153567b1232",
+      "source": "Close scanner",
+      "translated": "Zamknij skaner"
+    },
+    {
+      "id": "native.android.b8d5431e1e441f74",
+      "source": "Enter setup code",
+      "translated": "Wpisz kod konfiguracji"
     },
     {
       "id": "native.android.41e3fbccb2ad5a4c",
       "source": "Setup code",
       "translated": "Kod konfiguracji"
+    },
+    {
+      "id": "native.android.06a2214da1eee841",
+      "source": "Paste setup code",
+      "translated": "Wklej kod konfiguracji"
+    },
+    {
+      "id": "native.android.35aec8a97ac12e1c",
+      "source": "Setup code was not accepted",
+      "translated": "Kod konfiguracji nie został zaakceptowany"
+    },
+    {
+      "id": "native.android.9aaee5a05de93dbe",
+      "source": "Use setup code",
+      "translated": "Użyj kodu konfiguracji"
+    },
+    {
+      "id": "native.android.073c93545602b198",
+      "source": "Manual setup",
+      "translated": "Konfiguracja ręczna"
+    },
+    {
+      "id": "native.android.46d58ca58c32ad52",
+      "source": "Gateway URL",
+      "translated": "Adres URL Gateway"
     },
     {
       "id": "native.android.d54b9e3433ffd809",
@@ -1084,24 +1229,29 @@
       "translated": "Port"
     },
     {
-      "id": "native.android.20d94e1cedd3f319",
-      "source": "TLS off",
-      "translated": "TLS wyłączony"
+      "id": "native.android.1b0d9893ae4c0682",
+      "source": "Use the Gateway computer's LAN address or secure remote hostname.",
+      "translated": "Użyj adresu LAN komputera Gateway lub bezpiecznej zdalnej nazwy hosta."
     },
     {
-      "id": "native.android.a3a158b4a10d34ba",
-      "source": "TLS on",
-      "translated": "TLS włączony"
+      "id": "native.android.bfc48711d6deed92",
+      "source": "Token",
+      "translated": "Token"
     },
     {
-      "id": "native.android.a02f48c59c8b7b9d",
-      "source": "Local",
-      "translated": "Lokalne"
+      "id": "native.android.7ac2b9aec9d78cda",
+      "source": "Paste token",
+      "translated": "Wklej token"
     },
     {
-      "id": "native.android.aae4212f2ff4df98",
-      "source": "Token optional",
-      "translated": "Token opcjonalny"
+      "id": "native.android.96ba0e3919c3955a",
+      "source": "Paste a shared Gateway token or operator-issued token.",
+      "translated": "Wklej udostępniony token Gateway lub token wydany przez operatora."
+    },
+    {
+      "id": "native.android.4a5a1702f0130328",
+      "source": "Password",
+      "translated": "Hasło"
     },
     {
       "id": "native.android.e7045d344dd32ddc",
@@ -1109,24 +1259,99 @@
       "translated": "Hasło opcjonalne"
     },
     {
-      "id": "native.android.369ee061f6d7881f",
-      "source": "Pair with Gateway",
-      "translated": "Sparuj z Gateway"
+      "id": "native.android.1259d0d0d1671ed7",
+      "source": "Connection type",
+      "translated": "Typ połączenia"
     },
     {
-      "id": "native.android.82b296ed39647687",
-      "source": "Last gateway",
-      "translated": "Ostatni gateway"
+      "id": "native.android.278d9abb3abc12e6",
+      "source": "Local network",
+      "translated": "Sieć lokalna"
     },
     {
-      "id": "native.android.e0e5d2bb055863fb",
-      "source": "Edit connection",
-      "translated": "Edytuj połączenie"
+      "id": "native.android.4aa2b8be11a971eb",
+      "source": "Secure remote",
+      "translated": "Bezpieczny zdalny"
     },
     {
-      "id": "native.android.ea2f18dad7749613",
-      "source": "Copy diagnostic",
-      "translated": "Kopiuj diagnostykę"
+      "id": "native.android.8c31e2762b496d61",
+      "source": "Local works for LAN or emulator hosts. Secure remote is for wss:// or Tailscale Serve/Funnel.",
+      "translated": "Lokalny działa dla hostów LAN lub emulatora. Bezpieczny zdalny jest przeznaczony dla wss:// lub Tailscale Serve/Funnel."
+    },
+    {
+      "id": "native.android.24a0a4819f223b87",
+      "source": "Could not test connection",
+      "translated": "Nie udało się przetestować połączenia"
+    },
+    {
+      "id": "native.android.9a8f8ba539d4dd68",
+      "source": "Test connection",
+      "translated": "Testuj połączenie"
+    },
+    {
+      "id": "native.android.a1c6ad798cdb4e32",
+      "source": "View details",
+      "translated": "Wyświetl szczegóły"
+    },
+    {
+      "id": "native.android.ebdc41fd34eab0a5",
+      "source": "Connection details",
+      "translated": "Szczegóły połączenia"
+    },
+    {
+      "id": "native.android.f982d1f6ad7b3e5d",
+      "source": "Copy",
+      "translated": "Kopiuj"
+    },
+    {
+      "id": "native.android.fa2a2369f23aa195",
+      "source": "Close",
+      "translated": "Zamknij"
+    },
+    {
+      "id": "native.android.50cca1e186823cd6",
+      "source": "Details copied",
+      "translated": "Szczegóły skopiowane"
+    },
+    {
+      "id": "native.android.31a4bf3ed4071f7c",
+      "source": "Approve node access",
+      "translated": "Zatwierdź dostęp węzła"
+    },
+    {
+      "id": "native.android.f43cb6ed03dc6766",
+      "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
+      "translated": "Parowanie Gateway zostało ukończone. Zatwierdź ten telefon jako węzeł, aby OpenClaw mógł używać włączonych przez Ciebie możliwości urządzenia."
+    },
+    {
+      "id": "native.android.8e49feba12c350ac",
+      "source": "On the Gateway computer, run:",
+      "translated": "Na komputerze Gateway uruchom:"
+    },
+    {
+      "id": "native.android.6189b5e2af7cc793",
+      "source": "Use the requestId from the pending command in the approve command.",
+      "translated": "Użyj requestId z oczekującego polecenia w poleceniu zatwierdzania."
+    },
+    {
+      "id": "native.android.53bcd45eeb574d74",
+      "source": "I have approved",
+      "translated": "Zatwierdzono"
+    },
+    {
+      "id": "native.android.cdc44aaeb8bd6e4a",
+      "source": "Still waiting for approval",
+      "translated": "Nadal oczekuje na zatwierdzenie"
+    },
+    {
+      "id": "native.android.df5cc00eb95c21ad",
+      "source": "Run the approve command on the Gateway computer, then check again.",
+      "translated": "Uruchom polecenie zatwierdzania na komputerze Gateway, a następnie sprawdź ponownie."
+    },
+    {
+      "id": "native.android.f579f91c216dd6c4",
+      "source": "OK",
+      "translated": "OK"
     },
     {
       "id": "native.android.b80462122abbe312",
@@ -1134,44 +1359,9 @@
       "translated": "Kopiuj polecenie zatwierdzenia"
     },
     {
-      "id": "native.android.a31f2beb68298aa8",
-      "source": "Allow permissions",
-      "translated": "Zezwól na uprawnienia"
-    },
-    {
-      "id": "native.android.b82104d8df1d4b4a",
-      "source": "These permissions keep OpenClaw secure\nand useful.",
-      "translated": "Te uprawnienia zapewniają bezpieczeństwo OpenClaw\ni jego użyteczność."
-    },
-    {
-      "id": "native.android.03b95088ba72bd8e",
-      "source": "Open $title",
-      "translated": "Otwórz $title"
-    },
-    {
-      "id": "native.android.f38ca3445453a6bb",
-      "source": "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
-      "translated": "Wybierz, czym ten telefon może udostępniać OpenClaw. Możesz zmienić te ustawienia później w Ustawieniach."
-    },
-    {
-      "id": "native.android.44549cfd7e6a1ab8",
-      "source": "Back",
-      "translated": "Wstecz"
-    },
-    {
-      "id": "native.android.4b54af42d17dec84",
-      "source": "Permission Setup",
-      "translated": "Konfiguracja uprawnień"
-    },
-    {
-      "id": "native.android.437599c024df158e",
-      "source": "Granted",
-      "translated": "Przyznano"
-    },
-    {
-      "id": "native.android.cf8344d3562e28e3",
-      "source": "Not granted",
-      "translated": "Nie przyznano"
+      "id": "native.android.d4c3bcf880727fb3",
+      "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
+      "translated": "Włączaj tylko taki dostęp, na którego używanie przez OpenClaw podczas połączenia tego telefonu się zgadzasz. Możesz to później zmienić w Ustawieniach Androida."
     },
     {
       "id": "native.android.d7ea800cc2475013",
@@ -1179,24 +1369,19 @@
       "translated": "Kontynuuj"
     },
     {
-      "id": "native.android.547f11a819721ffb",
-      "source": "Scan fresh setup code",
-      "translated": "Zeskanuj nowy kod konfiguracji"
+      "id": "native.android.44549cfd7e6a1ab8",
+      "source": "Back",
+      "translated": "Wstecz"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Ponów połączenie"
+      "id": "native.android.f3f0527db434d756",
+      "source": "Permissions",
+      "translated": "Uprawnienia"
     },
     {
-      "id": "native.android.e44224ed4df1700f",
-      "source": "Setup code expired. Scan a fresh setup QR.",
-      "translated": "Kod konfiguracji wygasł. Zeskanuj nowy kod QR konfiguracji."
-    },
-    {
-      "id": "native.android.e03bb4ea463ba7a5",
-      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
-      "translated": "Dostęp do Gateway wymaga sprawdzenia. Sprawdź zakresy uwierzytelniania Gateway, a następnie spróbuj ponownie."
+      "id": "native.android.29732759e050c874",
+      "source": "The code may have expired or been generated for another Gateway.",
+      "translated": "Kod mógł wygasnąć lub zostać wygenerowany dla innego Gateway."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1224,9 +1409,9 @@
       "translated": "Zapisane uwierzytelnienie jest nieprawidłowe. Uwierzytelnij ponownie lub zresetuj to połączenie Gateway."
     },
     {
-      "id": "native.android.3f61f2c34784ed0f",
-      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
-      "translated": "Uwierzytelnianie Gateway nie jest skonfigurowane. Skonfiguruj je na hoście gateway, a następnie spróbuj ponownie."
+      "id": "native.android.214b03b4cd2199b1",
+      "source": "Gateway authentication is not configured. Edit this connection and try again.",
+      "translated": "Uwierzytelnianie Gateway nie jest skonfigurowane. Edytuj to połączenie i spróbuj ponownie."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1244,9 +1429,14 @@
       "translated": "Polecenie zatwierdzenia skopiowane"
     },
     {
-      "id": "native.android.bc9715de99c769c7",
-      "source": "Diagnostic copied",
-      "translated": "Diagnostyka skopiowana"
+      "id": "native.android.437599c024df158e",
+      "source": "Granted",
+      "translated": "Przyznano"
+    },
+    {
+      "id": "native.android.cf8344d3562e28e3",
+      "source": "Not granted",
+      "translated": "Nie przyznano"
     },
     {
       "id": "native.android.561d07951dc36959",
@@ -2459,6 +2649,11 @@
       "translated": "Wymaga uwagi"
     },
     {
+      "id": "native.android.8452bcda8a619361",
+      "source": "Open ${row.title}",
+      "translated": "Otwórz ${row.title}"
+    },
+    {
       "id": "native.android.a65477861c7203aa",
       "source": "Open session",
       "translated": "Otwórz sesję"
@@ -2567,11 +2762,6 @@
       "id": "native.android.45005deba537cc59",
       "source": "Open profile",
       "translated": "Otwórz profil"
-    },
-    {
-      "id": "native.android.8452bcda8a619361",
-      "source": "Open ${row.title}",
-      "translated": "Otwórz ${row.title}"
     },
     {
       "id": "native.android.22d755834386db07",
@@ -3404,51 +3594,6 @@
       "translated": "Rozwiązany endpoint"
     },
     {
-      "id": "native.android.3d9d01cc0af8727d",
-      "source": "Gateway Setup",
-      "translated": "Konfiguracja Gateway"
-    },
-    {
-      "id": "native.android.fff6a6f130e88354",
-      "source": "Connect to your Gateway",
-      "translated": "Połącz ze swoim Gateway"
-    },
-    {
-      "id": "native.android.77a54beda22bfeb7",
-      "source": "Scan setup code",
-      "translated": "Zeskanuj kod konfiguracji"
-    },
-    {
-      "id": "native.android.8f525f9218215b42",
-      "source": "Use your Gateway QR or setup code",
-      "translated": "Użyj kodu QR Gateway lub kodu konfiguracji"
-    },
-    {
-      "id": "native.android.40da32c36971b959",
-      "source": "Nearby gateway",
-      "translated": "Gateway w pobliżu"
-    },
-    {
-      "id": "native.android.7423bd0086e6897e",
-      "source": "Enter gateway URL",
-      "translated": "Wpisz URL gateway"
-    },
-    {
-      "id": "native.android.c9420b6801f5a76f",
-      "source": "Connect using a manual URL",
-      "translated": "Połącz za pomocą ręcznego URL"
-    },
-    {
-      "id": "native.android.4b55356d9bf6e444",
-      "source": "Permissions",
-      "translated": "Uprawnienia"
-    },
-    {
-      "id": "native.android.c49a911b95af5d5d",
-      "source": "Done",
-      "translated": "Gotowe"
-    },
-    {
       "id": "native.android.288b83f93172c633",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "translated": "Zweryfikuj odcisk palca certyfikatu, zanim zaufasz temu gateway.\n\n%1$s"
@@ -3457,11 +3602,6 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "Certyfikat gateway uległ zmianie. Kontynuuj tylko, jeśli tego oczekiwano.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s"
-    },
-    {
-      "id": "native.android.6ffa3d752514836d",
-      "source": "Gateway Recovery",
-      "translated": "Odzyskiwanie Gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",

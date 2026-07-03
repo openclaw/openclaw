@@ -141,6 +141,7 @@ import {
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import {
   classifyProviderRequestError,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
@@ -1475,16 +1476,25 @@ function resolveRestartLifecycleError(
 }
 
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
-  return (
-    replyOperation?.result?.kind === "aborted" && replyOperation.result.code === "aborted_by_user"
-  );
+  if (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_by_user"
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && !isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
 function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
-  return (
+  if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_for_restart"
-  );
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
 function emitModelFallbackStepLifecycle(params: {
@@ -1593,42 +1603,44 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   };
 }
 
-/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
-export async function runAgentTurnWithFallback(params: {
-  commandBody: string;
-  transcriptCommandBody?: string;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  replyThreading?: TemplateContext["ReplyThreading"];
-  replyOperation?: ReplyOperation;
-  opts?: GetReplyOptions;
-  typingSignals: TypingSignaler;
-  blockReplyPipeline: BlockReplyPipeline | null;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
-  isHeartbeat: boolean;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  getActiveSessionEntry: () => SessionEntry | undefined;
-  activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
-  replyMediaContext?: ReplyMediaContext;
-  onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => boolean;
-}): Promise<AgentRunLoopResult> {
+async function runAgentTurnWithFallbackInternal(
+  params: {
+    commandBody: string;
+    transcriptCommandBody?: string;
+    followupRun: FollowupRun;
+    sessionCtx: TemplateContext;
+    replyThreading?: TemplateContext["ReplyThreading"];
+    replyOperation?: ReplyOperation;
+    opts?: GetReplyOptions;
+    typingSignals: TypingSignaler;
+    blockReplyPipeline: BlockReplyPipeline | null;
+    blockStreamingEnabled: boolean;
+    blockReplyChunking?: {
+      minChars: number;
+      maxChars: number;
+      breakPreference: "paragraph" | "newline" | "sentence";
+      flushOnParagraph?: boolean;
+    };
+    resolvedBlockStreamingBreak: "text_end" | "message_end";
+    applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+    shouldEmitToolResult: () => boolean;
+    shouldEmitToolOutput: () => boolean;
+    pendingToolTasks: Set<Promise<void>>;
+    resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+    isHeartbeat: boolean;
+    sessionKey?: string;
+    runtimePolicySessionKey?: string;
+    getActiveSessionEntry: () => SessionEntry | undefined;
+    activeSessionStore?: Record<string, SessionEntry>;
+    storePath?: string;
+    resolvedVerboseLevel: VerboseLevel;
+    toolProgressDetail?: "explain" | "raw";
+    replyMediaContext?: ReplyMediaContext;
+    onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+    isRestartRecoveryArmed?: () => boolean;
+  },
+  commitTerminalOutcome: () => void,
+): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
@@ -3046,6 +3058,20 @@ export async function runAgentTurnWithFallback(params: {
           ? restartAbortReason
           : createAgentRunRestartAbortError();
       }
+      if (isReplyOperationUserAbort(params.replyOperation)) {
+        settledLifecycleTerminal?.emit("end", runResult);
+        await drainPendingToolTasks({
+          tasks: params.pendingToolTasks,
+          onTimeout: logVerbose,
+        });
+        return {
+          kind: "final",
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+      commitTerminalOutcome();
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: attempt.provider,
@@ -3511,4 +3537,23 @@ export async function runAgentTurnWithFallback(params: {
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
   };
+}
+
+/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
+export async function runAgentTurnWithFallback(
+  params: Parameters<typeof runAgentTurnWithFallbackInternal>[0],
+): Promise<AgentRunLoopResult> {
+  let terminalOutcomeCommitted = false;
+  const commitTerminalOutcome = () => {
+    if (terminalOutcomeCommitted) {
+      return;
+    }
+    terminalOutcomeCommitted = true;
+    params.replyOperation?.freezeAbort();
+  };
+  try {
+    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+  } finally {
+    commitTerminalOutcome();
+  }
 }

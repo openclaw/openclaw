@@ -34,6 +34,11 @@ import {
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import {
+  clearEmbeddedAgentRunAbortabilityForRunId,
+  isEmbeddedAgentRunAbortableForRunId,
+  retainEmbeddedAgentRunAbortabilityForRunId,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
@@ -2630,6 +2635,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        isAbortable: () => isEmbeddedAgentRunAbortableForRunId(runId),
+        onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(runId),
         controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
         lifecycleGeneration,
@@ -2644,6 +2651,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       if (activeRunAbort.registered) {
+        retainEmbeddedAgentRunAbortabilityForRunId(runId);
         if (pendingChatRun) {
           context.addChatRun(runId, {
             ...pendingChatRun,
@@ -2659,6 +2667,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           );
         }
       }
+      const cleanupActiveRunAbort = (opts?: { force?: boolean }) => {
+        activeRunAbort.cleanup(opts);
+      };
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
       // Confirmed only when the caller is the trusted in-process backend ACP
@@ -2916,7 +2927,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
-            cleanupAbortController: activeRunAbort.cleanup,
+            cleanupAbortController: cleanupActiveRunAbort,
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
@@ -2945,7 +2956,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           });
         } finally {
           if (!dispatched) {
-            activeRunAbort.cleanup({ force: true });
+            cleanupActiveRunAbort({ force: true });
           }
         }
       })();

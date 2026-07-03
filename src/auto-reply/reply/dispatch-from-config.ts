@@ -147,7 +147,6 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
-import { resolveGroupRequireMention } from "./groups.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -1543,7 +1542,9 @@ export async function dispatchReplyFromConfig(
   };
   const getDispatchAbortSignal = () => {
     const operationSignal = dispatchReplyOperation?.abortSignal;
-    const upstreamSignal = params.replyOptions?.abortSignal;
+    // The operation mirrors upstream aborts until the backend commits its
+    // terminal outcome, then keeps delivery alive after freezeAbort().
+    const upstreamSignal = operationSignal ? undefined : params.replyOptions?.abortSignal;
     if (
       cachedDispatchAbortSignal &&
       cachedDispatchAbortSignal.operationSignal === operationSignal &&
@@ -1551,7 +1552,7 @@ export async function dispatchReplyFromConfig(
     ) {
       return cachedDispatchAbortSignal.signal;
     }
-    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    const signal = operationSignal ?? upstreamSignal;
     cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
     return signal;
   };
@@ -1589,6 +1590,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchReplyOperation) {
       return;
     }
+    dispatchReplyOperation.freezeAbort();
     if (!dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }
@@ -2209,12 +2211,7 @@ export async function dispatchReplyFromConfig(
             ctx.WasMentioned === false &&
             !explicitCommandTurnCtx;
           const shouldSuppressUnmentionedFallback =
-            isUnmentionedGroupFallback &&
-            (await resolveGroupRequireMention({
-              cfg,
-              ctx,
-              groupResolution: groupResolution ?? undefined,
-            }));
+            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
           if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });
@@ -2312,7 +2309,7 @@ export async function dispatchReplyFromConfig(
       let routedFinalCount = 0;
       if (!suppressDelivery) {
         const payload = {
-          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
+          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
         const result = await routeReplyToOriginating(payload);
         if (result) {
@@ -3122,11 +3119,15 @@ export async function dispatchReplyFromConfig(
               },
             }),
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,

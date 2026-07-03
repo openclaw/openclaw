@@ -4,7 +4,11 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import type { ChatAbortControllerEntry, RestartRecoveryCandidate } from "./chat-abort.js";
+import {
+  type ChatAbortControllerEntry,
+  removeChatAbortControllerEntry,
+  type RestartRecoveryCandidate,
+} from "./chat-abort.js";
 import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
@@ -63,7 +67,11 @@ export function startGatewayEventSubscriptions(params: {
                       entry.registrationCleanupRequested === true &&
                       !entry.projectSessionTerminalPersistence
                     ) {
-                      params.chatAbortControllers.delete(candidateRunId);
+                      removeChatAbortControllerEntry(
+                        params.chatAbortControllers,
+                        candidateRunId,
+                        entry,
+                      );
                     }
                   });
                 }
@@ -99,7 +107,11 @@ export function startGatewayEventSubscriptions(params: {
                       .catch(() => undefined)
                       .then(() => {
                         if (params.chatAbortControllers.get(candidateRunId) === entry) {
-                          params.chatAbortControllers.delete(candidateRunId);
+                          removeChatAbortControllerEntry(
+                            params.chatAbortControllers,
+                            candidateRunId,
+                            entry,
+                          );
                         }
                       });
                   }

@@ -60,8 +60,8 @@ describe("native app i18n inventory", () => {
         (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
       ),
     ).toBe(true);
-    expect(entries.some((entry) => entry.source === "Scan fresh setup code")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Retry connection")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Scan QR code")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Test connection")).toBe(true);
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);

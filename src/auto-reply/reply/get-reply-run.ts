@@ -541,6 +541,7 @@ export async function runPreparedReply(
   let { sessionEntry, resolvedThinkLevel } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
   const heartbeatRunScope = resolveHeartbeatRunScope(opts);
+  const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
@@ -947,7 +948,9 @@ export async function runPreparedReply(
     });
   }
   if (!thinkingLevelSupported) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    const explicitThink =
+      (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
+      explicitThinkingLevelOverride !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
