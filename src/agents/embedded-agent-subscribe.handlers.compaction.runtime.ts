@@ -2,6 +2,7 @@
  * Runtime helpers for reconciling compaction counts after subscribe events.
  */
 import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
+import { isCompactionStampCurrent } from "../config/sessions/types.js";
 
 /** Persist the highest observed compaction count after a successful subscribed run. */
 export default async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
@@ -30,10 +31,15 @@ export default async function reconcileSessionStoreCompactionCountAfterSuccess(p
       return {
         compactionCount: nextCount,
         // A live-run compaction landed: record it and clear any stale
-        // failure/skip reason so /status reflects the latest attempt.
-        lastCompactionAt: now,
-        lastCompactionOutcome: "compacted",
-        lastCompactionReason: undefined,
+        // failure/skip reason — unless a newer attempt already stamped the row
+        // (this reconcile runs async after the run ends).
+        ...(isCompactionStampCurrent(entry, now)
+          ? {
+              lastCompactionAt: now,
+              lastCompactionOutcome: "compacted" as const,
+              lastCompactionReason: undefined,
+            }
+          : {}),
         updatedAt: Math.max(entry.updatedAt ?? 0, now),
       };
     },

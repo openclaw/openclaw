@@ -5,6 +5,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { isCompactionStampCurrent } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -288,13 +289,21 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  if (incrementBy > 0) {
-    // A real compaction landed: record the outcome and clear any stale
-    // failure/skip reason so /status reflects the latest attempt.
-    updates.lastCompactionAt = now;
-    updates.lastCompactionOutcome = "compacted";
-    updates.lastCompactionReason = undefined;
-  }
+  // A real compaction landed: record the outcome and clear any stale
+  // failure/skip reason. Applied per target row via isCompactionStampCurrent
+  // so a delayed write cannot regress a newer outcome.
+  const outcomeStamp: Partial<SessionEntry> | null =
+    incrementBy > 0
+      ? {
+          lastCompactionAt: now,
+          lastCompactionOutcome: "compacted",
+          lastCompactionReason: undefined,
+        }
+      : null;
+  const buildUpdates = (target: Pick<SessionEntry, "lastCompactionAt">): Partial<SessionEntry> =>
+    outcomeStamp && isCompactionStampCurrent(target, now)
+      ? { ...updates, ...outcomeStamp }
+      : updates;
   const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
   const sessionFileChanged = Boolean(
@@ -332,13 +341,17 @@ export async function incrementCompactionCount(params: {
   }
   const nextEntry = {
     ...entry,
-    ...updates,
+    ...buildUpdates(entry),
   };
   sessionStore[sessionKey] = nextEntry;
   if (storePath) {
-    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
-      fallbackEntry: nextEntry,
-    });
+    const persistedEntry = await patchSessionEntry(
+      { storePath, sessionKey },
+      (current) => buildUpdates(current),
+      {
+        fallbackEntry: nextEntry,
+      },
+    );
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
     }
@@ -385,16 +398,20 @@ export async function recordCompactionOutcome(params: {
     // No fallbackEntry, and mirror to memory only after the persisted patch
     // confirms the row still exists — the disk store is the source of truth
     // for whether the session survived while compaction was in flight.
-    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
-      preserveActivity: true,
-    });
+    const persistedEntry = await patchSessionEntry(
+      { storePath, sessionKey },
+      (current) => (isCompactionStampCurrent(current, now) ? updates : null),
+      {
+        preserveActivity: true,
+      },
+    );
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
     }
     return;
   }
   const entry = sessionStore[sessionKey];
-  if (!entry) {
+  if (!entry || !isCompactionStampCurrent(entry, now)) {
     return;
   }
   sessionStore[sessionKey] = { ...entry, ...updates };

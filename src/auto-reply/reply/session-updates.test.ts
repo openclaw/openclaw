@@ -238,6 +238,31 @@ describe("compaction outcome tracking", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("does not let a delayed older attempt overwrite a newer outcome", async () => {
+    const sessionStore: Record<string, import("../../config/sessions/types.js").SessionEntry> = {
+      "agent:main:test": {
+        sessionId: "sess-1",
+        updatedAt: 100,
+        compactionCount: 3,
+        lastCompactionAt: 5_000,
+        lastCompactionOutcome: "compacted" as const,
+      },
+    };
+
+    await recordCompactionOutcome({
+      sessionStore,
+      sessionKey: "agent:main:test",
+      outcome: "failed",
+      reason: "timeout",
+      now: 2_000,
+    });
+
+    const entry = sessionStore["agent:main:test"];
+    expect(entry.lastCompactionAt).toBe(5_000);
+    expect(entry.lastCompactionOutcome).toBe("compacted");
+    expect(entry.lastCompactionReason).toBeUndefined();
+  });
+
   it("ignores outcome records for unknown sessions", async () => {
     const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
 

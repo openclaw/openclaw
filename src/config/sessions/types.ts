@@ -88,6 +88,18 @@ export type SessionCompactionCheckpoint = {
 /** Terminal outcome of a compaction attempt, persisted for `/status` visibility. */
 export type SessionCompactionOutcome = "compacted" | "failed" | "skipped";
 
+/**
+ * True when a compaction outcome stamped at `at` is at least as new as the
+ * row's recorded stamp. Outcome writers await between capturing `at` and the
+ * store write, so a delayed older attempt must not regress a newer outcome.
+ */
+export function isCompactionStampCurrent(
+  entry: Pick<SessionEntry, "lastCompactionAt">,
+  at: number,
+): boolean {
+  return typeof entry.lastCompactionAt !== "number" || entry.lastCompactionAt <= at;
+}
+
 export type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
