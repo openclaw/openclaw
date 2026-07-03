@@ -94,6 +94,7 @@ import {
 } from "../../infra/update-global.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -2845,10 +2846,14 @@ async function readPostCorePluginUpdateResultFile(
 function stopPostCoreUpdateChild(child: ChildProcess): void {
   if (process.platform === "win32" && child.pid) {
     try {
-      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      const killer = spawn(
+        getWindowsSystem32ExePath("taskkill.exe"),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       killer.once("error", () => {
         child.kill();
       });

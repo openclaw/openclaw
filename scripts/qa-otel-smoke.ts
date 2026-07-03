@@ -2,6 +2,7 @@
 // Qa Otel Smoke script supports OpenClaw repository automation.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -1155,7 +1156,7 @@ function terminateChildTree(
 ): void {
   if (platform === "win32") {
     if (typeof child.pid === "number") {
-      const result = runTaskkill("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      const result = runTaskkill(resolveWindowsTaskkillPath(), ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
       });
       if (result.status === 0) {

@@ -29,6 +29,7 @@ import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -3547,7 +3548,7 @@ async function stopGateway(gateway) {
       return;
     }
     if (process.platform === "win32") {
-      await runCommand("taskkill", ["/PID", String(gateway.child.pid), "/T", "/F"], {
+      await runCommand(resolveWindowsTaskkillPath(), ["/PID", String(gateway.child.pid), "/T", "/F"], {
         logPath: gateway.logPath,
         check: false,
         timeoutMs: 30_000,
@@ -3891,7 +3892,7 @@ async function runCommandInvocation(invocation, options) {
     const requestKill = () => {
       if (process.platform === "win32" && child.pid) {
         try {
-          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+          const killer = spawn(resolveWindowsTaskkillPath(), ["/PID", String(child.pid), "/T", "/F"], {
             stdio: "ignore",
             windowsHide: true,
           });

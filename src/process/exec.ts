@@ -11,7 +11,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
+import { getWindowsInstallRoots, getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -466,10 +466,13 @@ export async function runCommandWithTimeout(
         child.pid > 0
       ) {
         if (process.platform === "win32") {
+          const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
           try {
-            spawn("taskkill", ["/PID", String(child.pid), "/T"], {
+            spawn(taskkillPath, ["/PID", String(child.pid), "/T"], {
               stdio: "ignore",
               windowsHide: true,
+            }).on("error", () => {
+              // taskkill unavailable; fall through to direct kill below.
             });
             if (!processTreeForceKillTimer) {
               processTreeForceKillTimer = setTimeout(() => {
@@ -483,9 +486,11 @@ export async function runCommandWithTimeout(
                   return;
                 }
                 try {
-                  spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+                  spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
                     stdio: "ignore",
                     windowsHide: true,
+                  }).on("error", () => {
+                    child.kill("SIGKILL");
                   });
                 } catch {
                   child.kill("SIGKILL");
@@ -503,9 +508,15 @@ export async function runCommandWithTimeout(
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
         try {
-          spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-            stdio: "ignore",
-            windowsHide: true,
+          spawn(
+            getWindowsSystem32ExePath("taskkill.exe"),
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+            },
+          ).on("error", () => {
+            // taskkill unavailable; fall through to direct kill below.
           });
           return;
         } catch {

@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -915,7 +916,7 @@ async function waitForProcessTreeExit(child, timeoutMs) {
 function terminateProcessTree(child, signal) {
   if (process.platform === "win32") {
     try {
-      childProcess.spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      childProcess.spawnSync(resolveWindowsTaskkillPath(), ["/pid", String(child.pid), "/t", "/f"], {
         stdio: "ignore",
       });
       return;
