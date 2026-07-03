@@ -130,7 +130,7 @@ Choose your preferred auth method and follow the setup steps.
     configs should use `google/*` model refs plus the `google-gemini-cli`
     runtime when they want local Gemini CLI execution.
 
-</Tab>>
+</Tab>
 </Tabs>
 
 ## Capabilities

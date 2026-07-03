@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import googleProviderDiscovery from "./provider-discovery.js";
@@ -28,12 +28,19 @@ const googleProviderPlugin = {
 };
 
 const refreshGeminiCliOAuthTokenMock = vi.hoisted(() => vi.fn());
+const importOfficialGeminiCliOAuthCredentialsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./oauth.runtime.js", () => ({
   refreshGeminiCliOAuthToken: refreshGeminiCliOAuthTokenMock,
+  importOfficialGeminiCliOAuthCredentials: importOfficialGeminiCliOAuthCredentialsMock,
 }));
 
 describe("google provider plugin hooks", () => {
+  beforeEach(() => {
+    refreshGeminiCliOAuthTokenMock.mockReset();
+    importOfficialGeminiCliOAuthCredentialsMock.mockReset();
+  });
+
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -407,6 +414,105 @@ describe("google provider plugin hooks", () => {
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
+  });
+
+  it("uses the official Gemini CLI cache to recover legacy OAuth profile identity", async () => {
+    importOfficialGeminiCliOAuthCredentialsMock.mockReturnValueOnce({
+      access: "imported-access",
+      refresh: "imported-refresh",
+      expires: 123456,
+      email: "user@example.com",
+      projectId: "project-1",
+      sourcePath: "/home/user/.gemini/oauth_creds.json",
+    });
+
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    await expect(
+      provider.resolveCliBackendAuthCredential?.({
+        provider: "google-gemini-cli",
+        profileId: "oauth:user@example.com",
+        credential: {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: 1,
+        },
+      } as never),
+    ).resolves.toMatchObject({
+      kind: "oauth",
+      providerId: "google-gemini-cli",
+      profileId: "oauth:user@example.com",
+      accessToken: "imported-access",
+      refreshToken: "imported-refresh",
+      expiresAt: 123456,
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+  });
+
+  it("rejects a legacy Gemini CLI OAuth profile when the official cache is absent", async () => {
+    importOfficialGeminiCliOAuthCredentialsMock.mockReturnValueOnce(null);
+
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    await expect(
+      provider.resolveCliBackendAuthCredential?.({
+        provider: "google-gemini-cli",
+        profileId: "oauth:user@example.com",
+        credential: {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: 1,
+        },
+      } as never),
+    ).rejects.toThrow(
+      "Legacy Gemini CLI OAuth profile is missing validated Google account identity",
+    );
+  });
+
+  it("rejects a legacy Gemini CLI OAuth profile when the official cache identity mismatches the selected profile", async () => {
+    importOfficialGeminiCliOAuthCredentialsMock.mockReturnValueOnce({
+      access: "imported-access",
+      refresh: "imported-refresh",
+      expires: 123456,
+      email: "user@example.com",
+      sourcePath: "/home/user/.gemini/oauth_creds.json",
+    });
+
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    await expect(
+      provider.resolveCliBackendAuthCredential?.({
+        provider: "google-gemini-cli",
+        profileId: "oauth:other@example.com",
+        credential: {
+          type: "oauth",
+          provider: "google-gemini-cli",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: 1,
+        },
+      } as never),
+    ).rejects.toThrow("Gemini CLI OAuth profile identity does not match the selected profile id");
   });
 
   it("refreshes Gemini CLI OAuth through the provider-owned refresh hook", async () => {

@@ -46,7 +46,7 @@ function resolveEmailFromProfileId(profileId: string): string | undefined {
   return normalizeEmail(suffix);
 }
 
-function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: string) {
+async function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: string) {
   const accessToken = normalizeString(credential.access);
   if (!accessToken) {
     return null;
@@ -56,9 +56,32 @@ function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: s
   const email = normalizeEmail(credential.email);
   const expectedEmail = resolveEmailFromProfileId(profileId);
   if (!email) {
-    throw new Error(
-      "Gemini CLI OAuth profile is missing validated Google account identity. Re-import the official Gemini CLI cache.",
-    );
+    const { importOfficialGeminiCliOAuthCredentials } = await loadOauthRuntimeModule();
+    const imported = importOfficialGeminiCliOAuthCredentials();
+    const importedEmail = normalizeEmail(imported?.email);
+    const importedAccess = normalizeString(imported?.access);
+    if (!imported || !importedEmail || !importedAccess) {
+      throw new Error(
+        "Legacy Gemini CLI OAuth profile is missing validated Google account identity. Re-import the official Gemini CLI cache.",
+      );
+    }
+    if (expectedEmail && expectedEmail !== importedEmail) {
+      throw new Error("Gemini CLI OAuth profile identity does not match the selected profile id.");
+    }
+    const importedRefresh = normalizeString(imported.refresh);
+    const importedProjectId = normalizeString(imported.projectId);
+    return {
+      kind: "oauth" as const,
+      providerId: PROVIDER_ID,
+      profileId,
+      accessToken: importedAccess,
+      ...(importedRefresh ? { refreshToken: importedRefresh } : {}),
+      ...(typeof imported.expires === "number" && Number.isFinite(imported.expires)
+        ? { expiresAt: imported.expires }
+        : {}),
+      ...(importedProjectId ? { projectId: importedProjectId } : {}),
+      email: importedEmail,
+    };
   }
   if (expectedEmail && expectedEmail !== email) {
     throw new Error("Gemini CLI OAuth profile identity does not match the selected profile id.");
@@ -90,7 +113,7 @@ async function resolveGeminiCliBackendAuthCredential(
   // Do not refresh with OpenClaw-owned Google OAuth machinery. The Gemini CLI
   // owns its official OAuth client and can refresh from the staged OAuth cache.
   // OpenClaw only forwards the selected cached credential envelope.
-  return buildGeminiCliOAuthCredential(ctx.credential, ctx.profileId);
+  return await buildGeminiCliOAuthCredential(ctx.credential, ctx.profileId);
 }
 
 export function buildGoogleGeminiCliProvider(): ProviderPlugin {
