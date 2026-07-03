@@ -82,6 +82,7 @@ internal fun rememberChatReaderScrollController(
       mutableStateOf(ChatReaderState())
     }
   var isApplyingScroll by remember(sessionKey) { mutableStateOf(false) }
+  var isUserScrolling by remember(sessionKey) { mutableStateOf(false) }
 
   suspend fun applyTransition(transition: ChatReaderTransition) {
     readerState = transition.state
@@ -109,11 +110,22 @@ internal fun rememberChatReaderScrollController(
   }
 
   LaunchedEffect(sessionKey) {
-    snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-      .collect { (index, offset) ->
-        if (!readerState.initialized || isApplyingScroll) return@collect
+    snapshotFlow {
+      Triple(
+        listState.isScrollInProgress,
+        listState.firstVisibleItemIndex,
+        listState.firstVisibleItemScrollOffset,
+      )
+    }.collect { (scrolling, index, offset) ->
+      if (!readerState.initialized || isApplyingScroll) return@collect
+      if (scrolling) {
+        isUserScrolling = true
+        readerState = readerState.copy(followTarget = null)
+      } else if (isUserScrolling) {
+        isUserScrolling = false
         readerState = readerState.onViewportChanged(index, offset, currentTimeline, targetTolerancePx)
       }
+    }
   }
 
   return ChatReaderScrollController(
