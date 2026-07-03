@@ -146,6 +146,8 @@ export type BackupCreateResult = {
 const BACKUP_TAR_MAX_ATTEMPTS = 3;
 // Backoff between attempts: wait 10s before attempt 2, 20s before attempt 3.
 const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
+const VOLATILE_BACKUP_SUMMARY_DETAIL =
+  "live sessions, cron logs, queues, runtime caches, browser caches, sockets, pid/tmp/lock files";
 
 function isTarEofRaceError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
@@ -443,7 +445,7 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
       lines.push(
         `Skipped ${result.skippedVolatileCount} volatile file${
           result.skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (${VOLATILE_BACKUP_SUMMARY_DETAIL}).`,
       );
     }
     if (result.verified) {
@@ -906,7 +908,7 @@ export async function createBackupArchive(
       opts.log?.(
         `Backup skipped ${skippedVolatileCount} volatile file${
           skippedVolatileCount === 1 ? "" : "s"
-        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+        } (${VOLATILE_BACKUP_SUMMARY_DETAIL}).`,
       );
     }
     await publishTempArchive({ tempArchivePath, outputPath });

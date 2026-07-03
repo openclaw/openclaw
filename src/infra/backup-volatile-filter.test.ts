@@ -24,10 +24,30 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/tmp/pending.tmp`, true],
     [`${stateDir}/delivery-queue/pending.tmp`, true],
     [`${stateDir}/session-delivery-queue/pending.tmp`, true],
+    // volatile: agent runtime, browser caches, retired archives, and sidecars
+    [`${stateDir}/agents/main/agent/cache/provider.json`, true],
+    [`${stateDir}/agents/main/agent/shell-snapshots/bash.json`, true],
+    [`${stateDir}/agents/main/agent/shell_snapshots/zsh.json`, true],
+    [`${stateDir}/agents/main/agent/tmp/upload.bin`, true],
+    [`${stateDir}/cache/shell-snapshots/startup.json`, true],
+    [`${stateDir}/browser/openclaw/user-data/Default/Cache/data_0`, true],
+    [`${stateDir}/browser/openclaw/user-data/Default/Code Cache/js/index`, true],
+    [`${stateDir}/browser/openclaw/user-data/Default/Service Worker/CacheStorage/index`, true],
+    [`${stateDir}/browser/openclaw/user-data/Default/Web Applications/_crx/app.ico`, true],
+    [`${stateDir}/archived/2026-01-01/openclaw-backup.tar.gz`, true],
+    [`${stateDir}/state/openclaw.sqlite-wal`, true],
+    [`${stateDir}/state/openclaw.sqlite-shm`, true],
+    [`${stateDir}/state/openclaw.sqlite-journal`, true],
+    [`${stateDir}/locks/backup.lock`, true],
+    [`${stateDir}/downloads/archive.partial`, true],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
     [`${stateDir}/agents/main/sessions/sessions.json`, false],
+    [`${stateDir}/agents/main/agent/auth-profiles.json`, false],
+    [`${stateDir}/browser/openclaw/user-data/Default/Preferences`, false],
+    [`${stateDir}/browser/openclaw/user-data/Default/Login Data`, false],
+    [`${stateDir}/browser/cache/user-data/Default/Preferences`, false],
     // non-volatile: cron definitions
     [`${stateDir}/cron/jobs.json`, false],
     // non-volatile: cron runs but wrong extension
@@ -53,7 +73,9 @@ describe("isVolatileBackupPath", () => {
   it("does not skip transient extensions without a state anchor", () => {
     expect(isVolatileBackupPath("/any/path/daemon.sock", { stateDirs: [] })).toBe(false);
     expect(isVolatileBackupPath("/any/path/daemon.pid", { stateDirs: [] })).toBe(false);
+    expect(isVolatileBackupPath("/any/path/backup.lock", { stateDirs: [] })).toBe(false);
     expect(isVolatileBackupPath("/any/path/Cargo.lock", { stateDirs: [] })).toBe(false);
+    expect(isVolatileBackupPath("/any/path/main.sqlite-wal", { stateDirs: [] })).toBe(false);
   });
 
   it("does not match paths that escape the anchor via `..`", () => {

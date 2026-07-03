@@ -12,7 +12,22 @@ import path from "node:path";
  * partial tail of a live log has no restoration value.
  */
 
-const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
+const STATE_TRANSIENT_EXTENSIONS = new Set([".lock", ".partial", ".pid", ".sock", ".tmp"]);
+const STATE_TRANSIENT_SUFFIXES = ["-journal", "-shm", "-wal"] as const;
+const AGENT_RUNTIME_VOLATILE_DIRS = new Set(["cache", "shell_snapshots", "shell-snapshots", "tmp"]);
+const BROWSER_CACHE_DIRS = new Set([
+  "blob_storage",
+  "cache",
+  "cachestorage",
+  "cachedata",
+  "cache storage",
+  "code cache",
+  "gpucache",
+  "grshadercache",
+  "shadercache",
+  "web applications",
+  "webrtc event logs",
+]);
 
 function normalizePosix(input: string): string {
   if (!input) {
@@ -40,6 +55,11 @@ function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): 
   return extensions.has(path.posix.extname(filePosix).toLowerCase());
 }
 
+function hasTransientStateSuffix(filePosix: string): boolean {
+  const lowerFilePosix = filePosix.toLowerCase();
+  return STATE_TRANSIENT_SUFFIXES.some((suffix) => lowerFilePosix.endsWith(suffix));
+}
+
 function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string): boolean {
   const agentsRoot = path.posix.join(stateDirPosix, "agents");
   if (!isUnder(filePosix, agentsRoot)) {
@@ -48,6 +68,40 @@ function isAgentSessionTranscriptPath(filePosix: string, stateDirPosix: string):
   const relative = path.posix.relative(agentsRoot, filePosix);
   const parts = relative.split("/").filter(Boolean);
   return parts.length >= 3 && parts[1] === "sessions";
+}
+
+function isAgentRuntimeVolatilePath(filePosix: string, stateDirPosix: string): boolean {
+  const agentsRoot = path.posix.join(stateDirPosix, "agents");
+  if (!isUnder(filePosix, agentsRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(agentsRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  return parts.length >= 3 && parts[1] === "agent" && AGENT_RUNTIME_VOLATILE_DIRS.has(parts[2]);
+}
+
+function isShellSnapshotCachePath(filePosix: string, stateDirPosix: string): boolean {
+  const cacheRoot = path.posix.join(stateDirPosix, "cache");
+  if (!isUnder(filePosix, cacheRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(cacheRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  return parts[0] === "shell-snapshots" || parts[0] === "shell_snapshots";
+}
+
+function isBrowserCachePath(filePosix: string, stateDirPosix: string): boolean {
+  const browserRoot = path.posix.join(stateDirPosix, "browser");
+  if (!isUnder(filePosix, browserRoot)) {
+    return false;
+  }
+  const relative = path.posix.relative(browserRoot, filePosix);
+  const parts = relative.split("/").filter(Boolean);
+  const userDataIndex = parts.findIndex((part) => part.toLowerCase() === "user-data");
+  if (userDataIndex < 0) {
+    return false;
+  }
+  return parts.slice(userDataIndex + 1).some((part) => BROWSER_CACHE_DIRS.has(part.toLowerCase()));
 }
 
 function filePathCandidates(input: string): string[] {
@@ -75,7 +129,11 @@ type VolatileFilterPlan = {
  *   - `{stateDir}/cron/runs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/logs/**`/`*.{jsonl,log}`
  *   - `{stateDir}/{delivery-queue,session-delivery-queue}/**`/`*.{json,delivered,tmp}`
- *   - `{stateDir}/**`/`*.{sock,pid,tmp}`
+ *   - `{stateDir}/agents/<agentId>/agent/{cache,shell-snapshots,tmp}/**`
+ *   - `{stateDir}/cache/shell-snapshots/**`
+ *   - `{stateDir}/browser/**` cache/resource-cache directories
+ *   - `{stateDir}/archived/**`
+ *   - `{stateDir}/**`/`*.{lock,partial,pid,sock,tmp}` and `*-{journal,shm,wal}`
  */
 export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterPlan): boolean {
   if (!absolutePath) {
@@ -122,9 +180,27 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         }
       }
 
+      if (isAgentRuntimeVolatilePath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      if (isShellSnapshotCachePath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      if (isBrowserCachePath(filePosix, stateDirPosix)) {
+        return true;
+      }
+
+      const archivedRoot = path.posix.join(stateDirPosix, "archived");
+      if (isUnder(filePosix, archivedRoot)) {
+        return true;
+      }
+
       if (
         isUnder(filePosix, stateDirPosix) &&
-        hasExtensionInSet(filePosix, STATE_TRANSIENT_EXTENSIONS)
+        (hasExtensionInSet(filePosix, STATE_TRANSIENT_EXTENSIONS) ||
+          hasTransientStateSuffix(filePosix))
       ) {
         return true;
       }
