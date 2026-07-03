@@ -1,11 +1,102 @@
 // Normalizes error objects for codes, names, messages, and redacted logs.
 import { redactSensitiveText } from "../logging/redact.js";
 
-export function extractErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
+const nativeErrorStackGetter = Reflect.get(
+  Object.getOwnPropertyDescriptor(new Error(), "stack") ?? {},
+  "get",
+);
+
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" || typeof value === "function") && value !== null;
+}
+
+function isError(value: unknown): value is Error {
+  try {
+    return value instanceof Error;
+  } catch {
+    return false;
+  }
+}
+
+function isDomException(value: unknown): value is DOMException {
+  try {
+    return value instanceof DOMException;
+  } catch {
+    return false;
+  }
+}
+
+function readDataProperty(value: unknown, key: PropertyKey): unknown {
+  if (!isObjectLike(value)) {
     return undefined;
   }
-  const code = (err as { code?: unknown }).code;
+
+  const seen = new Set<object>();
+  let current: object | null = value;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    try {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor) {
+        if ("value" in descriptor) {
+          return descriptor.value;
+        }
+        const getter = Reflect.get(descriptor, "get");
+        if (typeof getter === "function" && getter === nativeErrorStackGetter && isError(value)) {
+          try {
+            return Reflect.apply(getter, value, []);
+          } catch {
+            return undefined;
+          }
+        }
+        if (
+          current === DOMException.prototype &&
+          typeof getter === "function" &&
+          isDomException(value)
+        ) {
+          try {
+            return Reflect.apply(getter, value, []);
+          } catch {
+            return undefined;
+          }
+        }
+      }
+      current = Object.getPrototypeOf(current);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function stringifyUnknownValue(value: unknown): string {
+  if (
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch {
+    // Fall through to a stable object tag when JSON serialization is unavailable.
+  }
+  try {
+    return Object.prototype.toString.call(value);
+  } catch {
+    return `[${typeof value}]`;
+  }
+}
+
+export function extractErrorCode(err: unknown): string | undefined {
+  const code = readDataProperty(err, "code");
   if (typeof code === "string") {
     return code;
   }
@@ -16,10 +107,7 @@ export function extractErrorCode(err: unknown): string | undefined {
 }
 
 export function readErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  const name = (err as { name?: unknown }).name;
+  const name = readDataProperty(err, "name");
   return typeof name === "string" ? name : "";
 }
 
@@ -56,41 +144,50 @@ export function collectErrorGraphCandidates(
  * Type guard for NodeJS.ErrnoException (any error with a `code` property).
  */
 export function isErrno(err: unknown): err is NodeJS.ErrnoException {
-  return Boolean(err && typeof err === "object" && "code" in err);
+  return readDataProperty(err, "code") !== undefined;
 }
 
 /**
  * Check if an error has a specific errno code.
  */
 export function hasErrnoCode(err: unknown, code: string): boolean {
-  return isErrno(err) && err.code === code;
+  return extractErrorCode(err) === code;
 }
 
 export function formatErrorMessage(err: unknown): string {
   let formatted: string;
-  if (err instanceof Error) {
-    formatted = err.message || err.name || "Error";
+  if (isError(err)) {
+    const message = readDataProperty(err, "message");
+    if (typeof message === "string" && message) {
+      formatted = message;
+    } else {
+      const name = readDataProperty(err, "name");
+      formatted = typeof name === "string" && name ? name : "Error";
+    }
     // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
-    let cause: unknown = err.cause;
+    let cause: unknown = readDataProperty(err, "cause");
     const seen = new Set<unknown>([err]);
     // Skip causes that repeat a message already emitted (e.g. coerceToFailoverError).
     const seenMessages = new Set<string>([formatted]);
-    const appendCauseMessage = (message: string): void => {
-      if (!message || seenMessages.has(message)) {
+    const appendCauseMessage = (causeMessage: string): void => {
+      if (!causeMessage || seenMessages.has(causeMessage)) {
         return;
       }
-      formatted += ` | ${message}`;
-      seenMessages.add(message);
+      formatted += ` | ${causeMessage}`;
+      seenMessages.add(causeMessage);
     };
     while (cause && !seen.has(cause)) {
       seen.add(cause);
-      if (cause instanceof Error) {
-        appendCauseMessage(cause.message);
+      if (isError(cause)) {
+        const causeMessage = readDataProperty(cause, "message");
+        if (typeof causeMessage === "string") {
+          appendCauseMessage(causeMessage);
+        }
         const code = extractErrorCode(cause);
         if (code) {
           appendCauseMessage(code);
         }
-        cause = cause.cause;
+        cause = readDataProperty(cause, "cause");
       } else if (typeof cause === "string") {
         appendCauseMessage(cause);
         break;
@@ -98,16 +195,8 @@ export function formatErrorMessage(err: unknown): string {
         break;
       }
     }
-  } else if (typeof err === "string") {
-    formatted = err;
-  } else if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
-    formatted = String(err);
   } else {
-    try {
-      formatted = JSON.stringify(err);
-    } catch {
-      formatted = Object.prototype.toString.call(err);
-    }
+    formatted = stringifyUnknownValue(err);
   }
   // Security: best-effort token redaction before returning/logging.
   return redactSensitiveText(formatted);
@@ -118,32 +207,39 @@ export function formatErrorMessage(err: unknown): string {
  * a flattened error chain. Returns `[object Object]`-free text without throwing.
  */
 export function stringifyNonErrorCause(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
+  return stringifyUnknownValue(value);
+}
+
+function copyErrorDataProperties(source: object, target: Error): void {
   try {
-    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
+    for (const key of Reflect.ownKeys(source)) {
+      const descriptor = Object.getOwnPropertyDescriptor(source, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        continue;
+      }
+      if (
+        (key === "message" || key === "name" || key === "stack") &&
+        typeof descriptor.value !== "string"
+      ) {
+        continue;
+      }
+      Object.defineProperty(target, key, { ...descriptor, configurable: true });
+    }
   } catch {
-    return Object.prototype.toString.call(value);
+    // Preserve the normalized Error when a hostile object rejects reflection.
   }
 }
 
 export function toErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
+  if (isError(value)) {
     return value;
   }
   if (typeof value === "string") {
     return new Error(value);
   }
   const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
+  if (isObjectLike(value)) {
+    copyErrorDataProperties(value, error);
   }
   return error;
 }
@@ -152,9 +248,17 @@ export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {
     return formatErrorMessage(err);
   }
-  if (err instanceof Error) {
-    const stack = err.stack ?? err.message ?? err.name;
-    return redactSensitiveText(stack);
+  if (isError(err)) {
+    const stack = readDataProperty(err, "stack");
+    if (typeof stack === "string" && stack) {
+      return redactSensitiveText(stack);
+    }
+    const message = readDataProperty(err, "message");
+    if (typeof message === "string" && message) {
+      return redactSensitiveText(message);
+    }
+    const name = readDataProperty(err, "name");
+    return redactSensitiveText(typeof name === "string" && name ? name : "Error");
   }
   return formatErrorMessage(err);
 }
