@@ -31,6 +31,17 @@ function createCompletionProgram(): Command {
   sessions.option("--verbose", "Verbose output");
   sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
 
+  const infer = program.command("infer").alias("capability").description("Infer capabilities");
+  infer.option("--json", "JSON output");
+  infer.command("scan").description("Scan project");
+
+  const cron = program.command("cron").description("Cron commands");
+  cron.command("add").alias("create").description("Add a cron job").option("--json", "JSON output");
+  cron.command("rm").aliases(["remove", "delete"]).description("Remove a cron job");
+
+  const plugins = program.command("plugins").description("Plugin commands");
+  plugins.command("inspect").alias("info").description("Inspect plugin");
+
   return program;
 }
 
@@ -44,6 +55,18 @@ describe("completion-cli", () => {
     expect(script).toContain("--force[Force the action]");
     expect(script).toContain("\\`models status --json\\`");
     expect(script).toContain("\\$OPENCLAW_STATE_DIR");
+  });
+
+  it("includes command aliases in zsh completions and dispatch cases", () => {
+    const script = getCompletionScript("zsh", createCompletionProgram());
+
+    expect(script).toContain("'capability[Infer capabilities]'");
+    expect(script).toContain("(infer|capability) _openclaw_infer ;;");
+    expect(script).toContain("'create[Add a cron job]'");
+    expect(script).toContain("(add|create) _openclaw_cron_add ;;");
+    expect(script).toContain("'remove[Remove a cron job]'");
+    expect(script).toContain("'delete[Remove a cron job]'");
+    expect(script).toContain("'info[Inspect plugin]'");
   });
 
   it("escapes zsh option descriptions for double-quoted arguments specs", () => {
@@ -122,6 +145,17 @@ describe("completion-cli", () => {
     expect(script).not.toContain("'-t,'");
   });
 
+  it("includes command aliases in PowerShell completions and command paths", () => {
+    const script = getCompletionScript("powershell", createCompletionProgram());
+
+    expect(script).toContain("'infer','capability'");
+    expect(script).toContain("if ($commandPath -eq 'capability') {");
+    expect(script).toContain("$completions = @('scan','--json')");
+    expect(script).toContain("$completions = @('add','create','rm','remove','delete')");
+    expect(script).toContain("if ($commandPath -eq 'cron create') {");
+    expect(script).toContain("$completions = @('inspect','info')");
+  });
+
   it("generates valid PowerShell root arrays when commands or options are empty", () => {
     const commandsOnly = new Command().name("openclaw");
     commandsOnly.command("status");
@@ -152,6 +186,23 @@ describe("completion-cli", () => {
     expect(script).toContain("if contains -- $flag $value_options");
   });
 
+  it("includes command aliases in fish completions and alias path conditions", () => {
+    const script = getCompletionScript("fish", createCompletionProgram());
+
+    expect(script).toContain(
+      'complete -c openclaw -n "__fish_use_subcommand" -a "capability" -d \'Infer capabilities\'',
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches cron --" -a "create" -d \'Add a cron job\'',
+    );
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches cron add --; or __openclaw_command_path_matches cron create --\" -l json -d 'JSON output'",
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches plugins --" -a "info" -d \'Inspect plugin\'',
+    );
+  });
+
   it("scopes fish value-taking option skips to the active command path", () => {
     const script = getCompletionScript("fish", createCompletionProgram());
 
@@ -168,5 +219,15 @@ describe("completion-cli", () => {
 
     expect(script).toContain("--token");
     expect(script).not.toContain("-t,");
+  });
+
+  it("includes command aliases in Bash completions and case labels", () => {
+    const script = getCompletionScript("bash", createCompletionProgram());
+
+    expect(script).toContain("infer capability");
+    expect(script).toContain("infer|capability)");
+    expect(script).toContain('opts="add create rm remove delete');
+    expect(script).toContain("add create");
+    expect(script).toContain("inspect info");
   });
 });
