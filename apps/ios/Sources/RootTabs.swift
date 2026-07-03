@@ -1293,6 +1293,7 @@ extension RootTabs {
         let requestID = self.appModel.gatewaySetupRequestID
         guard requestID != 0, requestID != self.handledGatewaySetupRequestID else { return }
         self.handledGatewaySetupRequestID = requestID
+        guard !self.showOnboarding else { return }
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true

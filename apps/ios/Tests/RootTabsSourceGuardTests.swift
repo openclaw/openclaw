@@ -789,6 +789,14 @@ struct RootTabsSourceGuardTests {
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
             to: "private var gatewayToastAnimation: Animation?")
+        let gatewaySetupSource = try Self.extract(
+            rootSource,
+            from: "private func maybeOpenSettingsForGatewaySetup()",
+            to: "private func maybeRequestLocalNetworkAccess")
+        let handledGatewaySetup = try #require(
+            gatewaySetupSource.range(of: "self.handledGatewaySetupRequestID = requestID"))
+        let onboardingSetupGuard = try #require(
+            gatewaySetupSource.range(of: "guard !self.showOnboarding else { return }"))
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -844,6 +852,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
+        #expect(handledGatewaySetup.lowerBound < onboardingSetupGuard.lowerBound)
         #expect(settingsSource.contains("QRScannerView("))
         #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
         #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
