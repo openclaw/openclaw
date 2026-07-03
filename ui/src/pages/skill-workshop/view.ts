@@ -74,6 +74,7 @@ export type SkillWorkshopProps = {
   revisionKey: string | null;
   revisionDraft: string;
   assistantName: string;
+  workshopAgentName: string;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
   onQueryChange: (query: string) => void;
@@ -626,7 +627,7 @@ function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
 }
 
 function renderWorkshopEmptyState(props: SkillWorkshopProps) {
-  const assistantName = props.assistantName.trim() || "Your agent";
+  const assistantName = resolveSkillWorkshopAgentName(props, "Your agent");
   return html`
     <div class="sw-empty-state">
       <section class="sw-empty-state__panel" aria-label="No Skill Workshop proposals">
@@ -642,6 +643,10 @@ function renderWorkshopEmptyState(props: SkillWorkshopProps) {
       </section>
     </div>
   `;
+}
+
+function resolveSkillWorkshopAgentName(props: SkillWorkshopProps, fallback: string): string {
+  return props.workshopAgentName.trim() || props.assistantName.trim() || fallback;
 }
 
 function renderToday(
@@ -673,7 +678,7 @@ function renderToday(
   const isPending = hero.status === "pending";
   const busy = props.actionBusy?.key === hero.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
-  const assistantName = props.assistantName.trim() || "agent";
+  const assistantName = resolveSkillWorkshopAgentName(props, "agent");
 
   return html`
     <div class="sw-today">

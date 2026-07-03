@@ -1,55 +1,118 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 
+type AgentIdentityGatewaySnapshot = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+};
+
 type AgentIdentityGateway = {
-  readonly snapshot: {
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-  };
+  readonly snapshot: AgentIdentityGatewaySnapshot;
+  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
 };
 
 export type AgentIdentityCapability = {
-  getMany: (agentIds: readonly string[]) => Promise<Record<string, AgentIdentityResult>>;
+  get: (agentId: string | null | undefined) => AgentIdentityResult | null;
+  entries: () => AgentIdentityResult[];
+  ensure: (agentIds: readonly (string | null | undefined)[]) => Promise<void>;
+  subscribe: (listener: () => void) => () => void;
 };
 
 export function createAgentIdentityCapability(
   gateway: AgentIdentityGateway,
 ): AgentIdentityCapability {
-  let cachedClient: GatewayBrowserClient | null = null;
+  let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   const identities = new Map<string, AgentIdentityResult>();
+  const inFlight = new Map<string, Promise<AgentIdentityResult | null>>();
+  const listeners = new Set<() => void>();
+
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
+
+  const resetForClient = (client: GatewayBrowserClient | null) => {
+    if (client === cachedClient) {
+      return;
+    }
+    const hadIdentities = identities.size > 0;
+    cachedClient = client;
+    identities.clear();
+    inFlight.clear();
+    if (hadIdentities) {
+      publish();
+    }
+  };
+
+  gateway.subscribe((snapshot) => resetForClient(snapshot.client));
+
+  const normalizeIds = (agentIds: readonly (string | null | undefined)[]) => [
+    ...new Set(
+      agentIds
+        .map((agentId) => agentId?.trim())
+        .filter((agentId): agentId is string => Boolean(agentId)),
+    ),
+  ];
+
+  const fetchIdentity = (
+    client: GatewayBrowserClient,
+    agentId: string,
+  ): Promise<AgentIdentityResult | null> => {
+    const active = inFlight.get(agentId);
+    if (active) {
+      return active;
+    }
+    const request = client
+      .request<AgentIdentityResult | null>("agent.identity.get", { agentId })
+      .catch(() => null)
+      .finally(() => {
+        if (inFlight.get(agentId) === request) {
+          inFlight.delete(agentId);
+        }
+      });
+    inFlight.set(agentId, request);
+    return request;
+  };
 
   return {
-    async getMany(agentIds) {
+    get(agentId) {
+      const normalized = agentId?.trim();
+      return normalized ? (identities.get(normalized) ?? null) : null;
+    },
+    entries() {
+      return [...identities.values()];
+    },
+    async ensure(agentIds) {
       const client = gateway.snapshot.client;
       if (!client || !gateway.snapshot.connected) {
-        return {};
+        return;
       }
-      if (client !== cachedClient) {
-        cachedClient = client;
-        identities.clear();
+      resetForClient(client);
+      const missing = normalizeIds(agentIds).filter((agentId) => !identities.has(agentId));
+      if (missing.length === 0) {
+        return;
       }
-      const missing = [...new Set(agentIds)].filter((agentId) => !identities.has(agentId));
       const results = await Promise.all(
-        missing.map(async (agentId) => {
-          try {
-            return [
-              agentId,
-              await client.request<AgentIdentityResult | null>("agent.identity.get", { agentId }),
-            ] as const;
-          } catch {
-            return [agentId, null] as const;
-          }
-        }),
+        missing.map(async (agentId) => [agentId, await fetchIdentity(client, agentId)] as const),
       );
       if (gateway.snapshot.client !== client) {
-        return {};
+        return;
       }
+      let changed = false;
       for (const [agentId, identity] of results) {
         if (identity) {
           identities.set(agentId, identity);
+          changed = true;
         }
       }
-      return Object.fromEntries(identities);
+      if (changed) {
+        publish();
+      }
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
   };
 }

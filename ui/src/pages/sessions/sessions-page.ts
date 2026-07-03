@@ -27,7 +27,6 @@ export class SessionsPage extends LitElement {
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
   @state() private error: string | null = null;
-  @state() private agentIdentityById: Record<string, AgentIdentityResult> = {};
   @state() private activeMinutes = "60";
   @state() private limit = "50";
   @state() private includeGlobal = true;
@@ -47,8 +46,8 @@ export class SessionsPage extends LitElement {
   @state() private checkpointErrorByKey: Record<string, string> = {};
 
   private stopSessionSubscription?: () => void;
+  private stopAgentIdentitySubscription?: () => void;
   private sessionRequestId = 0;
-  private identityRequestId = 0;
   private checkpointRequestId = 0;
 
   override createRenderRoot() {
@@ -58,17 +57,20 @@ export class SessionsPage extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.startSessionState();
+    this.startAgentIdentityState();
   }
 
   override updated() {
     this.startSessionState();
+    this.startAgentIdentityState();
   }
 
   override disconnectedCallback() {
     this.stopSessionSubscription?.();
     this.stopSessionSubscription = undefined;
+    this.stopAgentIdentitySubscription?.();
+    this.stopAgentIdentitySubscription = undefined;
     this.sessionRequestId += 1;
-    this.identityRequestId += 1;
     this.checkpointRequestId += 1;
     super.disconnectedCallback();
   }
@@ -84,6 +86,16 @@ export class SessionsPage extends LitElement {
       }
     });
     void this.loadSessions();
+  }
+
+  private startAgentIdentityState() {
+    const context = this.context;
+    if (!context || this.stopAgentIdentitySubscription) {
+      return;
+    }
+    this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(() =>
+      this.requestUpdate(),
+    );
   }
 
   private sessionAgentId(key: string): string | undefined {
@@ -126,7 +138,7 @@ export class SessionsPage extends LitElement {
         return;
       }
       this.result = result ? filterSessionRows(result, { showArchived: this.showArchived }) : null;
-      void this.loadAgentIdentities(this.result);
+      this.ensureAgentIdentities(this.result);
       const checkpointKey = this.reconcileCheckpointCache(previous, this.result);
       if (checkpointKey) {
         void this.loadCheckpoint(checkpointKey);
@@ -142,29 +154,42 @@ export class SessionsPage extends LitElement {
     }
   }
 
-  private async loadAgentIdentities(result: SessionsListResult | null) {
+  private ensureAgentIdentities(result: SessionsListResult | null) {
     const context = this.context;
     if (!context || !result) {
-      this.identityRequestId += 1;
-      this.agentIdentityById = {};
       return;
     }
-    const agentIds = [
-      ...new Set(
-        result.sessions
-          .map((row) => parseAgentSessionKey(row.key)?.agentId)
-          .filter((agentId): agentId is string => Boolean(agentId)),
-      ),
-    ].filter((agentId) => !this.agentIdentityById[agentId]);
+    const agentIds = this.sessionAgentIds(result).filter(
+      (agentId) => !context.agentIdentity.get(agentId),
+    );
     if (agentIds.length === 0) {
       return;
     }
-    const requestId = ++this.identityRequestId;
-    const identities = await context.agentIdentity.getMany(agentIds);
-    if (requestId !== this.identityRequestId || this.context !== context) {
-      return;
+    void context.agentIdentity.ensure(agentIds);
+  }
+
+  private sessionAgentIds(result: SessionsListResult | null): string[] {
+    return [
+      ...new Set(
+        (result?.sessions ?? [])
+          .map((row) => parseAgentSessionKey(row.key)?.agentId)
+          .filter((agentId): agentId is string => Boolean(agentId)),
+      ),
+    ];
+  }
+
+  private sessionAgentIdentityById(
+    result: SessionsListResult | null,
+  ): Record<string, AgentIdentityResult> {
+    const context = this.context;
+    if (!context) {
+      return {};
     }
-    this.agentIdentityById = { ...this.agentIdentityById, ...identities };
+    return Object.fromEntries(
+      this.sessionAgentIds(result)
+        .map((agentId) => [agentId, context.agentIdentity.get(agentId)] as const)
+        .filter((entry): entry is readonly [string, AgentIdentityResult] => Boolean(entry[1])),
+    );
   }
 
   private reconcileCheckpointCache(
@@ -365,7 +390,7 @@ export class SessionsPage extends LitElement {
       filtersCollapsed: this.filtersCollapsed,
       basePath: context.basePath,
       searchQuery: this.searchQuery,
-      agentIdentityById: this.agentIdentityById,
+      agentIdentityById: this.sessionAgentIdentityById(this.result),
       sortColumn: this.sortColumn,
       sortDir: this.sortDir,
       page: this.page,

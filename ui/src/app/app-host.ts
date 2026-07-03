@@ -9,7 +9,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import type { RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
@@ -25,8 +25,6 @@ import {
 } from "./context.ts";
 import "./router-outlet.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
-
-const ACTIVE_ROUTE_IDS = ["chat"] as const;
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -324,11 +322,11 @@ class OpenClawShell extends LitElement {
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
     const context = this.context;
-    if (!context || routeId !== "chat") {
+    if (!context || !isRouteId(routeId)) {
       return;
     }
     this.closeNavDrawer({ restoreFocus: true });
-    context.navigate("chat", this.chatNavigationOptions(options));
+    context.navigate(routeId, routeId === "chat" ? this.chatNavigationOptions(options) : options);
   }
 
   private replaceChatWithCurrentSession() {
@@ -454,7 +452,7 @@ class OpenClawShell extends LitElement {
           <openclaw-app-sidebar
             .basePath=${context.basePath}
             .activeRouteId=${activeRoute}
-            .enabledRouteIds=${ACTIVE_ROUTE_IDS}
+            .enabledRouteIds=${APP_ROUTE_IDS}
             .routeLocation=${this.routeState.location}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
@@ -487,7 +485,7 @@ class OpenClawShell extends LitElement {
             .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
               this.navigate(routeId, options)}
             .onPreloadRoute=${(routeId: string) =>
-              routeId === "chat" ? context.preload(routeId) : Promise.resolve()}
+              isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>
         </div>
         <main class="content ${activeRoute === "chat" ? "content--chat" : ""}">

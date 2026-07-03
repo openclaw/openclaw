@@ -5,6 +5,7 @@ import { property } from "lit/decorators.js";
 import { applicationContext } from "../../app/context.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import type { AgentIdentityCapability } from "../../lib/agents/identity.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -27,6 +28,7 @@ import { filterSkillWorkshopProposals } from "./view.ts";
 
 export type SkillWorkshopPageContext = SkillWorkshopContext & {
   assistantName: string;
+  agentIdentity: AgentIdentityCapability;
 };
 
 export type SkillWorkshopRevisionRequest = (
@@ -37,6 +39,7 @@ export type SkillWorkshopRevisionRequest = (
 
 type SkillWorkshopRenderContext = {
   context: SkillWorkshopPageContext;
+  workshopAgentName: string;
   onRevisionRequest?: SkillWorkshopRevisionRequest;
 };
 
@@ -66,7 +69,7 @@ function setSkillWorkshopMode(
   requestUpdate();
 }
 
-function renderSkillWorkshopHeaderControls(state: SkillWorkshopState) {
+function renderSkillWorkshopHeaderControls(state: SkillWorkshopState, requestUpdate: () => void) {
   const useCurrentChatLabel = t("skillWorkshop.header.useCurrentChat");
   return html`
     <div class="sw-header-controls">
@@ -131,7 +134,7 @@ function renderSkillWorkshopHeaderControls(state: SkillWorkshopState) {
 
 export function renderSkillWorkshopPage(
   state: SkillWorkshopState,
-  { context, onRevisionRequest }: SkillWorkshopRenderContext,
+  { context, workshopAgentName, onRevisionRequest }: SkillWorkshopRenderContext,
   requestUpdate: () => void,
 ) {
   const pageClass =
@@ -146,7 +149,7 @@ export function renderSkillWorkshopPage(
           <div class="page-title">${t("tabs.skillWorkshop")}</div>
           <div class="page-sub">${t("subtitles.skillWorkshop")}</div>
         </div>
-        <div class="page-meta">${renderSkillWorkshopHeaderControls(state)}</div>
+        <div class="page-meta">${renderSkillWorkshopHeaderControls(state, requestUpdate)}</div>
       </section>
       ${(() => {
         const visibleProposals = filterSkillWorkshopProposals(
@@ -196,6 +199,7 @@ export function renderSkillWorkshopPage(
           revisionKey: state.skillWorkshopRevisionKey,
           revisionDraft: state.skillWorkshopRevisionDraft,
           assistantName: context.assistantName,
+          workshopAgentName,
           counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
           onStatusFilterChange: (status) => {
             state.skillWorkshopStatusFilter = status;
@@ -295,6 +299,12 @@ export class SkillWorkshopPage extends LitElement {
 
   private state?: SkillWorkshopState;
   private stopGatewaySubscription?: () => void;
+  private stopAgentIdentitySubscription?: () => void;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.startGatewaySubscription();
+  }
 
   override willUpdate() {
     if (!this.state && this.context) {
@@ -305,27 +315,59 @@ export class SkillWorkshopPage extends LitElement {
     }
   }
 
-  override firstUpdated() {
+  override updated() {
+    this.startGatewaySubscription();
+    this.startAgentIdentitySubscription();
+    this.ensureWorkshopAgentIdentity();
+  }
+
+  private readonly requestPageUpdate = () => {
+    if (this.isConnected) {
+      this.requestUpdate();
+    }
+  };
+
+  private startGatewaySubscription(): void {
     const context = this.context;
-    if (!this.state || !context) {
+    if (!this.state || !context || this.stopGatewaySubscription) {
       return;
     }
-    this.stopGatewaySubscription = context.gateway.subscribe(() => {
-      if (!this.state || !this.context || !this.context.gateway.snapshot.connected) {
+    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
+      if (!snapshot.connected || !this.state || !this.context) {
         return;
       }
-      void loadSkillWorkshopProposals(this.state, this.context).finally(() => this.requestUpdate());
+      void loadSkillWorkshopProposals(this.state, this.context).finally(this.requestPageUpdate);
     });
     if (!this.data?.skillWorkshopLoaded && context.gateway.snapshot.connected) {
-      void loadSkillWorkshopProposals(this.state, context).finally(() => this.requestUpdate());
+      void loadSkillWorkshopProposals(this.state, context).finally(this.requestPageUpdate);
     }
+  }
+
+  private startAgentIdentitySubscription(): void {
+    const context = this.context;
+    if (!context || this.stopAgentIdentitySubscription) {
+      return;
+    }
+    this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(this.requestPageUpdate);
+  }
+
+  private ensureWorkshopAgentIdentity(): void {
+    const context = this.context;
+    const agentId = this.state?.skillWorkshopAgentId;
+    if (!context || !agentId || context.agentIdentity.get(agentId)) {
+      return;
+    }
+    void context.agentIdentity.ensure([agentId]);
   }
 
   override disconnectedCallback() {
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    this.stopAgentIdentitySubscription?.();
+    this.stopAgentIdentitySubscription = undefined;
     if (this.state?.skillWorkshopActionNoticeTimer) {
       globalThis.clearTimeout(this.state.skillWorkshopActionNoticeTimer);
+      this.state.skillWorkshopActionNoticeTimer = null;
     }
     super.disconnectedCallback();
   }
@@ -334,8 +376,13 @@ export class SkillWorkshopPage extends LitElement {
     return this.state && this.context
       ? renderSkillWorkshopPage(
           this.state,
-          { context: this.context, onRevisionRequest: this.onRevisionRequest },
-          () => this.requestUpdate(),
+          {
+            context: this.context,
+            workshopAgentName:
+              this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
+            onRevisionRequest: this.onRevisionRequest,
+          },
+          this.requestPageUpdate,
         )
       : nothing;
   }

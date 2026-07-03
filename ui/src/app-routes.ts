@@ -16,6 +16,7 @@ import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openc
 import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
 import type { ApplicationContext } from "./app/context.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
+import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 
 export type AppRouteModule = {
   render: (data: unknown) => unknown;
@@ -34,10 +35,15 @@ export type AppRoute = PageDefinition<
   unknown
 >;
 
-export const APP_ROUTE_TREE = [chatPage] as const;
+export const APP_ROUTE_TREE = [chatPage, skillWorkshopPage] as const;
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
+export const APP_ROUTE_IDS = APP_ROUTE_TREE.map((route) => route.id) as readonly RouteId[];
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+
+export function isRouteId(routeId: string): routeId is RouteId {
+  return APP_ROUTE_IDS.includes(routeId as RouteId);
+}
 
 export function createApplicationRouter(): ApplicationRouter {
   return createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule, unknown>({
