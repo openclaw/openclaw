@@ -693,6 +693,25 @@ describe("sendMessageDiscord", () => {
     expectReplyReference(firstBody, "orig-123");
     expectReplyReference(secondBody, "orig-123");
   });
+
+  it("falls back to text-only send when Discord rejects oversized media (#99021)", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    const oversized = Object.assign(new Error("Request entity too large"), { status: 413 });
+    postMock
+      .mockRejectedValueOnce(oversized)
+      .mockResolvedValueOnce({ id: "fallback-1", channel_id: "789" });
+
+    const result = await sendMessageDiscord("channel:789", "song ready", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrl: "file:///tmp/song.mp3",
+    });
+
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect(result?.messageId).toBe("fallback-1");
+  });
 });
 
 describe("reactMessageDiscord", () => {

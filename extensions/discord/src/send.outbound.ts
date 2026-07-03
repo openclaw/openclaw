@@ -98,6 +98,17 @@ function resolveDiscordSuppressEmbeds(params: {
   return params.override ?? params.configured ?? true;
 }
 
+function isDiscordOversizedMediaError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const status =
+    "status" in err
+      ? (err as { status?: unknown }).status
+      : "statusCode" in err
+        ? (err as { statusCode?: unknown }).statusCode
+        : undefined;
+  return status === 413;
+}
+
 /** Discord thread names are capped at 100 characters. */
 const DISCORD_THREAD_NAME_LIMIT = 100;
 
@@ -358,13 +369,30 @@ export async function sendMessageDiscord(
       );
     }
   } catch (err) {
-    throw await buildDiscordSendError(err, {
-      channelId,
-      cfg,
-      rest,
-      token,
-      hasMedia: Boolean(opts.mediaUrl),
-    });
+    if (opts.mediaUrl && isDiscordOversizedMediaError(err) && textWithMentions.trim()) {
+      result = await sendDiscordText(
+        rest,
+        channelId,
+        textWithMentions,
+        opts.replyTo,
+        request,
+        maxLinesPerMessage,
+        opts.components,
+        opts.embeds,
+        chunkMode,
+        opts.silent,
+        suppressEmbeds,
+        textLimit,
+      );
+    } else {
+      throw await buildDiscordSendError(err, {
+        channelId,
+        cfg,
+        rest,
+        token,
+        hasMedia: Boolean(opts.mediaUrl),
+      });
+    }
   }
 
   recordChannelActivity({
