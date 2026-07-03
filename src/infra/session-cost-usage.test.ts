@@ -1210,6 +1210,68 @@ describe("session cost usage", () => {
     });
   });
 
+  it("stores pricing fingerprint once at cache level, not per entry (#99511)", async () => {
+    const root = await makeSessionCostRoot("cost-cache-fingerprint-dedup");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionA = path.join(sessionsDir, "sess-fp-a.jsonl");
+    const sessionB = path.join(sessionsDir, "sess-fp-b.jsonl");
+
+    const assistantEntry = (timestamp: string, totalTokens: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(sessionA, `${assistantEntry("2026-02-05T12:00:00.000Z", 10)}\n`, "utf-8"),
+      fs.writeFile(sessionB, `${assistantEntry("2026-02-05T13:00:00.000Z", 20)}\n`, "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const raw = await fs.readFile(cachePath, "utf-8");
+      const cache = JSON.parse(raw) as {
+        version: number;
+        pricingFingerprint?: string;
+        files: Record<string, { pricingFingerprint?: string }>;
+      };
+
+      // Fingerprint stored once at top level
+      expect(typeof cache.pricingFingerprint).toBe("string");
+      expect(cache.pricingFingerprint).toBeTruthy();
+
+      // Entries stripped of per-entry fingerprint
+      const entries = Object.values(cache.files);
+      expect(entries.length).toBe(2);
+      for (const entry of entries) {
+        expect(entry).not.toHaveProperty("pricingFingerprint");
+      }
+
+      // Round-trip: load the cache and verify fingerprint is restored to entries
+      const { loadCostUsageSummaryFromCache } = await import("./session-cost-usage.js");
+      const summary = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(summary.cacheStatus?.status).toBe("warm");
+      expect(summary.totals.totalCost).toBeGreaterThan(0);
+    });
+  });
+
   it("preserves sessions usage range semantics when cached summaries span the range", async () => {
     const root = await makeSessionCostRoot("cost-cache-session-range");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
