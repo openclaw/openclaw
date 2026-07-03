@@ -1132,6 +1132,7 @@ export async function runSubagentAnnounceFlow(params: {
           agentId: parentAgentId,
         });
         try {
+          let parentTokensPersisted = false;
           await updateSessionStore(parentStorePath, (store) => {
             const parentEntry = store[targetRequesterSessionKey];
             if (parentEntry) {
@@ -1140,8 +1141,12 @@ export async function runSubagentAnnounceFlow(params: {
                   ? parentEntry.continuationChainTokens
                   : 0;
               parentEntry.continuationChainTokens = prev + accumulatedChildTokens;
+              parentTokensPersisted = true;
             }
           });
+          if (!parentTokensPersisted) {
+            throw new Error(`requester entry not found: ${targetRequesterSessionKey}`);
+          }
           defaultRuntime.log(
             `[subagent-chain-hop] Accumulated ${accumulatedChildTokens} tokens from ${params.childSessionKey} to parent chain cost`,
           );
@@ -1169,6 +1174,7 @@ export async function runSubagentAnnounceFlow(params: {
           agentId: childAgentId,
         });
         try {
+          let childTokensPersisted = false;
           await updateSessionStore(childStorePath, (store) => {
             const childStoreEntry = store[params.childSessionKey];
             if (childStoreEntry) {
@@ -1177,8 +1183,12 @@ export async function runSubagentAnnounceFlow(params: {
                   ? childStoreEntry.continuationChainTokens
                   : 0;
               childStoreEntry.continuationChainTokens = prev + accumulatedChildTokens;
+              childTokensPersisted = true;
             }
           });
+          if (!childTokensPersisted) {
+            throw new Error(`child entry not found: ${params.childSessionKey}`);
+          }
           invalidateSessionEntry(params.childSessionKey);
         } catch (err) {
           // Durable persist failed: the child entry's continuationChainTokens is
