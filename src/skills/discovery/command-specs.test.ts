@@ -57,7 +57,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       entries: [entry],
     });
     expect(specs).toHaveLength(1);
-    const desc = specs[0]!.description;
+    const desc = specs[0]?.description ?? "";
     // No replacement character from a split surrogate pair
     expect(desc).not.toContain("�");
     // Truncation marker present (description exceeded the limit)
@@ -82,7 +82,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       entries: [entry],
     });
     expect(specs).toHaveLength(1);
-    const desc = specs[0]!.description;
+    const desc = specs[0]?.description ?? "";
     expect(desc).not.toContain("�");
     expect(desc).toContain("…");
   });
