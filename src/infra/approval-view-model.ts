@@ -108,6 +108,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     pluginId: request.request.pluginId ?? null,
     toolName: request.request.toolName ?? null,
     severity: request.request.severity ?? "warning",
+    sessionKey: request.request.sessionKey ?? null,
   };
 }
 

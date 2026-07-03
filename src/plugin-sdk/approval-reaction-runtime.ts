@@ -300,6 +300,11 @@ function buildApprovalReactionPromptText(params: {
     if (view.agentId) {
       info.push(`Agent: ${view.agentId}`);
     }
+    if (view.sessionKey) {
+      // Disambiguates concurrent sessions of one agent, matching the other
+      // approval prompt surfaces; the value already ships on the envelope.
+      info.push(`Session: ${view.sessionKey}`);
+    }
     if (view.ask) {
       info.push(`Ask: ${view.ask}`);
     }
@@ -322,6 +327,10 @@ function buildApprovalReactionPromptText(params: {
     }
     if (view.agentId) {
       details.push(`Agent: ${view.agentId}`);
+    }
+    if (view.sessionKey) {
+      // Same session disambiguation as the exec reaction prompt above.
+      details.push(`Session: ${view.sessionKey}`);
     }
     details.push(`Expires in: ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
     details.push(`Full id: \`${view.approvalId}\``);
