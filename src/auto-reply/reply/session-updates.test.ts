@@ -1,4 +1,7 @@
 // Tests session update fanout and persisted lifecycle records.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
@@ -205,6 +208,30 @@ describe("compaction outcome tracking", () => {
     expect(entry.lastCompactionAt).toBe(3_000);
     expect(entry.lastCompactionOutcome).toBe("skipped");
     expect(entry.lastCompactionReason).toBe("below_threshold");
+  });
+
+  it("does not resurrect a session row deleted while compaction was in flight", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "session-updates-outcome-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    // Disk store no longer has the session (deleted/reset mid-compaction);
+    // the in-memory store still holds the stale entry.
+    fs.writeFileSync(storePath, JSON.stringify({}));
+    const sessionStore: Record<string, import("../../config/sessions/types.js").SessionEntry> = {
+      "agent:main:test": { sessionId: "sess-1", updatedAt: 100 },
+    };
+
+    await recordCompactionOutcome({
+      sessionStore,
+      sessionKey: "agent:main:test",
+      storePath,
+      outcome: "failed",
+      reason: "timeout",
+      now: 2_000,
+    });
+
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    expect(persisted["agent:main:test"]).toBeUndefined();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("ignores outcome records for unknown sessions", async () => {

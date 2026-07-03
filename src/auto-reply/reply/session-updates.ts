@@ -387,8 +387,9 @@ export async function recordCompactionOutcome(params: {
   const nextEntry = { ...entry, ...updates };
   sessionStore[sessionKey] = nextEntry;
   if (storePath) {
+    // No fallbackEntry: a metadata-only failed/skipped stamp must never
+    // resurrect a session row deleted/reset while compaction was in flight.
     const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
-      fallbackEntry: nextEntry,
       preserveActivity: true,
     });
     if (persistedEntry) {
