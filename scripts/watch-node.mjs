@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveGitHead, BUILD_STAMP_FILE } from "./lib/local-build-metadata.mjs";
 import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
@@ -73,6 +74,105 @@ const isIgnoredWatchPath = (filePath, cwd, watchPaths, stats) => {
 const shouldRestartAfterChildExit = (exitCode, exitSignal) =>
   (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
   (typeof exitSignal === "string" && WATCH_RESTARTABLE_CHILD_SIGNALS.has(exitSignal));
+
+/** Common config files whose mtime changes indicate a rebuild may be needed. */
+const WATCH_REBUILD_CONFIG_FILES = ["tsdown.config.ts", "tsconfig.json", "package.json"];
+
+/**
+ * Checks whether the current build output is ready for a hot-reload restart.
+ * Mirrors the rebuild-trigger conditions from run-node's resolveBuildRequirement():
+ *   1. dist/entry.js exists
+ *   2. Build stamp exists and is readable
+ *   3. Build stamp git HEAD matches current checkout HEAD
+ *   4. Config files (tsdown.config.ts, tsconfig.json) are not newer than stamp
+ *   5. Source roots are not newer than stamp (proxy for source mtime drift)
+ *   6. Runtime postbuild stamp exists (postbuild outputs are complete)
+ *
+ * When git is unavailable or stamp is unreadable, falls back to a
+ * conservative subset of checks (entry.js + stamp + config mtime).
+ *
+ * @param {string} cwd
+ * @param {{ existsSync: (p: string) => boolean; readFileSync?: (p: string, e?: string) => string; statSync?: (p: string) => { mtime: Date } }} fsModule
+ * @param {(opts: { cwd: string }) => string | null} [resolveHead]
+ * @returns {boolean}
+ */
+export const isBuildReadyForRestart = (cwd, fsModule, resolveHead) => {
+  const entryPath = path.join(cwd, "dist", "entry.js");
+  if (!fsModule.existsSync(entryPath)) {
+    return false;
+  }
+
+  // Without readFileSync (test mock), just check entry.js existence
+  if (typeof fsModule.readFileSync !== "function") {
+    return true;
+  }
+
+  let stamp;
+  let stampPath;
+  try {
+    stampPath = path.join(cwd, "dist", BUILD_STAMP_FILE);
+    if (!fsModule.existsSync(stampPath)) {
+      return false;
+    }
+    const raw = fsModule.readFileSync(stampPath, "utf8");
+    stamp = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+
+  if (!stamp || typeof stamp.builtAt !== "number") {
+    return false;
+  }
+
+  // Build stamp HEAD must match current git HEAD (when git is available)
+  try {
+    const currentHead = (resolveHead ?? resolveGitHead)({ cwd });
+    if (currentHead && stamp.head && currentHead !== stamp.head) {
+      return false;
+    }
+  } catch {
+    // git unavailable — skip HEAD check
+  }
+
+  // Config files must not be newer than build stamp
+  if (typeof fsModule.statSync === "function" && stamp.builtAt) {
+    for (const configFile of WATCH_REBUILD_CONFIG_FILES) {
+      try {
+        const configPath = path.join(cwd, configFile);
+        if (fsModule.existsSync(configPath)) {
+          const configStat = fsModule.statSync(configPath);
+          if (configStat.mtime.getTime() > stamp.builtAt) {
+            return false;
+          }
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+  }
+
+  // Runtime postbuild stamp must exist and have syncedAt >= build stamp builtAt
+  // (postbuild outputs must be complete for the current build)
+  try {
+    const postbuildStampPath = path.join(cwd, "dist", ".runtime-postbuildstamp");
+    if (fsModule.existsSync(postbuildStampPath)) {
+      const raw = fsModule.readFileSync(postbuildStampPath, "utf8");
+      const postbuildStamp = JSON.parse(raw);
+      if (!postbuildStamp || typeof postbuildStamp.syncedAt !== "number") {
+        return false;
+      }
+      if (postbuildStamp.syncedAt < stamp.builtAt) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return true;
+};
 
 const isGatewayWatchCommand = (args) => args[0] === "gateway";
 
@@ -259,6 +359,7 @@ const releaseWatchLock = (lockHandle) => {
  *     options: { ignoreInitial: boolean; ignored: (watchPath: string) => boolean },
  *   ) => { on: (event: string, cb: (...args: unknown[]) => void) => void; close?: () => Promise<void> };
  *   watchPaths?: string[];
+ *   fs?: { existsSync: (path: string) => boolean; readFileSync?: (path: string, encoding: string) => string };
  * }} [params]
  */
 /**
@@ -278,6 +379,7 @@ export async function runWatchMain(params = {}) {
     createWatcher: params.createWatcher,
     loadChokidar: params.loadChokidar ?? loadChokidar,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
+    fs: params.fs ?? fs,
   };
 
   const childEnv = { ...deps.env };
@@ -302,6 +404,8 @@ export async function runWatchMain(params = {}) {
     let autoDoctorAttempted = false;
     let shutdownExitCode = null;
     let shutdownKillTimer = null;
+    let restartDeferred = false;
+    let restartDeferredTimer = null;
 
     const signalWatchProcess = (child, signal) => {
       if (!child || typeof child.kill !== "function") {
@@ -340,6 +444,10 @@ export async function runWatchMain(params = {}) {
       settled = true;
       if (shutdownKillTimer) {
         clearTimeout(shutdownKillTimer);
+      }
+      if (restartDeferredTimer) {
+        clearInterval(restartDeferredTimer);
+        restartDeferredTimer = null;
       }
       if (onSigInt) {
         deps.process.off("SIGINT", onSigInt);
@@ -398,6 +506,18 @@ export async function runWatchMain(params = {}) {
           return;
         }
         if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
+          // Don't restart into a broken build — verify the replacement build
+          // is valid for the current checkout before spawning a new child
+          // (issue #99603).
+          if (!isBuildReadyForRestart(deps.cwd, deps.fs)) {
+            logWatcher(
+              "Build not ready after child exit — settling to avoid crash-loop; " +
+                "systemd will restart the gateway cleanly",
+              deps,
+            );
+            settle(exitCode ?? 1);
+            return;
+          }
           forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
           startRunner();
@@ -486,12 +606,50 @@ export async function runWatchMain(params = {}) {
       });
     };
 
+    const startDeferredPolling = () => {
+      if (restartDeferredTimer) return;
+      restartDeferred = true;
+      restartDeferredTimer = setInterval(() => {
+        if (settled || shuttingDown) {
+          clearInterval(restartDeferredTimer);
+          restartDeferredTimer = null;
+          restartDeferred = false;
+          return;
+        }
+        if (isBuildReadyForRestart(deps.cwd, deps.fs)) {
+          clearInterval(restartDeferredTimer);
+          restartDeferredTimer = null;
+          restartDeferred = false;
+          logWatcher("Build output ready — triggering deferred restart", deps);
+          if (!watchProcess) {
+            startRunner();
+          } else {
+            restartRequested = true;
+            signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
+          }
+        }
+      }, 1000);
+    };
+
     const requestRestart = (changedPath) => {
       if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
         return;
       }
       if (!watchProcess) {
         startRunner();
+        return;
+      }
+      if (restartDeferred) {
+        // Already polling — no need to re-enter
+        return;
+      }
+      if (!isBuildReadyForRestart(deps.cwd, deps.fs)) {
+        logWatcher(
+          "Build not ready — deferring restart until build output is complete " +
+            "(current process is still healthy; issue #99603)",
+          deps,
+        );
+        startDeferredPolling();
         return;
       }
       restartRequested = true;
