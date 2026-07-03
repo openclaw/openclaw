@@ -69,6 +69,30 @@ function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
   return err instanceof FailoverError;
 }
 
+// SCRUM-3256: narrower than shouldClearReusedCliSessionAfterError -- clearing a
+// dead session from the store is always safe, but retrying immediately is only
+// worthwhile when the failure looks like reused-session poisoning or a transient
+// hiccup (timeout, unknown, session_expired, empty_response). auth/billing/
+// rate_limit failures will fail again identically on an instant retry, so those
+// stay single-attempt (matches the existing "without retrying" test contracts).
+function shouldRetryFreshCliSessionAfterClear(err: unknown): boolean {
+  if (readErrorName(err) === "AbortError") {
+    return true;
+  }
+  if (err instanceof FailoverError) {
+    switch (err.reason) {
+      case "timeout":
+      case "unknown":
+      case "session_expired":
+      case "empty_response":
+        return true;
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
 function resolveClearedCliSessionReason(err: unknown): string {
   if (err instanceof FailoverError) {
     return err.reason;
@@ -751,6 +775,25 @@ export function runAgentAttempt(params: {
               provider: cliExecutionProvider,
               ...mutableCliSessionStore,
             })) ?? params.sessionEntry;
+
+          // SCRUM-3256: the reused session that just died is now cleared from the
+          // store, but nothing else in this call recovers from it. Callers that
+          // rely on in-process model fallback (agent-command.ts's
+          // runWithModelFallback) can still hand the *next* candidate a stale
+          // snapshot that carries the dead binding, cascading one transient
+          // reused-session death into "All models failed" across every remaining
+          // fallback model -- and single-candidate sessions have no fallback
+          // candidate to recover on at all. Retry once, in-process, with a brand
+          // new session (no resumeSession id) before giving up, so a single
+          // transient death self-heals here instead of depending on an outer
+          // fallback candidate or a cron-level retry. Bounded to one retry: if
+          // the fresh-session attempt also fails, that error propagates normally.
+          if (!params.opts.abortSignal?.aborted && shouldRetryFreshCliSessionAfterClear(err)) {
+            log.warn(
+              `cli session retry starting fresh session: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=prior-attempt-cleared`,
+            );
+            return await runCliWithSession(undefined, undefined);
+          }
         }
         throw err;
       }
