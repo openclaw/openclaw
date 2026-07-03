@@ -750,6 +750,20 @@ describe("qa scenario catalog", () => {
     }
   });
 
+  it("routes native command session targeting through Crabline Telegram", () => {
+    const scenario = readQaScenarioById("native-command-session-target");
+    const config = readQaScenarioExecutionConfig("native-command-session-target") as
+      | {
+          requiredChannelDriver?: string;
+          requiredProviderMode?: string;
+        }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("telegram");
+    expect(config?.requiredChannelDriver).toBeUndefined();
+    expect(config?.requiredProviderMode).toBe("mock-openai");
+  });
+
   it("adds a dreaming shadow trial report scenario", () => {
     const scenario = readQaScenarioById("dreaming-shadow-trial-report");
     const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
@@ -776,6 +790,15 @@ describe("qa scenario catalog", () => {
     expect(flow).toContain("plannedToolName === 'write'");
     expect(flow).toContain("readIndices[1] < firstWrite");
     expect(flow).toContain("String(memoryAfter) === config.seededMemory");
+  });
+
+  it("enables Telegram previews for channel streaming evidence", () => {
+    const scenario = readQaScenarioById("channel-message-flows");
+
+    expect(scenario.coverage?.primary).toContain("channels.streaming");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      channels: { telegram: { streaming: { mode: "partial" } } },
+    });
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {

@@ -1014,6 +1014,10 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
         defer { self.connectingGatewayID = nil }
+        await self.connectCurrentManualGateway(host: host, forceReconnect: false)
+    }
+
+    private func connectCurrentManualGateway(host: String, forceReconnect: Bool) async {
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: self.gatewayToken,
             pendingOverride: self.pendingManualAuthOverride,
@@ -1023,7 +1027,8 @@ extension OnboardingWizardView {
             host: host,
             port: self.manualPort,
             useTLS: self.manualTLS,
-            authOverride: authOverride)
+            authOverride: authOverride,
+            forceReconnect: forceReconnect)
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
@@ -1034,7 +1039,25 @@ extension OnboardingWizardView {
             self.statusLine = "Retrying last connection…"
         }
         defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connectLastKnown()
+
+        switch GatewaySettingsStore.loadLastGatewayConnection() {
+        case .some(.discovered):
+            await self.gatewayController.connectLastKnown()
+        case .some(.manual), .none:
+            // connectLastKnown() replays the persisted endpoint and credentials,
+            // so token/host/port edits made on this screen would be ignored and
+            // a missing stored connection would silently do nothing. Manual
+            // retries must dial the current form input instead.
+            let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 {
+                await self.connectCurrentManualGateway(host: host, forceReconnect: true)
+                return
+            }
+            if !silent {
+                self.connectMessage = nil
+                self.statusLine = "No connection to retry. Check the gateway host and port."
+            }
+        }
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {

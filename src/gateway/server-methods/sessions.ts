@@ -82,6 +82,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -199,14 +200,7 @@ function inheritSessionRuntimeSelection(
   };
 }
 
-type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
-
-let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
-
-function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
-  sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
-  return sessionsRuntimeModulePromise;
-}
+const loadSessionsRuntimeModule = createLazyRuntimeModule(() => import("./sessions.runtime.js"));
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =

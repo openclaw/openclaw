@@ -1,5 +1,6 @@
 // Google provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -17,14 +18,9 @@ import {
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
 
-type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
-
-let geminiWebSearchRuntimePromise: Promise<GeminiWebSearchRuntime> | undefined;
-
-function loadGeminiWebSearchRuntime(): Promise<GeminiWebSearchRuntime> {
-  geminiWebSearchRuntimePromise ??= import("./gemini-web-search-provider.runtime.js");
-  return geminiWebSearchRuntimePromise;
-}
+const loadGeminiWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./gemini-web-search-provider.runtime.js"),
+);
 
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",

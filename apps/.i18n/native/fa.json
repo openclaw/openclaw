@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "آماده"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "نیاز به راه‌اندازی دارد"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "تأییدنشده"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "${state.provider.label} از طریق رله Gateway"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "کاتالوگ گفت‌وگوی Gateway بارگذاری نشده است"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "بارگذاری کاتالوگ گفت‌وگوی Gateway ممکن نبود"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway تنظیمات ${issue.target.title} را برنگرداند"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "هیچ ارائه‌دهنده ${issue.target.title} روی Gateway پیکربندی نشده است"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway ارائه‌دهنده ناشناخته ${issue.providerId} را انتخاب کرد"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway وضعیت آمادگی ${issue.target.title} را برنگرداند"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "یک ارائه‌دهنده ${issue.target.title} را روی Gateway پیکربندی کنید"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway ارائه‌دهنده فعال ${issue.target.title} را شناسایی نکرد"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "یک ارائه‌دهنده پشتیبانی‌شده ${issue.target.title} را روی Gateway انتخاب کنید"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "${issue.providerLabel} را روی Gateway پیکربندی کنید"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -589,9 +659,9 @@
       "translated": "این گزینه را برای Tailscale یا میزبان‌های عمومی روشن کنید. LAN خصوصی با ws:// همچنان پشتیبانی می‌شود."
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "token"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "برای نگه داشتن توکن ذخیره‌شده، خالی بگذارید"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -707,6 +777,51 @@
       "id": "native.android.732f5b59ba7e1513",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "یک endpoint دستی معتبر برای اتصال وارد کنید."
+    },
+    {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "کد راه‌اندازی منقضی شده است"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "توکن Gateway لازم است"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "توکن Gateway پیکربندی نشده است"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "رمز عبور Gateway لازم است"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "رمز عبور Gateway نامعتبر است"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "رمز عبور Gateway پیکربندی نشده است"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "دسترسی Gateway نیاز به بازبینی دارد"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "احراز هویت ذخیره‌شده نامعتبر است"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "هویت دستگاه لازم است"
     },
     {
       "id": "native.android.b44fc3039e0fb9fa",
@@ -859,9 +974,14 @@
       "translated": "تلفن‌های پیوندشده و میزبان‌های گره پس از جفت‌سازی اینجا نمایش داده می‌شوند."
     },
     {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "مدیر جفت‌سازی دستگاه به دسترسی سطح بالاتر نیاز دارد. گره‌های متصل همچنان کار می‌کنند."
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "تأیید گره لازم است"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "روی میزبان Gateway اجرا کنید:"
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -999,11 +1119,6 @@
       "translated": "آخرین Gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "تلاش دوباره برای اتصال"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "ویرایش اتصال"
@@ -1064,9 +1179,24 @@
       "translated": "ادامه"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "کد راه‌اندازی تازه را اسکن کنید"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "تلاش دوباره برای اتصال"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "کد راه‌اندازی منقضی شده است. یک QR راه‌اندازی تازه را اسکن کنید."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "دسترسی Gateway نیاز به بازبینی دارد. محدوده‌های احراز هویت gateway را بررسی کنید، سپس دوباره تلاش کنید."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1094,9 +1224,9 @@
       "translated": "احراز هویت ذخیره‌شده نامعتبر است. دوباره احراز هویت کنید یا این اتصال Gateway را بازنشانی کنید."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "احراز هویت Gateway پیکربندی نشده است. این اتصال را ویرایش کنید و دوباره تلاش کنید."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "احراز هویت Gateway پیکربندی نشده است. آن را روی میزبان gateway پیکربندی کنید، سپس دوباره تلاش کنید."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",
@@ -1484,24 +1614,14 @@
       "translated": "انجام شد"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "ارائه‌دهنده بلادرنگ"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "گفت‌وگوی بلادرنگ"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "زنده"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "صدا"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "انتقال"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "دیکته"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -1622,6 +1742,21 @@
       "id": "native.android.53928793ec65d766",
       "source": "While Using",
       "translated": "هنگام استفاده"
+    },
+    {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "تنظیم Gateway جایگزین شود؟"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "جایگزینی تنظیمات"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "لغو"
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -1752,6 +1887,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "به‌روزرسانی"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "مجوزها"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw از شرکای خود در جامعهٔ متن‌باز قدردانی می‌کند."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "هیچ اعلان مجوزی در این بیلد گنجانده نشده است."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "باز کردن ${license.title}"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2619,9 +2774,9 @@
       "translated": "توقف دیکته"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "ارائه‌دهنده"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "راه‌اندازی صدا"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3079,11 +3234,6 @@
       "translated": "در حال ارسال صدای در صف"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "خاموش"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "در حال گوش دادن"
@@ -3092,6 +3242,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "آماده"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "گفت‌وگو ناموفق بود: ارائه‌دهنده بلادرنگ به‌طور غیرمنتظره بسته شد."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "گفت‌وگو ناموفق بود: ارائه‌دهنده بلادرنگ بسته شد: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",
@@ -5234,14 +5399,14 @@
       "translated": "OpenClaw نمی‌تواند وضعیت فعلی مجوز اعلان‌ها را تعیین کند."
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "ظاهر سیستم، روشن یا تیره را انتخاب کنید"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "ظاهر"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "ظاهر سیستم، روشن یا تاریک را انتخاب کنید"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5447,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "درباره"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "مجوزها"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5632,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "هیچ مجوزی همراه نشده است"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "فایل‌های مجوز در این بیلد در دسترس نیستند."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw از شرکای خود در جامعهٔ متن‌باز قدردانی می‌کند."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6484,9 @@
       "translated": "OpenClaw ممکن است از داده‌های حرکت برای پشتیبانی از تعاملات و خودکارسازی‌های آگاه از دستگاه استفاده کند."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw زمانی به دسترسی به کتابخانهٔ عکس نیاز دارد که عکس‌های موجود را برای اشتراک‌گذاری با دستیار خود انتخاب می‌کنید."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw به دستیار شما اجازه می‌دهد عکس‌هایی را که مجاز می‌کنید بخواند و به شما امکان می‌دهد عکس‌هایی را برای اشتراک‌گذاری انتخاب کنید."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +7119,11 @@
       "translated": "از دستیار، مخاطبین را جستجو و اضافه کنید."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "عکس‌ها"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "تقویم (افزودن رویدادها)"
@@ -6962,6 +7152,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "یادآورها را فهرست، اضافه و کامل کنید."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "محدود"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "عکس‌هایی را که برای دستیار انتخاب می‌کنید بخواند."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "عکس‌های اخیر را برای دستیار بخواند."
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7279,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "آفلاین"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "آماده"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "در حال گوش دادن"
@@ -7102,16 +7317,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "WebRTC بومی"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "آفلاین"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "آماده"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7387,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "در حال به‌روزرسانی OpenClaw"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "خاموش"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "متوقف‌شده"
     },
     {
       "id": "native.apple.732051c3e897a9f1",
