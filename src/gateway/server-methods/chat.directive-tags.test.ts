@@ -18,6 +18,10 @@ import {
   buildPairingQrReplyChannelData,
   setReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
+import {
+  testing as replyRunRegistryTesting,
+  withReplyRunAdmissionBlock,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -363,6 +367,9 @@ vi.mock("../../agents/sandbox/context.js", async () => {
   return {
     ...original,
     ensureSandboxWorkspaceForSession: vi.fn(async () => mockState.sandboxWorkspace),
+    withSandboxWorkspaceForSession: vi.fn(
+      async (_params, run) => await run(mockState.sandboxWorkspace),
+    ),
   };
 });
 
@@ -811,6 +818,7 @@ async function runNonStreamingChatSend(params: {
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
+    replyRunRegistryTesting.resetReplyRunRegistry();
     mockState.config = {};
     mockState.finalText = "[[reply_to_current]]";
     mockState.finalPayload = null;
@@ -5028,6 +5036,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
     expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.MediaStagedSessionId).toBeUndefined();
     expect(mockState.savedMediaCalls).toEqual([
       {
         contentType: "image/png",
@@ -5035,6 +5044,61 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         size: mockState.savedMediaCalls[0]?.size ?? 0,
       },
     ]);
+  });
+
+  it("tags entryless pre-staged offloads with a run generation", async () => {
+    createTranscriptFixture("openclaw-chat-send-entryless-attachment-generation-");
+    mockState.sessionEntry = { sessionId: undefined };
+    mockState.modelCatalog = [
+      {
+        provider: "text-only",
+        id: "text-only-model",
+        name: "text-only-model",
+        input: ["text"],
+      },
+    ];
+    mockState.config = {
+      agents: {
+        defaults: {
+          model: "text-only/text-only-model",
+          sandbox: { mode: "all" },
+        },
+      },
+    };
+    mockState.sandboxWorkspace = { workspaceDir: "/tmp/openclaw-sandbox" };
+    mockState.stagedRelativePaths = ["media/inbound/1.png"];
+    mockState.savedMediaResults = [
+      {
+        path: "/tmp/1.png",
+        contentType: "image/png",
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-entryless-attachments",
+      message: "describe image",
+      requestParams: {
+        attachments: [
+          {
+            mimeType: "image/png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    });
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.MediaStagedSessionId).toBe("idem-entryless-attachments");
   });
 
   it("keeps image attachments inline for configured custom vision models", async () => {
@@ -5268,6 +5332,126 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Marker replaces the implicit "relative-path no-op" coupling in
     // get-reply.ts with an explicit skip contract.
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("keeps validated chat.send media prestaging while sandbox cleanup is pending", async () => {
+    createTranscriptFixture("openclaw-chat-send-pending-sandbox-cleanup-media-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+      pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:main"],
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-pending-sandbox-cleanup-media",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
+  it("waits for sandbox cleanup admission before chat.send media prestaging", async () => {
+    createTranscriptFixture("openclaw-chat-send-waits-sandbox-cleanup-media-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
+    ];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.stagedRelativePaths = ["media/inbound/report.pdf"];
+    const { stageSandboxMedia } = await import("../../auto-reply/reply/stage-sandbox-media.js");
+    vi.mocked(stageSandboxMedia).mockClear();
+    let releaseCleanup: () => void = () => {};
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupBlock = withReplyRunAdmissionBlock(
+      "agent:main:main",
+      async () => await cleanupReleased,
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+    const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
+
+    const send = runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:main:main",
+      idempotencyKey: "idem-waits-sandbox-cleanup-media",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "report.pdf",
+            content: pdf,
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(mockState.savedMediaCalls.length).toBe(1);
+    });
+    expect(stageSandboxMedia).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+
+    releaseCleanup();
+    await cleanupBlock;
+    await send;
+    await waitForAssertion(() => {
+      expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
+    });
+    expect(stageSandboxMedia).toHaveBeenCalledTimes(1);
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
+    expect(mockState.lastDispatchCtx?.MediaStagedSessionId).toBe("sess-1");
   });
 
   it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {

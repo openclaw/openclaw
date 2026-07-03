@@ -10,6 +10,14 @@ import type { SandboxFsBridge } from "./fs-bridge.types.js";
  */
 export type SandboxBackendId = string;
 
+export type SandboxBackendCleanupMetadata =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly SandboxBackendCleanupMetadata[]
+  | { readonly [key: string]: SandboxBackendCleanupMetadata };
+
 /** Shell exec specification prepared by a sandbox backend for process launch. */
 export type SandboxBackendExecSpec = {
   argv: string[];
@@ -64,6 +72,7 @@ export type SandboxBackendHandle = {
   env?: Record<string, string>;
   configLabel?: string;
   configLabelKind?: string;
+  cleanupMetadata?: SandboxBackendCleanupMetadata;
   /**
    * Remote backends own cwd existence checks because valid runtime paths may
    * not exist in the local workspace mirror. Backend validation must be paired

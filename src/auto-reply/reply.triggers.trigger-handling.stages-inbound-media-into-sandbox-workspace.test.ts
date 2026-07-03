@@ -10,10 +10,16 @@ import {
   withSandboxMediaTempHome,
 } from "./stage-sandbox-media.test-harness.js";
 
-const sandboxMocks = vi.hoisted(() => ({
-  ensureSandboxWorkspaceForSession: vi.fn(),
-  assertSandboxPath: vi.fn(),
-}));
+const sandboxMocks = vi.hoisted(() => {
+  const ensureSandboxWorkspaceForSession = vi.fn();
+  return {
+    ensureSandboxWorkspaceForSession,
+    withSandboxWorkspaceForSession: vi.fn(
+      async (params, run) => await run(await ensureSandboxWorkspaceForSession(params)),
+    ),
+    assertSandboxPath: vi.fn(),
+  };
+});
 const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));

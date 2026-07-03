@@ -861,6 +861,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         prune: {
           idleHours: 24,
           maxAgeDays: 7,
+          onSessionEnd: false,
         },
       },
     },
@@ -928,6 +929,12 @@ When `backend: "openshell"` is selected, runtime-specific settings move to
 - `none`: per-scope sandbox workspace under `~/.openclaw/sandboxes`
 - `ro`: sandbox workspace at `/workspace`, agent workspace mounted read-only at `/agent`
 - `rw`: agent workspace mounted read/write at `/workspace`
+
+**Lifecycle cleanup:**
+
+- `prune.idleHours`: remove idle sandbox runtimes after this many hours (`0` disables idle pruning)
+- `prune.maxAgeDays`: remove sandbox runtimes older than this many days (`0` disables age pruning)
+- `prune.onSessionEnd`: opt-in cleanup for `scope: "session"`; removes matching runtimes, browser runtimes, registry entries, and non-shared sandbox workspaces when the owning session is reset, deleted, or rolled over by idle/daily reset policy
 
 **Scope:**
 

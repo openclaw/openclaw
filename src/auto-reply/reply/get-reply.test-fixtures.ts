@@ -60,6 +60,10 @@ export function createGetReplySessionState(overrides: Record<string, unknown> = 
   return {
     sessionCtx: {},
     sessionEntry: {},
+    sessionEntryHandle: {
+      getCurrent: vi.fn(() => ({})),
+      replaceCurrent: vi.fn(),
+    },
     previousSessionEntry: {},
     sessionStore: {},
     sessionKey: "agent:main:telegram:123",

@@ -233,6 +233,129 @@ describe("ssh sandbox backend", () => {
     expect(commandParams.remoteCommand).toContain('rm -rf -- "$1"');
   });
 
+  it("reports remote runtime removal failures", async () => {
+    sshMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from("permission denied"),
+      code: 1,
+    });
+
+    await expect(
+      sshSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "openclaw-ssh-worker-abcd1234",
+          backendId: "ssh",
+          runtimeLabel: "openclaw-ssh-worker-abcd1234",
+          sessionKey: "agent:worker",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "peter@example.com:2222",
+          configLabelKind: "Target",
+        },
+        config: createConfig(),
+      }),
+    ).rejects.toThrow(
+      "Failed to remove SSH sandbox runtime openclaw-ssh-worker-abcd1234: permission denied",
+    );
+  });
+
+  it("removes recorded SSH runtimes after the current backend changes", async () => {
+    await sshSandboxBackendManager.removeRuntime({
+      entry: {
+        containerName: "openclaw-ssh-worker-abcd1234",
+        backendId: "ssh",
+        runtimeLabel: "openclaw-ssh-worker-abcd1234",
+        sessionKey: "agent:worker",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "old@example.com:2222",
+        configLabelKind: "Target",
+        sshTarget: "old@example.com:2222",
+        sshWorkspaceRoot: "/remote/old-openclaw",
+      },
+      config: {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "docker",
+              ssh: {
+                target: "new@example.com:2222",
+                command: "ssh",
+                workspaceRoot: "/remote/current-openclaw",
+                strictHostKeyChecking: true,
+                updateHostKeys: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const sessionSettings = requireMockRecordArg(
+      sshMocks.createSshSandboxSessionFromSettings,
+      0,
+      "ssh session settings",
+    );
+    expect(sessionSettings.target).toBe("old@example.com:2222");
+    expect(sessionSettings.workspaceRoot).toBe("/remote/old-openclaw");
+    const commandParams = requireSshRunCommandParams();
+    expect(commandParams.remoteCommand).toContain("/remote/old-openclaw/openclaw-ssh-agent-worker");
+  });
+
+  it("uses the recorded SSH target for runtime removal", async () => {
+    await sshSandboxBackendManager.removeRuntime({
+      entry: {
+        containerName: "openclaw-ssh-worker-abcd1234",
+        backendId: "ssh",
+        runtimeLabel: "openclaw-ssh-worker-abcd1234",
+        sessionKey: "agent:worker",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "old@example.com:2222",
+        configLabelKind: "Target",
+        sshTarget: "old@example.com:2222",
+        sshWorkspaceRoot: "/remote/openclaw",
+      },
+      config: createConfig(),
+    });
+
+    const sessionSettings = requireMockRecordArg(
+      sshMocks.createSshSandboxSessionFromSettings,
+      0,
+      "ssh session settings",
+    );
+    expect(sessionSettings.target).toBe("old@example.com:2222");
+    expect(sshMocks.runSshSandboxCommand).toHaveBeenCalledOnce();
+  });
+
+  it("uses the recorded SSH workspace root for runtime removal", async () => {
+    await sshSandboxBackendManager.removeRuntime({
+      entry: {
+        containerName: "openclaw-ssh-worker-abcd1234",
+        backendId: "ssh",
+        runtimeLabel: "openclaw-ssh-worker-abcd1234",
+        sessionKey: "agent:worker",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "peter@example.com:2222",
+        configLabelKind: "Target",
+        sshTarget: "peter@example.com:2222",
+        sshWorkspaceRoot: "/old/openclaw",
+      },
+      config: createConfig(),
+    });
+
+    const sessionSettings = requireMockRecordArg(
+      sshMocks.createSshSandboxSessionFromSettings,
+      0,
+      "ssh session settings",
+    );
+    expect(sessionSettings.workspaceRoot).toBe("/old/openclaw");
+    const commandParams = requireSshRunCommandParams();
+    expect(commandParams.remoteCommand).toContain("/old/openclaw/openclaw-ssh-agent-worker");
+  });
+
   it("creates a remote-canonical backend that seeds once and reuses ssh exec", async () => {
     sshMocks.runSshSandboxCommand
       .mockResolvedValueOnce({
@@ -297,7 +420,7 @@ describe("ssh sandbox backend", () => {
           autoStartTimeoutMs: 1000,
         },
         tools: { allow: [], deny: [] },
-        prune: { idleHours: 24, maxAgeDays: 7 },
+        prune: { idleHours: 24, maxAgeDays: 7, onSessionEnd: false },
       },
     });
 

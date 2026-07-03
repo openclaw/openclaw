@@ -15,12 +15,22 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
+import type { SandboxBackendCleanupMetadata } from "./backend-handle.types.js";
 import {
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "./constants.js";
+import { hashTextSha256 } from "./hash.js";
+import type { SandboxScope } from "./types.js";
+
+export type SandboxRegistryCleanupLocation = {
+  workspaceRoot?: string;
+  sshTarget?: string;
+  sshWorkspaceRoot?: string;
+  cleanupMetadata?: SandboxBackendCleanupMetadata;
+};
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -32,6 +42,14 @@ export type SandboxRegistryEntry = {
   image: string;
   configLabelKind?: string;
   configHash?: string;
+  scope?: SandboxScope;
+  workspaceRoot?: string;
+  lifecycleCleanupOnSessionEnd?: boolean;
+  lifecycleOwnerSessionId?: string;
+  sshTarget?: string;
+  sshWorkspaceRoot?: string;
+  cleanupMetadata?: SandboxBackendCleanupMetadata;
+  supersededCleanupLocations?: SandboxRegistryCleanupLocation[];
 };
 
 type SandboxRegistry = {
@@ -45,12 +63,33 @@ export type SandboxBrowserRegistryEntry = {
   lastUsedAtMs: number;
   image: string;
   configHash?: string;
+  scope?: SandboxScope;
+  workspaceRoot?: string;
+  lifecycleCleanupOnSessionEnd?: boolean;
+  lifecycleOwnerSessionId?: string;
+  supersededCleanupLocations?: SandboxRegistryCleanupLocation[];
   cdpPort: number;
   noVncPort?: number;
 };
 
 type SandboxBrowserRegistry = {
   entries: SandboxBrowserRegistryEntry[];
+};
+
+export type SandboxWorkspaceRegistryEntry = {
+  containerName: string;
+  sessionKey: string;
+  createdAtMs: number;
+  lastUsedAtMs: number;
+  scope?: SandboxScope;
+  workspaceRoot: string;
+  supersededWorkspaceRoots?: string[];
+  lifecycleCleanupOnSessionEnd?: boolean;
+  lifecycleOwnerSessionId?: string;
+};
+
+type SandboxWorkspaceRegistry = {
+  entries: SandboxWorkspaceRegistryEntry[];
 };
 
 type RegistryEntry = {
@@ -70,7 +109,7 @@ type ShardedRegistryRead<T extends RegistryEntry> = {
 };
 
 type LegacyRegistryKind = "containers" | "browsers";
-type SandboxRegistryKind = "container" | "browser";
+type SandboxRegistryKind = "container" | "browser" | "workspace";
 type SandboxRegistryTable = OpenClawStateKyselyDatabase["sandbox_registry_entries"];
 type SandboxRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "sandbox_registry_entries">;
 type SandboxRegistryRow = Selectable<SandboxRegistryTable>;
@@ -107,6 +146,10 @@ const RegistryFileSchema = z.object({
   entries: z.array(RegistryEntrySchema),
 });
 
+export function resolveWorkspaceRegistryName(sessionKey: string): string {
+  return `workspace:${hashTextSha256(sessionKey.trim() || "main")}`;
+}
+
 function getSandboxRegistryKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SandboxRegistryDatabase>(db);
 }
@@ -124,6 +167,136 @@ function parseRegistryEntryJson(row: SandboxRegistryRow): RegistryEntryPayload |
 
 function optionalPayloadString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function normalizeCleanupLocationValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function cleanupLocationFromEntry(
+  entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+): SandboxRegistryCleanupLocation {
+  if ("cdpPort" in entry) {
+    return {
+      workspaceRoot: normalizeCleanupLocationValue(entry.workspaceRoot),
+    };
+  }
+  const sshTarget =
+    normalizeCleanupLocationValue(entry.sshTarget) ??
+    (entry.backendId === "ssh" ? normalizeCleanupLocationValue(entry.image) : undefined);
+  return {
+    workspaceRoot: normalizeCleanupLocationValue(entry.workspaceRoot),
+    sshTarget,
+    sshWorkspaceRoot: normalizeCleanupLocationValue(entry.sshWorkspaceRoot),
+    cleanupMetadata: entry.cleanupMetadata,
+  };
+}
+
+function cleanupLocationKey(location: SandboxRegistryCleanupLocation): string {
+  return JSON.stringify([
+    location.workspaceRoot ?? "",
+    location.sshTarget ?? "",
+    location.sshWorkspaceRoot ?? "",
+    location.cleanupMetadata ?? null,
+  ]);
+}
+
+function hasCleanupLocation(location: SandboxRegistryCleanupLocation): boolean {
+  return cleanupLocationKey(location) !== JSON.stringify(["", "", "", null]);
+}
+
+function mergeCleanupLocations(
+  ...locations: ReadonlyArray<SandboxRegistryCleanupLocation | undefined>
+): SandboxRegistryCleanupLocation[] | undefined {
+  const merged = new Map<string, SandboxRegistryCleanupLocation>();
+  for (const location of locations) {
+    if (!location || !hasCleanupLocation(location)) {
+      continue;
+    }
+    merged.set(cleanupLocationKey(location), location);
+  }
+  return merged.size > 0 ? [...merged.values()] : undefined;
+}
+
+function cleanupLocationChanged(
+  before: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+  after: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+): boolean {
+  return (
+    cleanupLocationKey(cleanupLocationFromEntry(before)) !==
+    cleanupLocationKey(cleanupLocationFromEntry(after))
+  );
+}
+
+function mergeSupersededCleanupLocations<
+  T extends SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+>(
+  entry: T,
+  existing?: T | null,
+  lifecycleCleanupOnSessionEnd?: boolean,
+): SandboxRegistryCleanupLocation[] | undefined {
+  return mergeCleanupLocations(
+    ...(existing?.supersededCleanupLocations ?? []),
+    ...(entry.supersededCleanupLocations ?? []),
+    existing && lifecycleCleanupOnSessionEnd === true && cleanupLocationChanged(existing, entry)
+      ? cleanupLocationFromEntry(existing)
+      : undefined,
+  );
+}
+
+function mergeSupersededWorkspaceRoots(
+  currentWorkspaceRoot: string,
+  ...roots: ReadonlyArray<string | undefined | readonly string[]>
+): string[] | undefined {
+  const normalizedCurrent = normalizeCleanupLocationValue(currentWorkspaceRoot);
+  const merged = new Set<string>();
+  for (const value of roots) {
+    const candidates = Array.isArray(value) ? value : [value];
+    for (const candidate of candidates) {
+      const normalized = normalizeCleanupLocationValue(candidate);
+      if (normalized && normalized !== normalizedCurrent) {
+        merged.add(normalized);
+      }
+    }
+  }
+  return merged.size > 0 ? [...merged.values()] : undefined;
+}
+
+export function getSandboxRegistryCleanupLocations(
+  entry: SandboxRegistryEntry | SandboxBrowserRegistryEntry,
+): SandboxRegistryCleanupLocation[] {
+  return (
+    mergeCleanupLocations(
+      cleanupLocationFromEntry(entry),
+      ...(entry.supersededCleanupLocations ?? []),
+    ) ?? [cleanupLocationFromEntry(entry)]
+  );
+}
+
+export function applySandboxRegistryCleanupLocation(
+  entry: SandboxRegistryEntry,
+  location: SandboxRegistryCleanupLocation,
+): SandboxRegistryEntry {
+  return {
+    ...entry,
+    workspaceRoot: location.workspaceRoot ?? entry.workspaceRoot,
+    sshTarget: location.sshTarget ?? entry.sshTarget,
+    sshWorkspaceRoot: location.sshWorkspaceRoot ?? entry.sshWorkspaceRoot,
+    cleanupMetadata:
+      "cleanupMetadata" in location ? location.cleanupMetadata : entry.cleanupMetadata,
+  };
+}
+
+export function getSandboxWorkspaceRegistryRoots(entry: SandboxWorkspaceRegistryEntry): string[] {
+  const roots = new Set<string>();
+  for (const root of [entry.workspaceRoot, ...(entry.supersededWorkspaceRoots ?? [])]) {
+    const normalized = normalizeCleanupLocationValue(root);
+    if (normalized) {
+      roots.add(normalized);
+    }
+  }
+  return [...roots];
 }
 
 function rowToContainerEntry(row: SandboxRegistryRow): SandboxRegistryEntry | null {
@@ -169,7 +342,33 @@ function rowToBrowserEntry(row: SandboxRegistryRow): SandboxBrowserRegistryEntry
   } as SandboxBrowserRegistryEntry;
 }
 
+function rowToWorkspaceEntry(row: SandboxRegistryRow): SandboxWorkspaceRegistryEntry | null {
+  if (row.registry_kind !== "workspace") {
+    return null;
+  }
+  const payload = parseRegistryEntryJson(row);
+  if (!payload) {
+    return null;
+  }
+  const workspaceRoot = optionalPayloadString(payload.workspaceRoot).trim();
+  if (!workspaceRoot) {
+    return null;
+  }
+  return {
+    ...payload,
+    containerName: row.container_name,
+    sessionKey: row.session_key ?? optionalPayloadString(payload.sessionKey),
+    createdAtMs: row.created_at_ms ?? Number(payload.createdAtMs ?? 0),
+    lastUsedAtMs: row.last_used_at_ms ?? Number(payload.lastUsedAtMs ?? 0),
+    workspaceRoot,
+  } as SandboxWorkspaceRegistryEntry;
+}
+
 function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegistryEntry | null) {
+  const lifecycleCleanupOnSessionEnd =
+    entry.lifecycleCleanupOnSessionEnd === true || existing?.lifecycleCleanupOnSessionEnd === true
+      ? true
+      : (entry.lifecycleCleanupOnSessionEnd ?? existing?.lifecycleCleanupOnSessionEnd);
   const next: SandboxRegistryEntry = {
     ...entry,
     backendId: entry.backendId ?? existing?.backendId,
@@ -178,6 +377,18 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
     image: existing?.image ?? entry.image,
     configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
     configHash: entry.configHash ?? existing?.configHash,
+    scope: entry.scope ?? existing?.scope,
+    workspaceRoot: entry.workspaceRoot ?? existing?.workspaceRoot,
+    lifecycleCleanupOnSessionEnd,
+    lifecycleOwnerSessionId: entry.lifecycleOwnerSessionId ?? existing?.lifecycleOwnerSessionId,
+    sshTarget: entry.sshTarget ?? existing?.sshTarget,
+    sshWorkspaceRoot: entry.sshWorkspaceRoot ?? existing?.sshWorkspaceRoot,
+    cleanupMetadata: "cleanupMetadata" in entry ? entry.cleanupMetadata : existing?.cleanupMetadata,
+    supersededCleanupLocations: mergeSupersededCleanupLocations(
+      entry,
+      existing,
+      lifecycleCleanupOnSessionEnd,
+    ),
   };
   return {
     registry_kind: "container",
@@ -197,15 +408,75 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
   } satisfies SandboxRegistryInsert;
 }
 
+function workspaceEntryToRow(
+  entry: SandboxWorkspaceRegistryEntry,
+  existing?: SandboxWorkspaceRegistryEntry | null,
+) {
+  const lifecycleCleanupOnSessionEnd =
+    entry.lifecycleCleanupOnSessionEnd === true || existing?.lifecycleCleanupOnSessionEnd === true
+      ? true
+      : (entry.lifecycleCleanupOnSessionEnd ?? existing?.lifecycleCleanupOnSessionEnd);
+  const workspaceRoot = entry.workspaceRoot || existing?.workspaceRoot || entry.workspaceRoot;
+  const supersededWorkspaceRoots = mergeSupersededWorkspaceRoots(
+    workspaceRoot,
+    existing?.supersededWorkspaceRoots,
+    entry.supersededWorkspaceRoots,
+    existing &&
+      lifecycleCleanupOnSessionEnd === true &&
+      normalizeCleanupLocationValue(existing.workspaceRoot) !==
+        normalizeCleanupLocationValue(workspaceRoot)
+      ? existing.workspaceRoot
+      : undefined,
+  );
+  const next: SandboxWorkspaceRegistryEntry = {
+    ...entry,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    scope: entry.scope ?? existing?.scope,
+    workspaceRoot,
+    supersededWorkspaceRoots,
+    lifecycleCleanupOnSessionEnd,
+    lifecycleOwnerSessionId: entry.lifecycleOwnerSessionId ?? existing?.lifecycleOwnerSessionId,
+  };
+  return {
+    registry_kind: "workspace",
+    container_name: next.containerName,
+    session_key: next.sessionKey,
+    backend_id: null,
+    runtime_label: null,
+    image: null,
+    created_at_ms: next.createdAtMs,
+    last_used_at_ms: next.lastUsedAtMs,
+    config_label_kind: null,
+    config_hash: null,
+    cdp_port: null,
+    no_vnc_port: null,
+    entry_json: JSON.stringify(next),
+    updated_at: Date.now(),
+  } satisfies SandboxRegistryInsert;
+}
+
 function browserEntryToRow(
   entry: SandboxBrowserRegistryEntry,
   existing?: SandboxBrowserRegistryEntry | null,
 ) {
+  const lifecycleCleanupOnSessionEnd =
+    entry.lifecycleCleanupOnSessionEnd === true || existing?.lifecycleCleanupOnSessionEnd === true
+      ? true
+      : (entry.lifecycleCleanupOnSessionEnd ?? existing?.lifecycleCleanupOnSessionEnd);
   const next: SandboxBrowserRegistryEntry = {
     ...entry,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
     configHash: entry.configHash ?? existing?.configHash,
+    scope: entry.scope ?? existing?.scope,
+    workspaceRoot: entry.workspaceRoot ?? existing?.workspaceRoot,
+    lifecycleCleanupOnSessionEnd,
+    lifecycleOwnerSessionId: entry.lifecycleOwnerSessionId ?? existing?.lifecycleOwnerSessionId,
+    supersededCleanupLocations: mergeSupersededCleanupLocations(
+      entry,
+      existing,
+      lifecycleCleanupOnSessionEnd,
+    ),
   };
   return {
     registry_kind: "browser",
@@ -225,6 +496,66 @@ function browserEntryToRow(
   } satisfies SandboxRegistryInsert;
 }
 
+function sandboxRegistryEntryMatchesSnapshot(
+  current: SandboxRegistryEntry,
+  expected: SandboxRegistryEntry,
+): boolean {
+  return (
+    current.containerName === expected.containerName &&
+    current.sessionKey === expected.sessionKey &&
+    current.createdAtMs === expected.createdAtMs &&
+    current.lastUsedAtMs === expected.lastUsedAtMs &&
+    current.image === expected.image &&
+    current.configHash === expected.configHash &&
+    current.lifecycleCleanupOnSessionEnd === expected.lifecycleCleanupOnSessionEnd &&
+    current.lifecycleOwnerSessionId === expected.lifecycleOwnerSessionId &&
+    current.sshTarget === expected.sshTarget &&
+    current.sshWorkspaceRoot === expected.sshWorkspaceRoot &&
+    JSON.stringify(current.cleanupMetadata ?? null) ===
+      JSON.stringify(expected.cleanupMetadata ?? null) &&
+    JSON.stringify(current.supersededCleanupLocations ?? []) ===
+      JSON.stringify(expected.supersededCleanupLocations ?? [])
+  );
+}
+
+function sandboxBrowserRegistryEntryMatchesSnapshot(
+  current: SandboxBrowserRegistryEntry,
+  expected: SandboxBrowserRegistryEntry,
+): boolean {
+  return (
+    current.containerName === expected.containerName &&
+    current.sessionKey === expected.sessionKey &&
+    current.createdAtMs === expected.createdAtMs &&
+    current.lastUsedAtMs === expected.lastUsedAtMs &&
+    current.image === expected.image &&
+    current.configHash === expected.configHash &&
+    current.lifecycleCleanupOnSessionEnd === expected.lifecycleCleanupOnSessionEnd &&
+    current.lifecycleOwnerSessionId === expected.lifecycleOwnerSessionId &&
+    JSON.stringify(current.supersededCleanupLocations ?? []) ===
+      JSON.stringify(expected.supersededCleanupLocations ?? []) &&
+    current.cdpPort === expected.cdpPort &&
+    current.noVncPort === expected.noVncPort
+  );
+}
+
+function sandboxWorkspaceRegistryEntryMatchesSnapshot(
+  current: SandboxWorkspaceRegistryEntry,
+  expected: SandboxWorkspaceRegistryEntry,
+): boolean {
+  return (
+    current.containerName === expected.containerName &&
+    current.sessionKey === expected.sessionKey &&
+    current.createdAtMs === expected.createdAtMs &&
+    current.lastUsedAtMs === expected.lastUsedAtMs &&
+    current.scope === expected.scope &&
+    current.workspaceRoot === expected.workspaceRoot &&
+    JSON.stringify(current.supersededWorkspaceRoots ?? []) ===
+      JSON.stringify(expected.supersededWorkspaceRoots ?? []) &&
+    current.lifecycleCleanupOnSessionEnd === expected.lifecycleCleanupOnSessionEnd &&
+    current.lifecycleOwnerSessionId === expected.lifecycleOwnerSessionId
+  );
+}
+
 function rowToUpdate(row: SandboxRegistryInsert): SandboxRegistryUpdate {
   const { registry_kind: _registryKind, container_name: _containerName, ...update } = row;
   return update;
@@ -239,6 +570,23 @@ function readRegistryRows(kind: SandboxRegistryKind): SandboxRegistryRow[] {
       .selectFrom("sandbox_registry_entries")
       .selectAll()
       .where("registry_kind", "=", kind)
+      .orderBy("container_name", "asc"),
+  ).rows;
+}
+
+function readRegistryRowsBySessionKeyFromDb(
+  db: import("node:sqlite").DatabaseSync,
+  kind: SandboxRegistryKind,
+  sessionKey: string,
+): SandboxRegistryRow[] {
+  const stateDb = getSandboxRegistryKysely(db);
+  return executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("sandbox_registry_entries")
+      .selectAll()
+      .where("registry_kind", "=", kind)
+      .where("session_key", "=", sessionKey)
       .orderBy("container_name", "asc"),
   ).rows;
 }
@@ -291,6 +639,75 @@ function insertRegistryRow(
         conflict.columns(["registry_kind", "container_name"]).doUpdateSet(rowToUpdate(row)),
       ),
   );
+}
+
+function touchContainerRegistryRowsForSessionKey(
+  db: import("node:sqlite").DatabaseSync,
+  sessionKey: string,
+  lastUsedAtMs: number,
+): void {
+  for (const row of readRegistryRowsBySessionKeyFromDb(db, "container", sessionKey)) {
+    const entry = rowToContainerEntry(row);
+    if (!entry) {
+      continue;
+    }
+    insertRegistryRow(
+      db,
+      containerEntryToRow(
+        {
+          ...entry,
+          lastUsedAtMs: Math.max(entry.lastUsedAtMs, lastUsedAtMs),
+        },
+        entry,
+      ),
+    );
+  }
+}
+
+function touchBrowserRegistryRowsForSessionKey(
+  db: import("node:sqlite").DatabaseSync,
+  sessionKey: string,
+  lastUsedAtMs: number,
+): void {
+  for (const row of readRegistryRowsBySessionKeyFromDb(db, "browser", sessionKey)) {
+    const entry = rowToBrowserEntry(row);
+    if (!entry) {
+      continue;
+    }
+    insertRegistryRow(
+      db,
+      browserEntryToRow(
+        {
+          ...entry,
+          lastUsedAtMs: Math.max(entry.lastUsedAtMs, lastUsedAtMs),
+        },
+        entry,
+      ),
+    );
+  }
+}
+
+function touchWorkspaceRegistryRowsForSessionKey(
+  db: import("node:sqlite").DatabaseSync,
+  sessionKey: string,
+  lastUsedAtMs: number,
+): void {
+  for (const row of readRegistryRowsBySessionKeyFromDb(db, "workspace", sessionKey)) {
+    const entry = rowToWorkspaceEntry(row);
+    if (!entry) {
+      continue;
+    }
+    insertRegistryRow(
+      db,
+      workspaceEntryToRow(
+        {
+          ...entry,
+          lastUsedAtMs: Math.max(entry.lastUsedAtMs, lastUsedAtMs),
+        },
+        entry,
+      ),
+    );
+  }
 }
 
 function readRegistryRowFromDb(
@@ -371,6 +788,15 @@ export async function readRegistry(): Promise<SandboxRegistry> {
     .filter((entry): entry is SandboxRegistryEntry => entry != null);
   return {
     entries: entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
+  };
+}
+
+/** Reads workspace ownership rows for sandbox scopes without runtime containers yet. */
+export async function readWorkspaceRegistry(): Promise<SandboxWorkspaceRegistry> {
+  return {
+    entries: readRegistryRows("workspace")
+      .map((row) => rowToWorkspaceEntry(row))
+      .filter((entry): entry is SandboxWorkspaceRegistryEntry => entry != null),
   };
 }
 
@@ -697,9 +1123,58 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
   });
 }
 
+/** Creates or updates one sandbox workspace ownership row before runtime creation. */
+export async function updateWorkspaceRegistry(entry: SandboxWorkspaceRegistryEntry) {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const existingRow = readRegistryRowFromDb(db, "workspace", entry.containerName);
+    const existing = existingRow ? rowToWorkspaceEntry(existingRow) : null;
+    insertRegistryRow(db, workspaceEntryToRow(entry, existing));
+  });
+}
+
+/** Refreshes ordinary and browser runtime rows for a scope before workspace reuse. */
+export async function touchRegistryEntriesForSessionKey(
+  sessionKey: string,
+  lastUsedAtMs = Date.now(),
+): Promise<void> {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(({ db }) => {
+    touchWorkspaceRegistryRowsForSessionKey(db, normalizedSessionKey, lastUsedAtMs);
+    touchContainerRegistryRowsForSessionKey(db, normalizedSessionKey, lastUsedAtMs);
+    touchBrowserRegistryRowsForSessionKey(db, normalizedSessionKey, lastUsedAtMs);
+  });
+}
+
 /** Removes one sandbox runtime registry entry by container name. */
 export async function removeRegistryEntry(containerName: string) {
   removeRegistryRow("container", containerName);
+}
+
+/** Removes one sandbox runtime registry entry only if it still matches the stale snapshot. */
+export async function removeRegistryEntryIfUnchanged(
+  expected: SandboxRegistryEntry,
+): Promise<boolean> {
+  let removed = false;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const row = readRegistryRowFromDb(db, "container", expected.containerName);
+    const current = row ? rowToContainerEntry(row) : null;
+    if (!current || !sandboxRegistryEntryMatchesSnapshot(current, expected)) {
+      return;
+    }
+    const stateDb = getSandboxRegistryKysely(db);
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .deleteFrom("sandbox_registry_entries")
+        .where("registry_kind", "=", "container")
+        .where("container_name", "=", expected.containerName),
+    );
+    removed = true;
+  });
+  return removed;
 }
 
 /** Reads all registered browser sandbox containers from SQLite. */
@@ -723,4 +1198,52 @@ export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) 
 /** Removes one browser sandbox registry entry by container name. */
 export async function removeBrowserRegistryEntry(containerName: string) {
   removeRegistryRow("browser", containerName);
+}
+
+/** Removes one browser runtime registry entry only if it still matches the stale snapshot. */
+export async function removeBrowserRegistryEntryIfUnchanged(
+  expected: SandboxBrowserRegistryEntry,
+): Promise<boolean> {
+  let removed = false;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const row = readRegistryRowFromDb(db, "browser", expected.containerName);
+    const current = row ? rowToBrowserEntry(row) : null;
+    if (!current || !sandboxBrowserRegistryEntryMatchesSnapshot(current, expected)) {
+      return;
+    }
+    const stateDb = getSandboxRegistryKysely(db);
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .deleteFrom("sandbox_registry_entries")
+        .where("registry_kind", "=", "browser")
+        .where("container_name", "=", expected.containerName),
+    );
+    removed = true;
+  });
+  return removed;
+}
+
+/** Removes one workspace ownership row only if it still matches the stale snapshot. */
+export async function removeWorkspaceRegistryEntryIfUnchanged(
+  expected: SandboxWorkspaceRegistryEntry,
+): Promise<boolean> {
+  let removed = false;
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const row = readRegistryRowFromDb(db, "workspace", expected.containerName);
+    const current = row ? rowToWorkspaceEntry(row) : null;
+    if (!current || !sandboxWorkspaceRegistryEntryMatchesSnapshot(current, expected)) {
+      return;
+    }
+    const stateDb = getSandboxRegistryKysely(db);
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .deleteFrom("sandbox_registry_entries")
+        .where("registry_kind", "=", "workspace")
+        .where("container_name", "=", expected.containerName),
+    );
+    removed = true;
+  });
+  return removed;
 }

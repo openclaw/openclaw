@@ -16,7 +16,11 @@ export {
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
 } from "./sandbox/constants.js";
-export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+export {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxContext,
+  withSandboxWorkspaceForSession,
+} from "./sandbox/context.js";
 export {
   getSandboxBackendFactory,
   getSandboxBackendManager,
@@ -26,6 +30,11 @@ export {
 } from "./sandbox/backend.js";
 
 export { buildSandboxCreateArgs, isDockerDaemonUnavailable } from "./sandbox/docker.js";
+export {
+  cleanupSessionScopedSandboxForLifecycleEnd,
+  type SandboxLifecycleCleanupFailure,
+  type SandboxLifecycleCleanupResult,
+} from "./sandbox/lifecycle.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -62,6 +71,7 @@ export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-renam
 
 export type {
   CreateSandboxBackendParams,
+  SandboxBackendCleanupMetadata,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,

@@ -884,6 +884,7 @@ export async function runEmbeddedAttempt(
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
+    lifecycleOwnerSessionId: params.sessionId,
     workspaceDir: resolvedWorkspace,
   });
   const effectiveWorkspace = sandbox?.enabled

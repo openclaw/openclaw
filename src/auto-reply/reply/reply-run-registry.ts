@@ -133,6 +133,9 @@ type ReplyRunState = {
   waitKeysBySessionId: Map<string, string>;
   waitersByKey: Map<string, Set<ReplyRunWaiter>>;
   followupAdmissionBarriersByKey: Map<string, ReplyRunFollowupAdmissionBarrier>;
+  admissionBlocksByKey: Map<string, number>;
+  admissionBlockWaitersByKey: Map<string, Set<ReplyRunWaiter>>;
+  admissionBlockTailsByKey: Map<string, Promise<void>>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -144,8 +147,14 @@ const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY,
   waitKeysBySessionId: new Map<string, string>(),
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
   followupAdmissionBarriersByKey: new Map<string, ReplyRunFollowupAdmissionBarrier>(),
+  admissionBlocksByKey: new Map<string, number>(),
+  admissionBlockWaitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
+  admissionBlockTailsByKey: new Map<string, Promise<void>>(),
 }));
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
+replyRunState.admissionBlocksByKey ??= new Map();
+replyRunState.admissionBlockWaitersByKey ??= new Map();
+replyRunState.admissionBlockTailsByKey ??= new Map();
 
 export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 
@@ -160,6 +169,81 @@ export class ReplyRunFollowupAdmissionBlockedError extends Error {
   constructor(sessionKey: string) {
     super(`Reply follow-up admission is blocked for ${sessionKey}`);
     this.name = "ReplyRunFollowupAdmissionBlockedError";
+  }
+}
+
+export class ReplyRunAdmissionBlockedError extends Error {
+  constructor(sessionKey: string) {
+    super(`Reply run admission is blocked for ${sessionKey}`);
+    this.name = "ReplyRunAdmissionBlockedError";
+  }
+}
+
+function isReplyRunAdmissionBlockedForNormalizedKey(sessionKey: string): boolean {
+  return (replyRunState.admissionBlocksByKey.get(sessionKey) ?? 0) > 0;
+}
+
+function notifyReplyRunAdmissionBlockReleased(sessionKey: string): void {
+  const waiters = replyRunState.admissionBlockWaitersByKey.get(sessionKey);
+  if (!waiters || waiters.size === 0) {
+    return;
+  }
+  replyRunState.admissionBlockWaitersByKey.delete(sessionKey);
+  for (const waiter of waiters) {
+    waiter.finish(true);
+  }
+}
+
+export async function withReplyRunAdmissionBlock<T>(
+  sessionKey: string,
+  run: () => Promise<T>,
+  opts?: {
+    readonly currentOperation?: ReplyOperation;
+    readonly waitTimeoutMs?: number;
+  },
+): Promise<T> {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey) {
+    return await run();
+  }
+  const current = replyRunState.admissionBlocksByKey.get(normalizedSessionKey) ?? 0;
+  replyRunState.admissionBlocksByKey.set(normalizedSessionKey, current + 1);
+  const previousTail =
+    replyRunState.admissionBlockTailsByKey.get(normalizedSessionKey) ?? Promise.resolve();
+  let releaseTail: () => void = () => undefined;
+  const currentTail = new Promise<void>((resolve) => {
+    releaseTail = resolve;
+  });
+  const nextTail = previousTail.then(() => currentTail);
+  replyRunState.admissionBlockTailsByKey.set(normalizedSessionKey, nextTail);
+  try {
+    await previousTail;
+    const activeOperation = replyRunState.activeRunsByKey.get(normalizedSessionKey);
+    if (activeOperation && activeOperation !== opts?.currentOperation) {
+      // Destructive reset/delete cleanup must drain a turn admitted just before
+      // the block; otherwise workspace/container cleanup can race the owner.
+      activeOperation.abortForRestart();
+      const idle = await replyRunRegistry.waitForIdle(
+        normalizedSessionKey,
+        opts?.waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+      );
+      if (!idle && replyRunState.activeRunsByKey.get(normalizedSessionKey) === activeOperation) {
+        throw new ReplyRunAlreadyActiveError(normalizedSessionKey);
+      }
+    }
+    return await run();
+  } finally {
+    releaseTail();
+    if (replyRunState.admissionBlockTailsByKey.get(normalizedSessionKey) === nextTail) {
+      replyRunState.admissionBlockTailsByKey.delete(normalizedSessionKey);
+    }
+    const next = (replyRunState.admissionBlocksByKey.get(normalizedSessionKey) ?? 1) - 1;
+    if (next > 0) {
+      replyRunState.admissionBlocksByKey.set(normalizedSessionKey, next);
+    } else {
+      replyRunState.admissionBlocksByKey.delete(normalizedSessionKey);
+      notifyReplyRunAdmissionBlockReleased(normalizedSessionKey);
+    }
   }
 }
 
@@ -392,6 +476,9 @@ export function createReplyOperation(params: {
   }
   if (!sessionId) {
     throw new Error("Reply operations require a sessionId");
+  }
+  if ((replyRunState.admissionBlocksByKey.get(sessionKey) ?? 0) > 0) {
+    throw new ReplyRunAdmissionBlockedError(sessionKey);
   }
   if (
     params.respectFollowupAdmissionBarrier &&
@@ -772,6 +859,60 @@ export function waitForReplyRunEndBySessionId(
   return replyRunRegistry.waitForIdle(waitKey, timeoutMs);
 }
 
+export function waitForReplyRunAdmissionBlockRelease(
+  sessionKey: string,
+  timeoutMs?: number,
+  opts?: { signal?: AbortSignal },
+): Promise<boolean> {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey || !isReplyRunAdmissionBlockedForNormalizedKey(normalizedSessionKey)) {
+    return Promise.resolve(true);
+  }
+  if (opts?.signal?.aborted) {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    const waiters = replyRunState.admissionBlockWaitersByKey.get(normalizedSessionKey) ?? new Set();
+    let abortHandler: (() => void) | undefined;
+    let settled = false;
+    const waiter: ReplyRunWaiter = {
+      finish: (released) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        waiters.delete(waiter);
+        if (waiters.size === 0) {
+          replyRunState.admissionBlockWaitersByKey.delete(normalizedSessionKey);
+        }
+        if (waiter.timer) {
+          clearTimeout(waiter.timer);
+        }
+        if (abortHandler) {
+          opts?.signal?.removeEventListener("abort", abortHandler);
+        }
+        resolve(released);
+      },
+    };
+    if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+      waiter.timer = setTimeout(
+        () => waiter.finish(false),
+        resolveTimerTimeoutMs(timeoutMs, 100, 100),
+      );
+      waiter.timer.unref?.();
+    }
+    if (opts?.signal) {
+      abortHandler = () => waiter.finish(false);
+      opts.signal.addEventListener("abort", abortHandler, { once: true });
+    }
+    waiters.add(waiter);
+    replyRunState.admissionBlockWaitersByKey.set(normalizedSessionKey, waiters);
+    if (!isReplyRunAdmissionBlockedForNormalizedKey(normalizedSessionKey)) {
+      waiter.finish(true);
+    }
+  });
+}
+
 export async function waitForReplyRunFollowupAdmission(
   sessionKey: string,
   timeoutMs: number,
@@ -866,6 +1007,14 @@ export const testing = {
     }
     replyRunState.waitersByKey.clear();
     replyRunState.followupAdmissionBarriersByKey.clear();
+    for (const waiters of replyRunState.admissionBlockWaitersByKey.values()) {
+      for (const waiter of waiters) {
+        waiter.finish(false);
+      }
+    }
+    replyRunState.admissionBlockWaitersByKey.clear();
+    replyRunState.admissionBlockTailsByKey.clear();
+    replyRunState.admissionBlocksByKey.clear();
   },
 };
 export { testing as __testing };

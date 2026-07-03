@@ -8,6 +8,12 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
+const updateWorkspaceRegistryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const touchRegistryEntriesForSessionKeyMock = vi.hoisted(() => vi.fn(async () => undefined));
+const resolveWorkspaceRegistryNameMock = vi.hoisted(() =>
+  vi.fn((sessionKey: string) => `workspace:${sessionKey}`),
+);
+const maybePruneSandboxesMock = vi.hoisted(() => vi.fn(async () => undefined));
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
 const browserControlAuthMock = vi.hoisted(() => ({
@@ -23,11 +29,18 @@ const browserProfilesMock = vi.hoisted(() => ({
 }));
 
 vi.mock("./sandbox/registry.js", () => ({
+  resolveWorkspaceRegistryName: resolveWorkspaceRegistryNameMock,
+  touchRegistryEntriesForSessionKey: touchRegistryEntriesForSessionKeyMock,
   updateRegistry: updateRegistryMock,
+  updateWorkspaceRegistry: updateWorkspaceRegistryMock,
 }));
 
 vi.mock("./sandbox/browser.js", () => ({
   ensureSandboxBrowser: ensureSandboxBrowserMock,
+}));
+
+vi.mock("./sandbox/prune.js", () => ({
+  maybePruneSandboxes: maybePruneSandboxesMock,
 }));
 
 vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
@@ -156,6 +169,54 @@ describe("resolveSandboxContext", () => {
     }
   }, 15_000);
 
+  it("runs owner-aware pruning even when the current caller disables thresholds", async () => {
+    maybePruneSandboxesMock.mockClear();
+    const restore = registerSandboxBackend("test-prune-backend", async () => ({
+      id: "test-prune-backend",
+      runtimeId: "test-prune-runtime",
+      runtimeLabel: "Test Prune Runtime",
+      workdir: "/workspace",
+      buildExecSpec: async () => ({
+        argv: ["test-prune-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
+      }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-prune-backend",
+              scope: "session",
+              prune: { idleHours: 0, maxAgeDays: 0, onSessionEnd: false },
+            },
+          },
+        },
+      };
+
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:main:prune-disabled-caller",
+        workspaceDir: "/tmp/openclaw-test",
+      });
+
+      expect(maybePruneSandboxesMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prune: expect.objectContaining({ idleHours: 0, maxAgeDays: 0 }),
+        }),
+      );
+    } finally {
+      restore();
+    }
+  }, 15_000);
+
   it("treats main session aliases as main in non-main mode", async () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "work" },
@@ -200,6 +261,73 @@ describe("resolveSandboxContext", () => {
     ).toBeNull();
   }, 15_000);
 
+  it("refreshes registered runtime freshness when staging reuses a session workspace", async () => {
+    touchRegistryEntriesForSessionKeyMock.mockClear();
+    updateWorkspaceRegistryMock.mockClear();
+    syncSkillsToWorkspaceMock.mockClear();
+    const order: string[] = [];
+    updateWorkspaceRegistryMock.mockImplementationOnce(async () => {
+      order.push("registry");
+    });
+    syncSkillsToWorkspaceMock.mockImplementationOnce(async () => {
+      order.push("sync");
+    });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "rw",
+            prune: { idleHours: 24, maxAgeDays: 7, onSessionEnd: true },
+          },
+        },
+      },
+    };
+
+    const workspace = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:worker:task",
+      workspaceDir: "/tmp/openclaw-test",
+    });
+
+    expect(workspace).not.toBeNull();
+    expect(updateWorkspaceRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        containerName: "workspace:agent:worker:task",
+        sessionKey: "agent:worker:task",
+        scope: "session",
+      }),
+    );
+    expect(touchRegistryEntriesForSessionKeyMock).toHaveBeenCalledWith("agent:worker:task");
+    expect(order).toEqual(["registry", "sync"]);
+  }, 15_000);
+
+  it("does not create workspace registry rows for unmanaged session workspaces", async () => {
+    updateWorkspaceRegistryMock.mockClear();
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "rw",
+            prune: { idleHours: 24, maxAgeDays: 7, onSessionEnd: false },
+          },
+        },
+      },
+    };
+
+    const workspace = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:worker:unmanaged",
+      workspaceDir: "/tmp/openclaw-test",
+    });
+
+    expect(workspace).not.toBeNull();
+    expect(updateWorkspaceRegistryMock).not.toHaveBeenCalled();
+  }, 15_000);
+
   it("resolves a registered non-docker backend", async () => {
     const restore = registerSandboxBackend("test-backend", {
       factory: async () => ({
@@ -207,6 +335,10 @@ describe("resolveSandboxContext", () => {
         runtimeId: "test-runtime",
         runtimeLabel: "Test Runtime",
         workdir: "/runtime/workspace",
+        cleanupMetadata: {
+          openShellGateway: "old-gateway",
+          openShellGatewayEndpoint: "https://old-gateway.example",
+        },
         buildExecSpec: async () => ({
           argv: ["test-backend", "exec"],
           env: process.env,
@@ -229,7 +361,7 @@ describe("resolveSandboxContext", () => {
               backend: "test-backend",
               scope: "session",
               workspaceAccess: "rw",
-              prune: { idleHours: 0, maxAgeDays: 0 },
+              prune: { idleHours: 0, maxAgeDays: 0, onSessionEnd: false },
             },
           },
         },
@@ -245,6 +377,14 @@ describe("resolveSandboxContext", () => {
       expect(result?.runtimeId).toBe("test-runtime");
       expect(result?.containerName).toBe("test-runtime");
       expect(result?.backend?.id).toBe("test-backend");
+      expect(updateRegistryMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cleanupMetadata: {
+            openShellGateway: "old-gateway",
+            openShellGatewayEndpoint: "https://old-gateway.example",
+          },
+        }),
+      );
 
       const workspace = await ensureSandboxWorkspaceForSession({
         config: cfg,
@@ -288,7 +428,7 @@ describe("resolveSandboxContext", () => {
               backend: "test-browser-backend",
               scope: "session",
               workspaceAccess: "rw",
-              prune: { idleHours: 0, maxAgeDays: 0 },
+              prune: { idleHours: 0, maxAgeDays: 0, onSessionEnd: false },
               browser: { enabled: true },
             },
           },

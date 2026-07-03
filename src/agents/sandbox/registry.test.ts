@@ -41,18 +41,23 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { hashTextSha256 } from "./hash.js";
 import {
+  getSandboxWorkspaceRegistryRoots,
   migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
   readRegistry,
   readRegistryEntry,
+  readWorkspaceRegistry,
   removeBrowserRegistryEntry,
   removeRegistryEntry,
+  touchRegistryEntriesForSessionKey,
   updateBrowserRegistry,
   updateRegistry,
+  updateWorkspaceRegistry,
 } from "./registry.js";
 
 type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistryEntry;
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
+type SandboxWorkspaceRegistryEntry = import("./registry.js").SandboxWorkspaceRegistryEntry;
 type MigrationResult = Awaited<ReturnType<typeof migrateLegacySandboxRegistryFiles>>[number];
 
 async function seedMalformedContainerRegistry(payload: string) {
@@ -105,6 +110,20 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
     createdAtMs: 1,
     lastUsedAtMs: 1,
     image: "openclaw-sandbox:test",
+    ...overrides,
+  };
+}
+
+function workspaceEntry(
+  overrides: Partial<SandboxWorkspaceRegistryEntry> = {},
+): SandboxWorkspaceRegistryEntry {
+  return {
+    containerName: "workspace-a",
+    sessionKey: "agent:main",
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    scope: "session",
+    workspaceRoot: "/tmp/workspace-root",
     ...overrides,
   };
 }
@@ -306,6 +325,148 @@ describe("registry race safety", () => {
     expect(entry?.lastUsedAtMs).toBe(10);
   });
 
+  it("keeps lifecycle cleanup ownership sticky on container and browser rows", async () => {
+    await updateRegistry(
+      containerEntry({
+        lifecycleCleanupOnSessionEnd: true,
+        scope: "session",
+        workspaceRoot: "/tmp/original-root",
+        sshTarget: "old-host",
+        sshWorkspaceRoot: "/old/remote/root",
+        cleanupMetadata: { openShellGateway: null },
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        lifecycleCleanupOnSessionEnd: false,
+        scope: "session",
+        workspaceRoot: "/tmp/new-root",
+        sshTarget: "new-host",
+        sshWorkspaceRoot: "/new/remote/root",
+        cleanupMetadata: { openShellGateway: "new-gateway" },
+      }),
+    );
+    await updateBrowserRegistry(
+      browserEntry({
+        lifecycleCleanupOnSessionEnd: true,
+        scope: "session",
+        workspaceRoot: "/tmp/original-root",
+      }),
+    );
+    await updateBrowserRegistry(
+      browserEntry({
+        lifecycleCleanupOnSessionEnd: false,
+        scope: "session",
+        workspaceRoot: "/tmp/new-root",
+      }),
+    );
+
+    const container = await readRegistryEntry("container-a");
+    const browser = (await readBrowserRegistry()).entries[0];
+    expect(container?.lifecycleCleanupOnSessionEnd).toBe(true);
+    expect(browser?.lifecycleCleanupOnSessionEnd).toBe(true);
+    expect(container?.workspaceRoot).toBe("/tmp/new-root");
+    expect(container?.sshTarget).toBe("new-host");
+    expect(container?.supersededCleanupLocations).toEqual([
+      {
+        workspaceRoot: "/tmp/original-root",
+        sshTarget: "old-host",
+        sshWorkspaceRoot: "/old/remote/root",
+        cleanupMetadata: { openShellGateway: null },
+      },
+    ]);
+    expect(browser?.supersededCleanupLocations).toEqual([{ workspaceRoot: "/tmp/original-root" }]);
+  });
+
+  it("uses legacy SSH image targets as superseded cleanup locations", async () => {
+    await updateRegistry(
+      containerEntry({
+        backendId: "ssh",
+        configLabelKind: "Target",
+        image: "old-host",
+        lifecycleCleanupOnSessionEnd: true,
+        scope: "session",
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        backendId: "ssh",
+        configLabelKind: "Target",
+        image: "new-host",
+        lifecycleCleanupOnSessionEnd: false,
+        scope: "session",
+        sshTarget: "new-host",
+      }),
+    );
+
+    const container = await readRegistryEntry("container-a");
+    expect(container?.sshTarget).toBe("new-host");
+    expect(container?.supersededCleanupLocations).toEqual([{ sshTarget: "old-host" }]);
+  });
+
+  it("keeps old roots on workspace-only rows before runtime creation finalizes", async () => {
+    await updateWorkspaceRegistry(
+      workspaceEntry({
+        lifecycleCleanupOnSessionEnd: true,
+        workspaceRoot: "/tmp/original-root",
+      }),
+    );
+    await updateWorkspaceRegistry(
+      workspaceEntry({
+        lifecycleCleanupOnSessionEnd: false,
+        lastUsedAtMs: 2,
+        workspaceRoot: "/tmp/new-root",
+      }),
+    );
+
+    const workspace = (await readWorkspaceRegistry()).entries[0];
+    expect(workspace?.lifecycleCleanupOnSessionEnd).toBe(true);
+    expect(workspace?.workspaceRoot).toBe("/tmp/new-root");
+    expect(workspace?.supersededWorkspaceRoots).toEqual(["/tmp/original-root"]);
+    expect(workspace ? getSandboxWorkspaceRegistryRoots(workspace) : []).toEqual([
+      "/tmp/new-root",
+      "/tmp/original-root",
+    ]);
+  });
+
+  it("keeps superseded OpenShell gateway-only cleanup locations", async () => {
+    await updateRegistry(
+      containerEntry({
+        backendId: "openshell",
+        lifecycleCleanupOnSessionEnd: true,
+        scope: "session",
+        workspaceRoot: "/tmp/openshell-root",
+        cleanupMetadata: {
+          openShellGateway: null,
+          openShellGatewayEndpoint: null,
+        },
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        backendId: "openshell",
+        lifecycleCleanupOnSessionEnd: false,
+        scope: "session",
+        workspaceRoot: "/tmp/openshell-root",
+        cleanupMetadata: {
+          openShellGateway: "remote-gateway",
+          openShellGatewayEndpoint: "https://remote-gateway.example",
+        },
+      }),
+    );
+
+    const container = await readRegistryEntry("container-a");
+    expect(container?.supersededCleanupLocations).toEqual([
+      {
+        workspaceRoot: "/tmp/openshell-root",
+        cleanupMetadata: {
+          openShellGateway: null,
+          openShellGatewayEndpoint: null,
+        },
+      },
+    ]);
+  });
+
   it("prefers newer sharded entries over stale monolithic entries during legacy migration", async () => {
     await seedContainerRegistry([
       containerEntry({
@@ -337,6 +498,47 @@ describe("registry race safety", () => {
     expect(entry?.containerName).toBe("container-x");
     expect(entry?.sessionKey).toBe("sess:x");
     await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
+  });
+
+  it("touches only matching session rows without changing cleanup metadata", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "container-x",
+        sessionKey: "sess:x",
+        lastUsedAtMs: 4,
+        workspaceRoot: "/tmp/current",
+        supersededCleanupLocations: [{ workspaceRoot: "/tmp/old" }],
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "container-y",
+        sessionKey: "sess:y",
+        lastUsedAtMs: 5,
+      }),
+    );
+    await updateBrowserRegistry(
+      browserEntry({
+        containerName: "browser-x",
+        sessionKey: "sess:x",
+        lastUsedAtMs: 3,
+        workspaceRoot: "/tmp/browser-current",
+        supersededCleanupLocations: [{ workspaceRoot: "/tmp/browser-old" }],
+      }),
+    );
+
+    await touchRegistryEntriesForSessionKey("sess:x", 10);
+
+    const containerX = await readRegistryEntry("container-x");
+    const containerY = await readRegistryEntry("container-y");
+    const browserX = (await readBrowserRegistry()).entries.find(
+      (entry) => entry.containerName === "browser-x",
+    );
+    expect(containerX?.lastUsedAtMs).toBe(10);
+    expect(containerX?.supersededCleanupLocations).toEqual([{ workspaceRoot: "/tmp/old" }]);
+    expect(containerY?.lastUsedAtMs).toBe(5);
+    expect(browserX?.lastUsedAtMs).toBe(10);
+    expect(browserX?.supersededCleanupLocations).toEqual([{ workspaceRoot: "/tmp/browser-old" }]);
   });
 
   it("keeps both container updates under concurrent writes", async () => {

@@ -483,6 +483,7 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+  deferredSandboxLifecycleCleanup?: () => Promise<void>;
 };
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
@@ -516,6 +517,7 @@ export async function runPreparedReply(
     opts,
     defaultModel,
     timeoutMs,
+    deferredSandboxLifecycleCleanup,
     isNewSession,
     resetTriggered,
     systemSent,
@@ -1517,5 +1519,6 @@ export async function runPreparedReply(
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
+    deferredSandboxLifecycleCleanup,
   });
 }

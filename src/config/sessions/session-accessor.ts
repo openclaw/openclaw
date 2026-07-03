@@ -60,6 +60,7 @@ import {
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
+  type DeleteSessionEntryLifecycleMutation,
   type DeleteSessionEntryLifecycleResult,
   type ResetSessionEntryLifecycleMutation,
   type ResetSessionEntryLifecycleResult,
@@ -639,6 +640,7 @@ export type SessionPatchProjectionSnapshot = SessionEntryPatchProjectionSnapshot
 export type SessionPatchProjectionTarget = SessionEntryPatchProjectionTarget;
 
 export type {
+  DeleteSessionEntryLifecycleMutation,
   DeleteSessionEntryLifecycleResult,
   ResetSessionEntryLifecycleResult,
   SessionLifecycleArchivedTranscript,
@@ -658,6 +660,8 @@ export type {
 export type ResetSessionEntryLifecycleParams = {
   /** Runs after the persisted entry rotates and before transcript artifacts move. */
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
+  /** Runs after the replacement entry is built but before it is persisted. */
+  beforeEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Builds the persisted replacement entry from the current backend row. */
@@ -676,6 +680,10 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
   archiveTranscript: boolean;
+  /** Runs after the entry is found but before the deletion is persisted. */
+  beforeEntryRemoval?: (mutation: DeleteSessionEntryLifecycleMutation) => Promise<void> | void;
+  /** Optional guard for plans built before external lifecycle cleanup runs. */
+  expectedSessionId?: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */

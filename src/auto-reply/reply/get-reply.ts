@@ -1,5 +1,7 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -19,9 +21,11 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isPathInside } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { getMediaDir } from "../../media/store.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -31,7 +35,10 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -49,6 +56,7 @@ import {
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
+import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import type {
   InternalGetReplyOptions as BaseInternalGetReplyOptions,
@@ -59,6 +67,13 @@ import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-medi
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  ReplyRunAlreadyActiveError,
+  replyRunRegistry,
+  type ReplyOperation,
+  withReplyRunAdmissionBlock,
+} from "./reply-run-registry.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
@@ -73,6 +88,12 @@ type ResetCommandAction = "new" | "reset";
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   extractedFileImages?: ExtractedFileImage[];
+  replyOperation?: ReplyOperation;
+};
+
+type SandboxMediaRestageSource = {
+  source: string;
+  mediaType?: string;
 };
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
@@ -214,6 +235,197 @@ function withExtractedFileImages(
     ...opts,
     extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
   };
+}
+
+function toInboundMediaUriForRestage(value: string | undefined): string | undefined {
+  const raw = normalizeOptionalString(value);
+  if (!raw) {
+    return value;
+  }
+  const match = /^media\/inbound\/([^/\\]+)$/i.exec(raw.replace(/\\/g, "/"));
+  return match ? `media://inbound/${encodeURIComponent(match[1])}` : raw;
+}
+
+type RemoteInboundMediaSourceSnapshot = Pick<
+  MsgContext,
+  "MediaPath" | "MediaPaths" | "MediaUrl" | "MediaUrls"
+>;
+
+function captureRemoteInboundMediaSourceSnapshot(
+  ctx: MsgContext,
+): RemoteInboundMediaSourceSnapshot | undefined {
+  if (!normalizeOptionalString(ctx.MediaRemoteHost) || !hasInboundMedia(ctx)) {
+    return undefined;
+  }
+  return {
+    ...(ctx.MediaPath !== undefined ? { MediaPath: ctx.MediaPath } : {}),
+    ...(ctx.MediaPaths ? { MediaPaths: [...ctx.MediaPaths] } : {}),
+    ...(ctx.MediaUrl !== undefined ? { MediaUrl: ctx.MediaUrl } : {}),
+    ...(ctx.MediaUrls ? { MediaUrls: [...ctx.MediaUrls] } : {}),
+  };
+}
+
+function restoreRemoteInboundMediaSourceSnapshot(params: {
+  ctx: MsgContext;
+  sessionCtx: MsgContext;
+  source: RemoteInboundMediaSourceSnapshot;
+}): void {
+  const mediaPaths = params.source.MediaPaths ? [...params.source.MediaPaths] : undefined;
+  const mediaUrls = params.source.MediaUrls ? [...params.source.MediaUrls] : undefined;
+  params.ctx.MediaPath = params.source.MediaPath;
+  params.sessionCtx.MediaPath = params.source.MediaPath;
+  params.ctx.MediaPaths = mediaPaths;
+  params.sessionCtx.MediaPaths = mediaPaths;
+  params.ctx.MediaUrl = params.source.MediaUrl;
+  params.sessionCtx.MediaUrl = params.source.MediaUrl;
+  params.ctx.MediaUrls = mediaUrls;
+  params.sessionCtx.MediaUrls = mediaUrls;
+}
+
+function collectSandboxMediaRestageSources(ctx: MsgContext): SandboxMediaRestageSource[] {
+  const mediaPaths = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths.map((value) => normalizeOptionalString(value)).filter(
+        (value): value is string => Boolean(value),
+      )
+    : [];
+  const mediaTypes = Array.isArray(ctx.MediaTypes)
+    ? ctx.MediaTypes.map((value) => normalizeOptionalString(value))
+    : [];
+  const sources =
+    mediaPaths.length > 0
+      ? mediaPaths.map((source, index) => ({
+          source,
+          mediaType: mediaTypes[index] ?? normalizeOptionalString(ctx.MediaType),
+        }))
+      : (() => {
+          const mediaPath = normalizeOptionalString(ctx.MediaPath);
+          return mediaPath
+            ? [
+                {
+                  source: mediaPath,
+                  mediaType: normalizeOptionalString(ctx.MediaType),
+                },
+              ]
+            : [];
+        })();
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    if (seen.has(source.source)) {
+      return false;
+    }
+    seen.add(source.source);
+    return true;
+  });
+}
+
+function isPdfRestageSource(source: SandboxMediaRestageSource): boolean {
+  const mime = source.mediaType?.trim().toLowerCase();
+  if (mime === "application/pdf" || mime?.endsWith("+pdf")) {
+    return true;
+  }
+  return path.extname(source.source.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
+}
+
+function mediaRestageSourceKeys(source: string): string[] {
+  if (!source.startsWith("file://")) {
+    return [source];
+  }
+  try {
+    return [source, fileURLToPath(source)];
+  } catch {
+    return [source];
+  }
+}
+
+function resolveLocalRestageSourcePath(source: string): string | undefined {
+  if (source.startsWith("file://")) {
+    try {
+      return fileURLToPath(source);
+    } catch {
+      return undefined;
+    }
+  }
+  return path.isAbsolute(source) ? source : undefined;
+}
+
+function isManagedInboundPdfPassThroughSource(source: SandboxMediaRestageSource): boolean {
+  if (!isPdfRestageSource(source)) {
+    return false;
+  }
+  if (/^media:\/\/inbound\/[^/\\]+$/i.test(source.source)) {
+    return true;
+  }
+  const filePath = resolveLocalRestageSourcePath(source.source);
+  return Boolean(filePath && isPathInside(path.join(getMediaDir(), "inbound"), filePath));
+}
+
+function didRestageAllSandboxMediaSources(params: {
+  sources: readonly SandboxMediaRestageSource[];
+  staged: ReadonlyMap<string, string>;
+}): boolean {
+  return params.sources.every(
+    (source) =>
+      mediaRestageSourceKeys(source.source).some((key) => params.staged.has(key)) ||
+      isManagedInboundPdfPassThroughSource(source),
+  );
+}
+
+function preparePrestagedMediaForRestage(params: {
+  ctx: MsgContext;
+  sessionCtx: MsgContext;
+  remoteSource?: RemoteInboundMediaSourceSnapshot;
+}): boolean {
+  if (params.ctx.MediaStaged !== true || !hasInboundMedia(params.ctx)) {
+    return false;
+  }
+  if (params.remoteSource) {
+    restoreRemoteInboundMediaSourceSnapshot({
+      ctx: params.ctx,
+      sessionCtx: params.sessionCtx,
+      source: params.remoteSource,
+    });
+    params.ctx.MediaStaged = undefined;
+    params.sessionCtx.MediaStaged = undefined;
+    return true;
+  }
+  const rewriteList = (values: string[] | undefined): string[] | undefined =>
+    values?.map((value) => toInboundMediaUriForRestage(value) ?? value);
+  const mediaPaths = rewriteList(params.ctx.MediaPaths);
+  const mediaUrls = rewriteList(params.ctx.MediaUrls);
+  const mediaPath = mediaPaths?.[0] ?? toInboundMediaUriForRestage(params.ctx.MediaPath);
+  const mediaUrl = mediaUrls?.[0] ?? toInboundMediaUriForRestage(params.ctx.MediaUrl);
+
+  if (mediaPaths) {
+    params.ctx.MediaPaths = mediaPaths;
+    params.sessionCtx.MediaPaths = mediaPaths;
+  }
+  if (mediaPath !== undefined) {
+    params.ctx.MediaPath = mediaPath;
+    params.sessionCtx.MediaPath = mediaPath;
+  }
+  if (mediaUrls) {
+    params.ctx.MediaUrls = mediaUrls;
+    params.sessionCtx.MediaUrls = mediaUrls;
+  }
+  if (mediaUrl !== undefined) {
+    params.ctx.MediaUrl = mediaUrl;
+    params.sessionCtx.MediaUrl = mediaUrl;
+  }
+  params.ctx.MediaStaged = undefined;
+  params.sessionCtx.MediaStaged = undefined;
+  return true;
+}
+
+function hasSandboxStagedMedia(ctx: MsgContext): boolean {
+  return Boolean(ctx.MediaStaged === true && normalizeOptionalString(ctx.MediaWorkspaceDir));
+}
+
+function isPrestagedMediaForDifferentSession(ctx: MsgContext, sessionId: string): boolean {
+  if (!hasSandboxStagedMedia(ctx)) {
+    return false;
+  }
+  const stagedSessionId = normalizeOptionalString(ctx.MediaStagedSessionId);
+  return Boolean(stagedSessionId && stagedSessionId !== sessionId);
 }
 
 async function applyLinkUnderstandingIfNeeded(params: {
@@ -421,6 +633,33 @@ export async function getReplyFromConfig(
   );
   const workspaceDir = workspace.dir;
 
+  let mediaUnderstandingApplied = false;
+  const applyFinalizedMediaUnderstanding = async (phase: string) => {
+    const mediaResult = await traceGetReplyPhase(phase, () =>
+      applyMediaUnderstandingIfNeeded({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        workspaceDir,
+        activeModel: { provider, model },
+      }),
+    );
+    if (mediaResult?.extractedFileImages.length) {
+      extractedFileImages = mediaResult.extractedFileImages;
+    }
+    if (
+      mediaResult &&
+      (mediaResult.outputs.length > 0 ||
+        mediaResult.appliedFile ||
+        mediaResult.extractedFileImages.length > 0)
+    ) {
+      mediaUnderstandingApplied = true;
+    }
+    return mediaResult;
+  };
+
+  const remoteInboundMediaSourceSnapshot = captureRemoteInboundMediaSourceSnapshot(finalized);
   if (
     !isFastTestEnv &&
     normalizeOptionalString(finalized.MediaRemoteHost) &&
@@ -436,19 +675,7 @@ export async function getReplyFromConfig(
     );
   }
   if (!isFastTestEnv && hasInboundMediaForUnderstanding(finalized)) {
-    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
-      applyMediaUnderstandingIfNeeded({
-        ctx: finalized,
-        cfg,
-        agentId,
-        agentDir,
-        workspaceDir,
-        activeModel: { provider, model },
-      }),
-    );
-    if (mediaResult?.extractedFileImages.length) {
-      extractedFileImages = mediaResult.extractedFileImages;
-    }
+    await applyFinalizedMediaUnderstanding("reply.apply_media_understanding");
   }
   if (!isFastTestEnv && hasLinkCandidate(finalized)) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>
@@ -499,14 +726,148 @@ export async function getReplyFromConfig(
     isGroup,
     triggerBodyNormalized,
     bodyStripped,
+    deferredSandboxLifecycleCleanup,
   } = sessionState;
   let { abortedLastRun } = sessionState;
+  const currentReplyOperation = internalResolvedOpts?.replyOperation;
+  if (
+    currentReplyOperation &&
+    currentReplyOperation.result === null &&
+    currentReplyOperation.phase === "queued" &&
+    currentReplyOperation.key === sessionKey &&
+    currentReplyOperation.sessionId !== sessionId
+  ) {
+    currentReplyOperation.updateSessionId(sessionId);
+  }
+  let pendingSandboxLifecycleCleanup = deferredSandboxLifecycleCleanup;
+  let sandboxLifecycleCleanupRetryScheduled = false;
+  const runDeferredSandboxLifecycleCleanupAfterIdle = async (): Promise<boolean> => {
+    const cleanup = pendingSandboxLifecycleCleanup;
+    if (!cleanup) {
+      return true;
+    }
+    const scheduleSandboxLifecycleCleanupRetry = () => {
+      if (sandboxLifecycleCleanupRetryScheduled) {
+        return;
+      }
+      sandboxLifecycleCleanupRetryScheduled = true;
+      void replyRunRegistry
+        .waitForIdle(sessionKey)
+        .then(async () => {
+          sandboxLifecycleCleanupRetryScheduled = false;
+          await runDeferredSandboxLifecycleCleanupAfterIdle();
+        })
+        .catch((error: unknown) =>
+          logVerbose(`sandbox lifecycle cleanup retry failed: ${String(error)}`),
+        );
+    };
+    const activeOperation = replyRunRegistry.get(sessionKey);
+    if (activeOperation && activeOperation !== currentReplyOperation) {
+      if (
+        previousSessionEntry?.sessionId &&
+        activeOperation.sessionId === previousSessionEntry.sessionId
+      ) {
+        activeOperation.abortForRestart();
+      }
+      const idle = await replyRunRegistry.waitForIdle(sessionKey, REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      if (!idle) {
+        logVerbose(`sandbox lifecycle cleanup skipped; reply run still active for ${sessionKey}`);
+        scheduleSandboxLifecycleCleanupRetry();
+        return false;
+      }
+    }
+    pendingSandboxLifecycleCleanup = undefined;
+    try {
+      await withReplyRunAdmissionBlock(
+        sessionKey,
+        async () => {
+          await cleanup();
+        },
+        { currentOperation: currentReplyOperation },
+      );
+    } catch (error) {
+      if (error instanceof ReplyRunAlreadyActiveError) {
+        pendingSandboxLifecycleCleanup = cleanup;
+        logVerbose(`sandbox lifecycle cleanup skipped; reply run still active for ${sessionKey}`);
+        scheduleSandboxLifecycleCleanupRetry();
+        return false;
+      }
+      logVerbose(`sandbox lifecycle cleanup failed before replacement turn: ${String(error)}`);
+      return false;
+    }
+    return true;
+  };
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
   internalResolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
     storePath,
   });
+
+  const hasDeferredSandboxLifecycleCleanup = Boolean(deferredSandboxLifecycleCleanup);
+  const sandboxLifecycleReady = await runDeferredSandboxLifecycleCleanupAfterIdle();
+  if (!sandboxLifecycleReady) {
+    typing.cleanup();
+    logResolverTiming("completed", "sandbox_lifecycle_cleanup_pending");
+    return markReplyPayloadForSourceSuppressionDelivery({
+      text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+    });
+  }
+  const prestagedMediaSessionChanged = isPrestagedMediaForDifferentSession(finalized, sessionId);
+  if (
+    hasSandboxStagedMedia(finalized) &&
+    (hasDeferredSandboxLifecycleCleanup || prestagedMediaSessionChanged) &&
+    preparePrestagedMediaForRestage({
+      ctx: finalized,
+      sessionCtx,
+      remoteSource: remoteInboundMediaSourceSnapshot,
+    })
+  ) {
+    const restageSources = collectSandboxMediaRestageSources(finalized);
+    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    const restageResult = await traceGetReplyPhase(
+      "reply.restage_media_after_sandbox_cleanup",
+      () =>
+        stageSandboxMedia({
+          ctx: finalized,
+          sessionCtx,
+          cfg,
+          sessionKey,
+          workspaceDir,
+        }),
+    );
+    if (
+      !didRestageAllSandboxMediaSources({
+        sources: restageSources,
+        staged: restageResult.staged,
+      })
+    ) {
+      typing.cleanup();
+      logVerbose("sandbox lifecycle media restage incomplete after replacement cleanup");
+      logResolverTiming("completed", "sandbox_lifecycle_media_restaging_failed");
+      return markReplyPayloadForSourceSuppressionDelivery({
+        text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
+      });
+    }
+    finalized.MediaStaged = true;
+    finalized.MediaStagedSessionId = sessionId;
+    sessionCtx.MediaStaged = true;
+    sessionCtx.MediaStagedSessionId = sessionId;
+    ctx.MediaPath = finalized.MediaPath;
+    ctx.MediaPaths = finalized.MediaPaths ? [...finalized.MediaPaths] : undefined;
+    ctx.MediaUrl = finalized.MediaUrl;
+    ctx.MediaUrls = finalized.MediaUrls ? [...finalized.MediaUrls] : undefined;
+    ctx.MediaStaged = true;
+    ctx.MediaStagedSessionId = sessionId;
+    if (
+      prestagedMediaSessionChanged &&
+      !mediaUnderstandingApplied &&
+      !isFastTestEnv &&
+      hasInboundMediaForUnderstanding(finalized)
+    ) {
+      await applyFinalizedMediaUnderstanding("reply.apply_media_understanding_after_restaging");
+    }
+  }
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
@@ -687,64 +1048,71 @@ export async function getReplyFromConfig(
       commandAuthorized,
     });
     logResolverTiming("milestone", "before_fast_directive_prepared_reply");
-    const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-      runPreparedReply({
-        ctx,
-        sessionCtx,
-        cfg,
-        agentId,
-        agentDir,
-        agentCfg,
-        sessionCfg,
-        commandAuthorized,
-        command: fastCommand,
-        commandSource:
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-        allowTextCommands: shouldHandleFastReplyTextCommands({
+    const fastReplyResult = await traceGetReplyPhase("reply.run_prepared_reply", async () => {
+      try {
+        return await runPreparedReply({
+          ctx,
+          sessionCtx,
           cfg,
-          commandSource: finalized.CommandSource,
-        }),
-        directives: clearInlineDirectives(
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-        ),
-        defaultActivation: "always",
-        resolvedThinkLevel: undefined,
-        resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
-        resolvedReasoningLevel: "off",
-        resolvedElevatedLevel: "off",
-        execOverrides: undefined,
-        elevatedEnabled: false,
-        elevatedAllowed: false,
-        blockStreamingEnabled: false,
-        blockReplyChunking: undefined,
-        resolvedBlockStreamingBreak: "text_end",
-        modelState: createFastTestModelSelectionState({
+          agentId,
+          agentDir,
           agentCfg,
+          sessionCfg,
+          commandAuthorized,
+          command: fastCommand,
+          commandSource:
+            finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+          allowTextCommands: shouldHandleFastReplyTextCommands({
+            cfg,
+            commandSource: finalized.CommandSource,
+          }),
+          directives: clearInlineDirectives(
+            finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+          ),
+          defaultActivation: "always",
+          resolvedThinkLevel: undefined,
+          resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
+          resolvedReasoningLevel: "off",
+          resolvedElevatedLevel: "off",
+          execOverrides: undefined,
+          elevatedEnabled: false,
+          elevatedAllowed: false,
+          blockStreamingEnabled: false,
+          blockReplyChunking: undefined,
+          resolvedBlockStreamingBreak: "text_end",
+          modelState: createFastTestModelSelectionState({
+            agentCfg,
+            provider: autoFallbackPrimaryProbe?.provider ?? provider,
+            model: autoFallbackPrimaryProbe?.model ?? model,
+          }),
           provider: autoFallbackPrimaryProbe?.provider ?? provider,
           model: autoFallbackPrimaryProbe?.model ?? model,
-        }),
-        provider: autoFallbackPrimaryProbe?.provider ?? provider,
-        model: autoFallbackPrimaryProbe?.model ?? model,
-        perMessageQueueMode: undefined,
-        perMessageQueueOptions: undefined,
-        typing,
-        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-        defaultModel,
-        timeoutMs,
-        isNewSession,
-        resetTriggered,
-        systemSent,
-        sessionEntry,
-        sessionEntryHandle,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        workspaceDir,
-        abortedLastRun,
-        autoFallbackPrimaryProbe,
-      }),
-    );
+          perMessageQueueMode: undefined,
+          perMessageQueueOptions: undefined,
+          typing,
+          opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+          defaultModel,
+          timeoutMs,
+          isNewSession,
+          resetTriggered,
+          systemSent,
+          sessionEntry,
+          sessionEntryHandle,
+          sessionStore,
+          sessionKey,
+          sessionId,
+          storePath,
+          workspaceDir,
+          abortedLastRun,
+          autoFallbackPrimaryProbe,
+          deferredSandboxLifecycleCleanup: async () => {
+            await runDeferredSandboxLifecycleCleanupAfterIdle();
+          },
+        });
+      } finally {
+        await runDeferredSandboxLifecycleCleanupAfterIdle();
+      }
+    });
     logResolverTiming("completed", "fast_directive_prepared_reply");
     return fastReplyResult;
   }
@@ -782,6 +1150,7 @@ export async function getReplyFromConfig(
     }),
   );
   if (directiveResult.kind === "reply") {
+    await runDeferredSandboxLifecycleCleanupAfterIdle();
     logResolverTiming("completed", "directive_reply");
     return directiveResult.reply;
   }
@@ -883,6 +1252,7 @@ export async function getReplyFromConfig(
     }),
   );
   if (inlineActionResult.kind === "reply") {
+    await runDeferredSandboxLifecycleCleanupAfterIdle();
     await maybeEmitMissingResetHooks();
     logResolverTiming("completed", "inline_action_reply");
     return inlineActionResult.reply;
@@ -987,6 +1357,7 @@ export async function getReplyFromConfig(
         ),
       );
       if (hookResult?.handled) {
+        await runDeferredSandboxLifecycleCleanupAfterIdle();
         logResolverTiming("completed", "before_agent_reply_hook");
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
@@ -1011,57 +1382,65 @@ export async function getReplyFromConfig(
   }
 
   logResolverTiming("milestone", "before_run_prepared_reply");
-  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-    runPreparedReply({
-      ctx,
-      sessionCtx,
-      cfg,
-      agentId,
-      agentDir,
-      agentCfg,
-      sessionCfg,
-      commandAuthorized,
-      command,
-      commandSource,
-      allowTextCommands,
-      directives,
-      defaultActivation,
-      resolvedThinkLevel,
-      resolvedFastMode,
-      resolvedFastModeAutoOnSeconds,
-      resolvedFastModeOverride,
-      resolvedFastModeAutoOnSecondsOverride,
-      resolvedVerboseLevel,
-      resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      execOverrides,
-      elevatedEnabled,
-      elevatedAllowed,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
-      modelState: runModelState,
-      provider: runProvider,
-      model: runModel,
-      perMessageQueueMode,
-      perMessageQueueOptions,
-      typing,
-      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-      defaultModel,
-      timeoutMs,
-      isNewSession,
-      resetTriggered,
-      systemSent,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      sessionId,
-      storePath,
-      workspaceDir,
-      abortedLastRun,
-      autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
-    }),
-  );
+  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", async () => {
+    try {
+      return await runPreparedReply({
+        ctx,
+        sessionCtx,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        sessionCfg,
+        commandAuthorized,
+        command,
+        commandSource,
+        allowTextCommands,
+        directives,
+        defaultActivation,
+        resolvedThinkLevel,
+        resolvedFastMode,
+        resolvedFastModeAutoOnSeconds,
+        resolvedFastModeOverride,
+        resolvedFastModeAutoOnSecondsOverride,
+        resolvedVerboseLevel,
+        resolvedReasoningLevel,
+        resolvedElevatedLevel,
+        execOverrides,
+        elevatedEnabled,
+        elevatedAllowed,
+        blockStreamingEnabled,
+        blockReplyChunking,
+        resolvedBlockStreamingBreak,
+        modelState: runModelState,
+        provider: runProvider,
+        model: runModel,
+        perMessageQueueMode,
+        perMessageQueueOptions,
+        typing,
+        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+        defaultModel,
+        timeoutMs,
+        isNewSession,
+        resetTriggered,
+        systemSent,
+        sessionEntry,
+        sessionEntryHandle,
+        sessionStore,
+        sessionKey,
+        sessionId,
+        storePath,
+        workspaceDir,
+        abortedLastRun,
+        autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+        deferredSandboxLifecycleCleanup: async () => {
+          await runDeferredSandboxLifecycleCleanupAfterIdle();
+        },
+      });
+    } finally {
+      await runDeferredSandboxLifecycleCleanupAfterIdle();
+    }
+  });
   logResolverTiming("completed", "prepared_reply");
   return replyResult;
 }

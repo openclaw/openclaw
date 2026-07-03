@@ -98,6 +98,8 @@ export type SandboxPruneSettings = {
   idleHours?: number;
   /** Prune if older than N days (0 disables). */
   maxAgeDays?: number;
+  /** Remove session-scoped sandbox resources when the owning session is reset or deleted. */
+  onSessionEnd?: boolean;
 };
 
 export type SandboxSshSettings = {

@@ -220,6 +220,7 @@ export async function ensureSandboxBrowser(params: {
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
+  lifecycleOwnerSessionId?: string;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
@@ -518,6 +519,10 @@ export async function ensureSandboxBrowser(params: {
     lastUsedAtMs: now,
     image: browserImage,
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    scope: params.cfg.scope,
+    workspaceRoot: params.cfg.workspaceRoot,
+    lifecycleCleanupOnSessionEnd: params.cfg.prune.onSessionEnd,
+    lifecycleOwnerSessionId: params.lifecycleOwnerSessionId?.trim() || undefined,
     cdpPort: mappedCdp,
     noVncPort: mappedNoVnc ?? undefined,
   });

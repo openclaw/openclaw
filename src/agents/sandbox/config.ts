@@ -181,6 +181,7 @@ export function resolveSandboxPruneConfig(params: {
   return {
     idleHours: agentPrune?.idleHours ?? globalPrune?.idleHours ?? DEFAULT_SANDBOX_IDLE_HOURS,
     maxAgeDays: agentPrune?.maxAgeDays ?? globalPrune?.maxAgeDays ?? DEFAULT_SANDBOX_MAX_AGE_DAYS,
+    onSessionEnd: agentPrune?.onSessionEnd ?? globalPrune?.onSessionEnd ?? false,
   };
 }
 

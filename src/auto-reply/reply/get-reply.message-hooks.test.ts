@@ -51,6 +51,7 @@ registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
+let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 let stageSandboxMediaMock: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
@@ -58,6 +59,7 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
+  ({ replyRunRegistry } = await import("./reply-run-registry.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
   ({ stageSandboxMedia: stageSandboxMediaMock } = await import("./stage-sandbox-media.runtime.js"));
 }
@@ -331,6 +333,11 @@ describe("getReplyFromConfig message hooks", () => {
     const order: string[] = [];
     const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionKey: "agent:main:imessage:direct:user",
+      }),
+    );
     vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
       order.push("stage");
       params.ctx.MediaPath = stagedPath;
@@ -388,6 +395,527 @@ describe("getReplyFromConfig message hooks", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
+  });
+
+  it("cleans up the old sandbox before restaging caller-prestaged media", async () => {
+    const order: string[] = [];
+    const cleanup = vi.fn(async () => {
+      order.push("cleanup");
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey: "agent:main:telegram:123",
+        previousSessionEntry: { sessionId: "old-session" },
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "please read this",
+        abortKey: "telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      order.push("stage");
+      expect(params.ctx.MediaPaths).toEqual(["media://inbound/report.pdf"]);
+      params.ctx.MediaPath = "media/inbound/report.pdf";
+      params.ctx.MediaPaths = ["media/inbound/report.pdf"];
+      params.sessionCtx.MediaPath = "media/inbound/report.pdf";
+      params.sessionCtx.MediaPaths = ["media/inbound/report.pdf"];
+      return {
+        staged: new Map([["media://inbound/report.pdf", "media/inbound/report.pdf"]]),
+      };
+    });
+
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "please read this",
+        BodyForAgent: "please read this",
+        RawBody: "please read this",
+        CommandBody: "please read this",
+        BodyForCommands: "please read this",
+        MediaPath: "media/inbound/report.pdf",
+        MediaPaths: ["media/inbound/report.pdf"],
+        MediaUrl: "media/inbound/report.pdf",
+        MediaUrls: ["media/inbound/report.pdf"],
+        MediaType: "application/pdf",
+        MediaTypes: ["application/pdf"],
+        MediaWorkspaceDir: "/tmp/sandbox-workspace",
+        MediaStaged: true,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(order).toEqual(["cleanup", "stage"]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0].ctx.MediaPath).toBe(
+      "media/inbound/report.pdf",
+    );
+  });
+
+  it("restages caller-prestaged media when the owning session changed before dispatch", async () => {
+    const order: string[] = [];
+    mocks.applyMediaUnderstanding
+      .mockImplementationOnce(async () => {
+        order.push("understand-old");
+        throw new Error("old workspace missing");
+      })
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        order.push("understand-new");
+        const { ctx } = args[0] as { ctx: MsgContext };
+        expect(ctx.MediaPath).toBe("media/inbound/report.txt");
+        ctx.BodyForAgent = "understood report";
+        ctx.MediaUnderstanding = [
+          {
+            kind: "image.description",
+            attachmentIndex: 0,
+            text: "understood report",
+            provider: "openai",
+            model: "gpt-4o-mini",
+          },
+        ];
+        return {
+          outputs: ctx.MediaUnderstanding,
+          decisions: [],
+          extractedFileImages: [],
+          appliedImage: true,
+          appliedAudio: false,
+          appliedVideo: false,
+          appliedFile: false,
+        };
+      });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey: "agent:main:telegram:123",
+        sessionId: "new-session",
+        previousSessionEntry: { sessionId: "old-session" },
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "please read this",
+        abortKey: "telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      order.push("stage");
+      expect(params.ctx.MediaPaths).toEqual(["media://inbound/report.txt"]);
+      params.ctx.MediaPath = "media/inbound/report.txt";
+      params.ctx.MediaPaths = ["media/inbound/report.txt"];
+      params.sessionCtx.MediaPath = "media/inbound/report.txt";
+      params.sessionCtx.MediaPaths = ["media/inbound/report.txt"];
+      return {
+        staged: new Map([["media://inbound/report.txt", "media/inbound/report.txt"]]),
+      };
+    });
+
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "please read this",
+        BodyForAgent: "please read this",
+        RawBody: "please read this",
+        CommandBody: "please read this",
+        BodyForCommands: "please read this",
+        MediaPath: "media/inbound/report.txt",
+        MediaPaths: ["media/inbound/report.txt"],
+        MediaType: "text/plain",
+        MediaTypes: ["text/plain"],
+        MediaWorkspaceDir: "/tmp/sandbox-workspace",
+        MediaStaged: true,
+        MediaStagedSessionId: "old-session",
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(order).toEqual(["understand-old", "stage", "understand-new"]);
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(runParams?.ctx.MediaPath).toBe("media/inbound/report.txt");
+    expect(runParams?.ctx.MediaStagedSessionId).toBe("new-session");
+    expect(runParams?.ctx.BodyForAgent).toBe("understood report");
+  });
+
+  it("returns a retry payload when cleanup media restaging is incomplete", async () => {
+    const order: string[] = [];
+    const cleanup = vi.fn(async () => {
+      order.push("cleanup");
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey: "agent:main:telegram:123",
+        previousSessionEntry: { sessionId: "old-session" },
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "please read these",
+        abortKey: "telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      order.push("stage");
+      expect(params.ctx.MediaPaths).toEqual([
+        "media://inbound/report-a.txt",
+        "media://inbound/report-b.txt",
+      ]);
+      params.ctx.MediaPath = "media/inbound/report-a.txt";
+      params.ctx.MediaPaths = ["media/inbound/report-a.txt", "media://inbound/report-b.txt"];
+      params.sessionCtx.MediaPath = "media/inbound/report-a.txt";
+      params.sessionCtx.MediaPaths = ["media/inbound/report-a.txt", "media://inbound/report-b.txt"];
+      return {
+        staged: new Map([["media://inbound/report-a.txt", "media/inbound/report-a.txt"]]),
+      };
+    });
+
+    const reply = await getReplyFromConfig(
+      buildCtx({
+        Body: "please read these",
+        BodyForAgent: "please read these",
+        RawBody: "please read these",
+        CommandBody: "please read these",
+        BodyForCommands: "please read these",
+        MediaPath: "media/inbound/report-a.txt",
+        MediaPaths: ["media/inbound/report-a.txt", "media/inbound/report-b.txt"],
+        MediaType: "text/plain",
+        MediaTypes: ["text/plain", "text/plain"],
+        MediaWorkspaceDir: "/tmp/sandbox-workspace",
+        MediaStaged: true,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(reply).toEqual(expect.objectContaining({ text: expect.stringContaining("shutting") }));
+    expect(order).toEqual(["cleanup", "stage"]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves managed PDF pass-through when cleanup media restaging skips it", async () => {
+    const { getMediaDir } = await import("../../media/store.js");
+    const managedPdfPath = `${getMediaDir()}/inbound/large.pdf`;
+    const order: string[] = [];
+    const cleanup = vi.fn(async () => {
+      order.push("cleanup");
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey: "agent:main:telegram:123",
+        previousSessionEntry: { sessionId: "old-session" },
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "please read this",
+        abortKey: "telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      order.push("stage");
+      expect(params.ctx.MediaPath).toBe(managedPdfPath);
+      return { staged: new Map() };
+    });
+
+    await getReplyFromConfig(
+      buildCtx({
+        Body: "please read this",
+        BodyForAgent: "please read this",
+        RawBody: "please read this",
+        CommandBody: "please read this",
+        BodyForCommands: "please read this",
+        MediaPath: managedPdfPath,
+        MediaPaths: [managedPdfPath],
+        MediaType: "application/pdf",
+        MediaTypes: ["application/pdf"],
+        MediaStaged: true,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(order).toEqual(["cleanup"]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(stageSandboxMediaMock).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0].ctx.MediaPath).toBe(managedPdfPath);
+  });
+
+  it("restages remote media from the original remote source after sandbox cleanup", async () => {
+    const order: string[] = [];
+    const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const cleanup = vi.fn(async () => {
+      order.push("cleanup");
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey: "agent:main:imessage:direct:user",
+        previousSessionEntry: { sessionId: "old-session" },
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "please describe this",
+        abortKey: "imessage:chat:abc",
+        from: "imessage:user",
+        to: "imessage:chat:abc",
+        senderId: "user",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+    vi.mocked(stageSandboxMediaMock)
+      .mockImplementationOnce(async (params) => {
+        order.push("prestage");
+        expect(params.ctx.MediaPaths).toEqual([remotePath]);
+        params.ctx.MediaPath = "media/inbound/photo.jpg";
+        params.ctx.MediaPaths = ["media/inbound/photo.jpg"];
+        params.ctx.MediaUrl = "media/inbound/photo.jpg";
+        params.ctx.MediaUrls = ["media/inbound/photo.jpg"];
+        params.ctx.MediaWorkspaceDir = "/tmp/sandbox-workspace";
+        params.sessionCtx.MediaPath = "media/inbound/photo.jpg";
+        params.sessionCtx.MediaPaths = ["media/inbound/photo.jpg"];
+        params.sessionCtx.MediaUrl = "media/inbound/photo.jpg";
+        params.sessionCtx.MediaUrls = ["media/inbound/photo.jpg"];
+        params.sessionCtx.MediaWorkspaceDir = "/tmp/sandbox-workspace";
+        return { staged: new Map([[remotePath, "media/inbound/photo.jpg"]]) };
+      })
+      .mockImplementationOnce(async (params) => {
+        order.push("restage");
+        expect(params.ctx.MediaPath).toBe(remotePath);
+        expect(params.ctx.MediaPaths).toEqual([remotePath]);
+        params.ctx.MediaPath = "media/inbound/photo.jpg";
+        params.ctx.MediaPaths = ["media/inbound/photo.jpg"];
+        params.sessionCtx.MediaPath = "media/inbound/photo.jpg";
+        params.sessionCtx.MediaPaths = ["media/inbound/photo.jpg"];
+        return { staged: new Map([[remotePath, "media/inbound/photo.jpg"]]) };
+      });
+
+    await getReplyFromConfig(
+      buildCtx({
+        Provider: "imessage",
+        Surface: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "imessage:chat:abc",
+        ChatType: "direct",
+        Body: "please describe this",
+        BodyForAgent: "please describe this",
+        RawBody: "please describe this",
+        CommandBody: "please describe this",
+        BodyForCommands: "please describe this",
+        SessionKey: "agent:main:imessage:direct:user",
+        From: "imessage:user",
+        To: "imessage:chat:abc",
+        MediaPath: remotePath,
+        MediaPaths: [remotePath],
+        MediaUrl: remotePath,
+        MediaUrls: [remotePath],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+        MediaRemoteHost: "user@gateway-host",
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(order).toEqual(["prestage", "cleanup", "restage"]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(stageSandboxMediaMock).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0].ctx.MediaPath).toBe(
+      "media/inbound/photo.jpg",
+    );
+  });
+
+  it("returns a retry payload without staging media when sandbox cleanup fails", async () => {
+    const cleanup = vi.fn(async () => {
+      throw new Error("runtime removal failed");
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionKey: "agent:main:telegram:123",
+        previousSessionEntry: { sessionId: "old-session" },
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+
+    const reply = await getReplyFromConfig(
+      buildCtx({
+        Body: "please read this",
+        BodyForAgent: "please read this",
+        RawBody: "please read this",
+        CommandBody: "please read this",
+        BodyForCommands: "please read this",
+        MediaPath: "/tmp/report.pdf",
+        MediaPaths: ["/tmp/report.pdf"],
+        MediaType: "application/pdf",
+        MediaTypes: ["application/pdf"],
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(reply).toEqual(expect.objectContaining({ text: expect.stringContaining("shutting") }));
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(stageSandboxMediaMock).not.toHaveBeenCalled();
+    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not abort the current queued operation while cleaning up a rollover", async () => {
+    const sessionKey = "agent:main:telegram:123";
+    const cleanup = vi.fn(async () => undefined);
+    const operation = replyRunRegistry.begin({
+      sessionKey,
+      sessionId: "old-session",
+      resetTriggered: true,
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey,
+        sessionId: "new-session",
+        previousSessionEntry: { sessionId: "old-session" },
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: "telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+
+    try {
+      await getReplyFromConfig(
+        buildCtx({
+          Body: "hello",
+          BodyForAgent: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          BodyForCommands: "hello",
+          MediaPath: undefined,
+          MediaUrl: undefined,
+          MediaType: undefined,
+          MediaPaths: undefined,
+          MediaUrls: undefined,
+          MediaTypes: undefined,
+        }),
+        { replyOperation: operation } as never,
+        withFastReplyConfig({}),
+      );
+    } finally {
+      operation.complete();
+    }
+
+    expect(operation.sessionId).toBe("new-session");
+    expect(operation.abortSignal.aborted).toBe(false);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(runPreparedReplyMock).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0].sessionEntryHandle).toBeDefined();
+  });
+
+  it("waits for a different active operation before retrying persisted cleanup", async () => {
+    const sessionKey = "agent:main:telegram:123";
+    const order: string[] = [];
+    const cleanup = vi.fn(async () => {
+      order.push("cleanup");
+    });
+    const operation = replyRunRegistry.begin({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    setTimeout(() => {
+      order.push("complete");
+      operation.complete();
+    }, 0);
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {},
+        sessionKey,
+        sessionId: "current-session",
+        previousSessionEntry: undefined,
+        deferredSandboxLifecycleCleanup: cleanup,
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: "telegram:123",
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+      }),
+    );
+
+    try {
+      await getReplyFromConfig(
+        buildCtx({
+          Body: "hello",
+          BodyForAgent: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          BodyForCommands: "hello",
+          MediaPath: undefined,
+          MediaUrl: undefined,
+          MediaType: undefined,
+          MediaPaths: undefined,
+          MediaUrls: undefined,
+          MediaTypes: undefined,
+        }),
+        undefined,
+        withFastReplyConfig({}),
+      );
+    } finally {
+      operation.complete();
+    }
+
+    expect(order).toEqual(["complete", "cleanup"]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(runPreparedReplyMock).toHaveBeenCalledOnce();
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {

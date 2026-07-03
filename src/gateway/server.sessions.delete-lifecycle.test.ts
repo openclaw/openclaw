@@ -7,8 +7,10 @@ import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.js";
+import { admitReplyTurn } from "../auto-reply/reply/reply-turn-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -18,6 +20,7 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
+  sandboxLifecycleMocks,
   writeSingleLineSession,
   sessionStoreEntry,
   expectActiveRunCleanup,
@@ -32,6 +35,7 @@ const {
 } = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
+  replyRunRegistryTesting.resetReplyRunRegistry();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -90,6 +94,29 @@ test("sessions.delete rejects main and aborts active runs", async () => {
 
   embeddedRunMock.activeIds.add("sess-active");
   embeddedRunMock.waitResults.set("sess-active", true);
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockImplementationOnce(
+    async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("expected session store path");
+      }
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
+      expect(
+        store["agent:main:discord:group:dev"]?.sessionId ?? store["discord:group:dev"]?.sessionId,
+      ).toBe("sess-active");
+      return {
+        skipped: false,
+        scopeKeys: [],
+        removedContainers: 0,
+        removedBrowsers: 0,
+        removedWorkspaces: 0,
+        failures: [],
+      };
+    },
+  );
 
   const mainDelete = await directSessionReq("sessions.delete", { key: "main" });
   expect(mainDelete.ok).toBe(false);
@@ -132,6 +159,274 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     targetSessionKey: "agent:main:discord:group:dev",
     reason: "session-delete",
   });
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agentId: "main",
+      reason: "session-delete",
+      sessionKeys: expect.arrayContaining(["discord:group:dev", "agent:main:discord:group:dev"]),
+    }),
+  );
+});
+
+test("sessions.delete keeps the session with pending sandbox cleanup when lifecycle cleanup fails", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete-fail", "active");
+  await writeSessionStore({
+    entries: {
+      "discord:group:cleanup": sessionStoreEntry("sess-delete-fail"),
+    },
+  });
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockResolvedValueOnce({
+    skipped: false,
+    scopeKeys: ["agent:main:discord:group:cleanup"],
+    removedContainers: 0,
+    removedBrowsers: 0,
+    removedWorkspaces: 0,
+    failures: [{ scopeKey: "agent:main:discord:group:cleanup", error: "permission denied" }],
+  });
+
+  const deleted = await directSessionReq("sessions.delete", {
+    key: "discord:group:cleanup",
+  });
+
+  expect(deleted.ok).toBe(false);
+  expect(deleted.error?.code).toBe("UNAVAILABLE");
+  const storePath = testState.sessionStorePath;
+  expect(storePath).toBeTruthy();
+  const store = JSON.parse(await fs.readFile(storePath!, "utf-8")) as Record<
+    string,
+    {
+      pendingSandboxLifecycleCleanupOwnerSessionIds?: string[];
+      pendingSandboxLifecycleCleanupReason?: string;
+      pendingSandboxLifecycleCleanupSessionKeys?: string[];
+      sessionId?: string;
+    }
+  >;
+  const entry = store["agent:main:discord:group:cleanup"] ?? store["discord:group:cleanup"];
+  expect(entry?.sessionId).toBe("sess-delete-fail");
+  expect(entry?.pendingSandboxLifecycleCleanupSessionKeys).toEqual(
+    expect.arrayContaining(["discord:group:cleanup", "agent:main:discord:group:cleanup"]),
+  );
+  expect(entry?.pendingSandboxLifecycleCleanupReason).toBe("session-delete");
+  expect(entry?.pendingSandboxLifecycleCleanupOwnerSessionIds).toEqual(["sess-delete-fail"]);
+});
+
+test("sessions.delete preserves a replacement session created during sandbox cleanup", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete-old", "old");
+  await writeSingleLineSession(dir, "sess-delete-new", "new");
+  await writeSessionStore({
+    entries: {
+      "agent:main:discord:group:replace": sessionStoreEntry("sess-delete-old"),
+    },
+  });
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockImplementationOnce(
+    async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("expected session store path");
+      }
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+      store["agent:main:discord:group:replace"] = sessionStoreEntry("sess-delete-new");
+      await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+      return {
+        skipped: false,
+        scopeKeys: ["agent:main:discord:group:replace"],
+        removedContainers: 1,
+        removedBrowsers: 0,
+        removedWorkspaces: 1,
+        failures: [],
+      };
+    },
+  );
+
+  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: "discord:group:replace",
+  });
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(false);
+  const storePath = testState.sessionStorePath;
+  expect(storePath).toBeTruthy();
+  const store = JSON.parse(await fs.readFile(storePath!, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  expect(store["agent:main:discord:group:replace"]?.sessionId).toBe("sess-delete-new");
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+});
+
+test("sessions.delete waits reply admission while sandbox cleanup owns the session", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete-admission", "delete");
+  await writeSessionStore({
+    entries: {
+      "agent:main:discord:group:delete-admission": sessionStoreEntry("sess-delete-admission"),
+    },
+  });
+  let admitted: ReturnType<typeof admitReplyTurn> | undefined;
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockImplementationOnce(
+    async () => {
+      admitted = admitReplyTurn({
+        sessionKey: "agent:main:discord:group:delete-admission",
+        sessionId: "reply-during-delete",
+        kind: "visible",
+        resetTriggered: false,
+      });
+      let settled = false;
+      void admitted.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      return {
+        skipped: false,
+        scopeKeys: ["agent:main:discord:group:delete-admission"],
+        removedContainers: 0,
+        removedBrowsers: 0,
+        removedWorkspaces: 1,
+        failures: [],
+      };
+    },
+  );
+
+  await expectSessionDeleteSucceeds({
+    key: "discord:group:delete-admission",
+  });
+  const admission = await admitted;
+  expect(admission?.status).toBe("owned");
+  if (admission?.status === "owned") {
+    expect(admission.operation.sessionId).toBe("reply-during-delete");
+    admission.operation.complete();
+  }
+});
+
+test("sessions.delete prevents a concurrent reset from recreating the deleted session", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:discord:group:delete-reset-race";
+  await writeSingleLineSession(dir, "sess-delete-reset-race", "delete");
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("sess-delete-reset-race"),
+    },
+  });
+
+  let releaseDeleteCleanup: () => void = () => undefined;
+  const deleteCleanupReleased = new Promise<void>((resolve) => {
+    releaseDeleteCleanup = resolve;
+  });
+  let markDeleteCleanupStarted: () => void = () => undefined;
+  const deleteCleanupStarted = new Promise<void>((resolve) => {
+    markDeleteCleanupStarted = resolve;
+  });
+  const cleanupReasons: string[] = [];
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockImplementation(
+    async (params) => {
+      cleanupReasons.push(params.reason);
+      if (params.reason === "session-delete") {
+        markDeleteCleanupStarted();
+        await deleteCleanupReleased;
+      }
+      return {
+        skipped: false,
+        scopeKeys: [sessionKey],
+        removedContainers: 0,
+        removedBrowsers: 0,
+        removedWorkspaces: 1,
+        failures: [],
+      };
+    },
+  );
+
+  const deletePromise = directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: "discord:group:delete-reset-race",
+  });
+  await deleteCleanupStarted;
+
+  const resetPromise = directSessionReq("sessions.reset", {
+    key: "discord:group:delete-reset-race",
+  });
+  await Promise.resolve();
+  expect(cleanupReasons).toEqual(["session-delete"]);
+
+  releaseDeleteCleanup();
+  const [deleted, reset] = await Promise.all([deletePromise, resetPromise]);
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  expect(reset.ok).toBe(false);
+  expect(reset.error?.code).toBe("UNAVAILABLE");
+  expect(cleanupReasons).toEqual(["session-delete"]);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  expect(store[sessionKey]).toBeUndefined();
+});
+
+test("sessions.delete preserves existing pending sandbox cleanup when pre-delete cleanup fails", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete-prep-fail", "active");
+  await writeSessionStore({
+    entries: {
+      "discord:group:prep-fail": sessionStoreEntry("sess-delete-prep-fail", {
+        pendingSandboxLifecycleCleanupOwnerSessionIds: ["old-session"],
+        pendingSandboxLifecycleCleanupReason: "session-reset",
+        pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:discord:group:old-cleanup"],
+      }),
+    },
+  });
+  embeddedRunMock.activeIds.add("sess-delete-prep-fail");
+  embeddedRunMock.waitResults.set("sess-delete-prep-fail", false);
+
+  const deleted = await directSessionReq("sessions.delete", {
+    key: "discord:group:prep-fail",
+  });
+
+  expect(deleted.ok).toBe(false);
+  const storePath = testState.sessionStorePath;
+  expect(storePath).toBeTruthy();
+  const store = JSON.parse(await fs.readFile(storePath!, "utf-8")) as Record<
+    string,
+    {
+      pendingSandboxLifecycleCleanupOwnerSessionIds?: string[];
+      pendingSandboxLifecycleCleanupReason?: string;
+      pendingSandboxLifecycleCleanupSessionKeys?: string[];
+    }
+  >;
+  const entry = store["agent:main:discord:group:prep-fail"] ?? store["discord:group:prep-fail"];
+  expect(entry?.pendingSandboxLifecycleCleanupSessionKeys).toEqual([
+    "agent:main:discord:group:old-cleanup",
+  ]);
+  expect(entry?.pendingSandboxLifecycleCleanupReason).toBe("session-reset");
+  expect(entry?.pendingSandboxLifecycleCleanupOwnerSessionIds).toEqual(["old-session"]);
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
+});
+
+test("sessions.delete includes pending sandbox cleanup keys and usage lineage owners", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-pending", "pending");
+  await writeSessionStore({
+    entries: {
+      "discord:group:pending": sessionStoreEntry("sess-pending", {
+        pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:discord:group:old"],
+        pendingSandboxLifecycleCleanupOwnerSessionIds: ["old-owner-session"],
+        usageFamilySessionIds: ["ancestor-session", "sess-pending"],
+      }),
+    },
+  });
+
+  await expectSessionDeleteSucceeds({
+    key: "discord:group:pending",
+  });
+
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ownerSessionIds: expect.arrayContaining([
+        "old-owner-session",
+        "ancestor-session",
+        "sess-pending",
+      ]),
+      sessionKeys: expect.arrayContaining(["agent:main:discord:group:old"]),
+    }),
+  );
 });
 
 test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {

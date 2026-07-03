@@ -7,6 +7,8 @@ import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.js";
+import { admitReplyTurn } from "../auto-reply/reply/reply-turn-admission.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -21,6 +23,7 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
+  sandboxLifecycleMocks,
   writeSingleLineSession,
   sessionStoreEntry,
   expectActiveRunCleanup,
@@ -49,6 +52,7 @@ type ResetAcpState = {
 type ConfigFilePatch = Parameters<(typeof import("../config/config.js"))["writeConfigFile"]>[0];
 
 afterEach(() => {
+  replyRunRegistryTesting.resetReplyRunRegistry();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -144,6 +148,32 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   bootstrapCacheMocks.clearBootstrapSnapshot.mockImplementation(() => {
     waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
   });
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockImplementationOnce(
+    async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("expected session store path");
+      }
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { pendingSandboxLifecycleCleanupSessionKeys?: string[]; sessionId?: string }
+      >;
+      const entry = store["agent:main:main"] ?? store.main;
+      expect(entry?.sessionId).toBeTruthy();
+      expect(entry?.sessionId).not.toBe("sess-main");
+      expect(entry?.pendingSandboxLifecycleCleanupSessionKeys).toEqual(
+        expect.arrayContaining(["main", "agent:main:main"]),
+      );
+      return {
+        skipped: false,
+        scopeKeys: [],
+        removedContainers: 0,
+        removedBrowsers: 0,
+        removedWorkspaces: 0,
+        failures: [],
+      };
+    },
+  );
 
   const reset = await resetMainSession();
   expect(reset.ok).toBe(true);
@@ -179,10 +209,202 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agentId: "main",
+      reason: "session-reset",
+      sessionKeys: expect.arrayContaining(["main", "agent:main:main"]),
+    }),
+  );
+});
+
+test("sessions.reset succeeds with pending sandbox cleanup when lifecycle cleanup fails", async () => {
+  await seedWaitingActiveMainSession();
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockResolvedValueOnce({
+    skipped: false,
+    scopeKeys: ["agent:main:main"],
+    removedContainers: 0,
+    removedBrowsers: 0,
+    removedWorkspaces: 0,
+    failures: [{ scopeKey: "agent:main:main", error: "docker rm failed" }],
+  });
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(true);
+  const storePath = testState.sessionStorePath;
+  expect(storePath).toBeTruthy();
+  const store = JSON.parse(await fs.readFile(storePath!, "utf-8")) as Record<
+    string,
+    { pendingSandboxLifecycleCleanupSessionKeys?: string[]; sessionId?: string }
+  >;
+  const entry = store["agent:main:main"] ?? store.main;
+  expect(entry?.sessionId).toBeTruthy();
+  expect(entry?.sessionId).not.toBe("sess-main");
+  expect(entry?.pendingSandboxLifecycleCleanupSessionKeys).toEqual(
+    expect.arrayContaining(["main", "agent:main:main"]),
+  );
+});
+
+test("sessions.reset succeeds with pending sandbox cleanup when cleanup infrastructure throws", async () => {
+  await seedWaitingActiveMainSession();
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockRejectedValueOnce(
+    new Error("registry unavailable"),
+  );
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(true);
+  const storePath = testState.sessionStorePath;
+  expect(storePath).toBeTruthy();
+  const store = JSON.parse(await fs.readFile(storePath!, "utf-8")) as Record<
+    string,
+    { pendingSandboxLifecycleCleanupSessionKeys?: string[]; sessionId?: string }
+  >;
+  const entry = store["agent:main:main"] ?? store.main;
+  expect(entry?.sessionId).toBeTruthy();
+  expect(entry?.sessionId).not.toBe("sess-main");
+  expect(entry?.pendingSandboxLifecycleCleanupSessionKeys).toEqual(
+    expect.arrayContaining(["main", "agent:main:main"]),
+  );
+});
+
+test("sessions.reset waits reply admission while sandbox cleanup owns the session", async () => {
+  await seedWaitingActiveMainSession();
+  let admitted: ReturnType<typeof admitReplyTurn> | undefined;
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockImplementationOnce(
+    async () => {
+      admitted = admitReplyTurn({
+        sessionKey: "agent:main:main",
+        sessionId: "reply-during-reset",
+        kind: "visible",
+        resetTriggered: false,
+      });
+      let settled = false;
+      void admitted.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      return {
+        skipped: false,
+        scopeKeys: ["agent:main:main"],
+        removedContainers: 1,
+        removedBrowsers: 0,
+        removedWorkspaces: 1,
+        failures: [],
+      };
+    },
+  );
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(true);
+  const admission = await admitted;
+  expect(admission?.status).toBe("owned");
+  if (admission?.status === "owned") {
+    expect(admission.operation.sessionId).toBe("reply-during-reset");
+    admission.operation.complete();
+  }
+});
+
+test("sessions.reset rejects while session-delete sandbox cleanup is pending", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete-pending", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-delete-pending", {
+        pendingSandboxLifecycleCleanupOwnerSessionIds: ["sess-delete-pending"],
+        pendingSandboxLifecycleCleanupReason: "session-delete",
+        pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:main"],
+      }),
+    },
+  });
+
+  const reset = await directSessionReq("sessions.reset", {
+    key: "main",
+  });
+
+  expect(reset.ok).toBe(false);
+  expect(reset.error?.code).toBe("UNAVAILABLE");
+  expect((reset.error as typeof reset.error & { retryable?: boolean } | undefined)?.retryable).toBe(
+    true,
+  );
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      pendingSandboxLifecycleCleanupOwnerSessionIds?: string[];
+      pendingSandboxLifecycleCleanupReason?: string;
+      pendingSandboxLifecycleCleanupSessionKeys?: string[];
+      sessionId?: string;
+    }
+  >;
+  const entry = store["agent:main:main"] ?? store.main;
+  expect(entry?.sessionId).toBe("sess-delete-pending");
+  expect(entry?.pendingSandboxLifecycleCleanupReason).toBe("session-delete");
+  expect(entry?.pendingSandboxLifecycleCleanupOwnerSessionIds).toEqual([
+    "sess-delete-pending",
+  ]);
+  expect(entry?.pendingSandboxLifecycleCleanupSessionKeys).toEqual(["agent:main:main"]);
 });
 
 test("sessions.reset skips browser cleanup when root browser support is disabled", async () => {
   await expectResetWithConfigSkipsBrowserCleanup({ browser: { enabled: false } });
+});
+
+test("sessions.reset includes the direct-message runtime policy sandbox key", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        chatType: "direct",
+        origin: {
+          provider: "slack",
+          chatType: "direct",
+          to: "user:U123",
+        },
+      }),
+    },
+  });
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(true);
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionKeys: expect.arrayContaining(["agent:main:slack:default:direct:u123"]),
+    }),
+  );
+});
+
+test("sessions.reset includes pending sandbox cleanup keys and usage lineage owners", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:slack:default:direct:old"],
+        pendingSandboxLifecycleCleanupOwnerSessionIds: ["old-owner-session"],
+        usageFamilySessionIds: ["ancestor-session", "sess-main"],
+      }),
+    },
+  });
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(true);
+  expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ownerSessionIds: expect.arrayContaining([
+        "old-owner-session",
+        "ancestor-session",
+        "sess-main",
+      ]),
+      sessionKeys: expect.arrayContaining(["agent:main:slack:default:direct:old"]),
+    }),
+  );
 });
 
 test("sessions.reset skips browser cleanup when the browser plugin entry is disabled", async () => {
@@ -597,6 +819,44 @@ test("sessions.reset does not emit lifecycle events when key does not exist", as
   expect(reset.ok).toBe(true);
   expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
+});
+
+test("sessions.reset persists cleanup keys for missing session entries when sandbox cleanup fails", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockResolvedValueOnce({
+    skipped: false,
+    scopeKeys: ["agent:main:subagent:missing"],
+    removedContainers: 0,
+    removedBrowsers: 0,
+    removedWorkspaces: 0,
+    failures: [{ scopeKey: "agent:main:subagent:missing", error: "docker rm failed" }],
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; pendingSandboxLifecycleCleanupSessionKeys?: string[] };
+  }>("sessions.reset", {
+    key: "agent:main:subagent:missing",
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.pendingSandboxLifecycleCleanupSessionKeys).toEqual(
+    expect.arrayContaining(["agent:main:subagent:missing"]),
+  );
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { pendingSandboxLifecycleCleanupSessionKeys?: string[] }
+  >;
+  expect(store["agent:main:subagent:missing"]?.pendingSandboxLifecycleCleanupSessionKeys).toEqual(
+    expect.arrayContaining(["agent:main:subagent:missing"]),
+  );
 });
 
 test("sessions.reset emits subagent targetKind for subagent sessions", async () => {

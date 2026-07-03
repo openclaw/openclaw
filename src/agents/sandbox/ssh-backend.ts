@@ -84,16 +84,21 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
   },
   async removeRuntime({ entry, config, agentId }) {
     const cfg = resolveSandboxConfigForAgent(config, agentId);
-    if (cfg.backend !== "ssh" || !cfg.ssh.target) {
-      return;
+    const recordedTarget = entry.sshTarget?.trim() || entry.image.trim() || cfg.ssh.target;
+    if (!recordedTarget) {
+      throw new Error(
+        `Cannot remove SSH sandbox runtime ${entry.runtimeLabel ?? entry.containerName}: no SSH runtime target was recorded.`,
+      );
     }
-    const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
+    const recordedWorkspaceRoot = entry.sshWorkspaceRoot?.trim() || cfg.ssh.workspaceRoot;
+    const runtimePaths = resolveSshRuntimePaths(recordedWorkspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
-      target: cfg.ssh.target,
+      target: recordedTarget,
+      workspaceRoot: recordedWorkspaceRoot,
     });
     try {
-      await runSshSandboxCommand({
+      const result = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
           "/bin/sh",
@@ -104,6 +109,15 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         ]),
         allowFailure: true,
       });
+      if (result.code !== 0) {
+        const detail =
+          result.stderr.toString("utf8").trim() ||
+          result.stdout.toString("utf8").trim() ||
+          `exit ${result.code}`;
+        throw new Error(
+          `Failed to remove SSH sandbox runtime ${entry.runtimeLabel ?? entry.containerName}: ${detail}`,
+        );
+      }
     } finally {
       await disposeSshSandboxSession(session);
     }

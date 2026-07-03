@@ -6,6 +6,7 @@ import type {
   OpenClawConfig,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
+  SandboxBackendCleanupMetadata,
   SandboxBackendFactory,
   SandboxBackendManager,
   SshSandboxSession,
@@ -40,6 +41,62 @@ import {
 type CreateOpenShellSandboxBackendFactoryParams = {
   pluginConfig: ResolvedOpenShellPluginConfig;
 };
+
+function resolveOpenShellDeletionConfig(params: {
+  entry: {
+    cleanupMetadata?: SandboxBackendCleanupMetadata;
+  };
+  fallback: ResolvedOpenShellPluginConfig;
+}): ResolvedOpenShellPluginConfig {
+  const metadata =
+    params.entry.cleanupMetadata &&
+    typeof params.entry.cleanupMetadata === "object" &&
+    !Array.isArray(params.entry.cleanupMetadata)
+      ? (params.entry.cleanupMetadata as Record<string, unknown>)
+      : {};
+  const gateway = metadata.openShellGateway;
+  const gatewayEndpoint = metadata.openShellGatewayEndpoint;
+  const hasGatewaySnapshot = Object.hasOwn(metadata, "openShellGateway");
+  const hasEndpointSnapshot = Object.hasOwn(metadata, "openShellGatewayEndpoint");
+  return {
+    ...params.fallback,
+    gateway: hasGatewaySnapshot
+      ? typeof gateway === "string"
+        ? gateway
+        : undefined
+      : params.fallback.gateway,
+    gatewayEndpoint: hasEndpointSnapshot
+      ? typeof gatewayEndpoint === "string"
+        ? gatewayEndpoint
+        : undefined
+      : params.fallback.gatewayEndpoint,
+  };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isOpenShellMissingSandboxResult(
+  result: {
+    code: number;
+    stdout: string;
+    stderr: string;
+  },
+  sandboxName: string,
+): boolean {
+  if (result.code === 0) {
+    return false;
+  }
+  const detail = `${result.stderr}\n${result.stdout}`;
+  const quotedName = escapeRegExp(sandboxName);
+  return new RegExp(
+    `(?:\\bsandbox\\b[^\\n]*${quotedName}[^\\n]*(?:not found|does not exist)|` +
+      `(?:not found|does not exist)[^\\n]*${quotedName}|` +
+      `(?:unknown|no such)\\s+sandbox[^\\n]*${quotedName})`,
+    "iu",
+  ).test(detail);
+}
 
 type PendingExec = {
   sshSession: SshSandboxSession;
@@ -241,13 +298,25 @@ export function createOpenShellSandboxBackendManager(params: {
     },
     async removeRuntime({ entry }) {
       const execContext: OpenShellExecContext = {
-        config: params.pluginConfig,
+        config: resolveOpenShellDeletionConfig({
+          entry,
+          fallback: params.pluginConfig,
+        }),
         sandboxName: entry.containerName,
       };
-      await runOpenShellCli({
+      const result = await runOpenShellCli({
         context: execContext,
         args: ["sandbox", "delete", entry.containerName],
       });
+      if (isOpenShellMissingSandboxResult(result, entry.containerName)) {
+        return;
+      }
+      if (result.code !== 0) {
+        const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
+        throw new Error(
+          `Failed to remove OpenShell sandbox runtime ${entry.containerName}: ${detail}`,
+        );
+      }
     },
   };
 }
@@ -281,6 +350,10 @@ async function createOpenShellSandboxBackend(params: {
     mode: params.pluginConfig.mode,
     configLabel: params.pluginConfig.from,
     configLabelKind: "Source",
+    cleanupMetadata: {
+      openShellGateway: params.pluginConfig.gateway ?? null,
+      openShellGatewayEndpoint: params.pluginConfig.gatewayEndpoint ?? null,
+    },
     workdirValidation: "backend",
     validateWorkdir: async (workdir) => await impl.validateWorkdir(workdir),
     discardPreparedWorkdir: (workdir) => impl.discardPreparedWorkdir(workdir),

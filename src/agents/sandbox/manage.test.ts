@@ -3,6 +3,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
+let removeSandboxContainer: typeof import("./manage.js").removeSandboxContainer;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 
 const configMocks = vi.hoisted(() => ({
@@ -10,6 +11,22 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 const registryMocks = vi.hoisted(() => ({
+  applySandboxRegistryCleanupLocation: vi.fn(
+    (entry: Record<string, unknown>, location: Record<string, unknown>) => ({
+      ...entry,
+      ...location,
+    }),
+  ),
+  getSandboxRegistryCleanupLocations: vi.fn(
+    (entry: {
+      workspaceRoot?: string;
+      cleanupMetadata?: Record<string, unknown> | null;
+      supersededCleanupLocations?: Array<Record<string, unknown>>;
+    }) => [
+      { workspaceRoot: entry.workspaceRoot, cleanupMetadata: entry.cleanupMetadata },
+      ...(entry.supersededCleanupLocations ?? []),
+    ],
+  ),
   readBrowserRegistry: vi.fn(),
   readRegistry: vi.fn(),
   removeBrowserRegistryEntry: vi.fn(),
@@ -30,6 +47,8 @@ vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
 }));
 
 vi.mock("./registry.js", () => ({
+  applySandboxRegistryCleanupLocation: registryMocks.applySandboxRegistryCleanupLocation,
+  getSandboxRegistryCleanupLocations: registryMocks.getSandboxRegistryCleanupLocations,
   readBrowserRegistry: registryMocks.readBrowserRegistry,
   readRegistry: registryMocks.readRegistry,
   removeBrowserRegistryEntry: registryMocks.removeBrowserRegistryEntry,
@@ -49,7 +68,8 @@ vi.mock("./browser-bridges.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
+  ({ listSandboxBrowsers, removeSandboxBrowserContainer, removeSandboxContainer } =
+    await import("./manage.js"));
 });
 
 function firstDescribeRuntimeInput(): { agentId?: string; entry?: { configLabelKind?: string } } {
@@ -91,6 +111,8 @@ describe("listSandboxBrowsers", () => {
     configMocks.getRuntimeConfig.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
     registryMocks.readRegistry.mockReset();
+    registryMocks.applySandboxRegistryCleanupLocation.mockClear();
+    registryMocks.getSandboxRegistryCleanupLocations.mockClear();
     registryMocks.removeBrowserRegistryEntry.mockReset();
     registryMocks.removeRegistryEntry.mockReset();
     backendMocks.describeRuntime.mockReset();
@@ -157,5 +179,49 @@ describe("listSandboxBrowsers", () => {
     expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");
     expect(removeInput?.entry?.backendId).toBe("docker");
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
+  });
+
+  it("removes superseded backend cleanup locations before deleting the registry row", async () => {
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+          workspaceRoot: "/tmp/openclaw-sandboxes-new",
+          cleanupMetadata: { openShellGateway: "new-gateway" },
+          supersededCleanupLocations: [
+            {
+              workspaceRoot: "/tmp/openclaw-sandboxes-old",
+              cleanupMetadata: { openShellGateway: "old-gateway" },
+            },
+          ],
+        },
+      ],
+    });
+
+    await removeSandboxContainer("sandbox-1");
+
+    expect(backendMocks.removeRuntime).toHaveBeenCalledTimes(2);
+    expect(backendMocks.removeRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          workspaceRoot: "/tmp/openclaw-sandboxes-new",
+          cleanupMetadata: { openShellGateway: "new-gateway" },
+        }),
+      }),
+    );
+    expect(backendMocks.removeRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          workspaceRoot: "/tmp/openclaw-sandboxes-old",
+          cleanupMetadata: { openShellGateway: "old-gateway" },
+        }),
+      }),
+    );
+    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("sandbox-1");
   });
 });
