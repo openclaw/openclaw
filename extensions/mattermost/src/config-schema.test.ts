@@ -30,6 +30,13 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts dmReplyToMode (opt-in DM threading, #93203)", () => {
+    const result = MattermostConfigSchema.safeParse({
+      dmReplyToMode: "first",
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('rejects dmPolicy="open" without wildcard allowFrom', () => {
     const result = MattermostConfigSchema.safeParse({
       dmPolicy: "open",
