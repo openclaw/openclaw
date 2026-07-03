@@ -793,6 +793,46 @@ function summarizeResponsesPayload(params: unknown): string {
   return parts.join(" ");
 }
 
+function summarizeCompletionsPayload(
+  params: unknown,
+  mode: ReturnType<typeof resolveModelPayloadDebugMode> = resolveModelPayloadDebugMode(),
+): string {
+  if (!params || typeof params !== "object") {
+    return "payload=non-object";
+  }
+  const record = params as Record<string, unknown>;
+  const messages = record.messages;
+  const parts = [
+    `fields=${Object.keys(record).toSorted().join(",")}`,
+    `model=${safeDebugValue(record.model)}`,
+    `stream=${safeDebugValue(record.stream)}`,
+    `messageItems=${Array.isArray(messages) ? messages.length : typeof messages}`,
+    `messageRoles=${responseInputRoles(messages) || "none"}`,
+    `messageTextChars=${responseInputTextChars(messages)}`,
+    `tools=${summarizeResponsesTools(record.tools)}`,
+    `toolChoice=${safeDebugValue(record.tool_choice)}`,
+    `reasoningEffort=${safeDebugValue(record.reasoning_effort)}`,
+    `maxTokens=${safeDebugValue(record.max_tokens)}`,
+    `maxCompletionTokens=${safeDebugValue(record.max_completion_tokens)}`,
+  ];
+  if (mode === "full-redacted") {
+    // Short-lived local diagnostics only: redaction/capping protects secrets but
+    // intentionally leaves prompt, message, and tool-result text visible.
+    parts.push(`payload=${stringifyRedactedPayload(record)}`);
+  }
+  return parts.join(" ");
+}
+
+function formatCompletionsPayloadDebugSummary(
+  params: unknown,
+  mode: ReturnType<typeof resolveModelPayloadDebugMode> = resolveModelPayloadDebugMode(),
+): string {
+  if (mode === "off") {
+    return "";
+  }
+  return ` ${summarizeCompletionsPayload(params, mode)}`;
+}
+
 function summarizeOpenAITransportError(error: unknown): string {
   if (!error || typeof error !== "object") {
     return `type=${typeof error} message=${safeDebugValue(error)}`;
@@ -2777,11 +2817,28 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           model as OpenAIModeModel,
           options as OpenAICompletionsOptions | undefined,
         );
+        const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
+        const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal);
+        const payloadDebugMode = resolveModelPayloadDebugMode();
+        emitModelTransportDebug(
+          log,
+          `[completions] start provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
+            `apiKey=${apiKey ? "present" : "missing"}${formatCompletionsPayloadDebugSummary(
+              params,
+              payloadDebugMode,
+            )}`,
+        );
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
+          requestOptions,
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
+        emitModelTransportDebug(
+          log,
+          `[completions] headers provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `elapsedMs=${Date.now() - requestStartedAt}`,
+        );
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
@@ -4511,6 +4568,8 @@ export const testing = {
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,
   summarizeResponsesPayload,
+  formatCompletionsPayloadDebugSummary,
+  summarizeCompletionsPayload,
   summarizeResponsesTools,
 };
 export { testing as __testing };

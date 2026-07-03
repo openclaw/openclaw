@@ -863,11 +863,36 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("does not traverse Chat Completions payload diagnostics when payload debug is off", () => {
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    try {
+      const params = {
+        model: "gpt-5.5",
+        stream: true,
+        get messages(): unknown {
+          throw new Error("messages getter should not be evaluated when payload debug is off");
+        },
+        get tools(): unknown {
+          throw new Error("tools getter should not be evaluated when payload debug is off");
+        },
+      };
+
+      expect(testing.formatCompletionsPayloadDebugSummary(params)).toBe("");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
+  });
+
   it("redacts full Chat Completions payload debug summaries", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
-      const summary = testing.summarizeCompletionsPayload({
+      const summary = testing.formatCompletionsPayloadDebugSummary({
         model: "gpt-5.5",
         stream: true,
         messages: [
@@ -883,6 +908,8 @@ describe("openai transport stream", () => {
         apiKey: "sk-abcdefghijklmnopqrstuvwxyz",
       });
       expect(summary).toContain("payload=");
+      // full-redacted is for short-lived local diagnostics only: secret-like
+      // values are redacted/capped, but prompt/message/tool-result text remains.
       expect(summary).toContain("OC99241_TEXT_ONLY_MARKER");
       expect(summary).toContain("sk-abc");
       expect(summary).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
