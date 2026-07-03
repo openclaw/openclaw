@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   clearEmbeddingProviders,
+  listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
+  restoreRegisteredEmbeddingProviders,
+  type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
 import {
   clearMemoryEmbeddingProviders,
@@ -14,6 +17,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
+let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
   // Register provider contracts locally so config tests do not depend on the
@@ -71,13 +75,15 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
 
 describe("memory search config", () => {
   beforeEach(() => {
+    registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
+    clearEmbeddingProviders();
     clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     clearMemoryEmbeddingProviders();
-    clearEmbeddingProviders();
+    restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
@@ -233,7 +239,6 @@ describe("memory search config", () => {
   });
 
   it("resolves providers from the generic embedding provider registry", () => {
-    clearMemoryEmbeddingProviders();
     registerEmbeddingProvider({
       id: "generic-local",
       defaultModel: "local-gguf-default",
