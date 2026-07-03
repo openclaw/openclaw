@@ -27,6 +27,15 @@ export {
 export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
 export {
+  buildScriptEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  type QaEvidencePackageSource,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+  validateQaEvidenceSummaryJson,
+} from "./src/evidence-summary.js";
+export type { QaProviderMode } from "./src/providers/index.js";
+export {
   type QaLabLatestReport,
   type QaLabScenarioOutcome,
   type QaLabScenarioRun,

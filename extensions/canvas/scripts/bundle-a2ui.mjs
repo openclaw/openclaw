@@ -15,8 +15,12 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const pluginDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootDir = path.resolve(pluginDir, "../..");
 const require = createRequire(import.meta.url);
-const hashFile = path.join(pluginDir, "src", "host", "a2ui", ".bundle.hash");
-const outputFile = path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
+const hashFile =
+  process.env.OPENCLAW_A2UI_BUNDLE_HASH_FILE ??
+  path.join(pluginDir, "src", "host", "a2ui", ".bundle.hash");
+const outputFile =
+  process.env.OPENCLAW_A2UI_BUNDLE_OUT ??
+  path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
 const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>

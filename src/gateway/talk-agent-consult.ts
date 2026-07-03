@@ -18,6 +18,40 @@ import type {
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 
+type TalkChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+
+function normalizeTalkChatSendAckStatus(result: unknown): TalkChatSendAckStatus {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return "started";
+  }
+  const status = (result as Record<string, unknown>).status;
+  return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+    ? status
+    : "started";
+}
+
+function terminalTalkChatSendAckError(status: TalkChatSendAckStatus): ErrorShape | undefined {
+  if (status === "timeout") {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "Realtime agent consult ended before the run started.",
+    );
+  }
+  if (status === "error") {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "Realtime agent consult failed before the run started.",
+    );
+  }
+  if (status === "ok") {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "Realtime agent consult completed before the tool result subscription started.",
+    );
+  }
+  return undefined;
+}
+
 /**
  * Starts the agent-consult chat run that backs realtime Talk tool calls.
  */
@@ -83,6 +117,10 @@ export async function startTalkRealtimeAgentConsult(params: {
     return { ok: false, error: chatResponse.error };
   }
   const result = chatResponse.result;
+  const terminalAckError = terminalTalkChatSendAckError(normalizeTalkChatSendAckStatus(result));
+  if (terminalAckError) {
+    return { ok: false, error: terminalAckError };
+  }
   const runId =
     result && typeof result === "object" && !Array.isArray(result)
       ? typeof (result as Record<string, unknown>).runId === "string"

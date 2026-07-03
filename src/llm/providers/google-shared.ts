@@ -12,6 +12,7 @@ import {
   type Part,
   type ThinkingConfig,
 } from "@google/genai";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -31,6 +32,7 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -277,14 +279,14 @@ export function convertMessages<T extends GoogleApiType>(
       });
     } else if (msg.role === "toolResult") {
       // Extract text and image content
-      const textContent = msg.content.filter((c): c is TextContent => c.type === "text");
-      const textResult = textContent.map((c) => c.text).join("\n");
+      const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
         ? msg.content.filter((c): c is ImageContent => c.type === "image")
         : [];
 
       const hasText = textResult.length > 0;
       const hasImages = imageContent.length > 0;
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
 
       // Gemini 3+ models support multimodal function responses with images nested inside
       // functionResponse.parts. Claude and other non-Gemini models behind Cloud Code Assist /
@@ -292,11 +294,7 @@ export function convertMessages<T extends GoogleApiType>(
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
       // Use "output" key for success, "error" key for errors as per SDK documentation
-      const responseValue = hasText
-        ? sanitizeSurrogates(textResult)
-        : hasImages
-          ? "(see attached image)"
-          : "";
+      const responseValue = hasText ? sanitizeSurrogates(textResult) : (mediaPlaceholder ?? "");
 
       const imageParts: Part[] = imageContent.map((imageBlock) => ({
         inlineData: {
@@ -500,7 +498,9 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
 
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),
-    ...(context.systemPrompt && { systemInstruction: sanitizeSurrogates(context.systemPrompt) }),
+    ...(context.systemPrompt && {
+      systemInstruction: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+    }),
     ...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools) }),
   };
 
@@ -747,6 +747,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   params.stream.push({ type: "start", partial: params.output });
   let currentBlock: TextContent | ThinkingContent | null = null;
   const blocks = params.output.content;
+  const toolCallIds = new Set<string>();
+  for (const block of blocks) {
+    if (block.type === "toolCall") {
+      toolCallIds.add(block.id);
+    }
+  }
   const blockIndex = () => blocks.length - 1;
 
   const endCurrentBlock = () => {
@@ -832,11 +838,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
         if (part.functionCall) {
           endCurrentBlock();
           const providedId = part.functionCall.id;
-          const needsNewId =
-            !providedId ||
-            params.output.content.some(
-              (block) => block.type === "toolCall" && block.id === providedId,
-            );
+          const needsNewId = !providedId || toolCallIds.has(providedId);
           const toolCall: ToolCall = {
             type: "toolCall",
             id: needsNewId ? params.nextToolCallId(part.functionCall.name) : providedId,
@@ -846,6 +848,7 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
           };
 
           params.output.content.push(toolCall);
+          toolCallIds.add(toolCall.id);
           params.stream.push({
             type: "toolcall_start",
             contentIndex: blockIndex(),
@@ -869,7 +872,12 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
     if (candidate?.finishReason) {
       params.output.stopReason = mapStopReason(candidate.finishReason);
-      if (params.output.content.some((block) => block.type === "toolCall")) {
+      // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+      // Google stop may promote parsed calls into an executable tool-use turn.
+      if (
+        params.output.stopReason === "stop" &&
+        params.output.content.some((block) => block.type === "toolCall")
+      ) {
         params.output.stopReason = "toolUse";
       }
     }
@@ -913,18 +921,4 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     message: params.output,
   });
   params.stream.end();
-}
-
-/**
- * Map string finish reason to our StopReason (for raw API responses).
- */
-export function mapStopReasonString(reason: string): StopReason {
-  switch (reason) {
-    case "STOP":
-      return "stop";
-    case "MAX_TOKENS":
-      return "length";
-    default:
-      return "error";
-  }
 }

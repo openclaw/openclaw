@@ -19,6 +19,7 @@ import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -98,7 +99,8 @@ type RunTuiOptions = TuiOptions & {
 /** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
 export function resolveCodexCliBin(): string | null {
   try {
-    const lookupCmd = process.platform === "win32" ? "where" : "which";
+    const lookupCmd =
+      process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
     // `where` on Windows can return multiple lines; take the first match.
     const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
     return raw.split(/\r?\n/)[0] || null;
@@ -228,12 +230,15 @@ export function resolveGatewayDisconnectState(reason?: string): {
   pairingHint?: string;
 } {
   const reasonLabel = reason?.trim() ? reason.trim() : "closed";
-  if (/pairing required/i.test(reasonLabel)) {
+  // Covers both "pairing required" and a pending "scope upgrade" for a paired device.
+  if (/pairing required|scope upgrade/i.test(reasonLabel)) {
     return {
       connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "pairing required: run openclaw devices list",
+      activityStatus: "device approval needed: preview latest request",
       pairingHint:
-        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+        "Device approval needed. Run `openclaw devices approve --latest` to preview the pending request, " +
+        "then rerun the printed `openclaw devices approve <requestId>` command " +
+        "(reuse `--token` or other auth flags if needed), then reconnect.",
     };
   }
   return {
@@ -1235,7 +1240,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       : "unknown";
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
-    const fast = sessionInfo.fastMode === true;
+    const fastLabel =
+      sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
@@ -1248,7 +1254,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       modelLabel,
       formatGoalFooter(sessionInfo.goal),
       think !== "off" ? `think ${think}` : null,
-      fast ? "fast" : null,
+      fastLabel,
       verbose !== "off" ? `verbose ${verbose}` : null,
       reasoningLabel,
       tokens,

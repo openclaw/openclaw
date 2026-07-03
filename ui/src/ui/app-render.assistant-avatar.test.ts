@@ -129,6 +129,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
@@ -348,6 +349,18 @@ describe("renderApp assistant avatar routing", () => {
     expect(content?.classList.contains("content--chat")).toBe(false);
   });
 
+  it("auto-expands chat tool calls when the effective verbose level is full", () => {
+    renderApp(createState({ tab: "chat", chatVerboseLevel: "full" }));
+
+    expect(chatProps.current?.autoExpandToolCalls).toBe(true);
+  });
+
+  it("keeps chat tool calls collapsed by default for non-full verbose levels", () => {
+    renderApp(createState({ tab: "chat", chatVerboseLevel: "tokens" }));
+
+    expect(chatProps.current?.autoExpandToolCalls).toBe(false);
+  });
+
   it("does not render chat errors in non-chat page headers", () => {
     const container = document.createElement("div");
 
@@ -505,6 +518,29 @@ describe("renderApp assistant avatar routing", () => {
     expect(tools?.exec?.security).toBe("full");
   });
 
+  it("passes effective fast mode to Quick Settings", () => {
+    const state = createState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            effectiveFastMode: "auto",
+          },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+
+    renderApp(state);
+
+    expect(quickSettingsProps.current?.fastMode).toBe("auto");
+  });
+
   it("renders stale cron state containing a job without a payload", () => {
     const container = document.createElement("div");
 
@@ -582,7 +618,8 @@ describe("renderApp assistant avatar routing", () => {
     const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
       (node) => node.textContent?.trim(),
     );
-    expect(labels).toEqual(["Work new", "Work older"]);
+    // The active session pins first even without a matching session row.
+    expect(labels).toEqual(["agent:work:main", "Work new", "Work older"]);
   });
 
   it("keeps legacy main sessions tied to the default agent when identity is stale", () => {
@@ -683,7 +720,8 @@ describe("renderApp assistant avatar routing", () => {
     const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
       (node) => node.textContent?.trim(),
     );
-    expect(labels).toEqual(["Ops new"]);
+    // The active global session pins first; recents stay agent-scoped.
+    expect(labels).toEqual(["global", "Ops new"]);
   });
 
   it("keeps unknown sidebar sessions unscoped", () => {
@@ -736,6 +774,8 @@ describe("renderApp assistant avatar routing", () => {
     const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
       (node) => node.textContent?.trim(),
     );
-    expect(labels).toEqual(["Main old", "Work new"]);
+    // The unknown sentinel gets the generic Chat fallback entry instead of a
+    // pinned session row; sentinel rows stay out of the recents list.
+    expect(labels).toEqual(["Chat", "Main old", "Work new"]);
   });
 });

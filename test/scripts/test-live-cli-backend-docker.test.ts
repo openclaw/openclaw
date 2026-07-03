@@ -32,6 +32,13 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     expect(forwardedVars).toContain("OPENCLAW_TEST_CONSOLE");
   });
 
+  it("forwards advisory provider-skip controls into the Docker container", () => {
+    const forwardedVars = readForwardedDockerEnvVars();
+
+    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY");
+    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP");
+  });
+
   it("rejects invalid setup timeout values before metadata or Docker setup", () => {
     const result = spawnSync("bash", [SCRIPT_PATH], {
       encoding: "utf8",

@@ -7,7 +7,6 @@ import { migrateLegacyCronRunLogsToSqlite } from "../commands/doctor/cron/legacy
 import {
   appendCronRunLog,
   getPendingCronRunLogWriteCountForTests,
-  readCronRunLogEntries,
   readCronRunLogEntriesPage,
   readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
@@ -201,38 +200,59 @@ describe("cron run log", () => {
         },
       });
 
-      const allA = await readCronRunLogEntries({ storePath, jobId: "a", limit: 10 });
+      const allA = (
+        await readCronRunLogEntriesPage({ storePath, jobId: "a", limit: 10, sortDir: "asc" })
+      ).entries;
       expect(allA.map((e) => e.jobId)).toEqual(["a", "a"]);
 
-      const onlyA = await readCronRunLogEntries({
-        storePath,
-        limit: 10,
-        jobId: "a",
-      });
+      const onlyA = (
+        await readCronRunLogEntriesPage({
+          storePath,
+          limit: 10,
+          jobId: "a",
+          sortDir: "asc",
+        })
+      ).entries;
       expect(onlyA.map((e) => e.ts)).toEqual([1, 3]);
 
-      const lastOne = await readCronRunLogEntries({ storePath, jobId: "a", limit: 1 });
+      const lastOne = (
+        await readCronRunLogEntriesPage({
+          storePath,
+          jobId: "a",
+          limit: 1,
+          sortDir: "desc",
+        })
+      ).entries;
       expect(lastOne.map((e) => e.ts)).toEqual([3]);
       expect(lastOne[0]?.sessionId).toBe("run-123");
       expect(lastOne[0]?.sessionKey).toBe("agent:main:cron:a:run:run-123");
 
-      const onlyB = await readCronRunLogEntries({
-        storePath,
-        limit: 10,
-        jobId: "b",
-      });
+      const onlyB = (
+        await readCronRunLogEntriesPage({
+          storePath,
+          limit: 10,
+          jobId: "b",
+          sortDir: "asc",
+        })
+      ).entries;
       expect(onlyB[0]?.summary).toBe("oops");
 
-      expect(await readCronRunLogEntries({ storePath, limit: 10, jobId: "missing" })).toStrictEqual(
-        [],
-      );
+      expect(
+        (
+          await readCronRunLogEntriesPage({
+            storePath,
+            limit: 10,
+            jobId: "missing",
+            sortDir: "asc",
+          })
+        ).entries,
+      ).toStrictEqual([]);
     });
   });
 
   it("filters run-log pages by runId", async () => {
     await withRunLogDir("openclaw-cron-log-runid-", async (dir) => {
       const storePath = storePathForDir(dir);
-
       await appendCronRunLog({
         storePath,
         entry: {
@@ -302,7 +322,9 @@ describe("cron run log", () => {
 
       const storePath = storePathForDir(dir);
       await migrateLegacyCronRunLogsToSqlite(storePath);
-      const entries = await readCronRunLogEntries({ storePath, limit: 10, jobId: "job-1" });
+      const entries = (
+        await readCronRunLogEntriesPage({ storePath, limit: 10, jobId: "job-1", sortDir: "asc" })
+      ).entries;
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(2);
       expect(entries[0]?.delivered).toBe(true);
@@ -423,7 +445,9 @@ describe("cron run log", () => {
         },
       });
 
-      const entries = await readCronRunLogEntries({ storePath, limit: 10, jobId: "job-1" });
+      const entries = (
+        await readCronRunLogEntriesPage({ storePath, limit: 10, jobId: "job-1", sortDir: "asc" })
+      ).entries;
       expect(entries[0]?.diagnostics?.summary).toBe("exec stderr tail");
       expect(entries[0]?.diagnostics?.entries).toHaveLength(1);
       expect(entries[0]?.diagnostics?.entries[0]?.source).toBe("exec");
@@ -483,7 +507,9 @@ describe("cron run log", () => {
       );
 
       await migrateLegacyCronRunLogsToSqlite(storePath);
-      const entries = await readCronRunLogEntries({ storePath, limit: 10, jobId: "job-1" });
+      const entries = (
+        await readCronRunLogEntriesPage({ storePath, limit: 10, jobId: "job-1", sortDir: "asc" })
+      ).entries;
       expect(entries[0]?.model).toBe("gpt-5.4");
       expect(entries[0]?.provider).toBe("openai");
       expect(entries[0]?.usage).toEqual({
@@ -534,7 +560,14 @@ describe("cron run log", () => {
       void writePromise.catch(() => undefined);
 
       // Read should see the entry because it drains pending writes.
-      const entries = await readCronRunLogEntries({ storePath, jobId: "job-drain", limit: 10 });
+      const entries = (
+        await readCronRunLogEntriesPage({
+          storePath,
+          jobId: "job-drain",
+          limit: 10,
+          sortDir: "asc",
+        })
+      ).entries;
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(42);
       expect(entries[0]?.summary).toBe("drain-test");
@@ -590,6 +623,37 @@ describe("cron run log", () => {
       expect(withName.entries).toHaveLength(2);
       for (const entry of withName.entries) {
         expect((entry as { jobName?: string }).jobName).toBe("Current Name");
+      }
+    });
+  });
+
+  it("normalizes the jobId on write so the write/read roundtrip is symmetric", async () => {
+    await withRunLogDir("openclaw-cron-log-roundtrip-", async (dir) => {
+      const storePath = storePathForDir(dir);
+      await appendCronRunLog({
+        storePath,
+        entry: { ts: 1000, jobId: "  spaced-job  ", action: "finished", status: "ok" },
+      });
+      // Reads trim before querying, so the written row must be found under both the
+      // trimmed and the original whitespace-padded jobId, and stored normalized.
+      expect(readCronRunLogEntriesSync({ storePath, jobId: "spaced-job" })).toHaveLength(1);
+      expect(readCronRunLogEntriesSync({ storePath, jobId: "  spaced-job  " })).toHaveLength(1);
+      expect(readCronRunLogEntriesSync({ storePath, jobId: "spaced-job" })[0]?.jobId).toBe(
+        "spaced-job",
+      );
+    });
+  });
+
+  it("rejects unsafe job ids on write the same way reads do", async () => {
+    await withRunLogDir("openclaw-cron-log-write-reject-", async (dir) => {
+      const storePath = storePathForDir(dir);
+      for (const jobId of ["nested/job", "..\\job", "   "]) {
+        await expect(
+          appendCronRunLog({
+            storePath,
+            entry: { ts: 1000, jobId, action: "finished", status: "ok" },
+          }),
+        ).rejects.toThrow(/invalid cron run log job id/i);
       }
     });
   });

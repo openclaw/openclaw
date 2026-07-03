@@ -63,7 +63,6 @@ export const nl: TranslationMap = {
     docs: "Docs",
     theme: "Thema",
     colorMode: "Kleurmodus",
-    colorModeOption: "Kleurmodus: {mode}",
     resources: "Bronnen",
     search: "Zoeken",
     save: "Opslaan",
@@ -203,6 +202,7 @@ export const nl: TranslationMap = {
     inherit: "overnemen",
     defaultOption: "Standaard ({value})",
     offExplicit: "uit (expliciet)",
+    auto: "auto",
     on: "aan",
     off: "uit",
     full: "volledig",
@@ -1335,6 +1335,8 @@ export const nl: TranslationMap = {
     settings: "Chatinstellingen",
     thinkingToggle: "Denken-/werken-output van assistent schakelen",
     toolCallsToggle: "Tool-aanroepen en toolresultaten schakelen",
+    commentaryToggle: "Commentaar na het uiteindelijke antwoord behouden",
+    commentaryLabel: "Commentaar",
     autoScrollMode: "Automatisch scrollen",
     autoScrollAlways: "Altijd",
     autoScrollNearBottom: "Bijna onderaan",
@@ -1353,6 +1355,9 @@ export const nl: TranslationMap = {
     updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
+    sidebar: {
+      allSessions: "Alle sessies",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1379,6 +1384,11 @@ export const nl: TranslationMap = {
       retry: "Opnieuw proberen",
       retrySend: "Verzenden opnieuw proberen",
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
+    },
+    pairingQrExpired: {
+      title: "Koppelings-QR verlopen",
+      reason: "Voer /pair qr opnieuw uit om een nieuwe installatiecode te genereren.",
+      badge: "Verlopen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1447,6 +1457,7 @@ export const nl: TranslationMap = {
     jaJP: "日本語 (Japans)",
     ko: "한국어 (Koreaans)",
     fr: "Français (Frans)",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية (Arabisch)",
     it: "Italiano (Italiaans)",
     tr: "Türkçe (Turks)",
@@ -1457,6 +1468,7 @@ export const nl: TranslationMap = {
     vi: "Tiếng Việt (Vietnamees)",
     nl: "Nederlands",
     fa: "فارسی (Perzisch)",
+    ru: "Русский (Russisch)",
   },
   cron: {
     quickCreate: {
@@ -1625,6 +1637,7 @@ export const nl: TranslationMap = {
       nextHeartbeat: "Volgende heartbeat",
       wakeModeHelp: "Nu triggert onmiddellijk. Volgende heartbeat wacht op de volgende cyclus.",
       payloadKind: "Wat moet er worden uitgevoerd?",
+      command: "Command",
       systemEvent: "Bericht plaatsen op main-tijdlijn",
       agentTurn: "Assistenttaak uitvoeren (geïsoleerd)",
       systemEventHelp:

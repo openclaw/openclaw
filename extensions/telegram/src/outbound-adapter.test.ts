@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
+const reactMessageTelegramMock = vi.fn();
 const sendPollTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
+  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
@@ -60,6 +62,7 @@ function callOptionsFromEnd(
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
+    reactMessageTelegramMock.mockReset();
     sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
@@ -153,6 +156,174 @@ describe("telegramOutbound", () => {
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
     expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+  });
+
+  it("forwards prompt-context timestamps on durable payload sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-final", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        text: "Final answer",
+        channelData: {
+          telegram: {
+            promptContextTimestampMs: 1_779_394_740_123,
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Final answer");
+    expect(options.promptContextTimestampMs).toBe(1_779_394_740_123);
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-final", chatId: "12345" });
+  });
+
+  it("applies reaction-only payloads without sending empty Telegram text", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      replyToId: "777",
+      payload: {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "🔥" },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith("12345", 777, "🔥", {
+      cfg: {},
+      verbose: false,
+      accountId: undefined,
+      gatewayClientScopes: undefined,
+    });
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ channel: "telegram", messageId: "777", chatId: "12345" });
+  });
+
+  it("applies reaction payloads before sending visible text", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-text", chatId: "12345" });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      accountId: "ops",
+      replyToId: "777",
+      payload: {
+        text: "Done",
+        channelData: {
+          telegram: {
+            reaction: { emoji: "✅" },
+          },
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(reactMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      777,
+      "✅",
+      expect.objectContaining({ accountId: "ops" }),
+    );
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "Done",
+      expect.objectContaining({ accountId: "ops", replyToMessageId: 777 }),
+    );
+    expect(reactMessageTelegramMock.mock.invocationCallOrder[0]).toBeLessThan(
+      sendMessageTelegramMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("rejects text plus reaction payloads without a reply target", async () => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: {
+          text: "Done",
+          channelData: { telegram: { reaction: { emoji: "🔥" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Telegram reaction requires a reply target");
+
+    expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects text plus reaction payloads when Telegram refuses the emoji", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({
+      ok: false,
+      warning: "Reaction unavailable: not-supported",
+    });
+
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        replyToId: "777",
+        payload: {
+          text: "Done",
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Reaction unavailable: not-supported");
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects reaction-only payloads without a reply target", async () => {
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        payload: {
+          channelData: { telegram: { reaction: { emoji: "🔥" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Telegram reaction requires a reply target");
+
+    expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects reaction-only payloads when Telegram refuses the emoji", async () => {
+    reactMessageTelegramMock.mockResolvedValueOnce({
+      ok: false,
+      warning: "Reaction unavailable: not-supported",
+    });
+
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {} as never,
+        to: "12345",
+        text: "",
+        replyToId: "777",
+        payload: {
+          channelData: { telegram: { reaction: { emoji: "not-supported" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toThrow("Reaction unavailable: not-supported");
+
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
   });
 
   it("uses presentation button labels as fallback text for presentation-only payloads", async () => {

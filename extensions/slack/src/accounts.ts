@@ -54,6 +54,13 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
     if (slack?.mode === "http") {
       return hasConfiguredAccountValue(slack.signingSecret);
     }
+    if (slack?.mode === "relay") {
+      return (
+        hasConfiguredAccountValue(slack.relay?.url) &&
+        hasConfiguredAccountValue(slack.relay?.authToken) &&
+        hasConfiguredAccountValue(slack.relay?.gatewayId)
+      );
+    }
     return (
       hasConfiguredAccountValue(slack?.appToken) ||
       hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
@@ -137,7 +144,7 @@ export function mergeSlackAccountConfig(
     channelConfig: cfg.channels?.slack as SlackAccountConfig,
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
-    nestedObjectKeys: ["botLoopProtection"],
+    nestedObjectKeys: ["botLoopProtection", "relay"],
   });
   const streaming = mergeSlackStreamingConfig(
     (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,
@@ -207,7 +214,7 @@ export function resolveSlackAccount(params: {
   const mode = merged.mode ?? "socket";
   const baseAllowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const botActive = enabled;
-  const appActive = enabled && mode !== "http";
+  const appActive = enabled && mode === "socket";
   const userActive = enabled;
   const envBot =
     botActive && baseAllowEnv ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN) : undefined;

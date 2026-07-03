@@ -127,9 +127,9 @@ That bootstrap token carries the built-in pairing bootstrap profile:
   `node` plus a bounded `operator` handoff
 - the handed-off `node` token stays `scopes: []`
 - the handed-off `operator` token is limited to `operator.approvals`,
-  `operator.read`, and `operator.write`
-- `operator.admin` and `operator.pairing` are not granted by QR/setup-code
-  bootstrap; they require a separate approved operator pairing or token flow
+  `operator.read`, `operator.talk.secrets`, and `operator.write`
+- `operator.admin` is not granted by QR/setup-code bootstrap; it requires a
+  separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 

@@ -271,7 +271,7 @@ function resolveArg(flag: string, argv: string[]): string | undefined {
     return undefined;
   }
   const value = argv[idx + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;

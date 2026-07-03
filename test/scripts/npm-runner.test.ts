@@ -129,6 +129,24 @@ describe("resolveNpmRunner", () => {
     });
   });
 
+  it("ignores ambient ComSpec when wrapping an adjacent npm.cmd on Windows", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const runner = resolveNpmRunner({
+      env: {
+        ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+        SystemRoot: "D:\\Windows",
+      },
+      execPath,
+      existsSync: (candidate) => candidate === npmCmdPath,
+      npmArgs: ["install"],
+      platform: "win32",
+    });
+
+    expect(runner.command).toBe("D:\\Windows\\System32\\cmd.exe");
+  });
+
   it("prefixes PATH with the active node dir when falling back to bare npm", () => {
     expect(
       resolveNpmRunner({

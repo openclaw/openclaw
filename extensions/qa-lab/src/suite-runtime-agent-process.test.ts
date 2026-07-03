@@ -5,12 +5,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+  spawnSync: spawnSyncMock,
 }));
 
 vi.mock("./node-exec.js", () => ({
@@ -32,6 +34,7 @@ import {
   runQaCli,
   startAgentRun,
   waitForAgentRun,
+  waitForAgentHistoryReply,
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
@@ -81,6 +84,7 @@ function firstGatewayCall(
 describe("qa suite runtime agent process helpers", () => {
   beforeEach(() => {
     spawnMock.mockReset();
+    spawnSyncMock.mockReset();
     resolveQaNodeExecPathMock.mockClear();
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
@@ -179,6 +183,64 @@ describe("qa suite runtime agent process helpers", () => {
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
       killSpy.mockRestore();
+    }
+  });
+
+  it("force-kills timed-out Windows qa cli process trees with taskkill", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    try {
+      const child = createSpawnedProcess({ pid: 12345 });
+      spawnMock.mockReturnValue(child);
+      spawnSyncMock.mockReturnValue({ status: 0 });
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: {
+            tempRoot: "/tmp/runtime",
+            runtimeEnv: { PATH: "/usr/bin" },
+          },
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+        { timeoutMs: 1 },
+      );
+      const timeoutAssertion = expect(pending).rejects.toThrow(
+        "qa cli timed out: openclaw qa suite",
+      );
+
+      await waitForSpawnCount(1);
+      await timeoutAssertion;
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
+        ["/PID", "12345", "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
+      }
     }
   });
 
@@ -534,6 +596,7 @@ describe("qa suite runtime agent process helpers", () => {
       transport: {
         buildAgentDelivery: vi.fn(() => ({
           channel: "qa-channel",
+          to: "transport-target",
           replyChannel: "reply-channel",
           replyTo: "reply-target",
         })),
@@ -555,11 +618,13 @@ describe("qa suite runtime agent process helpers", () => {
           replyChannel?: string;
           replyTo?: string;
           sessionKey?: string;
+          to?: string;
         }
       | undefined;
     expect(agentPayload?.sessionKey).toBe("session-1");
     expect(agentPayload?.message).toBe("hello");
     expect(agentPayload?.channel).toBe("qa-channel");
+    expect(agentPayload?.to).toBe("transport-target");
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
@@ -615,6 +680,92 @@ describe("qa suite runtime agent process helpers", () => {
     ).rejects.toThrow("agent.wait returned error: boom");
   });
 
+  it("accepts completed agent wait status as a successful terminal run", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-completed" })
+      .mockResolvedValueOnce({ status: "completed" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-completed",
+        message: "hello",
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-completed" },
+      waited: { status: "completed" },
+    });
+  });
+
+  it("accepts malformed completed wait errors as successful terminal runs", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-error-completed" })
+      .mockResolvedValueOnce({ status: "error", error: "completed" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-error-completed",
+        message: "hello",
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-error-completed" },
+      waited: { status: "error", error: "completed" },
+    });
+  });
+
+  it("waits for the latest assistant history reply", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "still working" }] })
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "HISTORY-REPLY-OK" }],
+          },
+        ],
+      });
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history",
+        (text) => text === "HISTORY-REPLY-OK",
+        1_000,
+        1,
+      ),
+    ).resolves.toMatchObject({
+      text: "HISTORY-REPLY-OK",
+    });
+    expect(gatewayCall).toHaveBeenLastCalledWith(
+      "chat.history",
+      { sessionKey: "session-history", limit: 12 },
+      { timeoutMs: 10_000 },
+    );
+  });
+
   it("waits for a specific agent run id", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));
 
@@ -637,7 +788,7 @@ describe("qa suite runtime agent process helpers", () => {
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "agent.wait",
-      { runId: "run-oversized", timeoutMs: 9e15 },
+      { runId: "run-oversized", timeoutMs: MAX_TIMER_TIMEOUT_MS },
       { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });

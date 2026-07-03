@@ -5,15 +5,24 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
+import {
+  fetchJsonWithTimeout,
+  runCommand,
+  signalChildProcessTree,
+} from "../../scripts/e2e/telegram-user-credential-io.ts";
 import {
   expandHome,
   resolvePrivateJsonDirectory,
   writePrivateJson,
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function makeTempDir(prefix: string) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
@@ -265,6 +274,24 @@ describe("telegram user credential IO", () => {
     );
   });
 
+  it("rejects short flags as credential script option values", async () => {
+    const credentialModule = (await import(
+      `${new URL("../../scripts/e2e/telegram-user-credential.ts", import.meta.url).href}?case=args-${Date.now()}`
+    )) as {
+      parseArgs(argv: string[]): unknown;
+    };
+
+    expect(() =>
+      credentialModule.parseArgs([
+        "node",
+        "scripts/e2e/telegram-user-credential.ts",
+        "restore",
+        "--payload-file",
+        "-h",
+      ]),
+    ).toThrow("Usage:");
+  });
+
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
@@ -315,6 +342,59 @@ setInterval(() => {}, 1000);
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects timed-out commands when descendant processes exit cleanly",
+    async () => {
+      const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-clean-");
+      const childPidPath = path.join(dir, "child.pid");
+      const readyPath = path.join(dir, "child.ready");
+      const cleanupPath = path.join(dir, "child.cleanup");
+      let childPid: number | undefined;
+
+      try {
+        const childScript = [
+          "const fs = require('node:fs');",
+          "process.on('SIGTERM', () => {",
+          `  fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
+          "  setTimeout(() => process.exit(0), 75);",
+          "});",
+          `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+          "setInterval(() => {}, 1000);",
+        ].join("");
+        const parentScript = [
+          "const { spawn } = require('node:child_process');",
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {`,
+          "  stdio: 'ignore',",
+          "});",
+          `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("");
+
+        const startedAt = Date.now();
+        const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
+          timeoutKillGraceMs: 1_000,
+          timeoutMs: 1_000,
+        });
+        const runError = runPromise.catch((error: unknown) => error);
+        await waitForFile(readyPath, 2_000);
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+
+        await expect(runError).resolves.toMatchObject({
+          code: "ETIMEDOUT",
+          message: expect.stringContaining("timed out after 1000ms"),
+        });
+
+        expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
+        expect(Date.now() - startedAt).toBeLessThan(1_700);
+      } finally {
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(childPid, "SIGKILL");
+        }
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")("kills timed-out child process groups", async () => {
     const dir = makeTempDir("openclaw-telegram-credential-tree-timeout-");
     const childPidPath = path.join(dir, "child.pid");
@@ -348,6 +428,75 @@ setInterval(() => {}, 1000);
         process.kill(childPid, "SIGKILL");
       }
     }
+  });
+
+  it("signals Windows credential helper process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalChildProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows credential helper process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalChildProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32")(

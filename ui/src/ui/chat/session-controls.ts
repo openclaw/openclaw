@@ -29,6 +29,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -41,7 +42,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
@@ -81,8 +82,6 @@ export function renderChatSessionSelect(
   state: AppViewState,
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
   options: {
-    compact?: boolean;
-    sessionSwitcherOnly?: boolean;
     surface?: ChatSessionSelectSurface;
   } = {},
 ) {
@@ -90,20 +89,16 @@ export function renderChatSessionSelect(
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const agentOptions = resolveChatAgentFilterOptions(state);
   const hasAgentSelect = agentOptions.length > 1;
-  const compact = options.compact ?? false;
-  const agentSelect = compact ? "" : renderChatAgentSelect(state, onSwitchSession, agentOptions);
-  const sessionSwitcherOnly = options.sessionSwitcherOnly ?? false;
-  const modelSelect = sessionSwitcherOnly ? "" : renderChatModelSelect(state);
-  const quotaPill = sessionSwitcherOnly ? "" : renderChatQuotaPill(state);
+  const agentSelect = renderChatAgentSelect(state, onSwitchSession, agentOptions);
+  const modelSelect = renderChatModelSelect(state);
+  const quotaPill = renderChatQuotaPill(state);
   const surface = options.surface ?? "desktop";
   const selectedSessionLabel = resolveSelectedChatSessionLabel(state, sessionGroups);
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;
   const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
   const rowClass = [
     "chat-controls__session-row",
-    sessionSwitcherOnly ? "chat-controls__session-row--session-switcher" : "",
-    hasAgentSelect && !compact ? "" : "chat-controls__session-row--single-agent",
-    compact ? "chat-controls__session-row--compact" : "",
+    hasAgentSelect ? "" : "chat-controls__session-row--single-agent",
     quotaPill ? "chat-controls__session-row--has-quota" : "",
     flashSession ? "chat-controls__session-row--flash" : "",
   ]
@@ -119,12 +114,80 @@ export function renderChatSessionSelect(
         selectedSessionLabel,
         pickerOpen,
         disabled: !state.connected || !state.client,
-        compact,
       })}
       ${modelSelect} ${quotaPill}
     </div>
     <div class="chat-controls__session-notice" role="status" aria-live="polite">
       ${state.sessionSwitchNotice?.text ?? ""}
+    </div>
+  `;
+}
+
+// Sidebar selections must land the user in Chat: the expanded sidebar has no
+// dedicated Chat nav item, so a switch that stays on the current tab would
+// strand the user on Overview/Sessions after picking a session.
+function enterChatOnSwitch(onSwitchSession: ChatSessionSwitchHandler): ChatSessionSwitchHandler {
+  return (state, nextSessionKey) => {
+    onSwitchSession(state, nextSessionKey);
+    state.setTab("chat");
+  };
+}
+
+// Agent filter for the sidebar sessions section; hidden for the common
+// single-agent install, mirrors the removed sidebar select's agent scoping.
+export function renderSidebarAgentFilter(
+  state: AppViewState,
+  onSwitchSession: ChatSessionSwitchHandler,
+) {
+  // Keep the per-agent row cache fresh so resolvePreferredSessionForAgent can
+  // pick each agent's most recent saved session after switching away and back;
+  // the removed sidebar session select used to do this on every render.
+  rememberChatAgentSessionRows(state, state.sessionsResult);
+  const agentOptions = resolveChatAgentFilterOptions(state);
+  if (agentOptions.length <= 1) {
+    return "";
+  }
+  return html`
+    <div class="sidebar-agent-filter">
+      ${renderChatAgentSelect(state, enterChatOnSwitch(onSwitchSession), agentOptions)}
+    </div>
+  `;
+}
+
+// Icon-only trigger for the full session picker (search + pagination) in the
+// sidebar sessions section; the recents list covers the common quick switches.
+export function renderSidebarSessionSearch(
+  state: AppViewState,
+  onSwitchSession: ChatSessionSwitchHandler,
+) {
+  const surface: ChatSessionSelectSurface = "sidebar";
+  const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;
+  const pickerId = `chat-session-picker-${surface}`;
+  const label = t("chat.selectors.sessionSearch");
+  // display:contents wrapper: groups the trigger and popover for the global
+  // outside-pointerdown close check without adding a layout box, so the
+  // popover keeps anchoring to the positioned sessions header.
+  return html`
+    <div class="sidebar-session-search">
+      <button
+        class="sidebar-session-search__button"
+        type="button"
+        title=${label}
+        aria-label=${label}
+        aria-haspopup="dialog"
+        aria-expanded=${pickerOpen ? "true" : "false"}
+        aria-controls=${pickerId}
+        ?disabled=${!state.connected || !state.client}
+        @click=${() => toggleChatSessionPicker(state, surface)}
+      >
+        ${icons.search}
+      </button>
+      ${pickerOpen
+        ? renderChatSessionPickerPopover(state, enterChatOnSwitch(onSwitchSession), pickerId, {
+            // Re-picking the current session still needs to open Chat.
+            onSelectCurrent: (s) => s.setTab("chat"),
+          })
+        : ""}
     </div>
   `;
 }
@@ -356,9 +419,9 @@ function appendChatSessionPickerResult(
 async function loadChatSessionPickerPage(
   state: AppViewState,
   options: { query?: string; offset?: number; append?: boolean } = {},
-) {
+): Promise<SessionsListResult | null> {
   if (!state.client || !state.connected) {
-    return;
+    return null;
   }
   const query = normalizeOptionalString(options.query ?? state.chatSessionPickerAppliedQuery) ?? "";
   const requestId = beginChatSessionPickerSearchRequest(
@@ -370,7 +433,7 @@ async function loadChatSessionPickerPage(
     }),
   );
   if (requestId === null) {
-    return;
+    return null;
   }
   state.chatSessionPickerLoading = true;
   state.chatSessionPickerError = null;
@@ -384,17 +447,19 @@ async function loadChatSessionPickerPage(
       ),
     );
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      return;
+      return null;
     }
     const previous = state.chatSessionPickerResult ?? state.sessionsResult;
     state.chatSessionPickerResult =
       options.append === true && previous ? appendChatSessionPickerResult(previous, page) : page;
     state.chatSessionPickerAppliedQuery = query;
+    return state.chatSessionPickerResult;
   } catch (err) {
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      return;
+      return null;
     }
     state.chatSessionPickerError = String(err);
+    return null;
   } finally {
     if (isCurrentChatSessionPickerSearchRequest(state, requestId)) {
       finishChatSessionPickerSearchRequest(state, requestId);
@@ -462,16 +527,28 @@ function updateChatSessionPickerSearchQuery(state: AppViewState, nextQuery: stri
 }
 
 async function loadMoreChatSessionPickerResults(state: AppViewState) {
-  const result = state.chatSessionPickerResult;
-  const offset = resolveNextChatSessionOffset(result);
-  if (offset === null) {
-    return;
+  let result = state.chatSessionPickerResult;
+  let offset = resolveNextChatSessionOffset(result);
+  let visibleCount = resolveChatSessionPickerRows(state, result).length;
+  const seenOffsets = new Set<number>();
+  while (offset !== null && !seenOffsets.has(offset)) {
+    seenOffsets.add(offset);
+    const next = await loadChatSessionPickerPage(state, {
+      query: state.chatSessionPickerAppliedQuery,
+      offset,
+      append: true,
+    });
+    if (!next) {
+      return;
+    }
+    result = next;
+    const nextVisibleCount = resolveChatSessionPickerRows(state, result).length;
+    if (nextVisibleCount > visibleCount) {
+      return;
+    }
+    visibleCount = nextVisibleCount;
+    offset = resolveNextChatSessionOffset(result);
   }
-  await loadChatSessionPickerPage(state, {
-    query: state.chatSessionPickerAppliedQuery,
-    offset,
-    append: true,
-  });
 }
 
 function resolveChatSessionRow(
@@ -545,10 +622,8 @@ function renderChatSessionPicker(params: {
   selectedSessionLabel: string;
   pickerOpen: boolean;
   disabled: boolean;
-  compact: boolean;
 }) {
-  const { state, onSwitchSession, surface, selectedSessionLabel, pickerOpen, disabled, compact } =
-    params;
+  const { state, onSwitchSession, surface, selectedSessionLabel, pickerOpen, disabled } = params;
   const pickerId = `chat-session-picker-${surface}`;
   return html`
     <div class="chat-controls__session chat-controls__session-picker">
@@ -570,11 +645,6 @@ function renderChatSessionPicker(params: {
           }
         }}
       >
-        ${compact
-          ? html`<span class="chat-controls__session-trigger-compact-icon" aria-hidden="true">
-              ${icons.messageSquare}
-            </span>`
-          : ""}
         <span class="chat-controls__session-trigger-label">${selectedSessionLabel}</span>
         <span class="chat-controls__session-trigger-icon" aria-hidden="true">
           ${icons.chevronDown}
@@ -589,6 +659,7 @@ function renderChatSessionPickerPopover(
   state: AppViewState,
   onSwitchSession: ChatSessionSwitchHandler,
   pickerId: string,
+  options: { onSelectCurrent?: (state: AppViewState) => void } = {},
 ) {
   const result = resolveChatSessionPickerResult(state);
   const pickerRows = resolveChatSessionPickerRows(state, result);
@@ -600,9 +671,10 @@ function renderChatSessionPickerPopover(
     state.chatSessionPickerQuery.trim() !== "" || state.chatSessionPickerAppliedQuery.trim() !== "";
   const loadMoreOffset = resolveNextChatSessionOffset(result);
   const shownCount = pickerRows.length;
+  const rawLoadedCount = result?.sessions.length ?? 0;
   const totalCount = result?.totalCount;
   const countLabel =
-    typeof totalCount === "number" && Number.isFinite(totalCount)
+    rawLoadedCount === shownCount && typeof totalCount === "number" && Number.isFinite(totalCount)
       ? `${shownCount} / ${totalCount}`
       : String(shownCount);
 
@@ -704,7 +776,9 @@ function renderChatSessionPickerPopover(
                   closeChatSessionPicker(state);
                   if (row.key !== state.sessionKey) {
                     onSwitchSession(state, row.key);
+                    return;
                   }
+                  options.onSelectCurrent?.(state);
                 }}
               >
                 <span class="chat-session-picker__option-main">
@@ -887,7 +961,7 @@ type ChatThinkingSelectState = {
 };
 
 type ChatFastModeSelectState = {
-  currentOverride: "" | "on" | "off";
+  currentOverride: "" | "on" | "off" | "auto";
   disabled: boolean;
   options: ChatInlineSelectOption[];
   supported: boolean;
@@ -935,7 +1009,13 @@ function resolveChatFastModeSelectState(
     provider?.trim().toLowerCase() ??
     null;
   const currentOverride =
-    activeRow?.fastMode === true ? "on" : activeRow?.fastMode === false ? "off" : "";
+    activeRow?.fastMode === "auto"
+      ? "auto"
+      : activeRow?.fastMode === true
+        ? "on"
+        : activeRow?.fastMode === false
+          ? "off"
+          : "";
   const supported = Boolean(
     (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
   );
@@ -953,19 +1033,10 @@ function resolveChatFastModeSelectState(
       { value: "", label: "Default" },
       { value: "on", label: "Fast" },
       { value: "off", label: "Standard" },
+      { value: "auto", label: "Auto" },
     ],
     supported,
   };
-}
-
-function sessionModelMatchesDefaults(
-  row: SessionsListResult["sessions"][number] | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!row?.modelProvider || row.modelProvider === defaults?.modelProvider) &&
-    (!row?.model || row.model === defaults?.model)
-  );
 }
 
 function buildThinkingOptions(
@@ -1006,18 +1077,14 @@ function resolveThinkingLevelOptions(
   model: string | null,
   catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
-  const sessionModelMatchesDefaultsLocal =
-    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
-    (!activeRow?.model || activeRow.model === defaults?.model);
+  const modelMatchesDefaults = sessionModelMatchesDefaults(activeRow, defaults);
   const catalogEntry =
     provider && model
       ? catalog.find((entry) => entry.provider === provider && entry.id === model)
       : undefined;
   const explicitLevels =
     (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
-    (sessionModelMatchesDefaultsLocal && defaults?.thinkingLevels?.length
-      ? defaults.thinkingLevels
-      : null);
+    (modelMatchesDefaults && defaults?.thinkingLevels?.length ? defaults.thinkingLevels : null);
   if (explicitLevels) {
     if (catalogEntry?.reasoning === false && isOffOnlyThinkingLevels(explicitLevels)) {
       return [];
@@ -1026,9 +1093,7 @@ function resolveThinkingLevelOptions(
   }
   const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
-    (sessionModelMatchesDefaultsLocal && defaults?.thinkingOptions?.length
-      ? defaults.thinkingOptions
-      : null);
+    (modelMatchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null);
   if (catalogEntry?.reasoning === false) {
     if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
       return [];
@@ -1113,7 +1178,7 @@ function renderChatModelReasoningSelect(params: {
   selectedThinkingValue: string;
   thinkingDisabled: boolean;
   thinkingOptions: ChatInlineSelectOption[];
-  onFastModeSelect: (value: "" | "on" | "off") => Promise<unknown>;
+  onFastModeSelect: (value: "" | "on" | "off" | "auto") => Promise<unknown>;
   onModelSelect: (value: string) => Promise<unknown>;
   onThinkingSelect: (value: string) => Promise<unknown>;
 }) {
@@ -1260,7 +1325,7 @@ function renderChatModelReasoningSelect(params: {
                     fastMode.options,
                     (speed) => speed.value,
                     (speed) => {
-                      const speedValue = speed.value as "" | "on" | "off";
+                      const speedValue = speed.value as "" | "on" | "off" | "auto";
                       const speedSelected = speedValue === fastMode.currentOverride;
                       return html`
                         <button
@@ -1309,7 +1374,7 @@ function renderChatModelReasoningSelect(params: {
 function patchSessionFastMode(
   state: AppViewState,
   sessionKey: string,
-  fastMode: boolean | undefined,
+  fastMode: FastMode | undefined,
 ) {
   const current = state.sessionsResult;
   if (!current) {
@@ -1323,14 +1388,15 @@ function patchSessionFastMode(
   };
 }
 
-async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off") {
+async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off" | "auto") {
   if (!state.client || !state.connected) {
     return;
   }
   const targetSessionKey = state.sessionKey;
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
-  const next = nextFastMode === "" ? undefined : nextFastMode === "on";
+  const next: FastMode | undefined =
+    nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
   if (previousFastMode === next) {
     return;
   }

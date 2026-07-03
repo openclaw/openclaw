@@ -30,7 +30,7 @@ Moonshot and Kimi Coding are **separate providers**. Keys are not interchangeabl
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
-Bundled cost estimates for current Moonshot-hosted K2 models use Moonshot's
+Catalog cost estimates for current Moonshot-hosted K2 models use Moonshot's
 published pay-as-you-go rates: Kimi K2.7 Code is $0.19/MTok cache hit,
 $0.95/MTok input, and $4.00/MTok output; Kimi K2.6 is $0.16/MTok cache hit,
 $0.95/MTok input, and $4.00/MTok output; Kimi K2.5 is $0.10/MTok cache hit,
@@ -213,6 +213,11 @@ Choose your provider and follow the setup steps.
     </Note>
 
     <Steps>
+      <Step title="Install the plugin">
+        ```bash
+        openclaw plugins install @openclaw/kimi-provider
+        ```
+      </Step>
       <Step title="Run onboarding">
         ```bash
         openclaw onboard --auth-choice kimi-code-api-key
@@ -257,8 +262,7 @@ Choose your provider and follow the setup steps.
 
 ## Kimi web search
 
-OpenClaw also ships **Kimi** as a `web_search` provider, backed by Moonshot web
-search.
+The Moonshot plugin also registers **Kimi** as a `web_search` provider, backed by Moonshot web search.
 
 <Steps>
   <Step title="Run interactive web search setup">
@@ -405,7 +409,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     capabilities, so compatible custom provider ids targeting the same native
     Moonshot hosts inherit the same streaming-usage behavior.
 
-    With the bundled K2.6 pricing, streamed usage that includes input, output,
+    With the catalog K2.6 pricing, streamed usage that includes input, output,
     and cache-read tokens is also converted into local estimated USD cost for
     `/status`, `/usage full`, `/usage cost`, and transcript-backed session
     accounting.

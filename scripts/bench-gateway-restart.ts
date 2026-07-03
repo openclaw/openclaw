@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
-  classifyProbeErrorKind,
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
@@ -177,7 +177,6 @@ const DEFAULT_RESTARTS = 5;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POST_READY_DELAY_MS = 250;
 const DEFAULT_ENTRY = "dist/entry.js";
-const RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
 const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -254,12 +253,19 @@ function readRequiredFlagValue(argv: string[], index: number, flag: string): str
 }
 
 function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
       readRequiredFlagValue(argv, index, arg);
       index += 1;
       continue;
@@ -338,8 +344,13 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [GATEWAY_CASES[0]];
   }
+  const seenIds = new Set<string>();
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
     const benchCase = byId.get(id);
     if (!benchCase) {
       throw new Error(`Unknown --case "${id}"`);
@@ -833,27 +844,7 @@ function sanitizedEnv(
 }
 
 function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: string): boolean {
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    return false;
-  }
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    const intentPath = path.join(stateDir, RESTART_INTENT_FILENAME);
-    writeFileSync(
-      intentPath,
-      `${JSON.stringify({
-        kind: "gateway-restart",
-        pid: targetPid,
-        createdAt: Date.now(),
-        reason,
-      })}\n`,
-      { mode: 0o600 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return writeGatewayRestartIntentSync({ env, reason, targetPid });
 }
 
 function readProcessFdCount(pid: number | undefined): number | null {
@@ -1603,8 +1594,8 @@ async function main() {
     return;
   }
 
-  ensureSupportedRestartPlatform();
   const options = parseOptions(argv);
+  ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
@@ -1655,7 +1646,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,

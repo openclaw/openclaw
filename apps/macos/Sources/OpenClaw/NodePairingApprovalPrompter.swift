@@ -20,6 +20,19 @@ enum NodePairingReconcilePolicy {
 @MainActor
 @Observable
 final class NodePairingApprovalPrompter {
+    private static let silentPairingSSHOptions = [
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=5",
+        "-o", "NumberOfPasswordPrompts=0",
+        "-o", "PreferredAuthentications=publickey",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        "-o", "ControlPersist=no",
+        "-o", "ForkAfterAuthentication=no",
+        // Silent approval is an authorization boundary; require an already trusted host key.
+        "-o", "StrictHostKeyChecking=yes",
+    ]
+
     static let shared = NodePairingApprovalPrompter()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "node-pairing")
@@ -475,16 +488,11 @@ final class NodePairingApprovalPrompter {
     }
 
     private static func probeSSH(user: String, host: String, port: Int) async -> Bool {
-        await Task.detached(priority: .utility) {
+        let options = self.silentPairingSSHOptions
+        return await Task.detached(priority: .utility) {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
 
-            let options = [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=5",
-                "-o", "NumberOfPasswordPrompts=0",
-                "-o", "PreferredAuthentications=publickey",
-            ] + CommandResolver.strictHostKeyCheckingSSHOptions
             guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
                 return false
             }
@@ -592,6 +600,10 @@ final class NodePairingApprovalPrompter {
 #if DEBUG
 @MainActor
 extension NodePairingApprovalPrompter {
+    static func _testSilentPairingSSHOptions() -> [String] {
+        self.silentPairingSSHOptions
+    }
+
     static func exerciseForTesting() async {
         let prompter = NodePairingApprovalPrompter()
         let pending = PendingRequest(

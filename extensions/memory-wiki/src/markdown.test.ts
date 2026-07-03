@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createWikiPageFilename,
+  parseWikiMarkdown,
   renderWikiMarkdown,
+  scanWikiPageSummary,
   slugifyWikiSegment,
   toWikiPageSummary,
   WIKI_RAW_SOURCE_MARKER,
@@ -420,5 +422,85 @@ describe("toWikiPageSummary", () => {
         privacyTier: "local-private",
       },
     ]);
+  });
+
+  it("reports and excludes unparsable frontmatter from page scans (#96125)", () => {
+    const raw = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.test",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Test Title",
+      "",
+      "Body text that should be preserved.",
+    ].join("\n");
+
+    const params = {
+      absolutePath: "/tmp/wiki/syntheses/test.md",
+      relativePath: "syntheses/test.md",
+      raw,
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
+    }
+
+    expect(result.error.relativePath).toBe("syntheses/test.md");
+    expect(result.error.message).toContain("Unexpected scalar");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Unexpected scalar");
+  });
+
+  it.each([
+    { name: "sequence", frontmatter: "- pageType: synthesis" },
+    { name: "scalar", frontmatter: "synthesis" },
+  ])("reports and excludes $name frontmatter roots from page scans", ({ frontmatter }) => {
+    const raw = ["---", frontmatter, "---", "", "# Invalid Root"].join("\n");
+    const params = {
+      absolutePath: "/tmp/wiki/syntheses/invalid-root.md",
+      relativePath: "syntheses/invalid-root.md",
+      raw,
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
+    }
+
+    expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
+  });
+
+  it("preserves frontmatter and body for valid YAML (#96125 control)", () => {
+    const raw = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.healthy",
+      "sourceIds:",
+      "  - source.alpha",
+      "---",
+      "",
+      "# Healthy Page",
+      "",
+      "Healthy body.",
+    ].join("\n");
+
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/syntheses/healthy.md",
+      relativePath: "syntheses/healthy.md",
+      raw,
+    });
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
+
+    expect(summary.hasFrontmatter).toBe(true);
+    expect(summary.title).toBe("Healthy Page");
+    expect(summary.id).toBe("synthesis.healthy");
+    expect(summary.sourceIds).toEqual(["source.alpha"]);
+    expect(summary.pageType).toBe("synthesis");
   });
 });

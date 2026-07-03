@@ -36,6 +36,7 @@ export type UpdateCommandOptions = {
   timeout?: string;
   yes?: boolean;
   reapplyLocalOverrides?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateStatusOptions = {
@@ -49,6 +50,7 @@ export type UpdateFinalizeOptions = {
   timeout?: string;
   yes?: boolean;
   restart?: boolean;
+  acknowledgeClawHubRisk?: boolean;
 };
 
 export type UpdateWizardOptions = {

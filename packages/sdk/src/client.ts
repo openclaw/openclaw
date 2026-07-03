@@ -790,9 +790,11 @@ export class RunsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async create(params: RunCreateParams): Promise<Run> {
-    const raw = await this.client.request("agent", buildAgentParams(params), {
+    const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
+    const normalizedParams = timeoutMs !== undefined ? { ...params, timeoutMs } : params;
+    const raw = await this.client.request("agent", buildAgentParams(normalizedParams), {
       expectFinal: false,
-      timeoutMs: params.timeoutMs,
+      ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
     const record = asRecord(raw);
     const runId = readOptionalString(record.runId);

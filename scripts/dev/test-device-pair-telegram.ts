@@ -43,6 +43,10 @@ type DevicePairTelegramArgs = {
 const BOOLEAN_FLAGS = new Set(["--help", "-h"]);
 const VALUE_FLAGS = new Set(["--account", "-a", "--chat", "-c"]);
 
+function isMissingOptionValue(value: string | undefined): boolean {
+  return !value || BOOLEAN_FLAGS.has(value) || VALUE_FLAGS.has(value) || value.startsWith("--");
+}
+
 function writeStdoutLine(...parts: string[]): void {
   process.stdout.write(`${parts.join(" ")}\n`);
 }
@@ -84,7 +88,7 @@ function validateArgs(args: readonly string[]): void {
     }
     if (VALUE_FLAGS.has(arg)) {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (isMissingOptionValue(value)) {
         throw new CliArgumentError(`${arg} requires a value`);
       }
       index += 1;

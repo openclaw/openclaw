@@ -1,6 +1,8 @@
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   buildAgentMediaPayload,
@@ -11,7 +13,13 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
-import { buildQaTarget, sendQaBusMessage, type QaBusMessage } from "./bus-client.js";
+import {
+  buildQaTarget,
+  deleteQaBusMessage,
+  editQaBusMessage,
+  sendQaBusMessage,
+  type QaBusMessage,
+} from "./bus-client.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -90,6 +98,106 @@ function resolveQaGroupConfig(params: {
   return groups?.[params.conversationId] ?? groups?.[params.target] ?? groups?.["*"];
 }
 
+function formatQaErrorForLog(error: unknown): string {
+  let escaped = "";
+  const message = formatErrorMessage(error) || Object.prototype.toString.call(error);
+  for (const character of message) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    const isControl = codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f);
+    const isLineSeparator = codePoint === 0x2028 || codePoint === 0x2029;
+    escaped +=
+      isControl || isLineSeparator ? `\\u${codePoint.toString(16).padStart(4, "0")}` : character;
+  }
+  return escaped;
+}
+
+function createQaReplyPreview(params: {
+  account: ResolvedQaChannelAccount;
+  inbound: QaBusMessage;
+  target: string;
+  toolCalls: QaBusToolCall[];
+}) {
+  let messageId: string | null = null;
+  let currentText = "";
+  let pending = Promise.resolve();
+
+  const write = (text: string) => {
+    if (!text.trim() || text === currentText) {
+      return pending;
+    }
+    pending = pending.then(async () => {
+      if (messageId) {
+        await editQaBusMessage({
+          baseUrl: params.account.baseUrl,
+          accountId: params.account.accountId,
+          messageId,
+          text,
+        });
+      } else {
+        const response = await sendQaBusMessage({
+          baseUrl: params.account.baseUrl,
+          accountId: params.account.accountId,
+          to: params.target,
+          text,
+          senderId: params.account.botUserId,
+          senderName: params.account.botDisplayName,
+          threadId: params.inbound.threadId,
+          replyToId: params.inbound.id,
+          toolCalls: params.toolCalls,
+        });
+        messageId = response.message.id;
+      }
+      currentText = text;
+    });
+    return pending;
+  };
+
+  const clear = async () => {
+    await pending.catch(() => undefined);
+    if (!messageId) {
+      return;
+    }
+    await deleteQaBusMessage({
+      baseUrl: params.account.baseUrl,
+      accountId: params.account.accountId,
+      messageId,
+    });
+    messageId = null;
+    currentText = "";
+  };
+
+  const sendDurable = async (text: string) => {
+    if (!text.trim()) {
+      return;
+    }
+    await sendQaBusMessage({
+      baseUrl: params.account.baseUrl,
+      accountId: params.account.accountId,
+      to: params.target,
+      text,
+      senderId: params.account.botUserId,
+      senderName: params.account.botDisplayName,
+      threadId: params.inbound.threadId,
+      replyToId: params.inbound.id,
+      toolCalls: params.toolCalls,
+    });
+  };
+
+  return {
+    clear,
+    async deliver(text: string, kind: string) {
+      await pending;
+      if (kind === "final" && messageId && params.toolCalls.length === 0) {
+        await write(text);
+        return;
+      }
+      await clear();
+      await sendDurable(text);
+    },
+    update: write,
+  };
+}
+
 export async function handleQaInbound(params: {
   channelId: string;
   channelLabel: string;
@@ -105,6 +213,12 @@ export async function handleQaInbound(params: {
     threadId: inbound.threadId,
   });
   const toolCalls: QaBusToolCall[] = [];
+  const preview = createQaReplyPreview({
+    account: params.account,
+    inbound,
+    target,
+    toolCalls,
+  });
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
@@ -179,15 +293,26 @@ export async function handleQaInbound(params: {
     body: inbound.text,
   });
   const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
+  const nativeCommand = inbound.nativeCommand;
+  const commandTargets = nativeCommand
+    ? resolveNativeCommandSessionTargets({
+        agentId: route.agentId,
+        sessionPrefix: "qa-channel:slash",
+        userId: inbound.senderId,
+        targetSessionKey: route.sessionKey,
+      })
+    : undefined;
+  const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
 
   const ctxPayload = runtime.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: inbound.text,
     RawBody: inbound.text,
-    CommandBody: inbound.text,
+    CommandBody: commandBody,
     From: target,
     To: target,
-    SessionKey: route.sessionKey,
+    SessionKey: commandTargets?.sessionKey ?? route.sessionKey,
+    CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
     AccountId: route.accountId ?? params.account.accountId,
     ChatType: inbound.conversation.kind === "direct" ? "direct" : "group",
     WasMentioned: wasMentioned,
@@ -215,6 +340,15 @@ export async function handleQaInbound(params: {
     OriginatingChannel: params.channelId,
     OriginatingTo: target,
     CommandAuthorized: true,
+    CommandSource: nativeCommand ? "native" : undefined,
+    CommandTurn: nativeCommand
+      ? {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          body: commandBody,
+        }
+      : undefined,
     ...mediaPayload,
   });
 
@@ -230,7 +364,7 @@ export async function handleQaInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         const text =
           payload && typeof payload === "object" && "text" in payload
             ? ((payload as { text?: string }).text ?? "")
@@ -238,25 +372,21 @@ export async function handleQaInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await sendQaBusMessage({
-          baseUrl: params.account.baseUrl,
-          accountId: params.account.accountId,
-          to: target,
-          text,
-          senderId: params.account.botUserId,
-          senderName: params.account.botDisplayName,
-          threadId: inbound.threadId,
-          replyToId: inbound.id,
-          toolCalls,
-        });
+        await preview.deliver(text, info.kind);
       },
       onError: (error) => {
-        throw error instanceof Error
-          ? error
-          : new Error(`qa-channel dispatch failed: ${String(error)}`);
+        void preview.clear().catch((clearError: unknown) => {
+          console.warn(
+            `[qa-channel] failed to clear reply preview after dispatch error: ${formatQaErrorForLog(clearError)}`,
+          );
+        });
+        console.warn(`[qa-channel] reply dispatch failed: ${formatQaErrorForLog(error)}`);
       },
     },
     replyOptions: {
+      onPartialReply: async (payload) => {
+        await preview.update(payload.text ?? "");
+      },
       onToolStart: (payload) => {
         if (payload.phase && payload.phase !== "start") {
           return;

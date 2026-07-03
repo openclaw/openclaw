@@ -53,6 +53,7 @@ import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transc
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -65,6 +66,7 @@ export type CodexAppServerToolTelemetry = {
 
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
+  onNativeToolResultRecorded?: () => void | Promise<void>;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
 
@@ -148,6 +150,13 @@ export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
+  private latestCompletedItemId: string | undefined;
+  private latestCompletedTerminalAssistantItemId: string | undefined;
+  private latestTerminalAssistantCandidateItemId: string | undefined;
+  private latestTerminalAssistantCandidateSuperseded = false;
+  private latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
+  private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
+  private pendingRawTerminalAssistantEchoItemId: string | undefined;
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
@@ -187,7 +196,6 @@ export class CodexAppServerEventProjector {
   private readonly toolTrajectoryItemsById = new Map<string, CodexThreadItem>();
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
-  private readonly nativeGeneratedMediaUrls = new Set<string>();
   private readonly nativeGeneratedMediaItemIds = new Set<string>();
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
@@ -195,6 +203,8 @@ export class CodexAppServerEventProjector {
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
+  private streamedPartialAssistantItemId: string | undefined;
+  private streamedPartialAssistantItemReplaceable = false;
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
@@ -217,8 +227,57 @@ export class CodexAppServerEventProjector {
   }
 
   hasCompletedTerminalAssistantText(): boolean {
+    const latestCompletedItemId = this.latestCompletedTerminalAssistantItemId;
+    if (!latestCompletedItemId) {
+      return false;
+    }
     const finalItem = this.resolveFinalAssistantTextItem();
-    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
+    return (
+      this.latestCompletedItemId === latestCompletedItemId &&
+      finalItem?.itemId === latestCompletedItemId &&
+      this.completedItemIds.has(latestCompletedItemId)
+    );
+  }
+
+  getLatestTerminalAssistantCandidate(): { itemId: string; hasText: boolean } | undefined {
+    const itemId = this.latestTerminalAssistantCandidateItemId;
+    if (!itemId) {
+      return undefined;
+    }
+    const text = this.assistantTextByItem.get(itemId)?.trim();
+    return {
+      itemId,
+      hasText: Boolean(text && !this.toolProgressTexts.has(text)),
+    };
+  }
+
+  hasLatestTerminalAssistantCandidateText(): boolean {
+    return (
+      !this.latestTerminalAssistantCandidateSuperseded &&
+      this.getLatestTerminalAssistantCandidate()?.hasText === true
+    );
+  }
+
+  canReleaseLatestTerminalAssistantAfterToolHandoff(): boolean {
+    return (
+      this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
+      this.hasLatestTerminalAssistantCandidateText()
+    );
+  }
+
+  /** Restores a completed final item after only the enclosing turn timeout fired. */
+  recoverCompletedTerminalAssistantAfterTurnWatchTimeout(): boolean {
+    if (
+      !this.aborted ||
+      this.promptError !== "codex app-server attempt timed out" ||
+      !this.hasCompletedTerminalAssistantText()
+    ) {
+      return false;
+    }
+    this.aborted = false;
+    this.promptError = undefined;
+    this.promptErrorSource = null;
+    return true;
   }
 
   /** Resolves the shared model-order position for a native tool item. */
@@ -409,6 +468,8 @@ export class CodexAppServerEventProjector {
       currentAttemptAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
+      didDeliverSourceReplyViaMessageTool:
+        toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
@@ -506,10 +567,17 @@ export class CodexAppServerEventProjector {
     if (!delta) {
       return;
     }
+    if (itemId !== this.pendingRawTerminalAssistantEchoItemId) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     this.rememberAssistantPhase(readItem(params.item));
     const phase = readString(params, "phase");
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
+    }
+    const isCommentary = this.isCommentaryAssistantItem(itemId);
+    if (!isCommentary && itemId !== this.latestTerminalAssistantCandidateItemId) {
+      this.markTerminalAssistantCandidateSupersededBy();
     }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
@@ -518,15 +586,48 @@ export class CodexAppServerEventProjector {
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
-    if (this.isCommentaryAssistantItem(itemId)) {
+    if (isCommentary) {
       this.emitCommentaryProgress({ itemId, text });
-    } else if (this.shouldStreamAssistantPartial(itemId)) {
-      await this.params.onPartialReply?.({ text, delta });
+    } else {
+      const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
+      const replace =
+        this.streamedPartialAssistantItemId !== undefined &&
+        this.streamedPartialAssistantItemId !== itemId;
+      // Codex defines final_answer as terminal text. Replacement mode is for
+      // phase-unknown/provisional items; append-only consumers cannot retract
+      // bytes after a known terminal answer has started.
+      if (replace && (!knownFinalAnswer || this.streamedPartialAssistantItemReplaceable)) {
+        this.streamedPartialAssistantItemReplaceable = true;
+      } else if (this.streamedPartialAssistantItemId === undefined) {
+        this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
+      }
+      this.streamedPartialAssistantItemId = itemId;
+      const replaceable = this.streamedPartialAssistantItemReplaceable;
+      const replacement = replace && replaceable;
+      const streamPayload = {
+        text,
+        delta: replacement ? "" : delta,
+        ...(replacement ? { replace: true as const } : {}),
+      };
+      this.emitAgentEvent({
+        stream: "assistant",
+        data: {
+          ...streamPayload,
+          ...(replaceable ? { replaceable: true as const } : {}),
+        },
+      });
+      // Legacy channel preview callbacks are append-oriented and do not all
+      // understand replacement snapshots. Keep them on the known final-answer
+      // path; replaceable snapshots stay on the typed agent-event path.
+      if (knownFinalAnswer && !replaceable) {
+        await this.params.onPartialReply?.(streamPayload);
+      }
     }
-    // Codex app-server can emit multiple agentMessage items per turn, including
-    // intermediate coordination/progress prose. Keep those deltas internal until
-    // their phase identifies terminal answer text or turn completion chooses the
-    // last assistant item as the user-visible reply.
+    // Stream non-commentary assistant deltas as partial replies and assistant
+    // agent events so live surfaces (TUI, WebChat) render incremental answer
+    // text via gateway emitChatDelta. When Codex switches to a new non-commentary
+    // item, mark replace:true with an empty delta so live merge and append-oriented
+    // partial consumers reset to the new cumulative text instead of concatenating.
   }
 
   private async handleReasoningDelta(
@@ -598,9 +699,24 @@ export class CodexAppServerEventProjector {
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      itemId !== this.pendingRawTerminalAssistantEchoItemId
+    ) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     this.rememberAssistantPhase(item);
     if (itemId) {
       this.activeItemIds.add(itemId);
+      if (itemId !== this.latestTerminalAssistantCandidateItemId) {
+        this.markTerminalAssistantCandidateSupersededBy(itemId, {
+          preserveEarlierActiveItem: true,
+        });
+        if (this.latestTerminalAssistantCandidateSuperseded) {
+          this.pendingRawTerminalAssistantEchoItemId = undefined;
+        }
+      }
     }
     this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
@@ -632,7 +748,7 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "start", item });
-    this.emitNormalizedToolItemEvent({ phase: "start", item });
+    await this.emitNormalizedToolItemEvent({ phase: "start", item });
     this.recordNativeToolTranscriptCall(item);
     this.emitToolResultSummary(item);
     this.emitAgentEvent({
@@ -646,11 +762,31 @@ export class CodexAppServerEventProjector {
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      itemId !== this.pendingRawTerminalAssistantEchoItemId
+    ) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     if (itemId) {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
+      this.latestCompletedItemId = itemId;
     }
     this.rememberAssistantPhase(item);
+    if (item?.type === "agentMessage" && !this.isCommentaryAssistantItem(item.id)) {
+      this.latestCompletedTerminalAssistantItemId = item.id;
+      this.markLatestTerminalAssistantCandidate(item.id);
+      this.pendingRawTerminalAssistantEchoItemId = item.id;
+    } else if (itemId) {
+      this.markTerminalAssistantCandidateSupersededBy(itemId, {
+        preserveEarlierActiveItem: true,
+      });
+      if (this.latestTerminalAssistantCandidateSuperseded) {
+        this.pendingRawTerminalAssistantEchoItemId = undefined;
+      }
+    }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
@@ -696,7 +832,7 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
-    this.emitNormalizedToolItemEvent({ phase: "result", item });
+    await this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.recordNativeToolTranscriptCall(item);
     this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
@@ -816,7 +952,7 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
-      this.emitSnapshotOnlyNativeToolProgress(item);
+      await this.emitSnapshotOnlyNativeToolProgress(item);
       this.recordNativeToolTranscriptCall(item);
       this.recordNativeToolTranscriptResult(item);
       this.emitAfterToolCallObservation(item);
@@ -827,7 +963,7 @@ export class CodexAppServerEventProjector {
     await this.maybeEndReasoning();
   }
 
-  private emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): void {
+  private async emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): Promise<void> {
     if (
       !shouldSynthesizeToolProgressForItem(item) ||
       !this.isCurrentTurnSnapshotItem(item) ||
@@ -839,11 +975,11 @@ export class CodexAppServerEventProjector {
     const wasStarted = this.activeItemIds.has(item.id);
     if (!wasStarted) {
       this.emitStandardItemEvent({ phase: "start", item });
-      this.emitNormalizedToolItemEvent({ phase: "start", item });
+      await this.emitNormalizedToolItemEvent({ phase: "start", item });
     }
     this.activeItemIds.delete(item.id);
     this.emitStandardItemEvent({ phase: "end", item });
-    this.emitNormalizedToolItemEvent({ phase: "result", item });
+    await this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.completedItemIds.add(item.id);
   }
 
@@ -914,20 +1050,60 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    const role = readString(item, "role");
+    const phase = readString(item, "phase");
+    const rawItemId = readString(item, "id");
+    const candidateWasSupersededBeforeRaw = this.latestTerminalAssistantCandidateSuperseded;
+    const pendingTerminalAssistantEchoItemId = this.pendingRawTerminalAssistantEchoItemId;
+    const isPendingTerminalAssistantEcho =
+      role === "assistant" &&
+      phase !== "commentary" &&
+      pendingTerminalAssistantEchoItemId !== undefined &&
+      (rawItemId === undefined || rawItemId === pendingTerminalAssistantEchoItemId);
+    if (pendingTerminalAssistantEchoItemId !== undefined && !isPendingTerminalAssistantEcho) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
+    if (!isPendingTerminalAssistantEcho) {
+      this.latestCompletedItemId = undefined;
+      this.markTerminalAssistantCandidateSupersededBy(rawItemId);
+    }
     await this.recordRawGeneratedImageMedia(item);
-    if (readString(item, "role") !== "assistant") {
+    if (role !== "assistant") {
       return;
     }
-    const phase = readString(item, "phase");
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
     const text = extractRawAssistantText(item);
+    if (isPendingTerminalAssistantEcho) {
+      const typedItemId = pendingTerminalAssistantEchoItemId;
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+      // Contributors may rewrite the typed completion without rewriting its raw echo.
+      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
+        return;
+      }
+      this.rememberAssistantItem(typedItemId);
+      this.assistantTextByItem.set(typedItemId, text);
+      return;
+    }
     if (!text) {
       return;
     }
-    const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const isIdlessTerminalAssistantAfterCompletedWork =
+      candidateWasSupersededBeforeRaw &&
+      rawItemId === undefined &&
+      pendingTerminalAssistantEchoItemId === undefined &&
+      this.activeItemIds.size === 0;
+    if (
+      phase !== "commentary" &&
+      candidateWasSupersededBeforeRaw &&
+      itemId !== this.streamedPartialAssistantItemId &&
+      !isIdlessTerminalAssistantAfterCompletedWork
+    ) {
+      return;
+    }
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
@@ -935,7 +1111,43 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });
+    } else {
+      this.markLatestTerminalAssistantCandidate(itemId, {
+        canReleaseAfterToolHandoff: isIdlessTerminalAssistantAfterCompletedWork,
+      });
     }
+  }
+
+  private markLatestTerminalAssistantCandidate(
+    itemId: string,
+    options?: { canReleaseAfterToolHandoff?: boolean },
+  ): void {
+    this.latestTerminalAssistantCandidateItemId = itemId;
+    this.latestTerminalAssistantCandidateSuperseded = false;
+    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff =
+      options?.canReleaseAfterToolHandoff === true;
+    this.terminalAssistantCandidateEarlierActiveItemIds = new Set(this.activeItemIds);
+  }
+
+  private markTerminalAssistantCandidateSupersededBy(
+    itemId?: string,
+    options?: { preserveEarlierActiveItem?: boolean },
+  ): void {
+    if (!this.latestTerminalAssistantCandidateItemId) {
+      return;
+    }
+    // Preserve app-server ordering where an item already active at assistant
+    // completion reports its delayed completion afterward. Only new work proves
+    // the candidate stale; origin/main has an integration test for this order.
+    if (itemId && this.terminalAssistantCandidateEarlierActiveItemIds.has(itemId)) {
+      if (!options?.preserveEarlierActiveItem) {
+        this.terminalAssistantCandidateEarlierActiveItemIds.delete(itemId);
+      }
+      return;
+    }
+    this.latestTerminalAssistantCandidateSuperseded = true;
+    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
+    this.terminalAssistantCandidateEarlierActiveItemIds.clear();
   }
 
   private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
@@ -992,6 +1204,9 @@ export class CodexAppServerEventProjector {
       this.recordNativeGeneratedMediaUrl({
         itemId,
         mediaUrl: saved.path,
+        // The typed savedPath may belong to a remote app-server host. Always
+        // prefer the copy persisted into this gateway's managed media root.
+        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn("codex app-server raw image generation result save failed", {
@@ -1001,13 +1216,19 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  private recordNativeGeneratedMediaUrl(params: { itemId: string; mediaUrl: string }): void {
-    if (this.nativeGeneratedMediaUrlsByItemId.has(params.itemId)) {
+  private recordNativeGeneratedMediaUrl(params: {
+    itemId: string;
+    mediaUrl: string;
+    replaceExisting?: boolean;
+  }): void {
+    if (
+      this.nativeGeneratedMediaUrlsByItemId.has(params.itemId) &&
+      params.replaceExisting !== true
+    ) {
       this.nativeGeneratedMediaItemIds.add(params.itemId);
       return;
     }
     this.nativeGeneratedMediaUrlsByItemId.set(params.itemId, params.mediaUrl);
-    this.nativeGeneratedMediaUrls.add(params.mediaUrl);
     this.nativeGeneratedMediaItemIds.add(params.itemId);
   }
 
@@ -1016,7 +1237,7 @@ export class CodexAppServerEventProjector {
       toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
     );
     if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
-      for (const mediaUrl of this.nativeGeneratedMediaUrls) {
+      for (const mediaUrl of this.nativeGeneratedMediaUrlsByItemId.values()) {
         mediaUrls.add(mediaUrl);
       }
     }
@@ -1116,10 +1337,10 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private emitNormalizedToolItemEvent(params: {
+  private async emitNormalizedToolItemEvent(params: {
     phase: "start" | "result";
     item: CodexThreadItem | undefined;
-  }): void {
+  }): Promise<void> {
     const { item } = params;
     if (!item || !shouldSynthesizeToolProgressForItem(item)) {
       return;
@@ -1139,6 +1360,7 @@ export class CodexAppServerEventProjector {
     if (!shouldEmitTranscriptToolProgress(name, args)) {
       if (params.phase === "result") {
         this.emitAfterToolCallObservation(item);
+        await this.options.onNativeToolResultRecorded?.();
       }
       return;
     }
@@ -1162,6 +1384,7 @@ export class CodexAppServerEventProjector {
     });
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
+      await this.options.onNativeToolResultRecorded?.();
     }
   }
 
@@ -1789,7 +2012,14 @@ export class CodexAppServerEventProjector {
   }
 
   private async readMirroredSessionMessages(): Promise<AgentMessage[]> {
-    return (await readCodexMirroredSessionHistoryMessages(this.params.sessionFile)) ?? [];
+    return (
+      (await readCodexMirroredSessionHistoryMessages({
+        agentId: this.params.agentId,
+        sessionFile: this.params.sessionFile,
+        sessionId: this.params.sessionId,
+        sessionKey: this.params.sessionKey,
+      })) ?? []
+    );
   }
 
   private createAssistantMessage(text: string): AssistantMessage {

@@ -9,7 +9,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as getRuntimeConfig,
@@ -72,6 +72,7 @@ let lastClientOptions: {
   clientDisplayName?: string;
   mode?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -170,6 +171,7 @@ vi.mock("./client.js", () => ({
       clientDisplayName?: string;
       mode?: string;
       approvalRuntimeToken?: string;
+      agentRuntimeIdentityToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
@@ -222,6 +224,8 @@ class StubGatewayClient {
     clientName?: string;
     clientDisplayName?: string;
     mode?: string;
+    approvalRuntimeToken?: string;
+    agentRuntimeIdentityToken?: string;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
@@ -331,12 +335,12 @@ describe("callGateway url resolution", () => {
 
   beforeEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     resetGatewayCallMocks();
   });
 
@@ -624,6 +628,29 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("wss://gateway-in-container.internal:9443/ws");
     expect(lastClientOptions?.token).toBe("env-token");
     expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("lets an explicit local port override bypass gateway env URL and port", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_PORT = "19001";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
@@ -1120,6 +1147,49 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.preauthHandshakeTimeoutMs).toBe(4321);
   });
 
+  it("lets probe details local port override bypass gateway env URL and port", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    testing.setDepsForTests({
+      getRuntimeConfig: () => config,
+      resolveGatewayPort: (_config?: unknown, env?: NodeJS.ProcessEnv) =>
+        Number(env?.OPENCLAW_GATEWAY_PORT ?? 18789),
+    });
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://env-gateway.example/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        localPortOverride: 19082,
+      });
+
+      expect(details.url).toBe("ws://127.0.0.1:19082");
+      expect(details.urlSource).toBe("local loopback");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
   it("redacts credential-bearing target URLs from connection messages", () => {
     setLocalLoopbackGatewayConfig(18800);
 
@@ -1218,10 +1288,42 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("lets a local port override bypass gateway env URL and port in connection details", () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      const details = buildGatewayConnectionDetails({ localPortOverride: 19082 });
+
+      expect(details.url).toBe("ws://127.0.0.1:19082");
+      expect(details.urlSource).toBe("local loopback");
+      expect(details.bindDetail).toBe("Bind: loopback");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
   it("falls back to the default config loader when test deps drift", () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(tempStateDir, "missing-config.json"));
     try {
       getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
       resolveGatewayPort.mockReturnValue(18800);
@@ -1411,6 +1513,27 @@ describe("callGateway error details", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("surfaces agent runtime identity connect request errors", async () => {
+    startMode = "connect-error";
+    connectError = new Error(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGateway({
+        method: "cron.remove",
+        token: "explicit-token",
+        agentRuntimeIdentityToken: "identity-token",
+      }),
+    ).rejects.toThrow(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+
+    expect(lastClientOptions?.agentRuntimeIdentityToken).toBe("identity-token");
     expect(lastRequestOptions).toBeNull();
   });
 
@@ -2552,7 +2675,7 @@ describe("callGateway password resolution", () => {
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
-    process.env[testCase.envKey] = testCase.envValue;
+    setTestEnvValue(testCase.envKey, testCase.envValue);
     const auth = { [testCase.authKey]: testCase.configValue } as {
       password?: string;
       token?: string;
