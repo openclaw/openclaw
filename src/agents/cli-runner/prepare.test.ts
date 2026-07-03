@@ -271,6 +271,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cleanup: vi.fn(async () => undefined),
       })),
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
+      hasProviderCliBackendAuthCredentialResolver: vi.fn(async () => false),
       resolveProviderCliBackendAuthCredential: vi.fn(async () => undefined),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -391,6 +392,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
+      hasProviderCliBackendAuthCredentialResolver: vi.fn(async () => true),
       resolveProviderCliBackendAuthCredential,
     });
 
@@ -495,6 +497,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
+      hasProviderCliBackendAuthCredentialResolver: vi.fn(async () => true),
       resolveProviderCliBackendAuthCredential,
     });
 
@@ -590,6 +593,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
+      hasProviderCliBackendAuthCredentialResolver: vi.fn(async () => true),
       resolveProviderCliBackendAuthCredential,
     });
 
@@ -702,6 +706,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ],
     });
     setCliRunnerPrepareTestDeps({
+      hasProviderCliBackendAuthCredentialResolver: vi.fn(async () => true),
       resolveProviderCliBackendAuthCredential,
     });
 
@@ -869,6 +874,85 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             profileId: authProfileId,
             apiKey: "secret-key",
           },
+        }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to generic forwarding when a provider hook declines", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "test-cli:secret";
+    const prepareExecution = vi.fn(async (_ctx: unknown) => undefined);
+    const resolveProviderCliBackendAuthCredential = vi.fn(async () => undefined);
+    const resolveApiKeyForProfile = vi.fn(async () => {
+      throw new Error("generic fallback should not run after provider hook decline");
+    });
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "api_key",
+            provider: "test-cli",
+            key: "secret-key",
+          },
+        },
+      },
+      agentDir,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test-plugin",
+          bundleMcp: false,
+          authProfileForwarding: {
+            supported: true,
+            providers: ["test-cli"],
+            credentialKinds: ["api_key"],
+          },
+          prepareExecution,
+          config: {
+            command: "test-cli",
+            args: ["--prompt", "{prompt}"],
+            output: "json",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      hasProviderCliBackendAuthCredentialResolver: vi.fn(async () => true),
+      resolveProviderCliBackendAuthCredential,
+      resolveApiKeyForProfile,
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-hook-decline-no-generic-fallback",
+        authProfileId,
+        config: {},
+      });
+
+      expect(resolveProviderCliBackendAuthCredential).toHaveBeenCalledOnce();
+      expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          authCredential: expect.anything(),
         }),
       );
     } finally {

@@ -438,6 +438,19 @@ export async function resolveProviderCliBackendAuthCredential(params: {
   return resolved ?? undefined;
 }
 
+export function hasProviderCliBackendAuthCredentialResolver(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
+}): boolean {
+  return (
+    typeof ensureProviderRuntimePluginHandle(params).plugin?.resolveCliBackendAuthCredential ===
+    "function"
+  );
+}
+
 export function resolveProviderFollowupFallbackRoute(params: {
   provider: string;
   config?: OpenClawConfig;

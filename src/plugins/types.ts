@@ -1728,6 +1728,8 @@ export type ProviderPlugin = {
    * Core calls this only after a CLI backend explicitly allowlists the selected
    * provider id and raw auth-profile kind. Return a typed, minimal credential
    * envelope that the backend can validate before staging CLI-owned auth files.
+   * Returning null or undefined declines forwarding for this selected profile;
+   * core falls back to the standard resolver only when the provider has no hook.
    */
   resolveCliBackendAuthCredential?: (
     ctx: ProviderResolveCliBackendAuthCredentialContext,

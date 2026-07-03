@@ -2,10 +2,20 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { prepareGeminiCliAuthHome } from "../extensions/google/cli-backend-auth.runtime.js";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import { buildGoogleGeminiCliBackend } from "../extensions/google/cli-backend.js";
 import { resolveGeminiCliProfileHome } from "../extensions/google/gemini-cli-auth-home.js";
-import { resolveGoogleAuthCredential } from "../src/agents/auth-profiles/google.js";
+import { buildGoogleGeminiCliProvider } from "../extensions/google/gemini-cli-provider.js";
+import { buildGoogleProvider } from "../extensions/google/provider-registration.js";
+import { saveAuthProfileStore } from "../src/agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../src/agents/auth-profiles/types.js";
+import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
+import {
+  hasProviderCliBackendAuthCredentialResolver,
+  resolveProviderCliBackendAuthCredential,
+} from "../src/plugins/provider-runtime.runtime.js";
+import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../src/plugins/runtime.js";
 
 const secretSentinels = {
   apiKey: "AIza-REAL-BEHAVIOR-PROOF-API-KEY-DO-NOT-LEAK",
@@ -20,8 +30,62 @@ function redact(value: string): string {
   );
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  return await fs
+    .stat(filePath)
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function createSessionFile(stateDir: string): Promise<string> {
+  const sessionFile = path.join(stateDir, "agents", "main", "sessions", "session-test.jsonl");
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  await fs.writeFile(
+    sessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "session-test",
+      timestamp: new Date(0).toISOString(),
+      cwd: stateDir,
+    })}\n`,
+    "utf-8",
+  );
+  return sessionFile;
+}
+
+function installGoogleProofRegistry(stateDir: string) {
+  const registry = createEmptyPluginRegistry();
+  const geminiCliBackend = buildGoogleGeminiCliBackend();
+  registry.providers.push(
+    {
+      pluginId: "google",
+      provider: buildGoogleProvider(),
+      source: "proof-google-auth-replacement",
+    },
+    {
+      pluginId: "google",
+      provider: buildGoogleGeminiCliProvider(),
+      source: "proof-google-auth-replacement",
+    },
+  );
+  registry.cliBackends.push({
+    pluginId: "google",
+    backend: {
+      ...geminiCliBackend,
+      bundleMcp: false,
+    },
+    source: "proof-google-auth-replacement",
+  });
+  setActivePluginRegistry(registry, "proof-google-auth-replacement", "default", stateDir);
+}
+
 async function main() {
-  const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-auth-proof-"));
+  const previousRegistry = getActivePluginRegistry();
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-auth-proof-"));
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const sessionFile = await createSessionFile(stateDir);
   const googleProfileId = "google:proof-api-key";
   const oauthProfileId = "google-gemini-cli:proof-oauth@example.test";
   const store: AuthProfileStore = {
@@ -47,107 +111,149 @@ async function main() {
     },
   };
 
-  const apiKeyCredential = await resolveGoogleAuthCredential({
-    providerId: "google",
-    profileId: googleProfileId,
-    agentDir,
-    store,
-  });
-  const oauthCredential = await resolveGoogleAuthCredential({
-    providerId: "google-gemini-cli",
-    profileId: oauthProfileId,
-    agentDir,
-    store,
-  });
-  if (!apiKeyCredential || apiKeyCredential.kind !== "api_key") {
-    throw new Error("google API-key profile did not resolve to an API-key credential");
-  }
-  if (!oauthCredential || oauthCredential.kind !== "oauth") {
-    throw new Error("google-gemini-cli OAuth profile did not resolve to an OAuth credential");
-  }
+  try {
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    installGoogleProofRegistry(stateDir);
+    await fs.mkdir(agentDir, { recursive: true });
+    saveAuthProfileStore(store, agentDir);
 
-  const oauthPrepared = await prepareGeminiCliAuthHome(
-    {
-      agentDir,
+    const registeredGeminiCliProviderHook = await hasProviderCliBackendAuthCredentialResolver({
+      provider: "google-gemini-cli",
+      workspaceDir: stateDir,
+      config: {},
+    });
+    const registeredGoogleApiProviderHook = await hasProviderCliBackendAuthCredentialResolver({
+      provider: "google",
+      workspaceDir: stateDir,
+      config: {},
+    });
+    const hookCredential = await resolveProviderCliBackendAuthCredential({
+      provider: "google-gemini-cli",
+      workspaceDir: stateDir,
+      config: {},
+      context: {
+        config: {},
+        agentDir,
+        workspaceDir: stateDir,
+        provider: "google-gemini-cli",
+        modelId: "gemini-3.1-pro-preview",
+        profileId: oauthProfileId,
+        credential: store.profiles[oauthProfileId]!,
+        store,
+      },
+    });
+    if (!registeredGeminiCliProviderHook || hookCredential?.kind !== "oauth") {
+      throw new Error("registered google-gemini-cli provider hook did not resolve OAuth material");
+    }
+    if (registeredGoogleApiProviderHook) {
+      throw new Error("google API-key provider unexpectedly registered a CLI backend auth hook");
+    }
+
+    const oauthContext = await prepareCliRunContext({
+      sessionId: "session-test",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir: stateDir,
+      prompt: "proof prompt",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+      timeoutMs: 1_000,
+      runId: "proof-google-gemini-cli-oauth",
       authProfileId: oauthProfileId,
-      systemSettingsPath: undefined,
-    },
-    oauthCredential,
-  );
-  if (!oauthPrepared?.env?.GEMINI_CLI_HOME) {
-    throw new Error("Gemini CLI OAuth preparation did not produce an isolated auth home");
-  }
-  await oauthPrepared.beforeExecution?.();
-  const oauthGeminiHome = oauthPrepared.env.GEMINI_CLI_HOME;
-  const oauthCredsPath = path.join(oauthGeminiHome, ".gemini", "oauth_creds.json");
-  const oauthCredsRaw = await fs.readFile(oauthCredsPath, "utf8");
-  const apiKeyPrepared = await prepareGeminiCliAuthHome(
-    {
-      agentDir,
+      config: {},
+    });
+    const oauthPrepared = oauthContext.preparedBackend;
+    const oauthGeminiHome = oauthPrepared.env?.GEMINI_CLI_HOME;
+    if (!oauthGeminiHome) {
+      throw new Error("Gemini CLI OAuth preparation did not produce an isolated auth home");
+    }
+    await oauthPrepared.beforeExecution?.();
+    const oauthCredsPath = path.join(oauthGeminiHome, ".gemini", "oauth_creds.json");
+    const oauthCredsRaw = await fs.readFile(oauthCredsPath, "utf8");
+
+    const apiKeyContext = await prepareCliRunContext({
+      sessionId: "session-test",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir: stateDir,
+      prompt: "proof prompt",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+      timeoutMs: 1_000,
+      runId: "proof-google-gemini-cli-api-key",
       authProfileId: googleProfileId,
-      systemSettingsPath: undefined,
-    },
-    apiKeyCredential,
-  );
-  if (!apiKeyPrepared?.env?.GEMINI_CLI_HOME || !apiKeyPrepared.env.GEMINI_API_KEY) {
-    throw new Error("Gemini CLI API-key preparation did not stage GEMINI_API_KEY");
-  }
-  await apiKeyPrepared.beforeExecution?.();
-  const apiKeyGeminiHome = apiKeyPrepared.env.GEMINI_CLI_HOME;
-  const apiKeyOauthCredsPath = path.join(apiKeyGeminiHome, ".gemini", "oauth_creds.json");
-  const apiKeyCachedCredentialsPath = path.join(
-    apiKeyGeminiHome,
-    ".gemini",
-    "gemini-credentials.json",
-  );
-  const apiKeyOauthFileAbsent = !(await fs
-    .stat(apiKeyOauthCredsPath)
-    .then(() => true)
-    .catch(() => false));
-  const apiKeyCachedCredentialsAbsent = !(await fs
-    .stat(apiKeyCachedCredentialsPath)
-    .then(() => true)
-    .catch(() => false));
-  const expectedProfileHash = crypto
-    .createHash("sha256")
-    .update(oauthProfileId)
-    .digest("hex")
-    .slice(0, 24);
-  const expectedHome = resolveGeminiCliProfileHome(agentDir, oauthProfileId);
+      config: {},
+    });
+    const apiKeyPrepared = apiKeyContext.preparedBackend;
+    const apiKeyGeminiHome = apiKeyPrepared.env?.GEMINI_CLI_HOME;
+    if (!apiKeyGeminiHome || apiKeyPrepared.env?.GEMINI_API_KEY !== secretSentinels.apiKey) {
+      throw new Error("Gemini CLI API-key preparation did not stage GEMINI_API_KEY");
+    }
+    await apiKeyPrepared.beforeExecution?.();
+    const apiKeyOauthCredsPath = path.join(apiKeyGeminiHome, ".gemini", "oauth_creds.json");
+    const apiKeyCachedCredentialsPath = path.join(
+      apiKeyGeminiHome,
+      ".gemini",
+      "gemini-credentials.json",
+    );
+    const expectedProfileHash = crypto
+      .createHash("sha256")
+      .update(oauthProfileId)
+      .digest("hex")
+      .slice(0, 24);
+    const expectedHome = resolveGeminiCliProfileHome(agentDir, oauthProfileId);
 
-  const proof = {
-    apiKeyProfileSelectedForGoogle: apiKeyCredential.profileId === googleProfileId,
-    oauthProfileSelectedForGeminiCli: oauthCredential.profileId === oauthProfileId,
-    geminiCliUsesIsolatedAuthHome: oauthGeminiHome === expectedHome,
-    inheritedGoogleAuthEnvCleared: [
-      "GOOGLE_API_KEY",
-      "GEMINI_API_KEY",
-      "GOOGLE_APPLICATION_CREDENTIALS",
-      "GOOGLE_CLOUD_ACCESS_TOKEN",
-      "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-    ].every((name) => oauthPrepared.clearEnv?.includes(name)),
-    apiKeyNotWrittenIntoGeminiCliOAuthFiles: !oauthCredsRaw.includes(secretSentinels.apiKey),
-    apiKeyProfileStagesGeminiApiKey: apiKeyPrepared.env.GEMINI_API_KEY === secretSentinels.apiKey,
-    apiKeyProfileDoesNotLeaveOauthFiles: apiKeyOauthFileAbsent && apiKeyCachedCredentialsAbsent,
-    oauthTokenValuesRedactedFromProofOutput: true,
-    profileIdHashUsedInHome: oauthGeminiHome.includes(expectedProfileHash),
-    rawProfileIdAbsentFromHome: !oauthGeminiHome.includes(oauthProfileId),
-    selectedCredentialKinds: {
-      google: apiKeyCredential.kind,
-      "google-gemini-cli": oauthCredential.kind,
-    },
-    redactedCredentialFilePreview: redact(oauthCredsRaw),
-  };
+    const proof = {
+      registeredGeminiCliProviderHook,
+      googleApiKeyProviderUsesGenericFallback: !registeredGoogleApiProviderHook,
+      cliRunnerForwardedOauthViaRegisteredProviderHook:
+        oauthContext.effectiveAuthProfileId === oauthProfileId &&
+        oauthContext.preparedBackend.env?.GEMINI_CLI_HOME === expectedHome,
+      cliRunnerForwardedApiKeyViaGenericFallback:
+        apiKeyContext.effectiveAuthProfileId === googleProfileId &&
+        apiKeyPrepared.env?.GEMINI_API_KEY === secretSentinels.apiKey,
+      apiKeyProfileSelectedForGoogle: apiKeyContext.effectiveAuthProfileId === googleProfileId,
+      oauthProfileSelectedForGeminiCli: oauthContext.effectiveAuthProfileId === oauthProfileId,
+      geminiCliUsesIsolatedAuthHome: oauthGeminiHome === expectedHome,
+      inheritedGoogleAuthEnvCleared: [
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_ACCESS_TOKEN",
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+      ].every((name) => oauthPrepared.backend.clearEnv?.includes(name)),
+      apiKeyNotWrittenIntoGeminiCliOAuthFiles: !oauthCredsRaw.includes(secretSentinels.apiKey),
+      apiKeyProfileStagesGeminiApiKey: apiKeyPrepared.env.GEMINI_API_KEY === secretSentinels.apiKey,
+      apiKeyProfileDoesNotLeaveOauthFiles:
+        !(await pathExists(apiKeyOauthCredsPath)) &&
+        !(await pathExists(apiKeyCachedCredentialsPath)),
+      oauthTokenValuesRedactedFromProofOutput: true,
+      profileIdHashUsedInHome: oauthGeminiHome.includes(expectedProfileHash),
+      rawProfileIdAbsentFromHome: !oauthGeminiHome.includes(oauthProfileId),
+      selectedCredentialKinds: {
+        "google-gemini-cli": hookCredential.kind,
+        google: "api_key",
+      },
+      redactedCredentialFilePreview: redact(oauthCredsRaw),
+    };
 
-  const rendered = JSON.stringify(proof, null, 2);
-  const leaked = Object.values(secretSentinels).filter((secret) => rendered.includes(secret));
-  if (leaked.length > 0) {
-    throw new Error("proof output leaked raw credential material");
+    const rendered = JSON.stringify(proof, null, 2);
+    const leaked = Object.values(secretSentinels).filter((secret) => rendered.includes(secret));
+    if (leaked.length > 0) {
+      throw new Error("proof output leaked raw credential material");
+    }
+    console.log(rendered);
+    await oauthPrepared.cleanup?.();
+    await apiKeyPrepared.cleanup?.();
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
-  console.log(rendered);
-  await oauthPrepared.cleanup?.();
-  await apiKeyPrepared.cleanup?.();
-  await fs.rm(agentDir, { recursive: true, force: true });
 }
 
 main().catch((error) => {

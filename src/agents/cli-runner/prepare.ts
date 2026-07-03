@@ -26,7 +26,10 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { resolveProviderCliBackendAuthCredential } from "../../plugins/provider-runtime.runtime.js";
+import {
+  hasProviderCliBackendAuthCredentialResolver,
+  resolveProviderCliBackendAuthCredential,
+} from "../../plugins/provider-runtime.runtime.js";
 import type { ProviderResolvedCliBackendAuthCredential } from "../../plugins/types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
@@ -112,6 +115,7 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
   resolveApiKeyForProfile,
+  hasProviderCliBackendAuthCredentialResolver,
   resolveProviderCliBackendAuthCredential,
 };
 const defaultPrepareDeps = { ...prepareDeps };
@@ -340,8 +344,13 @@ async function resolveCliBackendAuthCredential(params: {
   credential: AuthProfileCredential;
   store: AuthProfileStore;
 }): Promise<ProviderResolvedCliBackendAuthCredential | undefined> {
-  return (
-    (await prepareDeps.resolveProviderCliBackendAuthCredential({
+  const providerHookParams = {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    provider: params.provider,
+  };
+  if (await prepareDeps.hasProviderCliBackendAuthCredentialResolver(providerHookParams)) {
+    return await prepareDeps.resolveProviderCliBackendAuthCredential({
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
@@ -355,14 +364,15 @@ async function resolveCliBackendAuthCredential(params: {
         credential: params.credential,
         store: params.store,
       },
-    })) ??
-    (await resolveDefaultCliBackendAuthCredential({
-      cfg: params.cfg,
-      store: params.store,
-      profileId: params.profileId,
-      agentDir: params.agentDir,
-    }))
-  );
+    });
+  }
+
+  return await resolveDefaultCliBackendAuthCredential({
+    cfg: params.cfg,
+    store: params.store,
+    profileId: params.profileId,
+    agentDir: params.agentDir,
+  });
 }
 
 /** Builds the complete context required to execute a CLI-backed agent run. */

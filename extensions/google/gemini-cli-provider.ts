@@ -3,7 +3,9 @@ import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderResolveCliBackendAuthCredentialContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
@@ -31,6 +33,59 @@ const loadOauthRuntimeModule = async () => {
 
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
+}
+
+function normalizeString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function buildGeminiCliOAuthCredential(credential: OAuthCredential, profileId: string) {
+  const accessToken = normalizeString(credential.access);
+  if (!accessToken) {
+    return null;
+  }
+  const refreshToken = normalizeString(credential.refresh);
+  const projectId = normalizeString(credential.projectId);
+  return {
+    kind: "oauth" as const,
+    providerId: PROVIDER_ID,
+    profileId,
+    accessToken,
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(typeof credential.expires === "number" && Number.isFinite(credential.expires)
+      ? { expiresAt: credential.expires }
+      : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(credential.email ? { email: credential.email } : {}),
+  };
+}
+
+async function resolveGeminiCliBackendAuthCredential(
+  ctx: ProviderResolveCliBackendAuthCredentialContext,
+) {
+  if (ctx.provider !== PROVIDER_ID || ctx.credential.provider !== PROVIDER_ID) {
+    return null;
+  }
+  if (ctx.credential.type !== "oauth") {
+    return null;
+  }
+
+  const expires = ctx.credential.expires;
+  const expiryIsUsable =
+    typeof expires !== "number" || !Number.isFinite(expires) || expires > Date.now();
+  if (expiryIsUsable) {
+    return buildGeminiCliOAuthCredential(ctx.credential, ctx.profileId);
+  }
+
+  if (!normalizeString(ctx.credential.refresh)) {
+    return null;
+  }
+  const { refreshGeminiCliOAuthToken } = await loadOauthRuntimeModule();
+  return buildGeminiCliOAuthCredential(
+    await refreshGeminiCliOAuthToken(ctx.credential),
+    ctx.profileId,
+  );
 }
 
 export function buildGoogleGeminiCliProvider(): ProviderPlugin {
@@ -128,6 +183,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
         ctx,
       }),
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+    resolveCliBackendAuthCredential: resolveGeminiCliBackendAuthCredential,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     refreshOAuth: async (cred) => {
