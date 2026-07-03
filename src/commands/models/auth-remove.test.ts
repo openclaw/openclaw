@@ -4,12 +4,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
 import { modelsAuthRemoveCommand } from "./auth-remove.js";
 
+type ResolvePersistedAuthProfileOwnerAgentDir = (params: {
+  agentDir: string;
+  profileId: string;
+}) => string | undefined;
+
 const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   loadModelsConfig: vi.fn(),
   removeAuthProfilesWithLock: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
-  resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
+  resolvePersistedAuthProfileOwnerAgentDir: vi.fn<ResolvePersistedAuthProfileOwnerAgentDir>(
     ({ agentDir }: { agentDir: string; profileId: string }) => agentDir,
   ),
   resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
