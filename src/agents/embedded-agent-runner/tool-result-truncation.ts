@@ -553,6 +553,7 @@ export function truncateOversizedToolResultsInMessages(
   const projectionKeys = projectionState
     ? getToolResultProjectionKeys(messages, projectionState)
     : [];
+  const hasFrozenProjectionBaseline = projectionState ? projectionState.frozen.size > 0 : false;
   const branch = messages.map((message, index) => {
     const projectionKey = projectionKeys[index];
     const projectedMessage = projectionKey
@@ -576,6 +577,13 @@ export function truncateOversizedToolResultsInMessages(
         !projectionKey ||
         !projectionState?.frozen.has(projectionKey) ||
         (projectedMessage !== undefined && mergedMessage === message),
+      // Runtime/context messages can follow a fresh tool result before provider dispatch,
+      // so trailing-only protection does not cover every fresh-result path.
+      protectedFreshProjection:
+        projectionKey !== undefined &&
+        projectionState !== undefined &&
+        hasFrozenProjectionBaseline &&
+        !projectionState.frozen.has(projectionKey),
     };
   });
   const plan = buildToolResultReplacementPlan({
@@ -661,6 +669,7 @@ type ToolResultBranchEntry = {
   type: string;
   message?: AgentMessage;
   aggregateEligible?: boolean;
+  protectedFreshProjection?: boolean;
 };
 
 type ToolResultReplacement = {
@@ -808,7 +817,13 @@ function buildAggregateToolResultReplacements(params: {
       (
         item,
       ): item is {
-        entry: { id: string; type: string; message: AgentMessage; aggregateEligible?: boolean };
+        entry: {
+          id: string;
+          type: string;
+          message: AgentMessage;
+          aggregateEligible?: boolean;
+          protectedFreshProjection?: boolean;
+        };
         index: number;
       } =>
         item.entry.type === "message" &&
@@ -822,7 +837,8 @@ function buildAggregateToolResultReplacements(params: {
       spillSourceMessage: params.spillSourceBranch?.[item.index]?.message ?? item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
       aggregateEligible: item.entry.aggregateEligible !== false,
-      protectedFromAggregateRecovery: protectedEntryIds.has(item.entry.id),
+      protectedByFreshProjection: item.entry.protectedFreshProjection === true,
+      protectedByTrailingBatch: protectedEntryIds.has(item.entry.id),
     }))
     .filter((item) => item.textLength > 0);
 
@@ -844,18 +860,22 @@ function buildAggregateToolResultReplacements(params: {
 
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
+  const byPromptOrderThenSizeDesc = (
+    a: (typeof candidates)[number],
+    b: (typeof candidates)[number],
+  ) => {
+    if (a.index !== b.index) {
+      return a.index - b.index;
+    }
+    return b.textLength - a.textLength;
+  };
   const aggregateRecoveryCandidates = candidates
-    .filter((item) => !item.protectedFromAggregateRecovery)
-    .toSorted((a, b) => {
-      if (a.index !== b.index) {
-        return a.index - b.index;
-      }
-      return b.textLength - a.textLength;
-    });
+    .filter((item) => !item.protectedByFreshProjection && !item.protectedByTrailingBatch)
+    .toSorted(byPromptOrderThenSizeDesc);
   const recoveryCandidates = [
     ...aggregateRecoveryCandidates.filter((item) => item.aggregateEligible),
-    // Frozen bytes move only after fresh output is exhausted and the hard aggregate
-    // guard still overflows; starting from the frozen projection makes this shrink-only.
+    // Frozen history moves only after unfrozen history is exhausted. Starting from
+    // its frozen projection keeps further reductions shrink-only under a tighter cap.
     ...aggregateRecoveryCandidates.filter((item) => !item.aggregateEligible),
   ];
 

@@ -724,6 +724,100 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(totalChars).toBeLessThanOrEqual(32_000);
   });
 
+  it("preserves fresh tool results when a runtime context message follows them", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMessage[] = [];
+    for (let index = 0; index < 50; index++) {
+      history.push(makeAssistantMessage(`call ${index}`));
+      history.push(makeToolResult("x".repeat(4_000), `history_${index}`));
+    }
+    history.push(makeUserMessage("run echo with extra context"));
+
+    const first = truncateOversizedToolResultsInMessages(
+      history,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    expect(first.truncatedCount).toBeGreaterThan(0);
+
+    const freshOutput = "ABC";
+    const second = truncateOversizedToolResultsInMessages(
+      [
+        ...history,
+        makeAssistantMessage("running exec"),
+        makeToolResult(freshOutput, "fresh_exec"),
+        makeUserMessage("runtime context refresh"),
+      ],
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+
+    const freshResult = second.messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "fresh_exec",
+    );
+    const historicalResults = second.messages.filter(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId.startsWith("history_"),
+    );
+    const totalChars = second.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(historicalResults.some((message) => getToolResultTextLength(message) < 4_000)).toBe(
+      true,
+    );
+    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(second.aggregatePressureEngaged).toBe(true);
+    expect(totalChars).toBeLessThanOrEqual(32_000);
+  });
+
+  it("does not clear a fresh non-trailing result when frozen history cannot meet the cap", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMessage[] = [
+      makeAssistantMessage("old call 1"),
+      makeToolResult("x".repeat(1_000), "history_1"),
+      makeAssistantMessage("old call 2"),
+      makeToolResult("y".repeat(1_000), "history_2"),
+      makeUserMessage("run a current tool"),
+    ];
+    truncateOversizedToolResultsInMessages(history, 1_000_000, 10_000, 1_000, projectionState);
+
+    const freshOutput = "F".repeat(8_000);
+    const result = truncateOversizedToolResultsInMessages(
+      [
+        ...history,
+        makeAssistantMessage("running current tool"),
+        makeToolResult(freshOutput, "fresh_exec"),
+        makeUserMessage("runtime context refresh"),
+      ],
+      1_000_000,
+      10_000,
+      1_000,
+      projectionState,
+    );
+
+    const freshResult = result.messages.find(
+      (message): message is ToolResultMessage =>
+        message.role === "toolResult" && message.toolCallId === "fresh_exec",
+    );
+    const totalChars = result.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(result.aggregatePressureEngaged).toBe(true);
+    expect(totalChars).toBeGreaterThan(result.aggregateBudgetChars);
+  });
+
   it("caps oversized fresh trailing tool results without clearing them for aggregate recovery", () => {
     const projectionState = createToolResultPromptProjectionState();
     const history: AgentMessage[] = [];

@@ -36,6 +36,10 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
+import {
+  createToolResultPromptProjectionState,
+  truncateOversizedToolResultsInMessages,
+} from "../tool-result-truncation.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 
 // ---------------------------------------------------------------------------
@@ -557,6 +561,79 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     expect(wireN1.slice(0, sharedPrefixLen)).toEqual(wireN.slice(0, sharedPrefixLen));
     // In request N the carrier occupies the append-only slot right after q2.
     expect(isCarrier(wire(turnN)[3])).toBe(true);
+  });
+
+  it("preserves fresh tool output when the runtime carrier becomes the absolute tail", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMsg[] = [];
+    for (let index = 0; index < 50; index++) {
+      history.push({ ...ASSISTANT_MSG, timestamp: TS_TURN1 + index * 2 });
+      history.push({
+        role: "toolResult",
+        toolCallId: `history_${index}`,
+        toolName: "exec",
+        content: [{ type: "text", text: "x".repeat(4_000) }],
+        isError: false,
+        timestamp: TS_TURN1 + index * 2 + 1,
+      } as AgentMsg);
+    }
+
+    const first = truncateOversizedToolResultsInMessages(
+      wire(history) as AgentMsg[],
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    expect(first.truncatedCount).toBeGreaterThan(0);
+
+    const current = wire([
+      ...history,
+      runtimeCarrier(META, TS_TURN2),
+      currentUserMsg("run echo", TS_TURN2),
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "fresh_exec", name: "exec", arguments: {} }],
+        timestamp: TS_TURN2 + 1,
+      } as AgentMsg,
+      {
+        role: "toolResult",
+        toolCallId: "fresh_exec",
+        toolName: "exec",
+        content: [{ type: "text", text: "ABC" }],
+        isError: false,
+        timestamp: TS_TURN2 + 2,
+      } as AgentMsg,
+    ]) as AgentMsg[];
+    expect(isCarrier(current.at(-1))).toBe(true);
+
+    const second = truncateOversizedToolResultsInMessages(
+      current,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    const freshResult = second.messages.find(
+      (message) =>
+        message.role === "toolResult" &&
+        (message as { toolCallId?: unknown }).toolCallId === "fresh_exec",
+    );
+    const historicalResults = second.messages.filter(
+      (message) =>
+        message.role === "toolResult" &&
+        String((message as { toolCallId?: unknown }).toolCallId).startsWith("history_"),
+    );
+    const totalToolResultChars = second.messages.reduce(
+      (sum, message) => sum + (message.role === "toolResult" ? (textOf(message)?.length ?? 0) : 0),
+      0,
+    );
+
+    expect(freshResult && textOf(freshResult)).toBe("ABC");
+    expect(historicalResults.some((message) => (textOf(message)?.length ?? 0) < 4_000)).toBe(true);
+    expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
+    expect(second.aggregatePressureEngaged).toBe(true);
+    expect(totalToolResultChars).toBeLessThanOrEqual(32_000);
   });
 
   it("runtime-only (room-event) inline context is not strip-eligible, so it stays byte-stable in both positions", () => {
