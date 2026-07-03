@@ -6,6 +6,7 @@
  */
 
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
@@ -38,6 +39,7 @@ const CALLBACK_HOST = resolveCallbackHost();
 const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+const OPENAI_CODEX_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const SCOPE = "openid profile email offline_access";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
@@ -160,6 +162,17 @@ function formatTokenRequestError(
   return `OpenAI Codex token ${operation} error: ${error instanceof Error ? error.message : String(error)}`;
 }
 
+async function materializeTokenResponse(response: Response): Promise<Response> {
+  const responseBody = response.ok
+    ? await response.arrayBuffer()
+    : await readResponseTextLimited(response, OPENAI_CODEX_TOKEN_ERROR_BODY_LIMIT_BYTES);
+  return new Response(responseBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 async function postTokenForm(
   body: URLSearchParams,
   options: TokenRequestOptions = {},
@@ -178,12 +191,7 @@ async function postTokenForm(
     auditContext: "openai-chatgpt-oauth-token",
   });
   try {
-    const responseBody = await response.arrayBuffer();
-    return new Response(responseBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+    return await materializeTokenResponse(response);
   } finally {
     await release();
   }
@@ -216,7 +224,10 @@ async function exchangeAuthorizationCode(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const text = await readResponseTextLimited(
+      response,
+      OPENAI_CODEX_TOKEN_ERROR_BODY_LIMIT_BYTES,
+    ).catch(() => "");
     return {
       type: "failed",
       status: response.status,
@@ -258,7 +269,10 @@ async function refreshAccessToken(
     );
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = await readResponseTextLimited(
+        response,
+        OPENAI_CODEX_TOKEN_ERROR_BODY_LIMIT_BYTES,
+      ).catch(() => "");
       return {
         type: "failed",
         status: response.status,

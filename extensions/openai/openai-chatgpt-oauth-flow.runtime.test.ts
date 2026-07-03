@@ -29,6 +29,22 @@ function mockTokenResponseText(body: string, status = 200): void {
   });
 }
 
+function mockTokenErrorBodyWithBodyTraps(body: string, status = 500) {
+  const response = new Response(body, {
+    status,
+    headers: { "Content-Type": "text/plain" },
+  });
+  const text = vi
+    .spyOn(response, "text")
+    .mockRejectedValue(new Error("unexpected response.text() call"));
+  const arrayBuffer = vi
+    .spyOn(response, "arrayBuffer")
+    .mockRejectedValue(new Error("unexpected response.arrayBuffer() call"));
+  const release = vi.fn(async () => undefined);
+  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({ response, release });
+  return { arrayBuffer, release, text };
+}
+
 afterEach(() => {
   ssrfMocks.fetchWithSsrFGuard.mockReset();
 });
@@ -143,6 +159,27 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("bounds token exchange error bodies without materializing the full response", async () => {
+    const body = "x".repeat(32 * 1024);
+    const { arrayBuffer, release, text } = mockTokenErrorBodyWithBodyTraps(body, 500);
+
+    const result = await testing.exchangeAuthorizationCode(
+      "code",
+      "verifier",
+      testing.resolveRedirectUri("localhost"),
+      { timeoutMs: 5 },
+    );
+
+    expect(result).toEqual({
+      type: "failed",
+      status: 500,
+      message: `OpenAI Codex token exchange failed (500): ${"x".repeat(8 * 1024)}`,
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
@@ -173,5 +210,21 @@ describe("OpenAI Codex OAuth flow", () => {
       type: "failed",
       message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
+  });
+
+  it("bounds token refresh error bodies without materializing the full response", async () => {
+    const body = "y".repeat(32 * 1024);
+    const { arrayBuffer, release, text } = mockTokenErrorBodyWithBodyTraps(body, 500);
+
+    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+
+    expect(result).toEqual({
+      type: "failed",
+      status: 500,
+      message: `OpenAI Codex token refresh failed (500): ${"y".repeat(8 * 1024)}`,
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 });
