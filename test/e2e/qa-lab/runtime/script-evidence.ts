@@ -9,13 +9,16 @@ import {
   type QaEvidenceSummaryJson,
   type QaProviderMode,
 } from "../../../../extensions/qa-lab/api.js";
-import {
-  createBoundedChildOutput,
-  DEFAULT_CHILD_OUTPUT_TAIL_BYTES,
-} from "../../../helpers/bounded-child-output.js";
+import { readLoggingConfig } from "../../../../src/logging/config.js";
+import { withFullContextToolPayloadRedaction } from "../../../../src/logging/redact-internal.js";
+import { redactToolPayloadTextWithConfig } from "../../../../src/logging/redact.js";
+import { DEFAULT_CHILD_OUTPUT_TAIL_BYTES } from "../../../helpers/bounded-child-output.js";
 
 export const DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES = 32 * 1024;
 const QA_SCRIPT_STATUS_MATCH_CARRY_CHARS = 1024;
+const QA_SCRIPT_LOG_OVERFLOW_MESSAGE = "QA evidence log omitted: safe redaction buffer exceeded.\n";
+const QA_SCRIPT_DETAILS_OVERFLOW_MESSAGE =
+  "QA evidence details omitted: safe redaction buffer exceeded.";
 
 type QaScriptEvidenceArtifactInput = {
   filePath: string;
@@ -90,6 +93,37 @@ function utf8Tail(text: string, maxBytes: number) {
   return buffer.subarray(start).toString("utf8");
 }
 
+function createSafeRedactionBuffer(maxBytes: number) {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  let overflowed = false;
+
+  return {
+    append(chunk: string) {
+      if (overflowed) {
+        return;
+      }
+      const buffer = Buffer.from(chunk);
+      if (totalBytes + buffer.byteLength > maxBytes) {
+        // Arbitrary configured patterns need the complete raw context. Omit an
+        // oversized log instead of truncating before redaction and leaking a tail.
+        chunks.length = 0;
+        totalBytes = 0;
+        overflowed = true;
+        return;
+      }
+      chunks.push(buffer);
+      totalBytes += buffer.byteLength;
+    },
+    overflowed() {
+      return overflowed;
+    },
+    text() {
+      return Buffer.concat(chunks, totalBytes).toString("utf8");
+    },
+  };
+}
+
 export function createQaScriptBlockedStatusTracker(blockedPatterns: readonly RegExp[]) {
   let blocked = false;
   let carry = "";
@@ -115,21 +149,32 @@ export function createQaScriptBlockedStatusTracker(blockedPatterns: readonly Reg
 
 export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOptions) {
   const maxLogBytes = resolveByteLimit(options.maxLogBytes, DEFAULT_CHILD_OUTPUT_TAIL_BYTES);
-  const log = createBoundedChildOutput(maxLogBytes);
   const logFile = resolveArtifactPath(options.artifactBase, options.logFileName);
   const maxDetailsBytes = resolveByteLimit(
     options.maxDetailsBytes,
     DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES,
   );
-  const boundedLogText = () => utf8Tail(log.text(), maxLogBytes);
+  const log = createSafeRedactionBuffer(maxLogBytes + DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES);
+  const redact = (text: string) =>
+    redactToolPayloadTextWithConfig(text, withFullContextToolPayloadRedaction(readLoggingConfig()));
+  const boundedLogText = () => {
+    if (log.overflowed()) {
+      return utf8Tail(QA_SCRIPT_LOG_OVERFLOW_MESSAGE, maxLogBytes);
+    }
+    return utf8Tail(redact(log.text()), maxLogBytes);
+  };
 
   const boundedDetails = (details: string | undefined) => {
     if (!details) {
       return undefined;
     }
-    const output = createBoundedChildOutput(maxDetailsBytes);
-    output.append(details);
-    return utf8Tail(output.text(), maxDetailsBytes);
+    if (
+      Buffer.byteLength(details, "utf8") >
+      maxDetailsBytes + DEFAULT_QA_SCRIPT_EVIDENCE_DETAILS_BYTES
+    ) {
+      return utf8Tail(QA_SCRIPT_DETAILS_OVERFLOW_MESSAGE, maxDetailsBytes);
+    }
+    return utf8Tail(redact(details), maxDetailsBytes);
   };
 
   const normalizeArtifacts = (artifacts: readonly QaScriptEvidenceArtifactInput[] = []) => {
@@ -171,7 +216,7 @@ export function createQaScriptEvidenceWriter(options: QaScriptEvidenceWriterOpti
 
   return {
     appendLog(chunk: unknown) {
-      log.append(chunk);
+      log.append(String(chunk));
     },
     build,
     logText() {

@@ -7,7 +7,6 @@ import {
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
 import { spawnPnpmRunner as _spawnPnpmRunner } from "../../../../scripts/pnpm-runner.mjs";
-import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -751,28 +750,19 @@ async function runHostedMediaProof(
       env: command.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const stdout = createBoundedChildOutput();
-    const stderr = createBoundedChildOutput();
     const statusTracker = createQaScriptBlockedStatusTracker(HOSTED_MEDIA_BLOCKED_PATTERNS);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      stdout.append(chunk);
+      writer.appendLog(chunk);
       statusTracker.append(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr.append(chunk);
+      writer.appendLog(chunk);
       statusTracker.append(chunk);
     });
     child.on("error", reject);
     child.on("close", (status, signal) => {
-      const stdoutText = stdout.text();
-      const stderrText = stderr.text();
-      const output = [
-        stdoutText ? `\n--- stdout ---\n${stdoutText}` : "",
-        stderrText ? `\n--- stderr ---\n${stderrText}` : "",
-      ].join("");
-      writer.appendLog(output);
       const durationMs = Math.max(1, Date.now() - startedAt);
       if (status === 0 && !signal) {
         resolve({
@@ -785,9 +775,8 @@ async function runHostedMediaProof(
       const details = signal
         ? `${options.suiteId} hosted media live suite terminated by ${signal}`
         : `${options.suiteId} hosted media live suite exited with ${status ?? 1}`;
-      const combined = `${details}\n${stderrText || stdoutText}`;
       resolve({
-        details: combined,
+        details,
         durationMs,
         status: statusTracker.status(),
       });

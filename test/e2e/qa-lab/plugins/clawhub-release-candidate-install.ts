@@ -253,44 +253,36 @@ async function runParallelsProof(params: {
   }
   params.writer.appendLog(`$ bash ${args.map((arg) => JSON.stringify(arg)).join(" ")}\n`);
 
-  return await new Promise<{ stderr: string; stdout: string }>((resolve, reject) => {
+  return await new Promise<string>((resolve, reject) => {
     const child = spawn("bash", args, {
       cwd: params.options.repoRoot,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout = createBoundedChildOutput(1024 * 1024);
-    const stderr = createBoundedChildOutput();
     const statusTracker = createQaScriptBlockedStatusTracker(CLAWHUB_BLOCKED_PREREQUISITE_PATTERNS);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
+      params.writer.appendLog(chunk);
       stdout.append(chunk);
       statusTracker.append(chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr.append(chunk);
+      params.writer.appendLog(chunk);
       statusTracker.append(chunk);
     });
     child.on("error", reject);
     child.on("close", (status, signal) => {
       const stdoutText = stdout.text();
-      const stderrText = stderr.text();
-      const output = [
-        stdoutText ? `\n--- stdout ---\n${stdoutText}` : "",
-        stderrText ? `\n--- stderr ---\n${stderrText}` : "",
-      ].join("");
-      params.writer.appendLog(output);
       if (status === 0 && !signal) {
-        resolve({ stderr: stderrText, stdout: stdoutText });
+        resolve(stdoutText);
         return;
       }
       const reason = signal
         ? `Parallels npm-update proof terminated by ${signal}`
         : `Parallels npm-update proof exited with ${status ?? 1}`;
-      reject(
-        new ParallelsProofError(`${reason}\n${stderrText || stdoutText}`, statusTracker.status()),
-      );
+      reject(new ParallelsProofError(reason, statusTracker.status()));
     });
   });
 }
@@ -410,8 +402,8 @@ async function produceProof(
     writer.appendLog(
       `candidate: ${tarballPath}\nversion: ${metadata.version}\nbuild commit: ${metadata.buildCommit}\n`,
     );
-    const commandResult = await runParallelsProof({ options, tarballPath, writer });
-    const summary = parseParallelsSummary(commandResult.stdout);
+    const commandOutput = await runParallelsProof({ options, tarballPath, writer });
+    const summary = parseParallelsSummary(commandOutput);
     assertParallelsSummary({
       summary,
       tarballPath,
