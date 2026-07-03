@@ -97,29 +97,34 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     password: params.password,
     localPortOverride: params.localPortOverride,
   });
-  const probe = await probeGatewayStatus({
-    url: details.url,
-    token: params.token,
-    password: params.password,
-    tlsFingerprint: details.tlsFingerprint,
-    preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    config: params.config,
-    json: params.json,
-  });
-  if (!gatewayProbeResultSawGateway(probe)) {
-    return false;
-  }
-  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
-  if (params.json) {
-    writeRuntimeJson(params.runtime, diagnostic);
+  try {
+    const probe = await probeGatewayStatus({
+      url: details.url,
+      token: params.token,
+      password: params.password,
+      tlsFingerprint: details.tlsFingerprint,
+      ...(details.tlsServerName ? { tlsServerName: details.tlsServerName } : {}),
+      preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      config: params.config,
+      json: params.json,
+    });
+    if (!gatewayProbeResultSawGateway(probe)) {
+      return false;
+    }
+    const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+    if (params.json) {
+      writeRuntimeJson(params.runtime, diagnostic);
+      params.runtime.exit(1);
+      return true;
+    }
+    params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+    params.runtime.log(diagnostic.error.message);
     params.runtime.exit(1);
     return true;
+  } finally {
+    await Promise.resolve(details.sshTunnel?.stop()).catch(() => undefined);
   }
-  params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
-  params.runtime.log(diagnostic.error.message);
-  params.runtime.exit(1);
-  return true;
 }
 
 const loadConfigRuntime = async () => await import("../config/config.js");

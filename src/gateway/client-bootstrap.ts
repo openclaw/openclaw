@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayConnectionAuth } from "./connection-auth.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "./connection-details.js";
 import type { ExplicitGatewayAuth } from "./credentials.js";
+import { startGatewayRemoteSshTunnel, type GatewaySshTunnelConnection } from "./ssh-transport.js";
 
 /**
  * Maps connection-detail source labels to the override kinds that affect auth fallback.
@@ -30,6 +31,8 @@ export async function resolveGatewayClientBootstrap(params: {
   url: string;
   urlSource: string;
   preauthHandshakeTimeoutMs?: number;
+  tlsServerName?: string;
+  sshTunnel?: GatewaySshTunnelConnection["tunnel"];
   auth: {
     token?: string;
     password?: string;
@@ -38,6 +41,7 @@ export async function resolveGatewayClientBootstrap(params: {
   const connection = buildGatewayConnectionDetailsWithResolvers({
     config: params.config,
     url: params.gatewayUrl,
+    allowConfiguredSshTransport: true,
   });
   const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived
@@ -49,10 +53,17 @@ export async function resolveGatewayClientBootstrap(params: {
     urlOverride: urlOverrideSource ? connection.url : undefined,
     urlOverrideSource,
   });
-  return {
+  const ssh = await startGatewayRemoteSshTunnel({
+    config: params.config,
     url: connection.url,
     urlSource: connection.urlSource,
+  });
+  return {
+    url: ssh?.url ?? connection.url,
+    urlSource: ssh?.urlSource ?? connection.urlSource,
     preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs,
+    ...(ssh?.tlsServerName ? { tlsServerName: ssh.tlsServerName } : {}),
+    sshTunnel: ssh?.tunnel,
     auth,
   };
 }

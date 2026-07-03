@@ -109,21 +109,26 @@ export async function checkGatewayHealth(params: {
   } catch (err) {
     if (isGatewayHealthAuthUnavailableError(err)) {
       const probeDetails = await buildGatewayProbeConnectionDetails({ config: params.cfg });
-      const probe = await probeGatewayStatus({
-        url: probeDetails.url,
-        timeoutMs,
-        tlsFingerprint: probeDetails.tlsFingerprint,
-        preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
-        config: params.cfg,
-        json: true,
-      });
-      if (gatewayProbeResultSawGateway(probe)) {
-        note(
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
-          GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
-        );
-        healthOk = true;
-        return { healthOk, authenticated: false };
+      try {
+        const probe = await probeGatewayStatus({
+          url: probeDetails.url,
+          timeoutMs,
+          tlsFingerprint: probeDetails.tlsFingerprint,
+          ...(probeDetails.tlsServerName ? { tlsServerName: probeDetails.tlsServerName } : {}),
+          preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
+          config: params.cfg,
+          json: true,
+        });
+        if (gatewayProbeResultSawGateway(probe)) {
+          note(
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+            GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+          );
+          healthOk = true;
+          return { healthOk, authenticated: false };
+        }
+      } finally {
+        await Promise.resolve(probeDetails.sshTunnel?.stop()).catch(() => undefined);
       }
     }
     const message = String(err);

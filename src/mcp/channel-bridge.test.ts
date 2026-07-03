@@ -8,10 +8,92 @@ const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 const SWEEP_INTERVAL_MS = 5 * ONE_MINUTE_MS;
 const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
 
+const gatewayClientState = vi.hoisted(() => ({
+  options: null as Record<string, unknown> | null,
+  stopAndWait: vi.fn(async () => undefined),
+  sshTunnelStop: vi.fn(async () => undefined),
+  constructError: null as Error | null,
+  bootstrapPromise: null as Promise<Record<string, unknown>> | null,
+  readinessResult: {
+    ready: true,
+    elapsedMs: 0,
+    maxDriftMs: 0,
+    checks: 1,
+    aborted: false,
+  },
+}));
+
+vi.mock("../gateway/client-bootstrap.js", () => ({
+  resolveGatewayClientBootstrap: vi.fn(
+    () =>
+      gatewayClientState.bootstrapPromise ??
+      Promise.resolve({
+        url: "ws://127.0.0.1:19091",
+        urlSource: "config gateway.remote.url via ssh tunnel",
+        auth: { token: undefined, password: undefined },
+        sshTunnel: { stop: gatewayClientState.sshTunnelStop },
+      }),
+  ),
+}));
+
+vi.mock("../gateway/client.js", () => ({
+  GatewayClient: class {
+    private readonly opts: Record<string, unknown>;
+
+    constructor(opts: Record<string, unknown>) {
+      if (gatewayClientState.constructError) {
+        throw gatewayClientState.constructError;
+      }
+      this.opts = opts;
+      gatewayClientState.options = opts;
+    }
+
+    start(): void {
+      const onHelloOk = this.opts.onHelloOk;
+      if (typeof onHelloOk === "function") {
+        void Promise.resolve().then(() => onHelloOk());
+      }
+    }
+
+    async stopAndWait(): Promise<void> {
+      await gatewayClientState.stopAndWait();
+      const onStop = this.opts.onStop;
+      if (typeof onStop === "function") {
+        await onStop();
+      }
+    }
+
+    async request<T = Record<string, unknown>>(): Promise<T> {
+      return {} as T;
+    }
+  },
+}));
+
+vi.mock("../gateway/client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
+    if (gatewayClientState.readinessResult.ready) {
+      client.start();
+    }
+    return gatewayClientState.readinessResult;
+  }),
+}));
+
+vi.mock("../gateway/method-scopes.js", () => ({
+  APPROVALS_SCOPE: "approvals",
+  READ_SCOPE: "read",
+  WRITE_SCOPE: "write",
+}));
+
+vi.mock("../../packages/gateway-protocol/src/client-info.js", () => ({
+  GATEWAY_CLIENT_MODES: { CLI: "cli" },
+  GATEWAY_CLIENT_NAMES: { CLI: "cli" },
+}));
+
 // Test view that exposes the private map/timer fields and the methods we
 // exercise. Defined as a standalone shape (not an intersection with the class)
 // because mixing public/private constituents collapses to `never` under tsgo.
 type BridgeInternals = {
+  start: () => Promise<void>;
   queue: QueueEvent[];
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
@@ -126,6 +208,18 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
+    gatewayClientState.options = null;
+    gatewayClientState.stopAndWait.mockReset().mockResolvedValue(undefined);
+    gatewayClientState.sshTunnelStop.mockReset().mockResolvedValue(undefined);
+    gatewayClientState.constructError = null;
+    gatewayClientState.bootstrapPromise = null;
+    gatewayClientState.readinessResult = {
+      ready: true,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
+      aborted: false,
+    };
   });
 
   afterEach(async () => {
@@ -260,6 +354,67 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     expect(bridge.pendingApprovals.size).toBe(0);
     expect(bridge.pendingSweepInterval).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("close() stops the bootstrap SSH tunnel after Gateway startup", async () => {
+    const bridge = makeBridge();
+
+    await bridge.start();
+    await bridge.close();
+
+    expect(gatewayClientState.stopAndWait).toHaveBeenCalledTimes(1);
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("close() stops a bootstrap SSH tunnel when shutdown wins startup", async () => {
+    let resolveBootstrap: (value: Record<string, unknown>) => void = () => undefined;
+    gatewayClientState.bootstrapPromise = new Promise((resolve) => {
+      resolveBootstrap = resolve;
+    });
+    const bridge = makeBridge();
+
+    const startPromise = bridge.start();
+    await bridge.close();
+    gatewayClientState.sshTunnelStop.mockRejectedValueOnce(new Error("stop failed"));
+    resolveBootstrap({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: { token: undefined, password: undefined },
+      sshTunnel: { stop: gatewayClientState.sshTunnelStop },
+    });
+    await startPromise;
+
+    expect(gatewayClientState.options).toBeNull();
+    expect(gatewayClientState.stopAndWait).not.toHaveBeenCalled();
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("start() stops the bootstrap SSH tunnel when Gateway readiness fails", async () => {
+    gatewayClientState.readinessResult = {
+      ready: false,
+      elapsedMs: 250,
+      maxDriftMs: 250,
+      checks: 1,
+      aborted: false,
+    };
+    const bridge = makeBridge();
+
+    await expect(bridge.start()).rejects.toThrow("gateway event loop readiness timeout");
+
+    expect(gatewayClientState.options).not.toBeNull();
+    expect(gatewayClientState.stopAndWait).toHaveBeenCalledTimes(1);
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("start() stops the bootstrap SSH tunnel when GatewayClient construction fails", async () => {
+    gatewayClientState.constructError = new Error("device identity unavailable");
+    const bridge = makeBridge();
+
+    await expect(bridge.start()).rejects.toThrow("device identity unavailable");
+
+    expect(gatewayClientState.options).toBeNull();
+    expect(gatewayClientState.stopAndWait).not.toHaveBeenCalled();
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 
   test("handleClaudePermissionRequest is a no-op after close(), preventing post-close accumulation", async () => {

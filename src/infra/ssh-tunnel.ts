@@ -3,13 +3,25 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { resolveExecutable } from "./executable-path.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
+
+const POSIX_SSH_BINARY = "/usr/bin/ssh";
+
+function resolveSshExecutable(): string {
+  return process.platform === "win32" ? resolveExecutable("ssh") : POSIX_SSH_BINARY;
+}
 
 export type SshParsedTarget = {
   user?: string;
   host: string;
   port: number;
+};
+
+export type SshTunnelExit = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
 };
 
 export type SshTunnel = {
@@ -18,6 +30,7 @@ export type SshTunnel = {
   remotePort: number;
   pid: number | null;
   stderr: string[];
+  exited?: Promise<SshTunnelExit>;
   stop: () => Promise<void>;
 };
 
@@ -162,7 +175,7 @@ export async function startSshPortForward(opts: {
   args.push("--", userHost);
 
   const stderr: string[] = [];
-  const child = spawn("/usr/bin/ssh", args, {
+  const child = spawn(resolveSshExecutable(), args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
   const stderrStream = child.stderr;
@@ -174,34 +187,56 @@ export async function startSshPortForward(opts: {
     const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
+  const exited = new Promise<SshTunnelExit>((resolve) => {
+    child.once("exit", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
 
   const stop = async () => {
-    if (child.killed || !child.kill("SIGTERM")) {
+    if (
+      child.killed ||
+      child.exitCode !== null ||
+      child.signalCode !== null ||
+      typeof child.pid !== "number"
+    ) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } finally {
+    let signaled: boolean;
+    try {
+      signaled = child.kill("SIGTERM");
+    } catch {
+      return;
+    }
+    if (!signaled) {
+      return;
+    }
+    await Promise.race([
+      exited.then(() => undefined),
+      new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } finally {
+            resolve();
+          }
+        }, 1500);
+        void exited.then(() => {
+          clearTimeout(t);
           resolve();
-        }
-      }, 1500);
-      child.once("exit", () => {
-        clearTimeout(t);
-        resolve();
-      });
-    });
+        });
+      }),
+    ]);
   };
 
   try {
     await Promise.race([
       waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
       new Promise<void>((_, reject) => {
-        child.once("error", (err) => reject(err));
-        child.once("exit", (code, signal) => {
-          reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
-        });
+        child.once("error", reject);
+      }),
+      exited.then(({ code, signal }) => {
+        throw new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`);
       }),
     ]);
   } catch (err) {
@@ -216,6 +251,7 @@ export async function startSshPortForward(opts: {
     remotePort: opts.remotePort,
     pid: typeof child.pid === "number" ? child.pid : null,
     stderr,
+    exited,
     stop,
   };
 }

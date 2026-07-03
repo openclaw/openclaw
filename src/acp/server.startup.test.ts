@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayClientCallbacks = {
   onEvent?: (evt: { event: string; payload?: unknown }) => void;
+  onStop?: () => void | Promise<void>;
   onHelloOk?: () => void;
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
@@ -16,10 +17,17 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
   url: string;
   urlSource: string;
   auth: GatewayClientAuth;
+  sshTunnel?: {
+    stop: () => void | Promise<void>;
+    exited?: Promise<unknown>;
+  };
+  tlsServerName?: string;
 }>;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
     caps?: string[];
+    stopWhen?: Promise<unknown>;
+    tlsServerName?: string;
     url?: string;
   };
 type MockAcpStream = {
@@ -30,9 +38,12 @@ type MockAcpStream = {
 const mockState = vi.hoisted(() => ({
   acpProtocolVersion: 1,
   acpInputMessages: [] as unknown[],
+  ndJsonStreamError: null as Error | null,
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
+  gatewayConstructorError: null as Error | null,
+  gatewayStopAndWait: vi.fn(),
   agentSideConnectionCtor: vi.fn(),
   agentHandleGatewayEvent: vi.fn(async (_evt: unknown) => {}),
   agentStart: vi.fn(),
@@ -54,12 +65,25 @@ const mockState = vi.hoisted(() => ({
       password: undefined,
     },
   })),
+  startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
+    client.start();
+    return {
+      ready: true,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 2,
+      aborted: false,
+    };
+  }),
 }));
 
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
 
   constructor(opts: GatewayClientOptions) {
+    if (mockState.gatewayConstructorError) {
+      throw mockState.gatewayConstructorError;
+    }
     this.callbacks = opts;
     mockState.gatewayOptions.push(opts);
     mockState.gatewayAuth.push({ token: opts.token, password: opts.password });
@@ -69,14 +93,17 @@ class MockGatewayClient {
   start(): void {}
 
   stop(): void {
+    void this.callbacks.onStop?.();
     this.callbacks.onClose?.(1000, "gateway stopped");
   }
 
   async stopAndWait(): Promise<void> {
+    mockState.gatewayStopAndWait();
     if (mockState.gatewayStopDeferred) {
       await mockState.gatewayStopDeferred.promise;
     }
-    this.stop();
+    await this.callbacks.onStop?.();
+    this.callbacks.onClose?.(1000, "gateway stopped");
   }
 
   emitHello(): void {
@@ -103,17 +130,22 @@ vi.mock("@agentclientprotocol/sdk", () => ({
     factory({});
   },
   PROTOCOL_VERSION: mockState.acpProtocolVersion,
-  ndJsonStream: vi.fn(() => ({
-    writable: new WritableStream(),
-    readable: new ReadableStream({
-      start(controller) {
-        for (const message of mockState.acpInputMessages) {
-          controller.enqueue(message);
-        }
-        controller.close();
-      },
-    }),
-  })),
+  ndJsonStream: vi.fn(() => {
+    if (mockState.ndJsonStreamError) {
+      throw mockState.ndJsonStreamError;
+    }
+    return {
+      writable: new WritableStream(),
+      readable: new ReadableStream({
+        start(controller) {
+          for (const message of mockState.acpInputMessages) {
+            controller.enqueue(message);
+          }
+          controller.close();
+        },
+      }),
+    };
+  }),
 }));
 
 vi.mock("../config/config.js", () => {
@@ -155,16 +187,8 @@ vi.mock("../gateway/client.js", () => ({
 }));
 
 vi.mock("../gateway/client-start-readiness.js", () => ({
-  startGatewayClientWhenEventLoopReady: vi.fn(async (client: MockGatewayClient) => {
-    client.start();
-    return {
-      ready: true,
-      elapsedMs: 0,
-      maxDriftMs: 0,
-      checks: 2,
-      aborted: false,
-    };
-  }),
+  startGatewayClientWhenEventLoopReady: (client: MockGatewayClient) =>
+    mockState.startGatewayClientWhenEventLoopReady(client),
 }));
 
 vi.mock("../infra/is-main.js", () => ({
@@ -314,9 +338,12 @@ describe("serveAcpGateway startup", () => {
 
   beforeEach(async () => {
     mockState.acpInputMessages.length = 0;
+    mockState.ndJsonStreamError = null;
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
+    mockState.gatewayConstructorError = null;
+    mockState.gatewayStopAndWait.mockReset();
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentHandleGatewayEvent.mockReset();
     mockState.agentStart.mockReset();
@@ -339,6 +366,19 @@ describe("serveAcpGateway startup", () => {
         password: undefined,
       },
     });
+    mockState.startGatewayClientWhenEventLoopReady.mockReset();
+    mockState.startGatewayClientWhenEventLoopReady.mockImplementation(
+      async (client: { start: () => void }) => {
+        client.start();
+        return {
+          ready: true,
+          elapsedMs: 0,
+          maxDriftMs: 0,
+          checks: 2,
+          aborted: false,
+        };
+      },
+    );
   });
 
   it("waits for gateway hello before creating AgentSideConnection", async () => {
@@ -433,6 +473,22 @@ describe("serveAcpGateway startup", () => {
   });
 
   it("rejects startup when gateway connect fails before hello", async () => {
+    let resolveTunnelStop!: () => void;
+    const sshTunnelStop = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveTunnelStop = resolve;
+        }),
+    );
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
     const onceSpy = vi
       .spyOn(process, "once")
       .mockImplementation(
@@ -440,12 +496,34 @@ describe("serveAcpGateway startup", () => {
       );
 
     try {
-      const servePromise = serveAcpGateway({});
+      let settled = false;
+      const servePromise = serveAcpGateway({}).then(
+        () => {
+          settled = true;
+          return null;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
       await Promise.resolve();
 
       const gateway = getMockGateway();
       gateway.emitConnectError("connect failed");
-      await expect(servePromise).rejects.toThrow("connect failed");
+      await vi.waitFor(() => {
+        expect(mockState.gatewayStopAndWait).toHaveBeenCalledTimes(1);
+      });
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+
+      resolveTunnelStop();
+      const error = await servePromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("connect failed");
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
     } finally {
       onceSpy.mockRestore();
@@ -522,6 +600,123 @@ describe("serveAcpGateway startup", () => {
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("stops bootstrap SSH tunnel during ACP shutdown", async () => {
+    const sshTunnelStop = vi.fn(async () => undefined);
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("stops bootstrap SSH tunnel when ACP GatewayClient construction fails", async () => {
+    const sshTunnelStop = vi.fn(async () => undefined);
+    mockState.gatewayConstructorError = new Error("device identity unavailable");
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
+    const onceSpy = vi
+      .spyOn(process, "once")
+      .mockImplementation(
+        ((_signal: NodeJS.Signals, _handler: () => void) => process) as typeof process.once,
+      );
+
+    try {
+      await expect(serveAcpGateway({})).rejects.toThrow("device identity unavailable");
+
+      expect(mockState.gateways).toHaveLength(0);
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("stops bootstrap SSH tunnel when ACP gateway readiness startup fails", async () => {
+    const sshTunnelStop = vi.fn(async () => undefined);
+    mockState.startGatewayClientWhenEventLoopReady.mockRejectedValueOnce(
+      new Error("gateway event loop failed"),
+    );
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
+    const onceSpy = vi
+      .spyOn(process, "once")
+      .mockImplementation(
+        ((_signal: NodeJS.Signals, _handler: () => void) => process) as typeof process.once,
+      );
+
+    try {
+      await expect(serveAcpGateway({})).rejects.toThrow("gateway event loop failed");
+
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
+      expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("stops the GatewayClient when ACP stream setup fails after gateway readiness", async () => {
+    const sshTunnelStop = vi.fn(async () => undefined);
+    mockState.ndJsonStreamError = new Error("stdio stream unavailable");
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
+    const onceSpy = vi
+      .spyOn(process, "once")
+      .mockImplementation(
+        ((_signal: NodeJS.Signals, _handler: () => void) => process) as typeof process.once,
+      );
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await vi.waitFor(() => {
+        expect(mockState.gateways).toHaveLength(1);
+      });
+      getMockGateway().emitHello();
+
+      await expect(servePromise).rejects.toThrow("stdio stream unavailable");
+
+      expect(mockState.gatewayStopAndWait).toHaveBeenCalledTimes(1);
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
+      expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
     } finally {
       onceSpy.mockRestore();
     }

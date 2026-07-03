@@ -152,6 +152,9 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  tlsServerName?: string;
+  onStop?: () => void | Promise<void>;
+  stopWhen?: Promise<unknown>;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -200,15 +203,32 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 
 export class GatewayClient {
   #client: BaseGatewayClient;
+  #onStop?: () => void | Promise<void>;
+  #onStopPromise?: Promise<void>;
 
   constructor(opts: GatewayClientOptions) {
+    const { onStop, stopWhen, ...clientOptions } = opts;
+    this.#onStop = onStop;
     // Inject host deps here so the reusable package stays decoupled from
     // OpenClaw device identity, token storage, proxy routing, and logging.
     this.#client = new BaseGatewayClient({
-      ...opts,
-      clientVersion: opts.clientVersion ?? VERSION,
-      hostDeps: createOpenClawGatewayClientHostDeps(opts.hostDeps),
+      ...clientOptions,
+      clientVersion: clientOptions.clientVersion ?? VERSION,
+      hostDeps: createOpenClawGatewayClientHostDeps(clientOptions.hostDeps),
     });
+    void stopWhen?.then(
+      () => this.stop(),
+      () => this.stop(),
+    );
+  }
+
+  #runOnStop(): Promise<void> {
+    if (!this.#onStopPromise) {
+      this.#onStopPromise = Promise.resolve()
+        .then(() => this.#onStop?.())
+        .then(() => undefined);
+    }
+    return this.#onStopPromise;
   }
 
   start(): void {
@@ -217,10 +237,15 @@ export class GatewayClient {
 
   stop(): void {
     this.#client.stop();
+    void this.#runOnStop().catch(() => undefined);
   }
 
-  stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
-    return this.#client.stopAndWait(opts);
+  async stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
+    try {
+      await this.#client.stopAndWait(opts);
+    } finally {
+      await this.#runOnStop();
+    }
   }
 
   request<T = Record<string, unknown>>(

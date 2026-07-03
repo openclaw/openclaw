@@ -472,6 +472,16 @@ function parseHostForAddressChecks(
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
+export function isGatewayWebSocketUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return Boolean(parsed.hostname) && ["ws:", "wss:"].includes(parsed.protocol);
+}
+
 export function isSecureWebSocketUrl(
   url: string,
   opts?: {

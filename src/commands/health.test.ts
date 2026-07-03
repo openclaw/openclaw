@@ -75,14 +75,23 @@ const buildGatewayConnectionDetailsMock = vi.fn(() => ({
   message: TEST_GATEWAY_MESSAGE,
   url: TEST_GATEWAY_URL,
 }));
-const buildGatewayProbeConnectionDetailsMock = vi.fn(() => ({
-  message: TEST_GATEWAY_MESSAGE,
-  preauthHandshakeTimeoutMs: 4321,
-  tlsFingerprint: TEST_TLS_FINGERPRINT,
-  url: TEST_GATEWAY_URL,
-}));
+const buildGatewayProbeConnectionDetailsMock = vi.fn(
+  (): {
+    message: string;
+    preauthHandshakeTimeoutMs: number;
+    tlsFingerprint: string;
+    url: string;
+    sshTunnel?: { stop: () => void | Promise<void> };
+  } => ({
+    message: TEST_GATEWAY_MESSAGE,
+    preauthHandshakeTimeoutMs: 4321,
+    tlsFingerprint: TEST_TLS_FINGERPRINT,
+    url: TEST_GATEWAY_URL,
+  }),
+);
 const formatGatewayTransportErrorJsonMock = vi.fn();
 const probeGatewayStatusMock = vi.fn();
+const probeSshTunnelStopMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   buildGatewayConnectionDetails: (...args: [unknown, ...unknown[]]) =>
@@ -149,6 +158,7 @@ describe("healthCommand", () => {
     isGatewayCredentialsRequiredErrorMock.mockReturnValue(false);
     isGatewaySecretRefUnavailableErrorMock.mockReturnValue(false);
     probeGatewayStatusMock.mockReset();
+    probeSshTunnelStopMock.mockReset();
   });
 
   it("outputs JSON from gateway", async () => {
@@ -399,6 +409,13 @@ describe("healthCommand", () => {
     const error = new Error("gateway.auth.password is unavailable");
     callGatewayMock.mockRejectedValueOnce(error);
     isGatewaySecretRefUnavailableErrorMock.mockReturnValueOnce(true);
+    buildGatewayProbeConnectionDetailsMock.mockReturnValueOnce({
+      message: TEST_GATEWAY_MESSAGE,
+      preauthHandshakeTimeoutMs: 4321,
+      tlsFingerprint: TEST_TLS_FINGERPRINT,
+      url: TEST_GATEWAY_URL,
+      sshTunnel: { stop: probeSshTunnelStopMock },
+    });
     probeGatewayStatusMock.mockResolvedValueOnce({
       ok: false,
       kind: "connect",
@@ -423,6 +440,7 @@ describe("healthCommand", () => {
       [GATEWAY_HEALTH_REACHABLE_LINE],
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
     ]);
+    expect(probeSshTunnelStopMock).toHaveBeenCalledTimes(1);
     expect(runtime.error).not.toHaveBeenCalled();
   });
 

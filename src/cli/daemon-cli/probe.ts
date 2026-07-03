@@ -52,6 +52,7 @@ export async function probeGatewayStatus(opts: {
   password?: string;
   config?: OpenClawConfig;
   tlsFingerprint?: string;
+  tlsServerName?: string;
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
   json?: boolean;
@@ -77,6 +78,7 @@ export async function probeGatewayStatus(opts: {
             password: opts.password,
           },
           tlsFingerprint: opts.tlsFingerprint,
+          ...(opts.tlsServerName ? { tlsServerName: opts.tlsServerName } : {}),
           ...(opts.preauthHandshakeTimeoutMs !== undefined
             ? { preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs }
             : {}),
@@ -96,6 +98,7 @@ export async function probeGatewayStatus(opts: {
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
+            ...(opts.tlsServerName ? { tlsServerName: opts.tlsServerName } : {}),
             ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,

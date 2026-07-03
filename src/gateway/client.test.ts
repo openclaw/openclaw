@@ -354,6 +354,30 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
+  it("stops when an external connection dependency exits", async () => {
+    let resolveStopWhen!: () => void;
+    const stopWhen = new Promise<void>((resolve) => {
+      resolveStopWhen = resolve;
+    });
+    const onStop = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      stopWhen,
+      onStop,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    resolveStopWhen();
+
+    await vi.waitFor(() => {
+      expect(ws.closeCalls).toBe(1);
+    });
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(wsInstances).toHaveLength(1);
+  });
+
   it("does not treat hostnames starting with 127 as loopback", () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
@@ -1080,6 +1104,20 @@ describe("GatewayClient close handling", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("runs onStop once when the client is stopped", async () => {
+    const onStop = vi.fn(async () => undefined);
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onStop,
+    });
+
+    client.start();
+    await client.stopAndWait();
+    client.stop();
+
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 
   it("does not clear persisted device auth when explicit shared token is provided", () => {

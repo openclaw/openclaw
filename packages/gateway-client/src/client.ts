@@ -352,6 +352,7 @@ type AssembledConnect = {
 
 type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
   checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
+  servername?: string;
 };
 
 const DEFAULT_GATEWAY_CLIENT_URL = "ws://127.0.0.1:18789";
@@ -453,6 +454,7 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  tlsServerName?: string;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -640,6 +642,10 @@ export class GatewayClient {
       maxPayload: 25 * 1024 * 1024,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
+    const tlsServerName = normalizeOptionalString(this.opts.tlsServerName);
+    if (url.startsWith("wss://") && tlsServerName) {
+      wsOptions.servername = tlsServerName;
+    }
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
       wsOptions.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {

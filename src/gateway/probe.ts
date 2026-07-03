@@ -235,6 +235,7 @@ export async function probeGateway(opts: {
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
   tlsFingerprint?: string;
+  tlsServerName?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
@@ -365,6 +366,7 @@ export async function probeGateway(opts: {
       token: opts.auth?.token,
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,
+      ...(opts.tlsServerName ? { tlsServerName: opts.tlsServerName } : {}),
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
       scopes: [READ_SCOPE],

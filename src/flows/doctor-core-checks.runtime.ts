@@ -90,31 +90,36 @@ export async function collectGatewayHealthFindings(
     ];
   }
 
-  const probe = await probeGatewayStatus({
-    url: probeDetails.url,
-    timeoutMs: 3000,
-    tlsFingerprint: probeDetails.tlsFingerprint,
-    preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
-    config: ctx.cfg,
-    json: true,
-  });
-  if (gatewayProbeResultSawGateway(probe)) {
-    return [];
+  try {
+    const probe = await probeGatewayStatus({
+      url: probeDetails.url,
+      timeoutMs: 3000,
+      tlsFingerprint: probeDetails.tlsFingerprint,
+      ...(probeDetails.tlsServerName ? { tlsServerName: probeDetails.tlsServerName } : {}),
+      preauthHandshakeTimeoutMs: probeDetails.preauthHandshakeTimeoutMs,
+      config: ctx.cfg,
+      json: true,
+    });
+    if (gatewayProbeResultSawGateway(probe)) {
+      return [];
+    }
+    const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
+    return [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: `Gateway is not reachable: ${probe.error ?? "status probe failed"}`,
+        path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
+        target: formatGatewayHealthTarget(probeDetails.url),
+        fixHint:
+          mode === "remote"
+            ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
+            : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
+      },
+    ];
+  } finally {
+    await Promise.resolve(probeDetails.sshTunnel?.stop()).catch(() => undefined);
   }
-  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
-  return [
-    {
-      checkId: "core/doctor/gateway-health",
-      severity: "warning",
-      message: `Gateway is not reachable: ${probe.error ?? "status probe failed"}`,
-      path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
-      target: formatGatewayHealthTarget(probeDetails.url),
-      fixHint:
-        mode === "remote"
-          ? "Verify the remote Gateway URL, network path, TLS settings, and credentials."
-          : "Start the Gateway service or run `openclaw doctor --fix` for service repair prompts.",
-    },
-  ];
 }
 
 function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | undefined {

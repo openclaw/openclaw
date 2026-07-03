@@ -132,50 +132,66 @@ export class OpenClawChannelBridge {
       env: process.env,
     });
     if (this.closed) {
+      await bootstrap.sshTunnel?.stop().catch(() => undefined);
       this.resolveReadyOnce();
       return;
     }
 
-    this.gateway = new GatewayClientCtor({
-      url: bootstrap.url,
-      token: bootstrap.auth.token,
-      password: bootstrap.auth.password,
-      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: "OpenClaw MCP",
-      clientVersion: VERSION,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
-      requestTimeoutMs: 180_000,
-      onEvent: (event) => {
-        void this.dispatchGatewayEvent(event);
-      },
-      onHelloOk: () => {
-        this.retryingInitialConnect = false;
-        void this.handleHelloOk();
-      },
-      onConnectError: (error) => {
-        const normalizedError = error instanceof Error ? error : new Error(String(error));
-        if (shouldRetryInitialMcpGatewayConnect(normalizedError)) {
-          this.retryingInitialConnect = true;
-          return;
-        }
-        this.rejectReadyOnce(normalizedError);
-      },
-      onClose: (code, reason) => {
-        if (!this.ready && !this.closed && !this.retryingInitialConnect) {
-          this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
-        }
-        this.retryingInitialConnect = false;
-      },
-    });
-    const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
-      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
-    });
-    if (!readiness.ready) {
-      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+    try {
+      this.gateway = new GatewayClientCtor({
+        url: bootstrap.url,
+        token: bootstrap.auth.token,
+        password: bootstrap.auth.password,
+        onStop: () => bootstrap.sshTunnel?.stop(),
+        ...(bootstrap.sshTunnel?.exited ? { stopWhen: bootstrap.sshTunnel.exited } : {}),
+        ...(bootstrap.tlsServerName ? { tlsServerName: bootstrap.tlsServerName } : {}),
+        preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        clientDisplayName: "OpenClaw MCP",
+        clientVersion: VERSION,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+        requestTimeoutMs: 180_000,
+        onEvent: (event) => {
+          void this.dispatchGatewayEvent(event);
+        },
+        onHelloOk: () => {
+          this.retryingInitialConnect = false;
+          void this.handleHelloOk();
+        },
+        onConnectError: (error) => {
+          const normalizedError = error instanceof Error ? error : new Error(String(error));
+          if (shouldRetryInitialMcpGatewayConnect(normalizedError)) {
+            this.retryingInitialConnect = true;
+            return;
+          }
+          this.rejectReadyOnce(normalizedError);
+        },
+        onClose: (code, reason) => {
+          if (!this.ready && !this.closed && !this.retryingInitialConnect) {
+            this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
+          }
+          this.retryingInitialConnect = false;
+        },
+      });
+    } catch (error) {
+      await bootstrap.sshTunnel?.stop().catch(() => undefined);
+      throw error;
     }
-    await this.readyPromise;
+    try {
+      const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
+        clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+      });
+      if (!readiness.ready) {
+        this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+      }
+      await this.readyPromise;
+    } catch (error) {
+      const gateway = this.gateway;
+      this.gateway = null;
+      await gateway?.stopAndWait().catch(() => undefined);
+      throw error;
+    }
   }
 
   /** Wait until the bridge has subscribed to Gateway session events. */

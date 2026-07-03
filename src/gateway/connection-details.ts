@@ -3,7 +3,8 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import { isGatewayWebSocketUrl, isSecureWebSocketUrl } from "./net.js";
+import { isGatewayRemoteSshTransport } from "./ssh-transport-config.js";
 
 /** Resolved gateway target plus redacted display text for diagnostics. */
 export type GatewayConnectionDetails = {
@@ -29,6 +30,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    allowConfiguredSshTransport?: boolean;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -74,7 +76,14 @@ export function buildGatewayConnectionDetailsWithResolvers(
     : undefined;
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
+  const usesConfiguredSshTransport =
+    options.allowConfiguredSshTransport === true &&
+    !urlOverride &&
+    remoteUrl !== undefined &&
+    isGatewayWebSocketUrl(remoteUrl) &&
+    isGatewayRemoteSshTransport(remote) &&
+    Boolean(normalizeOptionalString(remote?.sshTarget));
+  if (!usesConfiguredSshTransport && !isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${displayUrl}" uses plaintext ws:// to a non-loopback address.`,

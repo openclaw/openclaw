@@ -7,6 +7,7 @@ const clientState = vi.hoisted(() => ({
   startMode: "hello" as "hello" | "close",
   close: { code: 1008, reason: "pairing required" },
   requestSpy: vi.fn(),
+  constructError: null as Error | null,
   stopSpy: vi.fn(),
   stopAndWaitSpy: vi.fn(async () => undefined),
 }));
@@ -15,12 +16,17 @@ const bootstrapState = vi.hoisted(() => ({
   url: "ws://127.0.0.1:18789",
   urlSource: "local loopback",
   auth: { token: "secret" as string | undefined, password: undefined as string | undefined },
+  sshTunnelStop: vi.fn(async () => undefined),
+  sshTunnelExited: Promise.resolve(),
 }));
 
 class MockGatewayClient {
   private readonly opts: Record<string, unknown>;
 
   constructor(opts: Record<string, unknown>) {
+    if (clientState.constructError) {
+      throw clientState.constructError;
+    }
     this.opts = opts;
     clientState.options = opts;
   }
@@ -49,10 +55,18 @@ class MockGatewayClient {
 
   stop(): void {
     clientState.stopSpy();
+    const onStop = this.opts.onStop;
+    if (typeof onStop === "function") {
+      void onStop();
+    }
   }
 
   async stopAndWait(): Promise<void> {
     await clientState.stopAndWaitSpy();
+    const onStop = this.opts.onStop;
+    if (typeof onStop === "function") {
+      await onStop();
+    }
   }
 }
 
@@ -61,6 +75,7 @@ vi.mock("./client-bootstrap.js", () => ({
     url: bootstrapState.url,
     urlSource: bootstrapState.urlSource,
     auth: bootstrapState.auth,
+    sshTunnel: { stop: bootstrapState.sshTunnelStop, exited: bootstrapState.sshTunnelExited },
   })),
 }));
 
@@ -97,11 +112,37 @@ describe("withOperatorApprovalsGatewayClient", () => {
     clientState.startMode = "hello";
     clientState.close = { code: 1008, reason: "pairing required" };
     clientState.requestSpy.mockReset().mockResolvedValue(undefined);
+    clientState.constructError = null;
     clientState.stopSpy.mockReset();
     clientState.stopAndWaitSpy.mockReset().mockResolvedValue(undefined);
     bootstrapState.url = "ws://127.0.0.1:18789";
     bootstrapState.urlSource = "local loopback";
     bootstrapState.auth = { token: "secret", password: undefined };
+    bootstrapState.sshTunnelStop.mockReset().mockResolvedValue(undefined);
+    bootstrapState.sshTunnelExited = Promise.resolve();
+  });
+
+  it("stops bootstrap SSH tunnel when the approval client closes", async () => {
+    await runOperatorApprovalsGatewayClient();
+
+    expect(bootstrapState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the approval GatewayClient when the bootstrap SSH tunnel exits", async () => {
+    await runOperatorApprovalsGatewayClient();
+
+    expect(clientState.options?.stopWhen).toBe(bootstrapState.sshTunnelExited);
+  });
+
+  it("stops bootstrap SSH tunnel when approval GatewayClient construction fails", async () => {
+    clientState.constructError = new Error("device identity unavailable");
+
+    await expect(runOperatorApprovalsGatewayClient()).rejects.toThrow(
+      "device identity unavailable",
+    );
+
+    expect(clientState.options).toBeNull();
+    expect(bootstrapState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 
   it("waits for hello before running the callback and stops cleanly", async () => {

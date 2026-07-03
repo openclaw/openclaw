@@ -89,44 +89,53 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     }
   };
 
-  const gateway = new GatewayClient({
-    url: bootstrap.url,
-    token: bootstrap.auth.token,
-    password: bootstrap.auth.password,
-    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: "ACP",
-    clientVersion: "acp",
-    mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
-    onEvent: (evt) => {
-      if (stopped) {
-        return;
-      }
-      // Gateway delivery stays non-blocking, but translator failures must not
-      // escape this callback as unhandled process rejections.
-      void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
-        process.stderr.write(`openclaw acp: gateway event ${evt.event} failed\n`);
-        if (opts.verbose) {
-          process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}\n`);
+  let gateway: GatewayClient;
+  try {
+    gateway = new GatewayClient({
+      url: bootstrap.url,
+      token: bootstrap.auth.token,
+      password: bootstrap.auth.password,
+      onStop: () => bootstrap.sshTunnel?.stop(),
+      ...(bootstrap.sshTunnel?.exited ? { stopWhen: bootstrap.sshTunnel.exited } : {}),
+      ...(bootstrap.tlsServerName ? { tlsServerName: bootstrap.tlsServerName } : {}),
+      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: "ACP",
+      clientVersion: "acp",
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      onEvent: (evt) => {
+        if (stopped) {
+          return;
         }
-      });
-    },
-    onHelloOk: () => {
-      resolveGatewayReady();
-      agent?.handleGatewayReconnect();
-    },
-    onConnectError: (err) => {
-      rejectGatewayReady(err);
-    },
-    onClose: (code, reason) => {
-      if (stopped) {
-        return;
-      }
-      rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
-      agent?.handleGatewayDisconnect(`${code}: ${reason}`);
-    },
-  });
+        // Gateway delivery stays non-blocking, but translator failures must not
+        // escape this callback as unhandled process rejections.
+        void agent?.handleGatewayEvent(evt).catch((err: unknown) => {
+          process.stderr.write(`openclaw acp: gateway event ${evt.event} failed\n`);
+          if (opts.verbose) {
+            process.stderr.write(`openclaw acp: gateway event ${evt.event} error: ${String(err)}\n`);
+          }
+        });
+      },
+      onHelloOk: () => {
+        resolveGatewayReady();
+        agent?.handleGatewayReconnect();
+      },
+      onConnectError: (err) => {
+        rejectGatewayReady(err);
+      },
+      onClose: (code, reason) => {
+        if (stopped) {
+          return;
+        }
+        rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
+        agent?.handleGatewayDisconnect(`${code}: ${reason}`);
+      },
+    });
+  } catch (error) {
+    await bootstrap.sshTunnel?.stop().catch(() => undefined);
+    throw error;
+  }
 
   const shutdown = async () => {
     if (stopped) {
@@ -157,59 +166,72 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     void shutdown();
   });
 
+  const stopGatewayAfterStartupFailure = async () => {
+    if (!stopped) {
+      stopped = true;
+      resolveGatewayReady();
+      await gateway.stopAndWait().catch(() => undefined);
+      onClosed();
+    }
+  };
+
   // Start gateway first and wait for hello before accepting ACP requests.
-  const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
-    clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
-  });
-  if (!readiness.ready) {
-    rejectGatewayReady(new Error("gateway event loop readiness timeout"));
-  }
-  await gatewayReady.catch(async (err: unknown) => {
-    await shutdown();
+  try {
+    const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
+      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      rejectGatewayReady(new Error("gateway event loop readiness timeout"));
+    }
+    await gatewayReady;
+  } catch (err) {
+    await stopGatewayAfterStartupFailure();
     throw err;
-  });
+  }
   if (stopped) {
     return closed;
   }
 
-  const input = Writable.toWeb(process.stdout);
-  const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
-  const stream = ndJsonStream(input, output);
-  const readable = stream.readable.pipeThrough(
-    new TransformStream<AcpStreamMessage, AcpStreamMessage>({
-      transform(message, controller) {
-        controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
-      },
-    }),
-  );
-  startupWork = migrateFileAcpEventLedgerToSqlite({
-    filePath: resolveDefaultAcpEventLedgerPath(process.env),
-    archiveSource: true,
-  });
   try {
-    await startupWork;
+    const input = Writable.toWeb(process.stdout);
+    const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
+    const stream = ndJsonStream(input, output);
+    const readable = stream.readable.pipeThrough(
+      new TransformStream<AcpStreamMessage, AcpStreamMessage>({
+        transform(message, controller) {
+          controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
+        },
+      }),
+    );
+    startupWork = migrateFileAcpEventLedgerToSqlite({
+      filePath: resolveDefaultAcpEventLedgerPath(process.env),
+      archiveSource: true,
+    });
+    try {
+      await startupWork;
+    } finally {
+      startupWork = null;
+    }
+    if (stopped) {
+      return closed;
+    }
+    const eventLedger = createSqliteAcpEventLedger();
+
+    void new AgentSideConnection(
+      (conn: AgentSideConnection) => {
+        agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
+        agent.start();
+        return agent;
+      },
+      { ...stream, readable },
+    );
   } catch (err) {
     if (stopped) {
       return closed;
     }
     await shutdown();
     throw err;
-  } finally {
-    startupWork = null;
   }
-  if (stopped) {
-    return closed;
-  }
-  const eventLedger = createSqliteAcpEventLedger();
-
-  void new AgentSideConnection(
-    (conn: AgentSideConnection) => {
-      agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
-      agent.start();
-      return agent;
-    },
-    { ...stream, readable },
-  );
 
   return closed;
 }
