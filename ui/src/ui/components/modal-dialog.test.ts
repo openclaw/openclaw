@@ -149,4 +149,50 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(returnTarget);
     returnTarget.remove();
   });
+
+  it("reopens the dialog after content change when the native dialog was closed", async () => {
+    // Regression test for Issue #98379:
+    // When the same <openclaw-modal-dialog> element is reused with new content
+    // (simulating queued approvals where the queue shifts), and the underlying
+    // <dialog> has been closed, the modal must re-open via showModal().
+
+    // First render: open the modal normally
+    const { modal, dialog } = await renderModal();
+    expect(dialog.open).toBe(true);
+
+    // Simulate the dialog being closed (e.g. Escape or external close)
+    dialog.close();
+    expect(dialog.open).toBe(false);
+
+    // Update properties on the existing element (simulating queue shift)
+    modal.label = "Second approval";
+    modal.description = "Next item in queue";
+    await modal.updateComplete;
+    await nextFrame();
+
+    // The updated() hook should have re-opened the dialog
+    expect(dialog.open).toBe(true);
+    expect(modal.label).toBe("Second approval");
+  });
+
+  it("does not call showModal on the dialog if it is already open", async () => {
+    // Verify that the guard in openDialog() correctly skips showModal() when
+    // the native dialog is already open, to avoid unnecessary DOM operations.
+    const { modal, dialog } = await renderModal();
+    expect(dialog.open).toBe(true);
+
+    // Spy on showModal after initial render — need a fresh reference after
+    // the polyfill + re-render cycle
+    const showModalSpy = vi.spyOn(dialog, "showModal");
+
+    // Update label property — dialog is already open, updated() fires but
+    // openDialog() should return early because dialog.open is true
+    modal.label = "Same content updated";
+    await modal.updateComplete;
+    await nextFrame();
+
+    // updated() fires but openDialog() returns early because dialog is open
+    expect(showModalSpy).not.toHaveBeenCalled();
+    expect(dialog.open).toBe(true);
+  });
 });
