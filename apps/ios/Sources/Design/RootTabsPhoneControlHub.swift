@@ -109,13 +109,11 @@ struct RootTabsPhoneControlHub: View {
     }
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: .secondary)
+        Label {
             Text(destination.title)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.primary)
+        } icon: {
+            ProIconBadge(systemName: destination.systemImage, color: .secondary)
         }
-        .padding(.vertical, 3)
     }
 
     @ViewBuilder

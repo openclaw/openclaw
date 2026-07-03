@@ -428,15 +428,14 @@ export const buildTelegramMessageContext = async ({
     agentId: route.agentId,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);
+  const groupRequireMention = firstDefined(
+    topicConfig?.requireMention,
+    activationOverride,
+    telegramGroupConfig?.requireMention,
+    baseRequireMention,
+  );
   const requireMention =
-    isGroup && bindingMode.kind === "plugin-owned-runtime"
-      ? false
-      : firstDefined(
-          topicConfig?.requireMention,
-          activationOverride,
-          telegramGroupConfig?.requireMention,
-          baseRequireMention,
-        );
+    isGroup && bindingMode.kind === "plugin-owned-runtime" ? false : groupRequireMention;
 
   const recordChannelActivity =
     runtime?.recordChannelActivity ??
@@ -516,6 +515,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    groupRequireMention: Boolean(groupRequireMention),
     mentionFacts: bodyResult.mentionFacts,
     hasControlCommand: bodyResult.hasControlCommand,
     stickerCacheHit: bodyResult.stickerCacheHit,

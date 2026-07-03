@@ -764,6 +764,21 @@
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
+      "id": "native.android.d5230e4551045851",
+      "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "Kod konfiguracji używa identyfikatora strefy IPv6. Użyj adresu IPv6 bez zakresu lub nazwy hosta w sieci LAN."
+    },
+    {
+      "id": "native.android.ca9fc2ce10f4028a",
+      "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "Kod QR używa identyfikatora strefy IPv6. Użyj adresu IPv6 bez zakresu lub nazwy hosta w sieci LAN."
+    },
+    {
+      "id": "native.android.141236601fece71e",
+      "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "Identyfikatory stref IPv6 nie są obsługiwane. Użyj adresu IPv6 bez zakresu lub nazwy hosta w sieci LAN."
+    },
+    {
       "id": "native.android.47e3c19d55f0150b",
       "source": "Setup code has invalid gateway URL.",
       "translated": "Kod konfiguracji zawiera nieprawidłowy URL Gateway."
@@ -3144,6 +3159,11 @@
       "translated": "Obraz niedostępny"
     },
     {
+      "id": "native.android.97a0b44d89402809",
+      "source": "Jump to latest",
+      "translated": "Przejdź do najnowszych"
+    },
+    {
       "id": "native.android.69239493702da212",
       "source": "Loading session",
       "translated": "Ładowanie sesji"
@@ -3222,6 +3242,11 @@
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "Ładowanie sesji"
+    },
+    {
+      "id": "native.android.2c1106e1687ab258",
+      "source": "Jump to latest",
+      "translated": "Przejdź do najnowszych"
     },
     {
       "id": "native.android.9df2c9d68bad169f",
@@ -12102,6 +12127,16 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "Sesje"
+    },
+    {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "Przejdź do najnowszych"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "Przejdź do najnowszej odpowiedzi"
     },
     {
       "id": "native.apple.9ab586b85834705c",

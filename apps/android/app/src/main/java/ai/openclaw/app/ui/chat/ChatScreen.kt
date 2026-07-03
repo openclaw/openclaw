@@ -38,7 +38,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -205,6 +204,7 @@ fun ChatScreen(
     }
 
     ChatMessageList(
+      sessionKey = sessionKey,
       messages = messages,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
@@ -270,15 +270,31 @@ private fun ChatSessionSwitcher(
   onSelectSession: (String) -> Unit,
   onOpenSessions: () -> Unit,
 ) {
-  val choices =
+  val allChoices =
     remember(sessionKey, sessions, mainSessionKey) {
-      resolveCompactSessionChoices(
+      resolveSessionChoices(
         currentSessionKey = sessionKey,
         sessions = sessions,
         mainSessionKey = mainSessionKey,
       )
     }
-  if (choices.size <= 1 && sessions.size <= 1) return
+  val choices =
+    remember(sessionKey, allChoices, mainSessionKey) {
+      compactSessionChoices(
+        choices = allChoices,
+        currentSessionKey = sessionKey,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  val hasMoreSessions =
+    remember(sessions, choices, mainSessionKey) {
+      hasAdditionalSessionChoices(
+        sessions = sessions,
+        displayedChoices = choices,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  if (choices.size <= 1 && !hasMoreSessions) return
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -292,7 +308,7 @@ private fun ChatSessionSwitcher(
         onClick = { onSelectSession(entry.key) },
       )
     }
-    if (sessions.size > choices.size) {
+    if (hasMoreSessions) {
       Surface(
         onClick = onOpenSessions,
         modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
@@ -447,6 +463,7 @@ private fun HeaderIcon(
 
 @Composable
 private fun ChatMessageList(
+  sessionKey: String,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
   pendingRunCount: Int,
@@ -457,7 +474,6 @@ private fun ChatMessageList(
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val listState = rememberLazyListState()
   val timeline =
     remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
       buildChatTimeline(
@@ -467,17 +483,17 @@ private fun ChatMessageList(
         streamingAssistantText = streamingAssistantText,
       )
     }
-
-  LaunchedEffect(timeline.scrollTargetIndex, timeline.items.size, pendingRunCount, pendingToolCalls.size) {
-    timeline.scrollTargetIndex?.let { index ->
-      listState.animateScrollToItem(index = index)
-    }
-  }
+  val readerScroll =
+    rememberChatReaderScrollController(
+      sessionKey = sessionKey,
+      timeline = timeline,
+      historyLoading = historyLoading,
+    )
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      state = listState,
+      state = readerScroll.listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(5.dp),
       contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
@@ -514,6 +530,27 @@ private fun ChatMessageList(
           onStarterPrompt = onStarterPrompt,
           modifier = Modifier.align(Alignment.Center),
         )
+      }
+    }
+
+    if (readerScroll.showJumpToLatest) {
+      Surface(
+        onClick = readerScroll.jumpToLatest,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        shape = RoundedCornerShape(999.dp),
+        color = ClawTheme.colors.surfaceRaised,
+        contentColor = ClawTheme.colors.text,
+        shadowElevation = 6.dp,
+        border = BorderStroke(1.dp, ClawTheme.colors.border),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+          Text(text = "Jump to latest", style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
+        }
       }
     }
   }

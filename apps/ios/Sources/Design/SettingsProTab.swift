@@ -56,6 +56,7 @@ struct SettingsProTab: View {
         locationServicesEnabled: true,
         authorizationStatus: .notDetermined,
         accuracyAuthorization: .fullAccuracy)
+    @State var locationPermissionRefreshID = 0
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State var notificationStatus: SettingsNotificationStatus = .checking
     @State var isRequestingNotificationAuthorization = false

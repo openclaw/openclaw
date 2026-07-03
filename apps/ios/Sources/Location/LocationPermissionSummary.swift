@@ -8,23 +8,6 @@ struct LocationPermissionSummary: Equatable {
     var authorizationStatus: CLAuthorizationStatus
     var accuracyAuthorization: CLAccuracyAuthorization
 
-    static func reconciledDesiredMode(
-        currentMode: OpenClawLocationMode,
-        locationServicesEnabled: Bool,
-        authorizationStatus: CLAuthorizationStatus) -> OpenClawLocationMode
-    {
-        guard locationServicesEnabled else { return currentMode }
-        guard currentMode != .off else { return .off }
-        switch authorizationStatus {
-        case .authorizedAlways:
-            return currentMode
-        case .authorizedWhenInUse:
-            return currentMode == .always ? .always : .whileUsing
-        default:
-            return currentMode
-        }
-    }
-
     var effectiveMode: OpenClawLocationMode {
         guard self.desiredMode != .off else { return .off }
         guard self.locationServicesEnabled else { return .off }

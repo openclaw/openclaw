@@ -523,7 +523,13 @@ fun OnboardingFlow(
           passwordInput = password,
         )
       if (plan == null) {
-        setupError = "Setup code was not accepted. Generate a fresh code with openclaw qr."
+        val endpointError =
+          decodeGatewaySetupCode(trimmed)
+            ?.let { parseGatewayEndpointResult(it.url).error }
+        setupError =
+          endpointError?.let {
+            gatewayEndpointValidationMessage(it, GatewayEndpointInputSource.SETUP_CODE)
+          } ?: "Setup code was not accepted. Generate a fresh code with openclaw qr."
         return
       }
       connectGateway(plan = plan, inputSource = inputSource)
@@ -536,10 +542,11 @@ fun OnboardingFlow(
       val scanned = resolveScannedSetupCodeResult(rawValue)
       if (scanned.setupCode == null) {
         val message =
-          if (scanned.error == GatewayEndpointValidationError.INSECURE_REMOTE_URL) {
-            gatewayEndpointValidationMessage(GatewayEndpointValidationError.INSECURE_REMOTE_URL, GatewayEndpointInputSource.QR_SCAN)
-          } else {
-            "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."
+          when (scanned.error) {
+            GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
+              gatewayEndpointValidationMessage(scanned.error, GatewayEndpointInputSource.QR_SCAN)
+            else -> "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."
           }
         showSetupScanError(message)
         return
@@ -569,7 +576,12 @@ fun OnboardingFlow(
           passwordInput = password,
         )
       if (plan == null) {
-        setupError = "Enter a valid Gateway URL and any required auth details."
+        val endpointError =
+          composeGatewayManualUrl(manualHost, manualPort, manualTls)
+            ?.let(::parseGatewayEndpointResult)
+            ?.error
+            ?: GatewayEndpointValidationError.INVALID_URL
+        setupError = gatewayEndpointValidationMessage(endpointError, GatewayEndpointInputSource.MANUAL)
         return
       }
       connectGateway(plan = plan, inputSource = OnboardingGatewayInputSource.Manual)

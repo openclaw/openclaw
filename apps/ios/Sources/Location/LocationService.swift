@@ -1,6 +1,7 @@
 import CoreLocation
 import Foundation
 import OpenClawKit
+import UIKit
 
 @MainActor
 final class LocationService: NSObject, CLLocationManagerDelegate, LocationServiceCommon {
@@ -76,13 +77,30 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
             self.authWaitID = waitID
             self.authContinuation = cont
             Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(1500))
-                guard self.authWaitID == waitID, self.authContinuation != nil else { return }
-                self.authWaitID = nil
-                self.authContinuation = nil
-                cont.resume(returning: self.manager.authorizationStatus)
+                let clock = ContinuousClock()
+                let noPromptDeadline = clock.now.advanced(by: .milliseconds(1500))
+                var observedPrompt = UIApplication.shared.applicationState != .active
+                // A slow system prompt must not trigger the no-callback fallback. Once iOS makes
+                // the app inactive, wait until the user dismisses the prompt and the app returns.
+                while self.authWaitID == waitID, self.authContinuation != nil {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    let applicationIsActive = UIApplication.shared.applicationState == .active
+                    if !applicationIsActive {
+                        observedPrompt = true
+                        continue
+                    }
+                    guard observedPrompt || clock.now >= noPromptDeadline else { continue }
+                    self.finishAuthorizationWait(waitID: waitID, status: self.manager.authorizationStatus)
+                }
             }
         }
+    }
+
+    private func finishAuthorizationWait(waitID: UUID, status: CLAuthorizationStatus) {
+        guard self.authWaitID == waitID, let cont = self.authContinuation else { return }
+        self.authWaitID = nil
+        self.authContinuation = nil
+        cont.resume(returning: status)
     }
 
     private func withTimeout<T: Sendable>(
@@ -113,11 +131,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         let status = manager.authorizationStatus
         Task { @MainActor in
             self.reconcileBackgroundMonitoringAuthorization(status)
-            if let cont = self.authContinuation {
-                self.authWaitID = nil
-                self.authContinuation = nil
-                cont.resume(returning: status)
-            }
+            guard let waitID = self.authWaitID else { return }
+            self.finishAuthorizationWait(waitID: waitID, status: status)
         }
     }
 

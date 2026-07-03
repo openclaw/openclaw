@@ -181,51 +181,25 @@ extension SettingsProTab {
     func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
         let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
         let manager = CLLocationManager()
-        let authorizationStatus = manager.authorizationStatus
-        let accuracyAuthorization = manager.accuracyAuthorization
+        self.locationPermissionRefreshID &+= 1
+        let refreshID = self.locationPermissionRefreshID
         let currentSummary = self.locationPermissionSummary
         self.locationPermissionSummary = LocationPermissionSummary(
             desiredMode: mode,
             locationServicesEnabled: currentSummary.locationServicesEnabled,
-            authorizationStatus: authorizationStatus,
-            accuracyAuthorization: accuracyAuthorization)
+            authorizationStatus: manager.authorizationStatus,
+            accuracyAuthorization: manager.accuracyAuthorization)
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
-            await MainActor.run {
-                let desiredMode = self.reconciledLocationModeForRefresh(
-                    modeOverride: modeOverride,
-                    locationServicesEnabled: locationServicesEnabled,
-                    authorizationStatus: authorizationStatus)
-                self.locationPermissionSummary = LocationPermissionSummary(
-                    desiredMode: desiredMode,
-                    locationServicesEnabled: locationServicesEnabled,
-                    authorizationStatus: authorizationStatus,
-                    accuracyAuthorization: accuracyAuthorization)
-            }
+            guard refreshID == self.locationPermissionRefreshID else { return }
+            let latestManager = CLLocationManager()
+            let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+            self.locationPermissionSummary = LocationPermissionSummary(
+                desiredMode: latestMode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: latestManager.authorizationStatus,
+                accuracyAuthorization: latestManager.accuracyAuthorization)
         }
-    }
-
-    private func reconciledLocationModeForRefresh(
-        modeOverride: OpenClawLocationMode?,
-        locationServicesEnabled: Bool,
-        authorizationStatus: CLAuthorizationStatus) -> OpenClawLocationMode
-    {
-        if let modeOverride { return modeOverride }
-        let currentMode = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        let reconciledMode = LocationPermissionSummary.reconciledDesiredMode(
-            currentMode: currentMode,
-            locationServicesEnabled: locationServicesEnabled,
-            authorizationStatus: authorizationStatus)
-        guard reconciledMode != currentMode else { return currentMode }
-
-        self.locationStatusText = nil
-        self.previousLocationModeRaw = reconciledMode.rawValue
-        self.locationModeRaw = reconciledMode.rawValue
-        self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-        Task {
-            _ = await self.appModel.requestLocationPermissions(mode: reconciledMode)
-        }
-        return reconciledMode
     }
 
     private static func locationServicesEnabled() async -> Bool {

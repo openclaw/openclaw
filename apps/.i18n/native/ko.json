@@ -764,6 +764,21 @@
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
+      "id": "native.android.d5230e4551045851",
+      "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "설정 코드가 IPv6 영역 ID를 사용합니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
+    },
+    {
+      "id": "native.android.ca9fc2ce10f4028a",
+      "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "QR 코드가 IPv6 영역 ID를 사용합니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
+    },
+    {
+      "id": "native.android.141236601fece71e",
+      "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "IPv6 영역 ID는 지원되지 않습니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
+    },
+    {
       "id": "native.android.47e3c19d55f0150b",
       "source": "Setup code has invalid gateway URL.",
       "translated": "설정 코드에 유효하지 않은 gateway URL이 있습니다."
@@ -3144,6 +3159,11 @@
       "translated": "이미지를 사용할 수 없음"
     },
     {
+      "id": "native.android.97a0b44d89402809",
+      "source": "Jump to latest",
+      "translated": "최신 항목으로 이동"
+    },
+    {
       "id": "native.android.69239493702da212",
       "source": "Loading session",
       "translated": "세션 로드 중"
@@ -3222,6 +3242,11 @@
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "세션 로드 중"
+    },
+    {
+      "id": "native.android.2c1106e1687ab258",
+      "source": "Jump to latest",
+      "translated": "최신 항목으로 이동"
     },
     {
       "id": "native.android.9df2c9d68bad169f",
@@ -12102,6 +12127,16 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "세션"
+    },
+    {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "최신 항목으로 이동"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "최신 답글로 이동"
     },
     {
       "id": "native.apple.9ab586b85834705c",

@@ -764,6 +764,21 @@
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
+      "id": "native.android.d5230e4551045851",
+      "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "設定代碼使用 IPv6 區域 ID。請使用未限定範圍的 IPv6 位址或 LAN 主機名稱。"
+    },
+    {
+      "id": "native.android.ca9fc2ce10f4028a",
+      "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "QR 碼使用 IPv6 區域 ID。請使用未限定範圍的 IPv6 位址或 LAN 主機名稱。"
+    },
+    {
+      "id": "native.android.141236601fece71e",
+      "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "不支援 IPv6 區域 ID。請使用未限定範圍的 IPv6 位址或 LAN 主機名稱。"
+    },
+    {
       "id": "native.android.47e3c19d55f0150b",
       "source": "Setup code has invalid gateway URL.",
       "translated": "設定碼包含無效的 Gateway URL。"
@@ -3144,6 +3159,11 @@
       "translated": "圖片無法使用"
     },
     {
+      "id": "native.android.97a0b44d89402809",
+      "source": "Jump to latest",
+      "translated": "跳至最新內容"
+    },
+    {
       "id": "native.android.69239493702da212",
       "source": "Loading session",
       "translated": "正在載入工作階段"
@@ -3222,6 +3242,11 @@
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "正在載入工作階段"
+    },
+    {
+      "id": "native.android.2c1106e1687ab258",
+      "source": "Jump to latest",
+      "translated": "跳至最新內容"
     },
     {
       "id": "native.android.9df2c9d68bad169f",
@@ -12102,6 +12127,16 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "工作階段"
+    },
+    {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "跳至最新內容"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "跳至最新回覆"
     },
     {
       "id": "native.apple.9ab586b85834705c",
