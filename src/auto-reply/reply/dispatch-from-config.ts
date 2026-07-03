@@ -2304,7 +2304,7 @@ export async function dispatchReplyFromConfig(
       let routedFinalCount = 0;
       if (!suppressDelivery) {
         const payload = {
-          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
+          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
         const result = await routeReplyToOriginating(payload);
         if (result) {

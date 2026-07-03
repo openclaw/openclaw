@@ -127,7 +127,7 @@ export function registerGroupIntroPromptCases(): void {
         },
         expected: [
           "You are in a WhatsApp group chat.",
-          "Activation: always-on (you receive every group message).",
+          "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.",
           'If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "NO_REPLY".',
           "Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.",
           groupSilentProseGuard,
@@ -147,10 +147,7 @@ export function registerGroupIntroPromptCases(): void {
             silentToken: "NO_REPLY",
           }),
           buildGroupIntro({
-            cfg,
-            sessionCtx: testCase.message,
             defaultActivation: testCase.defaultActivation ?? "mention",
-            silentToken: "NO_REPLY",
           }),
         ]
           .filter(Boolean)

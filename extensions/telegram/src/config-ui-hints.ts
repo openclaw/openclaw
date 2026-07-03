@@ -38,10 +38,6 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Mention Pattern Denylist",
     help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
   },
-  includeGroupHistoryContext: {
-    label: "Telegram Group History Context",
-    help: 'Controls prior Telegram group messages included in model context: "mention-only" keeps messages addressed to the bot and bot replies (default), "recent" includes recent room history, and "none" disables group history context.',
-  },
   "commands.native": {
     label: "Telegram Native Commands",
     help: 'Override native commands for Telegram (bool or "auto").',

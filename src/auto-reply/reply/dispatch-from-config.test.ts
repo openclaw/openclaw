@@ -46,7 +46,12 @@ import {
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+type AbortResult = {
+  handled: boolean;
+  aborted: boolean;
+  rejectionReason?: "finalizing";
+  stoppedSubagents?: number;
+};
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
@@ -4942,6 +4947,30 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
+    });
+  });
+
+  it("reports when a fast abort is rejected during finalization", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: false,
+      rejectionReason: "finalizing",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Body: "/stop" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      formatAbortReplyTextResolver: (_stopped, rejectionReason) =>
+        rejectionReason === "finalizing" ? "already finalizing" : "aborted",
+    });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "already finalizing",
     });
   });
 

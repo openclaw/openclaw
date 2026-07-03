@@ -267,6 +267,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare
   `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`;
   the Gateway allows those push-to-talk commands by default for trusted

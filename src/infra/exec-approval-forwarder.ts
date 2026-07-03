@@ -20,6 +20,7 @@ import {
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -142,14 +143,10 @@ type ExecApprovalForwarderDeps = {
 
 const DEFAULT_MODE = "session" as const;
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
-let execApprovalForwarderRuntimePromise: Promise<
-  typeof import("./exec-approval-forwarder.runtime.js")
-> | null = null;
 
-function loadExecApprovalForwarderRuntime() {
-  execApprovalForwarderRuntimePromise ??= import("./exec-approval-forwarder.runtime.js");
-  return execApprovalForwarderRuntimePromise;
-}
+const loadExecApprovalForwarderRuntime = createLazyRuntimeModule(
+  () => import("./exec-approval-forwarder.runtime.js"),
+);
 
 function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
   return mode ?? DEFAULT_MODE;

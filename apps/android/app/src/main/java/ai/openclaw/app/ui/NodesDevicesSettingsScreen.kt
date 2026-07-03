@@ -99,7 +99,7 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     if (!summary.devicePairingAvailable) {
       ClawPanel {
-        Text(text = "Device pairing admin needs elevated access. Connected nodes still work.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        Text(text = devicePairingAdminUnavailableText(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
     }
     if (summary.pendingDevices.isNotEmpty()) {
@@ -245,6 +245,10 @@ private fun nodeApprovalSubtitle(approvalState: GatewayNodeApprovalState): Strin
     GatewayNodeApprovalState.Unsupported,
     -> null
   }
+
+internal fun devicePairingAdminUnavailableText(): String =
+  "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. " +
+    "Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>."
 
 private fun pendingDeviceSubtitle(device: GatewayPendingDeviceSummary): String {
   val roles = formatDeviceList(device.roles, "role")
