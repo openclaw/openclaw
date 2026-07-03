@@ -13,15 +13,11 @@ import {
 } from "../plugins/install-security-scan.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
-let hookInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
-
-async function loadHookInstallRuntime() {
-  hookInstallRuntimePromise ??= import("./install.runtime.js");
-  return hookInstallRuntimePromise;
-}
+const loadHookInstallRuntime = createLazyRuntimeModule(() => import("./install.runtime.js"));
 
 /** Logger contract used by hook install and update operations. */
 export type HookInstallLogger = {

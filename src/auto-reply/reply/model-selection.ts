@@ -57,12 +57,29 @@ type ModelSelectionState = {
   resetModelOverrideReason?: "disallowed" | "stale";
   resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
+  hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
   modelContextWindow?: number;
   modelContextTokens?: number;
 };
+
+function resolveConfiguredModelThinkingDefault(raw: unknown): ThinkLevel | undefined {
+  if (raw === false || raw === "disabled" || raw === "none") {
+    return "off";
+  }
+  return raw === "off" ||
+    raw === "minimal" ||
+    raw === "low" ||
+    raw === "medium" ||
+    raw === "high" ||
+    raw === "xhigh" ||
+    raw === "adaptive" ||
+    raw === "max"
+    ? raw
+    : undefined;
+}
 
 /** Creates minimal model-selection state for fast test mode. */
 export function createFastTestModelSelectionState(params: {
@@ -80,6 +97,7 @@ export function createFastTestModelSelectionState(params: {
     resetModelOverrideReason: undefined,
     resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
+    hasConfiguredThinkingDefault: params.agentCfg?.thinkingDefault !== undefined,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
     modelContextWindow: undefined,
@@ -520,25 +538,11 @@ export async function createModelSelectionState(params: {
     const configuredModelThinkingDefault =
       configuredModels?.[canonicalKey]?.params?.thinking ??
       (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
-    if (
-      configuredModelThinkingDefault === false ||
-      configuredModelThinkingDefault === "disabled" ||
-      configuredModelThinkingDefault === "none"
-    ) {
-      defaultThinkingLevel = "off";
-      return defaultThinkingLevel;
-    }
-    if (
-      configuredModelThinkingDefault === "off" ||
-      configuredModelThinkingDefault === "minimal" ||
-      configuredModelThinkingDefault === "low" ||
-      configuredModelThinkingDefault === "medium" ||
-      configuredModelThinkingDefault === "high" ||
-      configuredModelThinkingDefault === "xhigh" ||
-      configuredModelThinkingDefault === "adaptive" ||
-      configuredModelThinkingDefault === "max"
-    ) {
-      defaultThinkingLevel = configuredModelThinkingDefault;
+    const resolvedConfiguredModelThinkingDefault = resolveConfiguredModelThinkingDefault(
+      configuredModelThinkingDefault,
+    );
+    if (resolvedConfiguredModelThinkingDefault) {
+      defaultThinkingLevel = resolvedConfiguredModelThinkingDefault;
       return defaultThinkingLevel;
     }
     const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
@@ -603,6 +607,16 @@ export async function createModelSelectionState(params: {
     provider,
     model,
   });
+  const configuredModels = cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(provider, model);
+  const legacyKey = legacyModelKey(provider, model);
+  const configuredModelThinkingDefault =
+    configuredModels?.[canonicalKey]?.params?.thinking ??
+    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  const hasConfiguredThinkingDefault =
+    agentEntry?.thinkingDefault !== undefined ||
+    resolveConfiguredModelThinkingDefault(configuredModelThinkingDefault) !== undefined ||
+    agentCfg?.thinkingDefault !== undefined;
 
   return {
     provider,
@@ -614,6 +628,7 @@ export async function createModelSelectionState(params: {
     resetModelOverrideReason,
     resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
+    hasConfiguredThinkingDefault,
     resolveDefaultReasoningLevel,
     needsModelCatalog,
     modelContextWindow: selectedCatalogEntry?.contextWindow,

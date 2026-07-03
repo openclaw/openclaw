@@ -26,6 +26,9 @@ struct RootTabs: View {
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
+    @State private var phoneControlNavigationRequest: PhoneControlNavigationRequest?
+    @State private var phoneChatReturn: PhoneChatReturn?
+    @State private var phoneChatSettingsResetRequestID: Int = 0
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -158,9 +161,10 @@ struct RootTabs: View {
     }
 
     private var phoneTabContent: some View {
-        TabView(selection: self.$selectedTab) {
-            PhoneTabSettingsHost { openSettingsRoute in
+        TabView(selection: self.phoneTabSelection) {
+            PhoneTabSettingsHost(resetRequestID: self.phoneChatSettingsResetRequestID) { openSettingsRoute in
                 ChatProTab(
+                    headerLeadingAction: self.phoneChatReturnAction,
                     ownsNavigationStack: false,
                     openSettings: { openSettingsRoute(.gateway) })
             }
@@ -183,7 +187,9 @@ struct RootTabs: View {
             RootTabsPhoneControlHub(
                 groups: Self.phoneControlGroups,
                 initialDestination: Self.requestedInitialSidebarDestination,
-                openRootDestination: { self.selectSidebarDestination($0) })
+                navigationRequest: self.phoneControlNavigationRequest,
+                openRootDestination: { self.selectSidebarDestination($0) },
+                openChatFromControlDetail: { self.openChatFromControlDetail($0) })
                 .tabItem { Label("Control", systemImage: "square.grid.2x2") }
                 .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
                 .tag(AppTab.control)
@@ -580,6 +586,23 @@ struct RootTabs: View {
             action: { self.showSidebar() })
     }
 
+    private var phoneChatReturnAction: OpenClawSidebarHeaderAction? {
+        guard !self.usesSidebarTabs, let phoneChatReturn else { return nil }
+        return OpenClawSidebarHeaderAction(
+            systemName: "chevron.left",
+            accessibilityLabel: "Back to \(phoneChatReturn.destination.title)",
+            accessibilityIdentifier: "OpenClawChatBackToControlDetailButton",
+            action: { self.openPhoneControlDetail(phoneChatReturn.destination) })
+    }
+
+    /// TabView writes through this binding; internal routing writes selectedTab directly.
+    /// That distinction keeps only a user-selected Control tab responsible for resetting its child stack.
+    private var phoneTabSelection: Binding<AppTab> {
+        Binding(
+            get: { self.selectedTab },
+            set: { self.handlePhoneTabSelection($0) })
+    }
+
     private var sidebarHideButton: some View {
         Button {
             self.hideSidebar()
@@ -835,8 +858,8 @@ struct RootTabs: View {
                 guard !newValue else { return }
                 self.maybeRequestLocalNetworkAccess(reason: "onboarding_dismissed")
             }
-            .onChange(of: self.appModel.openChatRequestID) { _, _ in
-                self.selectSidebarDestination(.chat)
+            .onChange(of: self.appModel.openChatRequestID) { _, newValue in
+                self.handleOpenChatRequest(newValue)
             }
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.maybeOpenSettingsForGatewaySetup()
@@ -1026,7 +1049,13 @@ struct RootTabs: View {
 }
 
 extension RootTabs {
-    private func selectSidebarDestination(_ destination: SidebarDestination) {
+    private func selectSidebarDestination(
+        _ destination: SidebarDestination,
+        preservingChatReturn: Bool = false)
+    {
+        if destination != .chat || !preservingChatReturn {
+            self.phoneChatReturn = nil
+        }
         self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
@@ -1034,13 +1063,64 @@ extension RootTabs {
         self.selectedSidebarDestination = destination
         self.selectedSettingsRoute = destination.settingsRoute
         self.selectedTab = destination.appTab
+        self.requestPhoneControlDestinationIfNeeded(destination)
         guard self.usesSidebarTabs, self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(.easeInOut(duration: 0.22)) {
             self.setSidebarVisible(false)
         }
     }
 
+    private func openChatFromControlDetail(_ returnDestination: SidebarDestination) {
+        // Detail screens focus a session before invoking this route callback. Remember that
+        // synchronous request so its later observation cannot erase the contextual return.
+        self.phoneChatReturn = PhoneChatReturn(
+            destination: returnDestination,
+            openChatRequestID: self.appModel.openChatRequestID)
+        // Chat owns an embedded Settings stack. Pop it before routing so the requested
+        // session and contextual return action cannot remain hidden behind Settings.
+        self.phoneChatSettingsResetRequestID &+= 1
+        self.selectSidebarDestination(.chat, preservingChatReturn: true)
+    }
+
+    private func handleOpenChatRequest(_ requestID: Int) {
+        guard requestID != self.phoneChatReturn?.openChatRequestID else { return }
+        self.selectSidebarDestination(.chat)
+    }
+
+    private func openPhoneControlDetail(_ destination: SidebarDestination) {
+        self.selectSidebarDestination(destination)
+        if destination == .overview {
+            self.requestPhoneControlDestinationIfNeeded(destination, force: true)
+        }
+    }
+
+    private func handlePhoneTabSelection(_ selectedTab: AppTab) {
+        if selectedTab != .chat {
+            self.phoneChatReturn = nil
+        }
+        if selectedTab == .control {
+            self.requestPhoneControlNavigation(.root)
+        }
+        self.selectedTab = selectedTab
+    }
+
+    private func requestPhoneControlDestinationIfNeeded(
+        _ destination: SidebarDestination,
+        force: Bool = false)
+    {
+        guard !self.usesSidebarTabs else { return }
+        guard destination.appTab == .control else { return }
+        guard force || destination != .overview else { return }
+        self.requestPhoneControlNavigation(.detail(destination))
+    }
+
+    private func requestPhoneControlNavigation(_ target: PhoneControlNavigationRequest.Target) {
+        let requestID = (self.phoneControlNavigationRequest?.id ?? 0) &+ 1
+        self.phoneControlNavigationRequest = PhoneControlNavigationRequest(id: requestID, target: target)
+    }
+
     private func selectSettingsRoute(_ route: SettingsRoute) {
+        self.phoneChatReturn = nil
         self.sidebarNavigationPath.removeAll()
         if route != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
@@ -1263,9 +1343,14 @@ extension RootTabs {
 /// (deep links, onboarding, problem banner) jump to the canonical Settings tab.
 private struct PhoneTabSettingsHost<Content: View>: View {
     @State private var settingsPath: [SettingsRoute] = []
+    private let resetRequestID: Int
     private let content: (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content
 
-    init(@ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content) {
+    init(
+        resetRequestID: Int = 0,
+        @ViewBuilder content: @escaping (_ openSettingsRoute: @escaping (SettingsRoute) -> Void) -> Content)
+    {
+        self.resetRequestID = resetRequestID
         self.content = content
     }
 
@@ -1277,6 +1362,9 @@ private struct PhoneTabSettingsHost<Content: View>: View {
             .navigationDestination(for: SettingsRoute.self) { route in
                 SettingsProTab(directRoute: route)
             }
+        }
+        .onChange(of: self.resetRequestID) { _, _ in
+            self.settingsPath.removeAll()
         }
     }
 }

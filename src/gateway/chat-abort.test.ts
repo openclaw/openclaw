@@ -239,12 +239,14 @@ describe("registerChatAbortController", () => {
 
   it("retains completed registrations until terminal persistence succeeds", async () => {
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const onRemoved = vi.fn();
     const registration = registerChatAbortController({
       chatAbortControllers,
       runId: "run-persisting",
       sessionId: "sess-1",
       sessionKey: "main",
       timeoutMs: 60_000,
+      onRemoved,
     });
     let resolvePersistence: () => void = () => undefined;
     const persistence = new Promise<void>((resolve) => {
@@ -259,10 +261,12 @@ describe("registerChatAbortController", () => {
     registration.cleanup();
 
     expect(chatAbortControllers.has("run-persisting")).toBe(true);
+    expect(onRemoved).not.toHaveBeenCalled();
     resolvePersistence();
     await persistence;
     await Promise.resolve();
     expect(chatAbortControllers.has("run-persisting")).toBe(false);
+    expect(onRemoved).toHaveBeenCalledTimes(1);
   });
 
   it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
@@ -353,6 +357,27 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("preserves finalizing runs when the owning reply operation rejects aborts", () => {
+    const { runId, sessionKey, entry, ops } = createAbortRunFixture({
+      buffer: "completed reply",
+      entry: {
+        ...createActiveEntry("main"),
+        isAbortable: () => false,
+      },
+    });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
+
+    expect(result).toEqual({ aborted: false });
+    expect(entry.controller.signal.aborted).toBe(false);
+    expect(ops.chatAbortControllers.get(runId)).toBe(entry);
+    expect(ops.chatRunBuffers.get(runId)).toBe("completed reply");
+    expect(ops.chatAbortedRuns.has(runId)).toBe(false);
+    expect(ops.removeChatRun).not.toHaveBeenCalled();
+    expect(ops.broadcast).not.toHaveBeenCalled();
+    expect(ops.nodeSendToSession).not.toHaveBeenCalled();
   });
 
   it("aborts hidden internal runs without broadcasting chat events", () => {

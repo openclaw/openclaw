@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import ai.openclaw.app.voice.TalkModeManager
@@ -209,6 +210,74 @@ class GatewayBootstrapAuthTest {
     assertEquals(
       NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       resolved,
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
+    assertEquals(
+      ConnectionManager.nativeClientOperatorScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = false,
+        storedOperatorScopes = null,
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthPreservesStoredScopesForReconnects() {
+    val storedScopes = listOf("operator.approvals", "operator.read", "operator.write")
+
+    assertEquals(
+      storedScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = true,
+        storedOperatorScopes = storedScopes,
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthFallsBackToLegacyScopesForOldStoredDeviceTokens() {
+    assertEquals(
+      ConnectionManager.legacyOperatorScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = true,
+        storedOperatorScopes = emptyList(),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorConnectScopesForAuthUsesNativeScopesForExplicitReauth() {
+    assertEquals(
+      ConnectionManager.nativeClientOperatorScopes,
+      operatorConnectScopesForAuth(
+        usesStoredDeviceToken = false,
+        storedOperatorScopes = listOf("operator.approvals", "operator.read", "operator.write"),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorSessionUsesStoredDeviceTokenOnlyWithoutExplicitSharedAuth() {
+    assertTrue(
+      operatorSessionUsesStoredDeviceToken(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertFalse(
+      operatorSessionUsesStoredDeviceToken(
+        auth = NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+        storedOperatorToken = "stored-token",
+      ),
+    )
+    assertFalse(
+      operatorSessionUsesStoredDeviceToken(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = "password"),
+        storedOperatorToken = "stored-token",
+      ),
     )
   }
 

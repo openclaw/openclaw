@@ -40,6 +40,7 @@ import {
 } from "../infra/provider-usage.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
+import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
@@ -98,52 +99,23 @@ function resolveStatusChannelFeatureLine(params: {
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
-let statusMessageRuntimePromise: Promise<typeof import("../auto-reply/status.runtime.js")> | null =
-  null;
-let agentHarnessSelectionRuntimePromise: Promise<
-  typeof import("../agents/harness/selection.js")
-> | null = null;
-let statusQueueRuntimePromise: Promise<typeof import("./status-queue.runtime.js")> | null = null;
-let statusSubagentsRuntimePromise: Promise<typeof import("./status-subagents.runtime.js")> | null =
-  null;
-let statusPluginHealthRuntimePromise: Promise<
-  typeof import("./status-plugin-health.runtime.js")
-> | null = null;
+const loadStatusMessageRuntime = createLazyPromise(
+  () =>
+    import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
+  { cacheRejections: true },
+);
+const loadAgentHarnessSelectionRuntime = createLazyRuntimeModule(
+  () => import("../agents/harness/selection.js"),
+);
+const loadStatusSubagentsRuntime = createLazyRuntimeModule(
+  () => import("./status-subagents.runtime.js"),
+);
 
-function loadStatusMessageRuntime(): Promise<typeof import("../auto-reply/status.runtime.js")> {
-  const runtimePromise = (statusMessageRuntimePromise ??=
-    import("./status-message.runtime.js").then((module) =>
-      module.loadStatusMessageRuntimeModule(),
-    ));
-  return runtimePromise;
-}
+const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
 
-function loadAgentHarnessSelectionRuntime(): Promise<
-  typeof import("../agents/harness/selection.js")
-> {
-  const runtimePromise = (agentHarnessSelectionRuntimePromise ??=
-    import("../agents/harness/selection.js"));
-  return runtimePromise;
-}
-
-function loadStatusSubagentsRuntime(): Promise<typeof import("./status-subagents.runtime.js")> {
-  const runtimePromise = (statusSubagentsRuntimePromise ??=
-    import("./status-subagents.runtime.js"));
-  return runtimePromise;
-}
-
-function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js")> {
-  const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js"));
-  return runtimePromise;
-}
-
-function loadStatusPluginHealthRuntime(): Promise<
-  typeof import("./status-plugin-health.runtime.js")
-> {
-  const runtimePromise = (statusPluginHealthRuntimePromise ??=
-    import("./status-plugin-health.runtime.js"));
-  return runtimePromise;
-}
+const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
+  () => import("./status-plugin-health.runtime.js"),
+);
 
 // Context lookup stays synchronous/non-refreshing so status output does not
 // trigger provider/catalog IO while rendering a command response.

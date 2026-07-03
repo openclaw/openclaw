@@ -13,9 +13,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRecord
 import android.media.AudioTrack
-import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -697,6 +695,13 @@ class TalkModeManager internal constructor(
     disableRealtimeModeAndNotifyOwner()
   }
 
+  private fun realtimeCloseStatusText(reason: String?): String =
+    when (reason) {
+      null, "completed" -> "Off"
+      "error" -> "Talk failed: Realtime provider closed unexpectedly."
+      else -> "Talk failed: Realtime provider closed: $reason"
+    }
+
   @SuppressLint("MissingPermission")
   private fun startRealtimeCapture(sessionId: String) {
     realtimeCaptureJob?.cancel()
@@ -736,35 +741,14 @@ class TalkModeManager internal constructor(
       }
     realtimeCaptureJob =
       scope.launch(Dispatchers.IO) {
-        var audioRecord: AudioRecord? = null
+        var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
-          val minBuffer =
-            AudioRecord.getMinBufferSize(
-              realtimeSampleRateHz,
-              AudioFormat.CHANNEL_IN_MONO,
-              AudioFormat.ENCODING_PCM_16BIT,
-            )
-          if (minBuffer <= 0) {
-            throw IllegalStateException("AudioRecord buffer unavailable")
-          }
-          audioRecord =
-            AudioRecord
-              .Builder()
-              .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-              .setAudioFormat(
-                AudioFormat
-                  .Builder()
-                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(realtimeSampleRateHz)
-                  .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                  .build(),
-              ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
-              .build()
+          audioInput = AndroidAudioInputSession.open(context, realtimeSampleRateHz, frameBytes)
           val buffer = ByteArray(frameBytes)
-          audioRecord.startRecording()
+          audioInput.startRecording()
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
-            val read = audioRecord.read(buffer, 0, buffer.size)
+            val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             if (!shouldAppendRealtimeCapturedFrame(read)) continue
             audioFrames.trySend(buffer.copyOf(read))
@@ -775,13 +759,7 @@ class TalkModeManager internal constructor(
           failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
         } finally {
           audioFrames.close()
-          audioRecord?.let { record ->
-            try {
-              record.stop()
-            } catch (_: Throwable) {
-            }
-            record.release()
-          }
+          audioInput?.close()
         }
       }
   }
@@ -866,11 +844,15 @@ class TalkModeManager internal constructor(
         Log.w(tag, "realtime error: $message")
       }
       "close" -> {
-        Log.d(tag, "realtime close reason=${obj["reason"].asStringOrNull()}")
-        stopRealtimeRelay(closeSession = false)
+        val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        val currentStatus = _statusText.value
+        val closeStatus =
+          if (currentStatus.startsWith("Talk failed:")) currentStatus else realtimeCloseStatusText(closeReason)
+        Log.d(tag, "realtime close reason=$closeReason")
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
         if (_isEnabled.value) {
           _isEnabled.value = false
-          _statusText.value = "Off"
+          _statusText.value = closeStatus
           onStoppedByRelay()
         }
       }
