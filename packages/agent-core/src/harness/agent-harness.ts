@@ -197,6 +197,14 @@ function normalizeHookError(error: unknown): AgentHarnessError {
   return normalizeHarnessError(error, "hook");
 }
 
+function isMidTurnPrecheckSignal(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "MidTurnPrecheckSignal" &&
+    error.message === "Context overflow: prompt too large for the model (mid-turn precheck)."
+  );
+}
+
 interface AgentHarnessTurnState<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -671,6 +679,9 @@ export class CoreAgentHarness<
           this.createStreamFn(getTurnState),
         );
       } catch (error) {
+        if (isMidTurnPrecheckSignal(error)) {
+          throw error;
+        }
         try {
           return await this.emitRunFailure(
             activeTurnState.model,
