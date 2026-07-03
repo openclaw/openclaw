@@ -478,6 +478,37 @@ describe("subagent registry seam flow", () => {
       expect(waitAttempts).toBeGreaterThanOrEqual(1);
     });
     await waitForFast(() => {
+      const progressNotice = findRecordCallArg(
+        mocks.callGateway,
+        0,
+        "subagent progress notice",
+        (record) => record.method === "agent",
+      );
+      const progressParams = expectRecordFields(
+        progressNotice.params,
+        {
+          sessionKey: "agent:main:main",
+          deliver: true,
+          bestEffortDeliver: true,
+          idempotencyKey: "subagent-progress:v1:run-waiter-timeout:0",
+        },
+        "subagent progress notice params",
+      );
+      expect(String(progressParams.message)).toContain(
+        "A delegated subagent is still running after a durable wait checkpoint",
+      );
+      expectRecordFields(
+        progressParams.inputProvenance,
+        {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_progress",
+        },
+        "subagent progress input provenance",
+      );
+    });
+    await waitForFast(() => {
       expect(waitAttempts).toBeGreaterThanOrEqual(2);
     });
     const activeRun = mod
@@ -485,6 +516,11 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-waiter-timeout");
     expect(activeRun?.endedAt).toBeUndefined();
     expect(activeRun?.outcome).toBeUndefined();
+    expect(activeRun?.progressNotice).toMatchObject({
+      lastReason: "wait_timeout",
+      lastIdempotencyKey: "subagent-progress:v1:run-waiter-timeout:0",
+      noticeCount: 1,
+    });
 
     resolveSecondWait({
       status: "ok",
@@ -501,6 +537,111 @@ describe("subagent registry seam flow", () => {
     });
     await waitForFast(() => {
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("emits progress while agent.wait is still pending for a long-running child", async () => {
+    mocks.resolveAgentTimeoutMs.mockReturnValue(600_000);
+    mocks.getAgentRunContext.mockImplementation((runId: string) =>
+      runId === "run-long-wait" ? ({ runId } as never) : undefined,
+    );
+    let resolveWait: (value: {
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+    }) => void = () => {};
+    const pendingWait = new Promise<{ status: "ok"; startedAt: number; endedAt: number }>(
+      (resolve) => {
+        resolveWait = resolve;
+      },
+    );
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return pendingWait;
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-long-wait",
+      childSessionKey: "agent:main:subagent:long-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "long running delegated command",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      const waitCall = findRecordCallArg(
+        mocks.callGateway,
+        0,
+        "agent.wait call",
+        (record) => record.method === "agent.wait",
+      );
+      expectRecordFields(waitCall.params, { runId: "run-long-wait" }, "agent.wait params");
+    });
+
+    const progressIntervalMs = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 120_000;
+    await vi.advanceTimersByTimeAsync(progressIntervalMs);
+
+    await waitForFast(() => {
+      const progressNotice = findRecordCallArg(
+        mocks.callGateway,
+        0,
+        "long child progress notice",
+        (record) => record.method === "agent",
+      );
+      const progressParams = expectRecordFields(
+        progressNotice.params,
+        {
+          sessionKey: "agent:main:main",
+          deliver: true,
+          bestEffortDeliver: true,
+        },
+        "long child progress notice params",
+      );
+      expect(String(progressParams.idempotencyKey)).toContain(
+        "subagent-progress:v1:run-long-wait:",
+      );
+      expect(String(progressParams.message)).toContain(
+        "A delegated subagent is still running after a durable wait checkpoint",
+      );
+      expect(String(progressParams.message)).toContain("long running delegated command");
+      expectRecordFields(
+        progressParams.inputProvenance,
+        {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:long-child",
+          sourceChannel: "webchat",
+          sourceTool: "subagent_progress",
+        },
+        "long child progress input provenance",
+      );
+    });
+
+    const activeRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-long-wait");
+    expect(activeRun?.endedAt).toBeUndefined();
+    expect(activeRun?.outcome).toBeUndefined();
+    expect(activeRun?.progressNotice).toMatchObject({
+      lastReason: "wait_timeout",
+      noticeCount: 1,
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+    const completedAt = Date.now();
+    resolveWait({
+      status: "ok",
+      startedAt: completedAt - progressIntervalMs,
+      endedAt: completedAt,
+    });
+    await waitForFast(() => {
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-long-wait");
+      expect(completedRun?.endedAt).toBe(completedAt);
+      expectRecordFields(completedRun?.outcome, { status: "ok" }, "completed long run outcome");
     });
   });
 

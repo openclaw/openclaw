@@ -83,6 +83,29 @@ describe("resolveDeferredCleanupDecision", () => {
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
 
+  it("does not spend completion retry budget while the gateway is draining for restart", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        delivery: {
+          status: "pending",
+          attemptCount: 2,
+          lastError:
+            "GatewayDrainingError: Gateway is draining for restart; new tasks are not accepted",
+        },
+      }),
+      activeDescendantRuns: 0,
+      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
+    });
+
+    expect(decision).toEqual({
+      kind: "retry",
+      retryCount: 2,
+      resumeDelayMs: 2_000,
+      countAttempt: false,
+    });
+  });
+
   it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {
     const decision = resolveDecision({
       entry: makeEntry({

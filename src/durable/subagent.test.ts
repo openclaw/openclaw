@@ -9,6 +9,7 @@ import {
 import { openDurableRuntimeSqliteStore } from "./sqlite-store.js";
 import {
   recordDurableSubagentAnnounceDelivery,
+  recordDurableSubagentProgress,
   recordDurableSubagentRegistered,
   recordDurableSubagentTerminal,
 } from "./subagent.js";
@@ -226,6 +227,97 @@ describe("durable subagent bridge", () => {
       });
       expect(child?.metadata?.task).toBeUndefined();
       expect(parentLink?.metadata?.task).toBeUndefined();
+    } finally {
+      assertStore.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("records running child progress without closing parent fan-in", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-subagent-"));
+    const dbPath = path.join(dir, "state", "openclaw.sqlite");
+    const env = {
+      ...process.env,
+      OPENCLAW_DURABLE_RUNTIME: "1",
+      OPENCLAW_STATE_DIR: dir,
+    };
+    const parentSessionKey = "agent:bo:discord:channel:bo-main";
+    const childSessionKey = "agent:bo-worker:subagent:slow-child";
+
+    let parentRuntimeRunId = "";
+    const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
+    try {
+      parentRuntimeRunId = setupStore.createRun({
+        operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
+        status: "running",
+        recoveryState: "running",
+        idempotencyKey: "run_parent",
+        sourceType: "agent_turn",
+        sourceRef: parentSessionKey,
+        metadata: { sessionKey: parentSessionKey },
+        now: 100,
+      }).runtimeRunId;
+    } finally {
+      setupStore.close();
+    }
+
+    recordDurableSubagentRegistered({
+      runId: "run_child_slow",
+      childSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterRunId: "run_parent",
+      task: "Run a long command",
+      label: "slow branch",
+      env,
+    });
+    recordDurableSubagentProgress({
+      runId: "run_child_slow",
+      childSessionKey,
+      status: "running",
+      reason: "wait_timeout",
+      detail: "child still running after durable wait checkpoint",
+      elapsedMs: 180_000,
+      env,
+    });
+
+    const assertStore = openDurableRuntimeSqliteStore({ path: dbPath });
+    try {
+      const child = assertStore
+        .listRuns({ limit: 20 })
+        .find((run) => run.operationKind === DURABLE_SUBAGENT_RUN_OPERATION_KIND);
+      expect(child).toMatchObject({
+        status: "running",
+        recoveryState: "running",
+        metadata: {
+          childSessionKey,
+          lastProgress: {
+            status: "running",
+            reason: "wait_timeout",
+            detail: "child still running after durable wait checkpoint",
+            elapsedMs: 180_000,
+          },
+        },
+      });
+      expect(assertStore.listChildLinks(parentRuntimeRunId)).toMatchObject([
+        {
+          childRuntimeRunId: child?.runtimeRunId,
+          status: "running",
+          metadata: {
+            lastProgress: {
+              status: "running",
+              reason: "wait_timeout",
+              elapsedMs: 180_000,
+            },
+          },
+        },
+      ]);
+      expect(assertStore.listSteps(parentRuntimeRunId)).toContainEqual(
+        expect.objectContaining({
+          stepId: "subagents",
+          status: "waiting",
+          recoveryState: "waiting_child",
+        }),
+      );
     } finally {
       assertStore.close();
       fs.rmSync(dir, { recursive: true, force: true });

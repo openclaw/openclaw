@@ -66,6 +66,7 @@ export function registerDurableCommand(program: Command) {
     ["steps", "steps", "Show durable runtime steps for one run"],
     ["children", "children", "Show child runtime links for one run"],
     ["parents", "parents", "Show parent runtime links for one run"],
+    ["why", "why", "Explain why a durable runtime run is quiet or what state it is in"],
     [
       "coordination",
       "coordination",

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDurableRuntimeSqlitePath } from "../durable/config.js";
+import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { durableCommand } from "./durable.js";
 
@@ -54,6 +55,110 @@ describe("durableCommand", () => {
       for (const candidate of resolveSqliteDatabaseFilePaths(sqlitePath)) {
         expect(fs.existsSync(candidate)).toBe(false);
       }
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("explains why a run is waiting on child work", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-why-"));
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DURABLE_RUNTIME: "1",
+    };
+    const store = openDurableRuntimeStore({ env });
+    let runtimeRunId = "";
+    try {
+      const parent = store.createRun({
+        operationKind: "test.parent",
+        status: "waiting_child",
+        recoveryState: "waiting_child",
+        sourceRef: "agent:test:main",
+        now: 100,
+      });
+      runtimeRunId = parent.runtimeRunId;
+      store.createStep({
+        runtimeRunId: parent.runtimeRunId,
+        stepId: "children",
+        stepType: "fan_in",
+        status: "waiting",
+        recoveryState: "waiting_child",
+        now: 100,
+      });
+      const child = store.createRun({
+        operationKind: "test.child",
+        status: "running",
+        recoveryState: "running",
+        parentRuntimeRunId: parent.runtimeRunId,
+        parentStepId: "children",
+        now: 110,
+      });
+      store.createLink({
+        parentRuntimeRunId: parent.runtimeRunId,
+        parentStepId: "children",
+        childRuntimeRunId: child.runtimeRunId,
+        linkType: "subagent",
+        status: "running",
+        now: 110,
+      });
+    } finally {
+      store.close();
+    }
+
+    try {
+      const { logs, runtime } = createRuntimeCapture();
+
+      await durableCommand({ action: "why", runtimeRunId, env }, runtime);
+
+      expect(logs[0]).toContain("Summary: Run is waiting for child work: 1 open of 1 children.");
+      expect(logs[0]).toContain("Waiting reason: child");
+      expect(logs[0]).toContain("Children: total=1 open=1 terminal=0");
+      expect(logs[0]).toContain(`- openclaw durable children ${runtimeRunId}`);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces recovery diagnostics in the why command", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-why-"));
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DURABLE_RUNTIME: "1",
+    };
+    const store = openDurableRuntimeStore({ env });
+    let runtimeRunId = "";
+    try {
+      const run = store.createRun({
+        operationKind: "test.agent_turn",
+        status: "lost",
+        recoveryState: "lost",
+        completedAt: 200,
+        metadata: {
+          recoveryDiagnostic: {
+            state: "lost",
+            severity: "error",
+            reason: "stale_heartbeat",
+            message: "Agent turn was marked lost during durable recovery.",
+            nextAction: "inspect_timeline_then_retry_or_resume",
+            safeRecoveryActions: ["inspect_timeline", "retry_request"],
+          },
+        },
+        now: 200,
+      });
+      runtimeRunId = run.runtimeRunId;
+    } finally {
+      store.close();
+    }
+
+    try {
+      const { logs, runtime } = createRuntimeCapture();
+
+      await durableCommand({ action: "why", runtimeRunId, env }, runtime);
+
+      expect(logs[0]).toContain("Summary: Agent turn was marked lost during durable recovery.");
+      expect(logs[0]).toContain("Recovery: lost/error next=inspect_timeline_then_retry_or_resume");
+      expect(logs[0]).toContain("Reason: stale_heartbeat");
+      expect(logs[0]).toContain("Safe actions: inspect_timeline, retry_request");
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

@@ -1,5 +1,8 @@
 import { isDurableRuntimesEnabled } from "../durable/config.js";
-import { buildDurableCoordinationProjection } from "../durable/coordination-projection.js";
+import {
+  buildDurableCoordinationProjection,
+  type DurableCoordinationProjection,
+} from "../durable/coordination-projection.js";
 import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import type {
   DurableRuntimeEvent,
@@ -24,6 +27,7 @@ export type DurableCliAction =
   | "refs"
   | "timers"
   | "coordination"
+  | "why"
   | "stats";
 
 export type DurableCliOptions = {
@@ -43,6 +47,12 @@ type DurableRunDetails = {
   refs: DurableRuntimeRef[];
   timers: DurableRuntimeTimer[];
   timeline: DurableRuntimeEvent[];
+};
+
+type DurableWhyPayload = {
+  summary: string;
+  projection: DurableCoordinationProjection;
+  commands: string[];
 };
 
 function write(runtime: RuntimeEnv, value: string): void {
@@ -271,6 +281,124 @@ function renderDetails(details: DurableRunDetails): string {
   ].join("\n");
 }
 
+function yesNo(value: boolean): "yes" | "no" {
+  return value ? "yes" : "no";
+}
+
+function buildWhyCommands(projection: DurableCoordinationProjection): string[] {
+  const commands = [
+    `openclaw durable timeline ${projection.runtimeRunId}`,
+    `openclaw durable steps ${projection.runtimeRunId}`,
+  ];
+  if (projection.children.total > 0) {
+    commands.push(`openclaw durable children ${projection.runtimeRunId}`);
+  }
+  if (projection.controls.canSignal) {
+    commands.push(`openclaw durable signals ${projection.runtimeRunId}`);
+  }
+  if (
+    projection.refs.inputRef ||
+    projection.refs.outputRefs.length > 0 ||
+    projection.refs.errorRefs.length > 0 ||
+    projection.refs.artifactRefs.length > 0
+  ) {
+    commands.push(`openclaw durable refs ${projection.runtimeRunId}`);
+  }
+  return commands;
+}
+
+function explainProjection(projection: DurableCoordinationProjection): string {
+  if (projection.recovery) {
+    return projection.recovery.message;
+  }
+  if (projection.waitingReason) {
+    switch (projection.waitingReason) {
+      case "child":
+        return `Run is waiting for child work: ${projection.children.open} open of ${projection.children.total} children.`;
+      case "signal":
+        return "Run is waiting for a durable signal or human input.";
+      case "timer":
+        return "Run is waiting for a durable timer.";
+      case "retry":
+        return "Run has a retry scheduled; durable runtime will only requeue it when the timer is due.";
+      case "worker":
+        return "Run or step is claimed by a worker and should heartbeat while active.";
+      case "unknown":
+        return "Run needs reconciliation before any retry or resume policy is applied.";
+    }
+  }
+  if (projection.completedAt) {
+    return `Run is terminal: ${projection.status}/${projection.recoveryState}.`;
+  }
+  return `Run is open: ${projection.status}/${projection.recoveryState}.`;
+}
+
+function buildWhyPayload(details: DurableRunDetails): DurableWhyPayload {
+  const projection = buildDurableCoordinationProjection({
+    run: details.run,
+    steps: details.steps,
+    childLinks: details.children,
+    refs: details.refs,
+  });
+  return {
+    summary: explainProjection(projection),
+    projection,
+    commands: buildWhyCommands(projection),
+  };
+}
+
+function renderWhy(payload: DurableWhyPayload): string {
+  const projection = payload.projection;
+  const lines = [
+    `${projection.runtimeRunId}  ${projection.operationKind}  ${projection.status}/${projection.recoveryState}`,
+    `Summary: ${payload.summary}`,
+    `Updated: ${formatTime(projection.updatedAt)}`,
+  ];
+  if (projection.completedAt) {
+    lines.push(`Completed: ${formatTime(projection.completedAt)}`);
+  }
+  if (projection.sourceRef) {
+    lines.push(`Source: ${projection.sourceRef}`);
+  }
+  if (projection.currentStepId) {
+    lines.push(`Current step: ${projection.currentStepId}`);
+  }
+  if (projection.waitingReason) {
+    lines.push(`Waiting reason: ${projection.waitingReason}`);
+  }
+  if (projection.heartbeatAt) {
+    lines.push(`Heartbeat: ${formatTime(projection.heartbeatAt)}`);
+  }
+  if (projection.children.total > 0) {
+    lines.push(
+      `Children: total=${projection.children.total} open=${projection.children.open} terminal=${projection.children.terminal} succeeded=${projection.children.succeeded} failed=${projection.children.failed} lost=${projection.children.lost}`,
+    );
+  }
+  if (projection.recovery) {
+    lines.push(
+      `Recovery: ${projection.recovery.state}/${projection.recovery.severity} next=${projection.recovery.nextAction}`,
+    );
+    if (projection.recovery.reason) {
+      lines.push(`Reason: ${projection.recovery.reason}`);
+    }
+    if (projection.recovery.safeRecoveryActions?.length) {
+      lines.push(`Safe actions: ${projection.recovery.safeRecoveryActions.join(", ")}`);
+    }
+  }
+  lines.push(
+    `Controls: cancel=${yesNo(projection.controls.canCancel)} retry=${yesNo(
+      projection.controls.canRetry,
+    )} resume=${yesNo(projection.controls.canResume)} signal=${yesNo(
+      projection.controls.canSignal,
+    )}`,
+  );
+  lines.push("Inspect:");
+  for (const command of payload.commands) {
+    lines.push(`- ${command}`);
+  }
+  return lines.join("\n");
+}
+
 export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEnv): Promise<void> {
   const env = opts.env ?? process.env;
   if (!isDurableRuntimesEnabled(env)) {
@@ -321,26 +449,28 @@ export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEn
     const payload =
       opts.action === "show"
         ? details
-        : opts.action === "coordination"
-          ? buildDurableCoordinationProjection({
-              run: details.run,
-              steps: details.steps,
-              childLinks: details.children,
-              refs: details.refs,
-            })
-          : opts.action === "timeline"
-            ? details.timeline
-            : opts.action === "steps"
-              ? details.steps
-              : opts.action === "children"
-                ? details.children
-                : opts.action === "parents"
-                  ? details.parents
-                  : opts.action === "signals"
-                    ? details.signals
-                    : opts.action === "refs"
-                      ? details.refs
-                      : details.timers;
+        : opts.action === "why"
+          ? buildWhyPayload(details)
+          : opts.action === "coordination"
+            ? buildDurableCoordinationProjection({
+                run: details.run,
+                steps: details.steps,
+                childLinks: details.children,
+                refs: details.refs,
+              })
+            : opts.action === "timeline"
+              ? details.timeline
+              : opts.action === "steps"
+                ? details.steps
+                : opts.action === "children"
+                  ? details.children
+                  : opts.action === "parents"
+                    ? details.parents
+                    : opts.action === "signals"
+                      ? details.signals
+                      : opts.action === "refs"
+                        ? details.refs
+                        : details.timers;
 
     if (opts.json) {
       writeJson(runtime, payload);
@@ -350,30 +480,32 @@ export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEn
     const text =
       opts.action === "show"
         ? renderDetails(details)
-        : opts.action === "coordination"
-          ? JSON.stringify(
-              buildDurableCoordinationProjection({
-                run: details.run,
-                steps: details.steps,
-                childLinks: details.children,
-                refs: details.refs,
-              }),
-              null,
-              2,
-            )
-          : opts.action === "timeline"
-            ? renderTimeline(details.timeline)
-            : opts.action === "steps"
-              ? renderSteps(details.steps)
-              : opts.action === "children"
-                ? renderLinks(details.children, "children")
-                : opts.action === "parents"
-                  ? renderLinks(details.parents, "parents")
-                  : opts.action === "signals"
-                    ? renderSignals(details.signals)
-                    : opts.action === "refs"
-                      ? renderRefs(details.refs)
-                      : renderTimers(details.timers);
+        : opts.action === "why"
+          ? renderWhy(buildWhyPayload(details))
+          : opts.action === "coordination"
+            ? JSON.stringify(
+                buildDurableCoordinationProjection({
+                  run: details.run,
+                  steps: details.steps,
+                  childLinks: details.children,
+                  refs: details.refs,
+                }),
+                null,
+                2,
+              )
+            : opts.action === "timeline"
+              ? renderTimeline(details.timeline)
+              : opts.action === "steps"
+                ? renderSteps(details.steps)
+                : opts.action === "children"
+                  ? renderLinks(details.children, "children")
+                  : opts.action === "parents"
+                    ? renderLinks(details.parents, "parents")
+                    : opts.action === "signals"
+                      ? renderSignals(details.signals)
+                      : opts.action === "refs"
+                        ? renderRefs(details.refs)
+                        : renderTimers(details.timers);
     write(runtime, text);
   } finally {
     store.close();
