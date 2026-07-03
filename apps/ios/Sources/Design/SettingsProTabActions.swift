@@ -178,11 +178,17 @@ extension SettingsProTab {
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
     }
 
-    func refreshLocationPermissionSummary() {
-        let mode = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+    func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
+        let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
         let manager = CLLocationManager()
         let authorizationStatus = manager.authorizationStatus
         let accuracyAuthorization = manager.accuracyAuthorization
+        let currentSummary = self.locationPermissionSummary
+        self.locationPermissionSummary = LocationPermissionSummary(
+            desiredMode: mode,
+            locationServicesEnabled: currentSummary.locationServicesEnabled,
+            authorizationStatus: authorizationStatus,
+            accuracyAuthorization: accuracyAuthorization)
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
             await MainActor.run {
@@ -401,18 +407,19 @@ extension SettingsProTab {
     {
         self.isChangingLocationMode = true
         self.locationStatusText = nil
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         defer { self.isChangingLocationMode = false }
 
         if mode == .off {
             _ = await self.appModel.requestLocationPermissions(mode: mode)
             self.previousLocationModeRaw = rawValue
-            self.refreshLocationPermissionSummary()
+            self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
             return
         }
 
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
-        self.refreshLocationPermissionSummary()
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -420,7 +427,8 @@ extension SettingsProTab {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
             self.locationStatusText = "Location permission was not granted."
-            self.refreshLocationPermissionSummary()
+            self.refreshLocationPermissionSummary(
+                desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
         }
     }
 
@@ -821,7 +829,10 @@ extension SettingsProTab {
     }
 
     var locationPermissionDetailText: String {
-        self.locationPermissionSummary.detailText
+        if self.isChangingLocationMode {
+            return "Requesting iOS location permission…"
+        }
+        return self.locationPermissionSummary.detailText
     }
 
     var locationPermissionWarningText: String? {
