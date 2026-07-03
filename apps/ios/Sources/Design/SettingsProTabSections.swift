@@ -2,21 +2,62 @@ import OpenClawKit
 import SwiftUI
 
 extension SettingsProTab {
-    var appearanceMenu: some View {
-        Menu {
-            Picker("Appearance", selection: self.$appearancePreferenceRaw) {
-                ForEach(AppAppearancePreference.allCases) { preference in
+    var currentAppearancePreference: AppAppearancePreference {
+        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
+    }
+
+    var appearanceRow: some View {
+        // Menu hides its source label while open on iPad; a dialog keeps the visible row stable.
+        Button {
+            self.isShowingAppearanceDialog = true
+        } label: {
+            self.appearanceRowLabel
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("settings-appearance-row")
+        .accessibilityLabel("Appearance")
+        .accessibilityValue(self.currentAppearancePreference.label)
+        .accessibilityHint("Choose system, light, or dark appearance")
+        .confirmationDialog(
+            "Appearance",
+            isPresented: self.$isShowingAppearanceDialog,
+            titleVisibility: .visible)
+        {
+            ForEach(AppAppearancePreference.allCases) { preference in
+                Button {
+                    self.appearancePreferenceRaw = preference.rawValue
+                } label: {
                     Label(preference.label, systemImage: preference.systemImage)
-                        .tag(preference.rawValue)
                 }
             }
-        } label: {
-            Label("Appearance", systemImage: "ellipsis")
-                .labelStyle(.iconOnly)
+        } message: {
+            Text("Choose system, light, or dark appearance")
         }
-        .tint(.primary)
-        .accessibilityIdentifier("settings-appearance-menu")
-        .accessibilityHint("Choose system, light, or dark appearance")
+    }
+
+    var appearanceRowLabel: some View {
+        HStack(spacing: 12) {
+            ProIconBadge(
+                systemName: "circle.lefthalf.filled",
+                color: .secondary)
+
+            Text("Appearance")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 5) {
+                Text(self.currentAppearancePreference.label)
+                    .font(.subheadline.weight(.semibold))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .foregroundStyle(OpenClawBrand.accent)
+        }
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     var gatewaySection: some View {
@@ -105,6 +146,7 @@ extension SettingsProTab {
         }
 
         Section("Device") {
+            self.appearanceRow
             self.settingsListRow(
                 icon: "stethoscope",
                 title: "Diagnostics",
@@ -200,10 +242,6 @@ extension SettingsProTab {
 
     var gatewayDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let gatewayProblem = self.appModel.lastGatewayProblem {
-                self.gatewayProblemCard(gatewayProblem)
-            }
-
             self.detailStatusCard(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Gateway",
@@ -509,21 +547,12 @@ extension SettingsProTab {
 
     var aboutDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            self.detailStatusCard(
-                icon: "info.circle",
-                title: "OpenClaw",
-                detail: "iOS companion app",
-                value: DeviceInfoHelper.openClawVersionString(),
-                color: OpenClawBrand.accent)
-
             self.detailListCard {
-                self.detailRow("Version", value: DeviceInfoHelper.openClawVersionString())
+                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
                 Divider()
                 self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
                 Divider()
-                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                Divider()
-                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
+                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
         }
     }
@@ -914,21 +943,6 @@ extension SettingsProTab {
                     .textFieldStyle(.roundedBorder)
                 self.detailRow("Instance ID", value: self.instanceId)
             }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func gatewayProblemCard(_ problem: GatewayConnectionProblem) -> some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            GatewayProblemBanner(
-                problem: problem,
-                primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
-                onPrimaryAction: {
-                    Task { await self.handleGatewayProblemPrimaryAction(problem) }
-                },
-                onShowDetails: {
-                    self.showGatewayProblemDetails = true
-                })
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }

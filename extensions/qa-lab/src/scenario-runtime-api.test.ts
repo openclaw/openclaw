@@ -138,6 +138,18 @@ describe("createQaScenarioRuntimeApi", () => {
         },
         sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
           state.addInboundMessage(input),
+        sendNativeCommand: async (
+          input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
+            command: string;
+          },
+        ) => {
+          const { command, ...message } = input;
+          state.addInboundMessage({
+            ...message,
+            text: `/${command}`,
+            nativeCommand: { name: command },
+          });
+        },
         waitForNoOutbound: vi.fn(async () => undefined),
         waitForOutbound: vi.fn(async () => {
           throw new Error("not used");

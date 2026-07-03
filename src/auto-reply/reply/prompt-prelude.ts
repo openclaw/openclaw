@@ -12,7 +12,6 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 const REPLY_MEDIA_HINT =
   "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
-const ROOM_EVENT_SOURCE_REPLY_DELIVERY_MODE = "message_tool_only";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (untrusted, chronological, selected for current message):",
   "Chat history since last reply (untrusted, for context):",
@@ -143,17 +142,16 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
   const roomEventBody = resolveRoomEventBody(params);
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
-  const visibleReplyContract =
+  const deliveryDirective =
     params.sourceReplyDeliveryMode === "message_tool_only"
-      ? `visible_reply_contract: ${ROOM_EVENT_SOURCE_REPLY_DELIVERY_MODE}`
-      : undefined;
+      ? "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way."
+      : "Treat this as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.";
   return [
     "[OpenClaw room event]",
     "inbound_event_kind: room_event",
-    visibleReplyContract,
     roomContextBlock,
     `Current event:\n${formatRoomEventLine(params.sessionCtx, roomEventBody)}`,
-    "Treat this as observed room activity. Decide whether to act.",
+    deliveryDirective,
   ]
     .filter(Boolean)
     .join("\n\n");

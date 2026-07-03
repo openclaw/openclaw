@@ -47,10 +47,6 @@ import {
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
-  resolveTelegramGroupHistoryContextModeForAccount,
-  type TelegramGroupHistoryContextMode,
-} from "./group-history-context.js";
-import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
   isTelegramSupportedReactionEmoji,
@@ -111,7 +107,6 @@ export type TelegramMessageContext = {
   historyKey?: string;
   historyLimit: BuildTelegramMessageContextParams["historyLimit"];
   groupHistories: BuildTelegramMessageContextParams["groupHistories"];
-  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
@@ -494,13 +489,6 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const groupHistoryContextMode = isGroup
-    ? resolveTelegramGroupHistoryContextModeForAccount({
-        cfg,
-        accountId: route.accountId,
-      })
-    : undefined;
-
   if (!(await ensureConfiguredBindingReady())) {
     return null;
   }
@@ -536,7 +524,6 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
-    groupHistoryContextMode,
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
@@ -675,7 +662,6 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
-    groupHistoryContextMode,
     route,
     skillFilter,
     sendTyping,

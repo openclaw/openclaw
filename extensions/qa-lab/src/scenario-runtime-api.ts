@@ -8,7 +8,13 @@ type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
 
 type QaScenarioTransport = Pick<
   QaTransportAdapter,
-  "capabilities" | "reset" | "sendInbound" | "state" | "waitForNoOutbound" | "waitForOutbound"
+  | "capabilities"
+  | "reset"
+  | "sendInbound"
+  | "sendNativeCommand"
+  | "state"
+  | "waitForNoOutbound"
+  | "waitForOutbound"
 >;
 
 export type QaScenarioRuntimeEnv<
