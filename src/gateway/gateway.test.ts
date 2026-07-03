@@ -206,6 +206,7 @@ describe("gateway e2e", () => {
               },
             },
           },
+          list: [{ id: "dev" }],
         },
         models: {
           mode: "replace",
