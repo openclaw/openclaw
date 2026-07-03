@@ -319,6 +319,7 @@ export async function sendMessageDiscord(
   }
 
   let result: DiscordChannelMessageResult | undefined;
+  let mediaFallback = false;
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -359,6 +360,7 @@ export async function sendMessageDiscord(
     }
   } catch (err) {
     if (opts.mediaUrl && !result && textWithMentions.trim()) {
+      mediaFallback = true;
       result = await sendDiscordText(
         rest,
         channelId,
@@ -390,7 +392,13 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return toDiscordSendResult(result!, channelId, {
-    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
+    kind: mediaFallback
+      ? "text"
+      : opts.mediaUrl
+        ? "media"
+        : opts.components || opts.embeds
+          ? "card"
+          : "text",
     replyToId: opts.replyTo,
   });
 }

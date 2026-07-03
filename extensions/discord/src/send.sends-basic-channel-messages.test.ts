@@ -711,6 +711,7 @@ describe("sendMessageDiscord", () => {
 
     expect(postMock).toHaveBeenCalledTimes(2);
     expect(result?.messageId).toBe("fallback-1");
+    expect(result?.receipt.parts[0]?.kind).toBe("text");
   });
 
   it("does not fallback when media succeeded but a trailing chunk fails", async () => {
