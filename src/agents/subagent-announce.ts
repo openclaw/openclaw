@@ -1563,6 +1563,8 @@ export async function runSubagentAnnounceFlow(params: {
                   task: chainTask,
                   delayMs: clampedDelay,
                   ...(chainWake ? { mode: "silent-wake" } : chainSilent ? { mode: "silent" } : {}),
+                  ...(params.silentAnnounce ? { inheritedSilent: true } : {}),
+                  ...(params.silentAnnounce && params.wakeOnReturn ? { inheritedWake: true } : {}),
                   ...(chainSignal.targetSessionKey
                     ? { targetSessionKey: chainSignal.targetSessionKey }
                     : {}),

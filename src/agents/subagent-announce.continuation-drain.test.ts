@@ -1405,6 +1405,48 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
+  it("persists inherited silent/wake policy on durable delayed bracket delegates (#1159)", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:bracket-inherit": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 1_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-inherit",
+      childRunId: "run-bracket-inherit",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "Research result.\n[[CONTINUE_DELEGATE: keep working +30s]]",
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+
+    expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
+    expect(enqueuePendingDelegateMock.mock.calls[0]?.[1]).toMatchObject({
+      task: "keep working",
+      delayMs: 30_000,
+      mode: "silent-wake",
+      inheritedSilent: true,
+      inheritedWake: true,
+    });
+  });
+
   it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails (#1144)", async () => {
     const store: Record<string, Record<string, unknown>> = {
       "agent:main:subagent:bracket-fail": {
