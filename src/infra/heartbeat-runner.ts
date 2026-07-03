@@ -117,9 +117,11 @@ import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  buildSlackInteractionEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
+  isSlackInteractionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { HEARTBEAT_RUN_SCOPE, type HeartbeatRunScope } from "./heartbeat-run-scope.js";
@@ -1130,6 +1132,7 @@ type HeartbeatPromptResolution = {
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasInteractionEvents: boolean;
   hasDueCommitments: boolean;
   usesHeartbeatResponseTool: boolean;
 };
@@ -1242,6 +1245,13 @@ function resolveHeartbeatRunPrompt(params: {
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
+  // Slack interaction events are queued by the bundled Slack plugin with a
+  // slack:interaction:... context key. Mirror the exec/cron branches so the
+  // clicked action_id/value reach the model instead of being drained silently.
+  const interactionEvents = pendingEventEntries
+    .filter((event) => isSlackInteractionEvent(event))
+    .map((event) => event.text);
+  const hasInteractionEvents = interactionEvents.length > 0;
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -1254,6 +1264,7 @@ function resolveHeartbeatRunPrompt(params: {
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasInteractionEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1263,6 +1274,7 @@ function resolveHeartbeatRunPrompt(params: {
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasInteractionEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
@@ -1287,6 +1299,7 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasInteractionEvents: false,
         hasDueCommitments: false,
         usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
@@ -1297,6 +1310,7 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasInteractionEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1306,6 +1320,7 @@ ${completionInstruction}`;
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasInteractionEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
@@ -1322,9 +1337,16 @@ ${completionInstruction}`;
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : baseUsesHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+      : hasInteractionEvents
+        ? // Use the dedicated Slack interaction builder so queued interaction
+          // values are rendered before the heartbeat consumes the entries.
+          buildSlackInteractionEventPrompt(interactionEvents, {
+            deliverToUser: params.canRelayToUser,
+            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+          })
+        : baseUsesHeartbeatResponseTool
+          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+          : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const basePromptWithHint = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
   const basePromptWithDirectives = appendHeartbeatFileDirectives(
     basePromptWithHint,
@@ -1339,6 +1361,7 @@ ${completionInstruction}`;
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasInteractionEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
@@ -1348,6 +1371,7 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   preflight: HeartbeatPreflight;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasInteractionEvents: boolean;
 }): SystemEvent[] {
   const { preflight } = params;
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
@@ -1362,6 +1386,12 @@ function selectSystemEventsConsumedByHeartbeat(params: {
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     );
+  }
+  if (params.hasInteractionEvents) {
+    // Consume every Slack interaction event that the prompt builder above will
+    // render. This keeps the queue drain symmetric with the prompt content so
+    // no rendered event is left behind and no unrendered event is lost.
+    return preflight.pendingEventEntries.filter((event) => isSlackInteractionEvent(event));
   }
   return preflight.pendingEventEntries;
 }
@@ -1634,6 +1664,7 @@ export async function runHeartbeatOnce(opts: {
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasInteractionEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool,
   } = resolveHeartbeatRunPrompt({
@@ -1655,6 +1686,7 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     hasExecCompletion,
     hasCronEvents,
+    hasInteractionEvents,
   });
 
   // If no tasks are due, skip heartbeat entirely

@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import type { SystemEvent } from "./system-events.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
@@ -215,4 +216,70 @@ export function isCronSystemEvent(evt: string) {
     return false;
   }
   return !isHeartbeatNoiseEvent(evt) && !isExecCompletionEvent(evt);
+}
+
+// Returns true when a system event was queued by a Slack interactive component
+// (button, select, etc.) and is not already handled by the exec/cron builders.
+export function isSlackInteractionEvent(event: Pick<SystemEvent, "contextKey" | "text">): boolean {
+  return Boolean(
+    event.contextKey?.startsWith("slack:interaction:") &&
+    !isExecCompletionEvent(event.text) &&
+    !isHeartbeatNoiseEvent(event.text),
+  );
+}
+
+// Cap the number of Slack interactions rendered in a single heartbeat prompt to prevent
+// prompt bloat when many rapid clicks are coalesced into one wake. Overflow is summarized
+// so the user knows additional clicks happened without exploding the context window.
+const MAX_SLACK_INTERACTION_EVENTS = 5;
+
+function parseSlackInteractionAction(eventText: string): {
+  actionId: string | undefined;
+  value: string | undefined;
+} {
+  try {
+    const parsed = JSON.parse(eventText) as {
+      actions?: Array<{ action_id?: string; value?: string }>;
+    };
+    const action = parsed.actions?.[0];
+    return { actionId: action?.action_id, value: action?.value };
+  } catch {
+    return { actionId: undefined, value: undefined };
+  }
+}
+
+export function buildSlackInteractionEventPrompt(
+  events: string[],
+  options: {
+    deliverToUser: boolean;
+    useHeartbeatResponseTool: boolean;
+  },
+): string {
+  // Render every pending interaction that selectSystemEventsConsumedByHeartbeat will
+  // consume, so the prompt/consume boundary stays symmetric. The cap only truncates the
+  // rendered list; consumed entries beyond the cap are still removed from the queue, but
+  // the summary line tells the model additional interactions arrived.
+  const rendered = events.slice(0, MAX_SLACK_INTERACTION_EVENTS).map((eventText, index) => {
+    const { actionId, value } = parseSlackInteractionAction(eventText);
+    const actionDescription = actionId ? `action_id="${actionId}"` : "a Slack button";
+    const valueDescription = value ? `value="${value}"` : "";
+    return `${index + 1}. ${actionDescription}${
+      valueDescription ? ` with ${valueDescription}` : ""
+    }`;
+  });
+
+  const remaining = events.length - rendered.length;
+  if (remaining > 0) {
+    rendered.push(`...and ${remaining} more Slack interaction(s)`);
+  }
+
+  const completionInstruction = options.useHeartbeatResponseTool
+    ? "Use heartbeat_respond to acknowledge the interaction(s)."
+    : "Reply HEARTBEAT_OK.";
+
+  const base = `Slack interactive button(s) were clicked:\n${rendered.join("\n")}\n\nPlease act on these interaction(s).`;
+
+  return options.deliverToUser
+    ? `${base} ${completionInstruction}`
+    : `${base} Handle the result internally and ${completionInstruction.toLowerCase()}`;
 }

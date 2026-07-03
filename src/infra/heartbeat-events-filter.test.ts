@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  buildSlackInteractionEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
+  isSlackInteractionEvent,
 } from "./heartbeat-events-filter.js";
 
 describe("heartbeat event prompts", () => {
@@ -178,36 +180,126 @@ describe("heartbeat event classification", () => {
   });
 });
 
-describe("isExecCompletionEvent", () => {
-  it("matches maybeNotifyOnExit (backgrounded allowlisted commands) events", () => {
-    // Word-based session slugs (createSessionSlug)
-    expect(isExecCompletionEvent("Exec completed (amber-at, code 0) :: some output")).toBe(true);
-    expect(isExecCompletionEvent("Exec completed (calm-del, code 0)")).toBe(true);
-    expect(isExecCompletionEvent("Exec failed (brisk-no, code 1) :: error text")).toBe(true);
-    expect(isExecCompletionEvent("Exec failed (fresh-ke, signal SIGTERM)")).toBe(true);
-    // Hex-style IDs also accepted
-    expect(isExecCompletionEvent("Exec completed (abc12345, code 0)")).toBe(true);
+describe("isSlackInteractionEvent", () => {
+  it("returns true for Slack block_actions events with slack:interaction contextKey", () => {
+    expect(
+      isSlackInteractionEvent({
+        text: JSON.stringify({ type: "block_actions", actions: [{ action_id: "approve" }] }),
+        contextKey: "slack:interaction:C123:1234567890.123456:approve",
+      }),
+    ).toBe(true);
   });
 
-  it("is case-insensitive", () => {
-    expect(isExecCompletionEvent("EXEC COMPLETED (abc12345, code 0)")).toBe(true);
-    expect(isExecCompletionEvent("exec failed (abc12345, code 2)")).toBe(true);
+  it("returns false for exec completion events even with slack:interaction contextKey", () => {
+    expect(
+      isSlackInteractionEvent({
+        text: "Exec completed (abc123, code 0)",
+        contextKey: "slack:interaction:C123:1234567890.123456:approve",
+      }),
+    ).toBe(false);
   });
 
-  it("does not match non-exec events", () => {
-    expect(isExecCompletionEvent("Exec running (gateway id=g1, session=s1, >5s): ls")).toBe(false);
-    expect(isExecCompletionEvent("Exec denied (gateway id=g1, reason): rm -rf /")).toBe(false);
-    expect(isExecCompletionEvent("Heartbeat wake")).toBe(false);
-    expect(isExecCompletionEvent("")).toBe(false);
+  it("returns false for heartbeat noise events", () => {
+    expect(
+      isSlackInteractionEvent({
+        text: "heartbeat poll",
+        contextKey: "slack:interaction:C123:1234567890.123456:approve",
+      }),
+    ).toBe(false);
   });
 
-  it("does not false-positive on free-form cron text containing exec phrases", () => {
-    expect(isExecCompletionEvent("Nightly backup exec failed – see logs")).toBe(false);
-    expect(isExecCompletionEvent("Cron: check if exec completed successfully")).toBe(false);
-    expect(isExecCompletionEvent("exec killed the process manually")).toBe(false);
-    expect(isExecCompletionEvent("Exec finished weekly backup checks")).toBe(false);
-    // Parenthesized false positive from review feedback — must not match mid-string
-    expect(isExecCompletionEvent("Nightly backup exec failed (see logs)")).toBe(false);
-    expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
+  it("returns false for non-Slack events", () => {
+    expect(
+      isSlackInteractionEvent({
+        text: JSON.stringify({ type: "block_actions", actions: [{ action_id: "approve" }] }),
+        contextKey: "cron:daily-reminder",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("buildSlackInteractionEventPrompt", () => {
+  it.each([
+    {
+      name: "builds user-facing prompt with action_id and value",
+      events: [
+        JSON.stringify({
+          type: "block_actions",
+          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
+        }),
+      ],
+      opts: { deliverToUser: true, useHeartbeatResponseTool: false },
+      expected: [
+        "Slack interactive button(s) were clicked",
+        '1. action_id="approve_pr"',
+        'value="merge-99544"',
+        "Please act on these interaction(s)",
+        "Reply HEARTBEAT_OK",
+      ],
+    },
+    {
+      name: "builds internal-only prompt",
+      events: [
+        JSON.stringify({
+          type: "block_actions",
+          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
+        }),
+      ],
+      opts: { deliverToUser: false, useHeartbeatResponseTool: false },
+      expected: ["Handle the result internally", "heartbeat_ok"],
+      unexpected: ["Please relay"],
+    },
+    {
+      name: "uses heartbeat_respond instruction when response tool is enabled",
+      events: [
+        JSON.stringify({
+          type: "block_actions",
+          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
+        }),
+      ],
+      opts: { deliverToUser: true, useHeartbeatResponseTool: true },
+      expected: ["Use heartbeat_respond", "acknowledge the interaction(s)"],
+    },
+    {
+      name: "renders multiple queued interactions and preserves render/consume symmetry",
+      events: [
+        JSON.stringify({
+          type: "block_actions",
+          actions: [{ action_id: "approve_pr", value: "merge-99544" }],
+        }),
+        JSON.stringify({
+          type: "block_actions",
+          actions: [{ action_id: "reject_pr", value: "close-99544" }],
+        }),
+      ],
+      opts: { deliverToUser: true, useHeartbeatResponseTool: false },
+      expected: [
+        '1. action_id="approve_pr"',
+        'value="merge-99544"',
+        '2. action_id="reject_pr"',
+        'value="close-99544"',
+      ],
+      unexpected: ["...and", "more Slack"],
+    },
+    {
+      name: "caps at MAX_SLACK_INTERACTION_EVENTS and reports overflow",
+      events: Array.from({ length: 6 }, (_, index) =>
+        JSON.stringify({
+          type: "block_actions",
+          actions: [{ action_id: `action_${index}`, value: `value_${index}` }],
+        }),
+      ),
+      opts: { deliverToUser: true, useHeartbeatResponseTool: false },
+      expected: ["action_0", "action_4", "...and 1 more Slack interaction(s)"],
+      unexpected: ["action_5"],
+    },
+  ])("$name", ({ events, opts, expected, unexpected }) => {
+    const prompt = buildSlackInteractionEventPrompt(events, opts);
+    for (const part of expected) {
+      expect(prompt).toContain(part);
+    }
+    for (const part of unexpected ?? []) {
+      expect(prompt).not.toContain(part);
+    }
   });
 });
