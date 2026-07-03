@@ -351,6 +351,111 @@ describe("session cost usage", () => {
     });
   });
 
+  it("stores pricing fingerprint once in the durable cache file", async () => {
+    const root = await makeSessionCostRoot("cost-cache-fingerprint-shape");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFiles = await Promise.all(
+      ["sess-fingerprint-a", "sess-fingerprint-b"].map(async (sessionId, index) => {
+        const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
+        await fs.writeFile(
+          sessionFile,
+          transcriptText(sessionId, {
+            type: "message",
+            timestamp: `2026-02-05T12:0${index}:00.000Z`,
+            message: {
+              role: "assistant",
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: index + 1, output: 0, totalTokens: index + 1 },
+            },
+          }),
+          "utf-8",
+        );
+        return sessionFile;
+      }),
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        version: number;
+        pricingFingerprint?: string;
+        files: Record<string, { pricingFingerprint?: string }>;
+      };
+
+      expect(cache.version).toBe(5);
+      expect(cache.pricingFingerprint).toEqual(expect.any(String));
+      expect(Object.keys(cache.files).toSorted()).toEqual(sessionFiles.toSorted());
+      for (const entry of Object.values(cache.files)) {
+        expect(entry).not.toHaveProperty("pricingFingerprint");
+      }
+
+      const warm = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        requestRefresh: false,
+      });
+      expect(warm.totals.totalTokens).toBe(3);
+      expect(warm.cacheStatus?.status).toBe("fresh");
+    });
+  });
+
+  it("rebuilds a version 4 per-entry fingerprint cache into the compact version 5 shape", async () => {
+    const root = await makeSessionCostRoot("cost-cache-fingerprint-upgrade");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-fingerprint-upgrade.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-fingerprint-upgrade", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.5",
+          usage: { input: 10, output: 0, totalTokens: 10 },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache();
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const oldCache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        version: number;
+        pricingFingerprint?: string;
+        files: Record<string, { pricingFingerprint?: string }>;
+      };
+      oldCache.version = 4;
+      for (const entry of Object.values(oldCache.files)) {
+        entry.pricingFingerprint = oldCache.pricingFingerprint;
+      }
+      delete oldCache.pricingFingerprint;
+      await fs.writeFile(cachePath, `${JSON.stringify(oldCache)}\n`, "utf-8");
+
+      const cold = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        refreshMode: "sync-when-empty",
+      });
+      expect(cold.totals.totalTokens).toBe(10);
+      expect(cold.cacheStatus?.status).toBe("fresh");
+
+      const rebuilt = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        version: number;
+        pricingFingerprint?: string;
+        files: Record<string, { pricingFingerprint?: string }>;
+      };
+      expect(rebuilt.version).toBe(5);
+      expect(rebuilt.pricingFingerprint).toEqual(expect.any(String));
+      expect(rebuilt.files[sessionFile]).not.toHaveProperty("pricingFingerprint");
+    });
+  });
+
   it("loads multiple session summaries from one durable cache snapshot", async () => {
     const root = await makeSessionCostRoot("cost-cache-batch");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
