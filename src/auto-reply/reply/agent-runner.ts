@@ -113,6 +113,7 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
   replyRunRegistry,
@@ -1060,6 +1061,15 @@ function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
     .filter((textLocal): textLocal is string => Boolean(textLocal))
     .join("\n\n");
   return sanitizePendingFinalDeliveryText(text);
+}
+
+function normalizeAssistantFinalDeliveryText(text: string): string {
+  const parsed = normalizeReplyPayloadDirectives({
+    payload: { text },
+    trimLeadingWhitespace: true,
+    parseMode: "auto",
+  });
+  return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -2513,10 +2523,11 @@ export async function runReplyAgent(params: {
       // #85714: warn only for unusually substantive private final text. In
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
-      const assistantFinalText =
+      const assistantFinalText = normalizeAssistantFinalDeliveryText(
         typeof runResult.meta?.finalAssistantVisibleText === "string"
           ? runResult.meta.finalAssistantVisibleText
-          : (finalDeliveryText || rawAssistantText || "");
+          : (rawAssistantText ?? ""),
+      );
       const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
       const isStrandedReply =
         !isRoomEvent &&
@@ -2547,7 +2558,7 @@ export async function runReplyAgent(params: {
         if (isStrandedReplyRetryRun) {
           finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
         } else {
-          const retryDeliveryText = finalDeliveryText || assistantFinalText;
+          const retryDeliveryText = assistantFinalText;
           const retryPrompt =
             `[System] Your previous reply was not delivered to the conversation because ` +
             `you did not call message(action=send). Your reply text was:\n\n` +

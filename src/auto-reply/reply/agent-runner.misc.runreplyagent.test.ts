@@ -26,7 +26,7 @@ import {
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -3274,6 +3274,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     didDeliverSourceReplyViaMessageTool?: boolean;
     finalAssistantText?: string;
     finalAssistantRawText?: string;
+    payloads?: ReplyPayload[];
     payloadText?: string;
     successfulCronAdds?: number;
     resolvedVerboseLevel?: VerboseLevel;
@@ -3303,7 +3304,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       // payloadText can differ from the assistant text to simulate metadata-only
       // payloads (verbose notices, usage line) that must NOT trigger the warn —
       // detection keys off the assistant final text, not the payload bundle.
-      payloads: [{ text: params.payloadText ?? finalAssistantText }],
+      payloads: params.payloads ?? [{ text: params.payloadText ?? finalAssistantText }],
       meta: {
         agentMeta: {},
         finalAssistantVisibleText: finalAssistantText,
@@ -3438,6 +3439,28 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
     expect(retryRun?.prompt).toContain(normalizedFinal);
     expect(retryRun?.prompt).not.toContain("[[reply_to_current]]");
+  });
+
+  it("excludes raw trace and status payloads from the recovery retry prompt", async () => {
+    const visibleFinal =
+      "Visible answer that should be delivered to the source chat. It includes another complete sentence so the substantive-final detector treats it as a real reply.";
+    const rawTraceText =
+      "🔎 Model Input (User Role):\n```text\nsecret user trace that must not reach chat\n```";
+    const statusText = "🧩 Active Memory: status=ok query=private-context";
+    await runPrivateFinalCase({
+      finalAssistantText: visibleFinal,
+      payloads: [
+        { text: visibleFinal },
+        { text: rawTraceText },
+        { text: statusText, isStatusNotice: true },
+      ],
+    });
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(retryRun?.prompt).toContain(visibleFinal);
+    expect(retryRun?.prompt).not.toContain("secret user trace");
+    expect(retryRun?.prompt).not.toContain("Active Memory");
   });
 
   it("suppresses retry prompt persistence and keeps the retry out of collect batches", async () => {

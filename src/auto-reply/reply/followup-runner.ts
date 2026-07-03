@@ -97,6 +97,7 @@ import {
   type FollowupRun,
   resolveQueueSettings,
 } from "./queue.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -133,13 +134,13 @@ function hasSuccessfulFollowupSourceReplyDelivery(params: {
   );
 }
 
-function buildPendingFollowupFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
+function normalizeAssistantFinalDeliveryText(text: string): string {
+  const parsed = normalizeReplyPayloadDirectives({
+    payload: { text },
+    trimLeadingWhitespace: true,
+    parseMode: "auto",
+  });
+  return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
@@ -1472,7 +1473,7 @@ export function createFollowupRunner(params: {
         );
         return true;
       };
-      const enqueueStrandedReplyRecoveryRetry = async (payloads: ReplyPayload[]) => {
+      const enqueueStrandedReplyRecoveryRetry = async () => {
         if (isStrandedReplyRetryFollowup(effectiveQueued)) {
           return false;
         }
@@ -1494,11 +1495,10 @@ export function createFollowupRunner(params: {
             chatType: activeSessionEntry?.chatType,
           }),
         });
-        const finalDeliveryText = buildPendingFollowupFinalDeliveryText(payloads);
         const assistantFinalText =
           typeof runResult.meta?.finalAssistantVisibleText === "string"
-            ? runResult.meta.finalAssistantVisibleText
-            : finalDeliveryText;
+            ? normalizeAssistantFinalDeliveryText(runResult.meta.finalAssistantVisibleText)
+            : "";
         const isStrandedReply =
           queued.currentInboundEventKind !== "room_event" &&
           shouldWarnAboutPrivateMessageToolFinal({
@@ -1518,7 +1518,7 @@ export function createFollowupRunner(params: {
           channel: queued.originatingChannel ?? run.messageProvider ?? activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
-        const retryDeliveryText = finalDeliveryText || assistantFinalText;
+        const retryDeliveryText = assistantFinalText;
         const retryPrompt =
           `[System] Your previous reply was not delivered to the conversation because ` +
           `you did not call message(action=send). Your reply text was:\n\n` +
@@ -1595,7 +1595,7 @@ export function createFollowupRunner(params: {
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
-        if (await enqueueStrandedReplyRecoveryRetry([])) {
+        if (await enqueueStrandedReplyRecoveryRetry()) {
           return;
         }
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
@@ -1619,7 +1619,7 @@ export function createFollowupRunner(params: {
       });
 
       if (finalPayloads.length === 0) {
-        if (await enqueueStrandedReplyRecoveryRetry([])) {
+        if (await enqueueStrandedReplyRecoveryRetry()) {
           return;
         }
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
@@ -1739,7 +1739,7 @@ export function createFollowupRunner(params: {
           );
           return;
         }
-        if (await enqueueStrandedReplyRecoveryRetry(deliveryPayloads)) {
+        if (await enqueueStrandedReplyRecoveryRetry()) {
           return;
         }
         if (await deliverStrandedReplyRetryFailureDiagnostic()) {
