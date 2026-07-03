@@ -201,6 +201,21 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
+  fun savedReaderStateDoesNotRestoreIntoAnotherSession() {
+    val state =
+      ChatReaderState(
+        ownerSessionKey = "session-old",
+        initialized = true,
+        followTarget = ChatScrollFollowTarget.LatestContent,
+      )
+    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+
+    val restored = createChatReaderStateSaver("session-new").restore(requireNotNull(saved))
+
+    assertNull(restored)
+  }
+
+  @Test
   fun restoredReaderRebindsRegeneratedMessageIds() {
     val before =
       timeline(

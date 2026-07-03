@@ -23,6 +23,7 @@ internal enum class ChatScrollFollowTarget {
 }
 
 internal data class ChatReaderState(
+  val ownerSessionKey: String? = null,
   val initialized: Boolean = false,
   val followTarget: ChatScrollFollowTarget? = null,
   val hasNewerContent: Boolean = false,
@@ -31,10 +32,12 @@ internal data class ChatReaderState(
   val latestContentVersion: String? = null,
 )
 
-internal val ChatReaderStateSaver =
+internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
   listSaver<ChatReaderState, Any>(
     save = { state ->
       listOf(
+        state.ownerSessionKey != null,
+        state.ownerSessionKey.orEmpty(),
         state.initialized,
         state.followTarget?.name.orEmpty(),
         state.hasNewerContent,
@@ -47,17 +50,22 @@ internal val ChatReaderStateSaver =
       )
     },
     restore = { saved ->
-      ChatReaderState(
-        initialized = saved[0] as Boolean,
-        followTarget =
-          (saved[1] as String).takeIf(String::isNotEmpty)?.let(ChatScrollFollowTarget::valueOf),
-        hasNewerContent = saved[2] as Boolean,
-        latestUserMessageId = (saved[4] as String).takeIf { saved[3] as Boolean },
-        latestUserMessageVersion = (saved[6] as String).takeIf { saved[5] as Boolean },
-        latestContentVersion = (saved[8] as String).takeIf { saved[7] as Boolean },
-      )
+      val restored =
+        ChatReaderState(
+          ownerSessionKey = (saved[1] as String).takeIf { saved[0] as Boolean },
+          initialized = saved[2] as Boolean,
+          followTarget =
+            (saved[3] as String).takeIf(String::isNotEmpty)?.let(ChatScrollFollowTarget::valueOf),
+          hasNewerContent = saved[4] as Boolean,
+          latestUserMessageId = (saved[6] as String).takeIf { saved[5] as Boolean },
+          latestUserMessageVersion = (saved[8] as String).takeIf { saved[7] as Boolean },
+          latestContentVersion = (saved[10] as String).takeIf { saved[9] as Boolean },
+        )
+      restored.takeIf { expectedSessionKey == null || it.ownerSessionKey == expectedSessionKey }
     },
   )
+
+internal val ChatReaderStateSaver = createChatReaderStateSaver()
 
 internal data class ChatReaderTransition(
   val state: ChatReaderState,
@@ -81,9 +89,10 @@ internal fun rememberChatReaderScrollController(
   val scope = rememberCoroutineScope()
   val targetTolerancePx = with(LocalDensity.current) { 24.dp.roundToPx() }
   val currentTimeline by rememberUpdatedState(timeline)
+  val readerStateSaver = remember(sessionKey) { createChatReaderStateSaver(sessionKey) }
   var readerState by
-    rememberSaveable(sessionKey, stateSaver = ChatReaderStateSaver) {
-      mutableStateOf(ChatReaderState())
+    rememberSaveable(sessionKey, stateSaver = readerStateSaver) {
+      mutableStateOf(ChatReaderState(ownerSessionKey = sessionKey))
     }
   var isApplyingScroll by remember(sessionKey) { mutableStateOf(false) }
   var isUserScrolling by remember(sessionKey) { mutableStateOf(false) }
@@ -108,7 +117,7 @@ internal fun rememberChatReaderScrollController(
       if (readerState.initialized) {
         readerState.onTimelineChanged(timeline, historyLoading)
       } else {
-        initialChatReaderTransition(timeline)
+        initialChatReaderTransition(timeline, ownerSessionKey = sessionKey)
       }
     applyTransition(transition)
   }
@@ -143,12 +152,16 @@ internal fun rememberChatReaderScrollController(
   )
 }
 
-internal fun initialChatReaderTransition(timeline: ChatTimeline): ChatReaderTransition {
+internal fun initialChatReaderTransition(
+  timeline: ChatTimeline,
+  ownerSessionKey: String? = null,
+): ChatReaderTransition {
   val initialIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex
   val followTarget = timeline.followTargetForIndex(initialIndex)
   return ChatReaderTransition(
     state =
       ChatReaderState(
+        ownerSessionKey = ownerSessionKey,
         initialized = initialIndex != null,
         followTarget = followTarget,
         hasNewerContent =
@@ -166,7 +179,9 @@ internal fun ChatReaderState.onTimelineChanged(
   historyLoading: Boolean = false,
 ): ChatReaderTransition {
   if (timeline.items.isEmpty()) {
-    return ChatReaderTransition(state = if (historyLoading) this else ChatReaderState())
+    return ChatReaderTransition(
+      state = if (historyLoading) this else ChatReaderState(ownerSessionKey = ownerSessionKey),
+    )
   }
   if (timeline.latestContentVersion == latestContentVersion) {
     return ChatReaderTransition(state = this)
