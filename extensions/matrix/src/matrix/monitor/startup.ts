@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Matrix plugin module implements startup behavior.
 import type { RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../../types.js";
@@ -25,10 +26,8 @@ export type MatrixStartupMaintenanceDeps = {
   ensureMatrixStartupVerification: typeof import("./startup-verification.js").ensureMatrixStartupVerification;
 };
 
-let matrixStartupMaintenanceDepsPromise: Promise<MatrixStartupMaintenanceDeps> | undefined;
-
-async function loadMatrixStartupMaintenanceDeps(): Promise<MatrixStartupMaintenanceDeps> {
-  matrixStartupMaintenanceDepsPromise ??= Promise.all([
+const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
+  Promise.all([
     import("../config-update.js"),
     import("../device-health.js"),
     import("../profile.js"),
@@ -48,9 +47,8 @@ async function loadMatrixStartupMaintenanceDeps(): Promise<MatrixStartupMaintena
       maybeRestoreLegacyMatrixBackup: legacyCryptoRestoreModule.maybeRestoreLegacyMatrixBackup,
       ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
     }),
-  );
-  return await matrixStartupMaintenanceDepsPromise;
-}
+  ),
+);
 
 export async function runMatrixStartupMaintenance(
   params: {

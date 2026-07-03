@@ -1355,6 +1355,9 @@ export const nl: TranslationMap = {
     updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
+    sidebar: {
+      allSessions: "Alle sessies",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1381,6 +1384,11 @@ export const nl: TranslationMap = {
       retry: "Opnieuw proberen",
       retrySend: "Verzenden opnieuw proberen",
       retryQueuedMessage: "Bericht in wachtrij opnieuw proberen",
+    },
+    pairingQrExpired: {
+      title: "Koppelings-QR verlopen",
+      reason: "Voer /pair qr opnieuw uit om een nieuwe installatiecode te genereren.",
+      badge: "Verlopen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

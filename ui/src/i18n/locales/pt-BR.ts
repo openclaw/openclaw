@@ -1351,6 +1351,9 @@ export const pt_BR: TranslationMap = {
     updateNow: "Atualizar agora",
     dismissUpdateBanner: "Dispensar banner de atualização",
     switchedSession: "Mudou para {session}",
+    sidebar: {
+      allSessions: "Todas as sessões",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1377,6 +1380,11 @@ export const pt_BR: TranslationMap = {
       retry: "Tentar novamente",
       retrySend: "Tentar enviar novamente",
       retryQueuedMessage: "Tentar novamente mensagem na fila",
+    },
+    pairingQrExpired: {
+      title: "QR de pareamento expirado",
+      reason: "Execute /pair qr novamente para gerar um novo código de configuração.",
+      badge: "Expirado",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

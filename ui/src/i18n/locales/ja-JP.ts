@@ -1354,6 +1354,9 @@ export const ja_JP: TranslationMap = {
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
+    sidebar: {
+      allSessions: "すべてのセッション",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1380,6 +1383,11 @@ export const ja_JP: TranslationMap = {
       retry: "再試行",
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
+    },
+    pairingQrExpired: {
+      title: "ペアリングQRの有効期限が切れました",
+      reason: "新しいセットアップコードを生成するには、もう一度 /pair qr を実行してください。",
+      badge: "期限切れ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

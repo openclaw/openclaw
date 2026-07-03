@@ -743,6 +743,91 @@ describe("cron controller", () => {
     expect(patch).not.toHaveProperty("payload");
   });
 
+  it("preserves on-exit schedules when editing Control UI metadata", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-on-exit" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-on-exit" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-on-exit",
+      name: "On exit",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "on-exit" as const, command: "make build", cwd: "/repo" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "report" },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.name = "On exit renamed";
+    state.cronForm.cronExpr = "";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    const patch = requestPatch(updateCall);
+    expect(patch.name).toBe("On exit renamed");
+    expect(patch).not.toHaveProperty("schedule");
+    expect(state.cronFieldErrors).toEqual({});
+  });
+
+  it("applies schedule edits when changing an on-exit job to a regular schedule", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-on-exit" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-on-exit" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-on-exit",
+      name: "On exit",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "on-exit" as const, command: "make build", cwd: "/repo" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "report" },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.scheduleKind = "every";
+    state.cronForm.everyAmount = "5";
+    state.cronForm.everyUnit = "minutes";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    const patch = requestPatch(updateCall);
+    expect(patch.schedule).toEqual({ kind: "every", everyMs: 300_000 });
+  });
+
   it('keeps implicit announce delivery implicit when editing a job that shows "last" in the form', async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
@@ -1281,6 +1366,18 @@ describe("cron controller", () => {
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
+  });
+
+  it("does not require cron expression fields for on-exit schedules", () => {
+    const errors = validateCronForm({
+      ...DEFAULT_CRON_FORM,
+      name: "on exit",
+      scheduleKind: "on-exit",
+      cronExpr: "",
+      payloadKind: "agentTurn",
+      payloadText: "report",
+    });
+    expect(errors.cronExpr).toBeUndefined();
   });
 
   it("blocks add/update submit when validation errors exist", async () => {

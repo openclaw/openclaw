@@ -6,6 +6,7 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -42,14 +43,9 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
 }
 
-type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
-
-let discordThreadBindingsPromise: Promise<DiscordThreadBindingsModule> | undefined;
-
-function loadDiscordThreadBindings(): Promise<DiscordThreadBindingsModule> {
-  discordThreadBindingsPromise ??= import("./monitor/thread-bindings.js");
-  return discordThreadBindingsPromise;
-}
+const loadDiscordThreadBindings = createLazyRuntimeModule(
+  () => import("./monitor/thread-bindings.js"),
+);
 
 function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;

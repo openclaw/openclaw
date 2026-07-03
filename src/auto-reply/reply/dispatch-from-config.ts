@@ -2383,6 +2383,11 @@ export async function dispatchReplyFromConfig(
       ctx.InboundEventKind !== "room_event" &&
       !sendPolicyDenied &&
       params.replyOptions?.forceToolResultProgress === true;
+    const shouldDeliverFastModeAutoProgressDespiteSourceSuppression = () =>
+      suppressAutomaticSourceDelivery &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      ctx.InboundEventKind !== "room_event" &&
+      !sendPolicyDenied;
     let finalReplyDeliveryStarted = false;
     const hasExecApprovalPayload = (payload: ReplyPayload) => {
       const execApproval =
@@ -3074,8 +3079,7 @@ export async function dispatchReplyFromConfig(
             suppressTyping: typing.suppressTyping,
             onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
             onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
-            streamReasoningInNonStreamModes:
-              params.replyOptions?.streamReasoningInNonStreamModes,
+            streamReasoningInNonStreamModes: params.replyOptions?.streamReasoningInNonStreamModes,
             onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
             onAssistantMessageStart: wrapProgressCallback(
               params.replyOptions?.onAssistantMessageStart,
@@ -3132,7 +3136,17 @@ export async function dispatchReplyFromConfig(
                 markInboundDedupeReplayUnsafe();
                 // Buffered commentary preceded this tool; land it before the summary.
                 await flushPendingCommentaryProgress();
+                // When the operator opts into messages.suppressToolErrors, never
+                // surface tool-error tool-result payloads as channel progress,
+                // regardless of source delivery mode. payloads.ts already drops
+                // the warning text; this drops the visible progress delivery too.
+                if (payload.isError === true && replyConfig.messages?.suppressToolErrors === true) {
+                  return;
+                }
                 const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+                const isFastModeAutoProgressDelivery =
+                  isFastModeAutoProgress &&
+                  shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                 const isForcedToolProgress =
                   shouldDeliverForcedToolProgressDespiteSourceSuppression();
                 const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
@@ -3157,7 +3171,7 @@ export async function dispatchReplyFromConfig(
                 }
                 if (
                   shouldSuppressProgressDelivery() &&
-                  !isFastModeAutoProgress &&
+                  !isFastModeAutoProgressDelivery &&
                   !isForcedToolProgress
                 ) {
                   return;

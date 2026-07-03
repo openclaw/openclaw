@@ -181,8 +181,10 @@
 
 .chat-workspace-rail__section {
   display: flex;
+  flex: 0 1 auto;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
   padding-top: 8px;
 }
 

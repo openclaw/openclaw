@@ -1333,6 +1333,9 @@ export const ar: TranslationMap = {
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
+    sidebar: {
+      allSessions: "كل الجلسات",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1359,6 +1362,11 @@ export const ar: TranslationMap = {
       retry: "إعادة المحاولة",
       retrySend: "إعادة محاولة الإرسال",
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
+    },
+    pairingQrExpired: {
+      title: "انتهت صلاحية رمز الاقتران QR",
+      reason: "شغّل ‎/pair qr‎ مرة أخرى لإنشاء رمز إعداد جديد.",
+      badge: "منتهي الصلاحية",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

@@ -1,7 +1,8 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
+import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -15,48 +16,116 @@ import java.util.Base64
 class OnboardingFlowLogicTest {
   @Test
   fun blocksFinishWhenOnlyOperatorIsConnected() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhenDisconnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhenOnlyNodeIsConnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhenNodeCapabilityApprovalIsPending() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval))
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingReapproval))
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unapproved))
+    assertFalse(
+      canFinishOnboarding(
+        isConnected = true,
+        isNodeConnected = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"),
+      ),
+    )
+    assertFalse(
+      canFinishOnboarding(
+        isConnected = true,
+        isNodeConnected = true,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingReapproval(requestId = "request-2"),
+      ),
+    )
+    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unapproved))
   }
 
   @Test
   fun allowsFinishWhenOperatorNodeAndCapabilityApprovalAreReady() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved))
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
   }
 
   @Test
   fun blocksFinishWhileDelayedNodeListResolvesPendingApproval() =
     runTest {
-      val delayedNodeList = CompletableDeferred<GatewayNodeApprovalState>()
-      var approvalState = GatewayNodeApprovalState.Loading
+      val delayedNodeList = CompletableDeferred<GatewayNodeCapabilityApproval>()
+      var approvalState: GatewayNodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading
       val refresh = launch { approvalState = delayedNodeList.await() }
 
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
 
-      delayedNodeList.complete(GatewayNodeApprovalState.PendingApproval)
+      delayedNodeList.complete(GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"))
       refresh.join()
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = approvalState))
+      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
     }
 
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
+    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
+  }
+
+  @Test
+  fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
+    val requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
+    val afterSendOnly =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.SEND_SMS to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterSendOnly)
+
+    val afterReadOnly =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { permission -> permission == Manifest.permission.SEND_SMS },
+      )
+    assertTrue(afterReadOnly)
+
+    val deniedRead =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.READ_SMS to false),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertFalse(deniedRead)
+  }
+
+  @Test
+  fun contactAndCalendarPermissionGroupsRequireBothGrants() {
+    val permissionGroups =
+      listOf(
+        listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+      )
+
+    for (requiredPermissions in permissionGroups) {
+      val readPermission = requiredPermissions.first()
+      val writePermission = requiredPermissions.last()
+      assertFalse(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(readPermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { false },
+        ),
+      )
+      assertTrue(
+        mergedRequiredPermissionGrantState(
+          permissions = mapOf(writePermission to true),
+          requiredPermissions = requiredPermissions,
+          currentlyGranted = { permission -> permission == readPermission },
+        ),
+      )
+    }
   }
 
   @Test
@@ -114,7 +183,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Gateway error: pairing required; approval in progress",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
@@ -127,7 +196,7 @@ class OnboardingFlowLogicTest {
         ready = true,
         statusText = "Gateway error: pairing required",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
@@ -140,7 +209,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connected",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.PendingApproval,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"),
       ),
     )
   }
@@ -153,7 +222,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connected",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
       ),
     )
   }
@@ -166,7 +235,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connecting…",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -189,7 +258,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connecting…",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -212,7 +281,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         remoteAddress = null,
         statusText = "Connected (node offline)",
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "PAIRING_REQUIRED",
@@ -235,7 +304,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         remoteAddress = "wss://gateway.example.test",
         statusText = "Connected (node offline)",
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "AUTH_DEVICE_TOKEN_MISMATCH",
@@ -258,7 +327,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         remoteAddress = "wss://gateway.example.test",
         statusText = "Connected (node offline)",
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Loading,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
         gatewayConnectionProblem =
           GatewayConnectionProblem(
             code = "AUTH_DEVICE_TOKEN_MISMATCH",
@@ -279,6 +348,8 @@ class OnboardingFlowLogicTest {
       listOf(
         "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired. Scan a fresh setup QR.",
         "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+        "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+        "AUTH_SCOPE_MISMATCH" to "Gateway access needs review. Check gateway authentication scopes, then retry.",
         "AUTH_PASSWORD_MISMATCH" to "Gateway password is invalid. Re-enter it or reset this gateway connection.",
         "AUTH_TOKEN_MISSING" to "Gateway token is required. Enter it again or edit this connection.",
         "DEVICE_IDENTITY_REQUIRED" to "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
@@ -300,6 +371,115 @@ class OnboardingFlowLogicTest {
         ),
       )
     }
+  }
+
+  @Test
+  fun authFailuresStopShowingAConnectingState() {
+    val cases =
+      listOf(
+        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "scan_fresh_setup_code",
+        "AUTH_DEVICE_TOKEN_MISMATCH" to "update_auth_credentials",
+        "AUTH_TOKEN_NOT_CONFIGURED" to "update_auth_configuration",
+        "AUTH_SCOPE_MISMATCH" to "review_auth_configuration",
+      )
+
+    for ((code, nextStep) in cases) {
+      assertEquals(
+        GatewayRecoveryUiState.AuthenticationRequired,
+        gatewayRecoveryUiState(
+          ready = false,
+          statusText = "Connecting…",
+          connectSettling = true,
+          nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
+          gatewayConnectionProblem = authProblem(code = code, recommendedNextStep = nextStep),
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun recoveryPrimaryActionRepairsTheStructuredAuthFailure() {
+    assertEquals(
+      GatewayRecoveryPrimaryAction.ScanFreshSetupCode,
+      gatewayRecoveryPrimaryAction(
+        ready = false,
+        problem = authProblem(code = "AUTH_BOOTSTRAP_TOKEN_INVALID"),
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryPrimaryAction.EditConnection,
+      gatewayRecoveryPrimaryAction(
+        ready = false,
+        problem = authProblem(code = "AUTH_DEVICE_TOKEN_MISMATCH", recommendedNextStep = "update_auth_credentials"),
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryPrimaryAction.RetryConnection,
+      gatewayRecoveryPrimaryAction(
+        ready = false,
+        problem = authProblem(code = "AUTH_TOKEN_NOT_CONFIGURED"),
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryPrimaryAction.EditConnection,
+      gatewayRecoveryPrimaryAction(
+        ready = false,
+        problem = authProblem(code = "AUTH_SCOPE_MISMATCH", recommendedNextStep = "review_auth_configuration"),
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryPrimaryAction.RetryConnection,
+      gatewayRecoveryPrimaryAction(ready = false, problem = null),
+    )
+  }
+
+  @Test
+  fun recoveryPrimaryActionLabelsDescribeTheirActualAction() {
+    val expected =
+      mapOf(
+        GatewayRecoveryPrimaryAction.Continue to "Continue",
+        GatewayRecoveryPrimaryAction.ScanFreshSetupCode to "Scan fresh setup code",
+        GatewayRecoveryPrimaryAction.EditConnection to "Edit connection",
+        GatewayRecoveryPrimaryAction.RetryConnection to "Retry connection",
+      )
+
+    for ((action, label) in expected) {
+      assertEquals(label, gatewayRecoveryPrimaryActionLabel(action))
+    }
+  }
+
+  @Test
+  fun recoveryApprovalCommandPrefersTheExactNodeRequestId() {
+    assertEquals(
+      "openclaw nodes approve request-1",
+      recoveryGatewayApprovalCommand(
+        GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1"),
+        gatewayConnectionProblem = null,
+      ),
+    )
+    assertEquals(
+      "openclaw nodes status",
+      recoveryGatewayApprovalCommand(
+        GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1; unsafe"),
+        gatewayConnectionProblem = null,
+      ),
+    )
+    assertEquals(
+      "openclaw devices list",
+      recoveryGatewayApprovalCommand(
+        GatewayNodeCapabilityApproval.Approved,
+        gatewayConnectionProblem =
+          GatewayConnectionProblem(
+            code = "PAIRING_REQUIRED",
+            message = "pairing required",
+            reason = "not-paired",
+            requestId = "request-1; unsafe",
+            recommendedNextStep = null,
+            pauseReconnect = true,
+            retryable = false,
+          ),
+      ),
+    )
   }
 
   @Test
@@ -367,7 +547,7 @@ class OnboardingFlowLogicTest {
   @Test
   fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
     assertEquals(
-      "Gateway authentication is not configured. Edit this connection and try again.",
+      "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
       recoveryGatewayAuthDetail(
         GatewayConnectionProblem(
           code = "UNKNOWN",
@@ -404,7 +584,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Offline",
         connectSettling = true,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
@@ -417,7 +597,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Connected (node offline)",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
@@ -430,10 +610,24 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Gateway error: connection refused",
         connectSettling = false,
-        nodeCapabilityApprovalState = GatewayNodeApprovalState.Approved,
+        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
       ),
     )
   }
+
+  private fun authProblem(
+    code: String,
+    recommendedNextStep: String? = null,
+  ): GatewayConnectionProblem =
+    GatewayConnectionProblem(
+      code = code,
+      message = "authentication needed",
+      reason = null,
+      requestId = null,
+      recommendedNextStep = recommendedNextStep,
+      pauseReconnect = true,
+      retryable = false,
+    )
 
   @Test
   fun resolvesOnboardingSetupCodeConnectConfigForScannedQr() {
@@ -441,9 +635,12 @@ class OnboardingFlowLogicTest {
       encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
     val scanned = resolveScannedSetupCodeResult(setupCode)
 
-    val resolved =
-      resolveOnboardingGatewayConnectConfig(
+    val plan =
+      resolveOnboardingGatewayConnectPlan(
         setupCode = requireNotNull(scanned.setupCode),
+        savedManualHost = "127.0.0.1",
+        savedManualPort = "18789",
+        savedManualTls = false,
         manualHost = "127.0.0.1",
         manualPort = "18789",
         manualTls = false,
@@ -451,20 +648,24 @@ class OnboardingFlowLogicTest {
         password = "stale-shared-password",
       )
 
-    assertEquals("10.0.2.2", resolved?.host)
-    assertEquals(18789, resolved?.port)
-    assertEquals(false, resolved?.tls)
-    assertEquals("bootstrap-1", resolved?.bootstrapToken)
-    assertEquals("", resolved?.token)
-    assertEquals("", resolved?.password)
+    assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
+    assertEquals("10.0.2.2", plan?.config?.host)
+    assertEquals(18789, plan?.config?.port)
+    assertEquals(false, plan?.config?.tls)
+    assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
+    assertEquals("", plan?.config?.token)
+    assertEquals("", plan?.config?.password)
     assertNull(scanned.error)
   }
 
   @Test
   fun resolvesOnboardingManualConnectConfigWhenSetupCodeIsBlank() {
-    val resolved =
-      resolveOnboardingGatewayConnectConfig(
+    val plan =
+      resolveOnboardingGatewayConnectPlan(
         setupCode = "",
+        savedManualHost = "127.0.0.1",
+        savedManualPort = "18789",
+        savedManualTls = false,
         manualHost = "127.0.0.1",
         manualPort = "18789",
         manualTls = false,
@@ -472,12 +673,33 @@ class OnboardingFlowLogicTest {
         password = "shared-password",
       )
 
-    assertEquals("127.0.0.1", resolved?.host)
-    assertEquals(18789, resolved?.port)
-    assertEquals(false, resolved?.tls)
-    assertEquals("", resolved?.bootstrapToken)
-    assertEquals("shared-token", resolved?.token)
-    assertEquals("shared-password", resolved?.password)
+    assertEquals(GatewaySavedAuthAction.PRESERVE, plan?.savedAuthAction)
+    assertEquals("127.0.0.1", plan?.config?.host)
+    assertEquals(18789, plan?.config?.port)
+    assertEquals(false, plan?.config?.tls)
+    assertEquals("", plan?.config?.bootstrapToken)
+    assertEquals("shared-token", plan?.config?.token)
+    assertEquals("", plan?.config?.password)
+  }
+
+  @Test
+  fun onboardingManualEndpointChangeReplacesSavedGatewayAuth() {
+    val plan =
+      resolveOnboardingGatewayConnectPlan(
+        setupCode = "",
+        savedManualHost = "127.0.0.1",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHost = "10.0.2.2",
+        manualPort = "18790",
+        manualTls = false,
+        token = "replacement-token",
+        password = "",
+      )
+
+    assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
+    assertEquals("10.0.2.2", plan?.config?.host)
+    assertEquals("replacement-token", plan?.config?.token)
   }
 
   private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))

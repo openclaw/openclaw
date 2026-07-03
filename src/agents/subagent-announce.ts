@@ -228,6 +228,9 @@ async function wakeSubagentRunAfterDescendants(params: {
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     preserveFrozenResultFallback: true,
+    // Persist the wake message as the replacement run's task so that any
+    // post-restart redispatch reconstructs the correct prompt.
+    task: wakeMessage,
   });
 }
 
@@ -594,7 +597,7 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
     });
     params.onDeliveryResult?.(delivery);
-    didAnnounce = delivery.delivered;
+    didAnnounce = delivery.delivered || delivery.terminal === true;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

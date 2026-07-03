@@ -1312,6 +1312,9 @@ export const zh_CN: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "关闭更新横幅",
     switchedSession: "已切换到 {session}",
+    sidebar: {
+      allSessions: "所有会话",
+    },
     welcome: {
       ready: "准备好聊天",
       hintBeforeShortcut: "在下方输入消息 · 输入",
@@ -1338,6 +1341,11 @@ export const zh_CN: TranslationMap = {
       retry: "重试",
       retrySend: "重试发送",
       retryQueuedMessage: "重试排队消息",
+    },
+    pairingQrExpired: {
+      title: "配对二维码已过期",
+      reason: "再次运行 /pair qr 以生成新的设置代码。",
+      badge: "已过期",
     },
     composer: {
       placeholder: "给 {name} 发消息（Enter 发送）",

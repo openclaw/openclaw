@@ -35,7 +35,9 @@ import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
@@ -57,9 +59,6 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
-type OnboardSearchModule = typeof import("../commands/onboard-search.js");
-
-let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
 const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function buildSessionGatewayAuthOverride(params: {
@@ -185,10 +184,9 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
   }));
 }
 
-function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
-  onboardSearchModulePromise ??= import("../commands/onboard-search.js");
-  return onboardSearchModulePromise;
-}
+const loadOnboardSearchModule = createLazyRuntimeModule(
+  () => import("../commands/onboard-search.js"),
+);
 
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
@@ -347,8 +345,8 @@ export async function finalizeSetupWizard(
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
-            {
+          const { programArguments, workingDirectory, environment, environmentValueSources } =
+            await buildGatewayInstallPlan({
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
@@ -356,8 +354,7 @@ export async function finalizeSetupWizard(
                 void prompter.note(message, title);
               },
               config: nextConfig,
-            },
-          );
+            });
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -366,6 +363,7 @@ export async function finalizeSetupWizard(
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
         }
       } catch (err) {
@@ -556,6 +554,9 @@ export async function finalizeSetupWizard(
       : t("wizard.finalize.gatewayNotDetectedStatus", {
           detail: gatewayProbe.detail ? ` (${gatewayProbe.detail})` : "",
         });
+    const windowsFirewallLines = formatWindowsGatewayFirewallGuidance({
+      bind: settings.bind,
+    });
     const bootstrapPath = path.join(
       resolveUserPath(options.workspaceDir),
       DEFAULT_BOOTSTRAP_FILENAME,
@@ -574,6 +575,7 @@ export async function finalizeSetupWizard(
           : undefined,
         t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
         gatewayStatusLine,
+        ...windowsFirewallLines,
         t("wizard.finalize.controlUiDocs"),
       ]
         .filter(Boolean)

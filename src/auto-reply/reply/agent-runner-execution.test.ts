@@ -7102,7 +7102,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.",
       );
     }
   });
@@ -7111,6 +7111,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new OAuthRefreshFailureError({
         provider: "openai",
+        profileId: "openai:user@example.com",
         message: "invalid_grant",
       }),
     );
@@ -7121,8 +7122,123 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai --profile-id 'openai:user@example.com'` in a terminal, then try again.",
       );
+    }
+  });
+
+  it("preserves OAuth profile guidance through failover wrappers", async () => {
+    const refreshError = new OAuthRefreshFailureError({
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      message: "invalid_grant",
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("OpenAI OAuth failed", {
+        reason: "auth",
+        provider: "openai",
+        model: "gpt-5.5",
+        profileId: "openai:user@example.com",
+        authProfileFailure: { allInCooldown: false },
+        status: 401,
+        cause: refreshError,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+    }
+  });
+
+  it("preserves OAuth profile guidance through fallback summaries", async () => {
+    const refreshError = new OAuthRefreshFailureError({
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      message: "invalid_grant",
+    });
+    const failoverError = new FailoverError("OpenAI OAuth failed", {
+      reason: "auth",
+      provider: "openai",
+      model: "gpt-5.5",
+      profileId: "openai:user@example.com",
+      authProfileFailure: { allInCooldown: false },
+      status: 401,
+      cause: refreshError,
+    });
+    const summaryError = new Error("All models failed", { cause: failoverError });
+    summaryError.name = "FallbackSummaryError";
+    Object.assign(summaryError, {
+      attempts: [
+        {
+          provider: "openai",
+          model: "gpt-5.5",
+          error: "OpenAI OAuth failed",
+          reason: "auth",
+        },
+      ],
+      soonestCooldownExpiry: null,
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(summaryError);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("--profile-id 'openai:user@example.com'");
+    }
+  });
+
+  it("omits OAuth profile ids from group reauth guidance", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "openai",
+        profileId: "openai:user@example.com",
+        message: "invalid_grant",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+          ChatType: "group",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain(
+        "openclaw models auth login --provider openai` in a terminal",
+      );
+      expect(result.payload.text).not.toContain("user@example.com");
+    }
+  });
+
+  it("keeps non-OpenAI OAuth refresh failures on provider-specific terminal guidance", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new OAuthRefreshFailureError({
+        provider: "anthropic",
+        message: "invalid_grant",
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login expired on the gateway for anthropic. Re-auth with `openclaw models auth login --provider anthropic` in a terminal, then try again.",
+      );
+      expect(result.payload.text).not.toContain("/login codex");
     }
   });
 
@@ -7189,6 +7305,7 @@ describe("runAgentTurnWithFallback", () => {
       new FailoverError("Auth profile failover exhausted for provider openai", {
         reason: "auth",
         provider: "openai",
+        status: 401,
         authProfileFailure: { allInCooldown: true },
         cause: new Error("invalid_grant"),
       }),
@@ -7315,7 +7432,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway. Re-auth with `openclaw models auth login`, then try again.",
+        "⚠️ Model login expired on the gateway. Re-auth with `openclaw models auth login` in a terminal, then try again.",
       );
     }
   });

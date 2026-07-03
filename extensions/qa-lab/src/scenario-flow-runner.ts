@@ -161,6 +161,27 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     }
     return;
   }
+  for (const name of [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ] as const) {
+    if (name in action) {
+      const callable = resolveCallable(`transport.${name}`, api, vars);
+      const result = await callable(await resolveValue(action[name], api, vars));
+      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+        vars[action.saveAs.trim()] = result;
+      }
+      return;
+    }
+  }
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    await reset();
+    return;
+  }
   if (typeof action.set === "string") {
     vars[action.set] = await resolveValue(action.value, api, vars);
     return;
