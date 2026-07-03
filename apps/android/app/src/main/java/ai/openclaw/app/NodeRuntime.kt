@@ -2435,7 +2435,12 @@ class NodeRuntime(
       nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
         _nodesDevicesRefreshing.value = true
         _nodesDevicesErrorText.value = null
-        if (_nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingApproval &&
+        _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
+        val pendingFallback = _nodeCapabilityApproval.value.withoutExactRequestId()
+        if (pendingFallback != null) {
+          _nodeCapabilityApproval.value = pendingFallback
+        } else if (
+          _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingApproval &&
           _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingReapproval
         ) {
           _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading

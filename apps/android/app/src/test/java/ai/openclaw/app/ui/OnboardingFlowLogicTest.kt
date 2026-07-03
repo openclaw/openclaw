@@ -421,7 +421,7 @@ class OnboardingFlowLogicTest {
       ),
     )
     assertEquals(
-      GatewayRecoveryPrimaryAction.RetryConnection,
+      GatewayRecoveryPrimaryAction.EditConnection,
       gatewayRecoveryPrimaryAction(
         ready = false,
         problem = authProblem(code = "AUTH_SCOPE_MISMATCH", recommendedNextStep = "review_auth_configuration"),

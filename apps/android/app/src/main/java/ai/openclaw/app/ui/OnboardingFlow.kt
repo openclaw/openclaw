@@ -1174,6 +1174,7 @@ private fun gatewayProblemNeedsCredentialUpdate(problem: GatewayConnectionProble
   when (problem?.code) {
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
+    "AUTH_SCOPE_MISMATCH",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
     "AUTH_TOKEN_MISSING",
@@ -1189,7 +1190,6 @@ private fun gatewayProblemNeedsAuthenticationRecovery(problem: GatewayConnection
     problem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" ||
     problem?.code == "AUTH_TOKEN_NOT_CONFIGURED" ||
     problem?.code == "AUTH_PASSWORD_NOT_CONFIGURED" ||
-    problem?.code == "AUTH_SCOPE_MISMATCH" ||
     problem?.recommendedNextStep == "update_auth_configuration" ||
     problem?.recommendedNextStep == "review_auth_configuration"
 
