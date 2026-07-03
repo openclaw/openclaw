@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
+  runCommandWithTimeout: vi.fn(),
   resolveNodeManagerOptions: vi.fn(() => [
     { value: "npm", label: "npm" },
     { value: "pnpm", label: "pnpm" },
@@ -29,6 +30,9 @@ vi.mock("../infra/container-environment.js", () => ({
 }));
 vi.mock("../infra/brew.js", () => ({
   resolveBrewExecutable: mocks.resolveBrewExecutable,
+}));
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
@@ -194,6 +198,7 @@ describe("setupSkills", () => {
     vi.clearAllMocks();
     mocks.isContainerEnvironment.mockReset();
     mocks.resolveBrewExecutable.mockReset();
+    mocks.runCommandWithTimeout.mockReset();
   });
 
   it("hides brew-only installs in Linux containers when brew is missing", async () => {
@@ -246,7 +251,7 @@ describe("setupSkills", () => {
     });
   });
 
-  it("auto-installs bundled skill dependencies without running workspace skill recipes", async () => {
+  it("auto-installs ready bundled skill dependencies without running workspace skill recipes", async () => {
     mockMissingBrewStatus([
       createWorkspaceSkill({
         name: "repo-helper",
@@ -255,10 +260,11 @@ describe("setupSkills", () => {
         installLabel: "Install repo-helper",
       }),
       createBundledSkill({
-        name: "video-frames",
-        description: "ffmpeg",
-        bins: ["ffmpeg"],
-        installLabel: "Install ffmpeg (brew)",
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
       }),
     ]);
 
@@ -268,10 +274,10 @@ describe("setupSkills", () => {
     expect(prompter.multiselect).not.toHaveBeenCalled();
     expect(mocks.installSkill).toHaveBeenCalledTimes(1);
     expect(mocks.installSkill).toHaveBeenCalledWith(
-      expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
+      expect.objectContaining({ skillName: "node-helper", installId: "node" }),
     );
-    const installNote = notes.find((n) => n.message.includes("video-frames"));
-    expect(installNote?.message).toContain("video-frames");
+    const installNote = notes.find((n) => n.message.includes("node-helper"));
+    expect(installNote?.message).toContain("node-helper");
     expect(installNote?.message).not.toContain("repo-helper");
   });
 
@@ -305,7 +311,7 @@ describe("setupSkills", () => {
     );
   });
 
-  it("recommends Homebrew when brew-backed deps are auto-installed and brew is missing", async () => {
+  it("recommends Homebrew and skips brew-backed deps when brew is missing", async () => {
     if (!supportsHomebrewPrompt) {
       return;
     }
@@ -343,9 +349,12 @@ describe("setupSkills", () => {
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeDefined();
     expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+    const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+    expect(manualNote?.message).toContain("Homebrew: video-frames");
   });
 
-  it("recommends Homebrew when brew-backed installs run and brew is missing", async () => {
+  it("does not run brew-backed installs when brew is missing", async () => {
     if (!supportsHomebrewPrompt) {
       return;
     }
@@ -364,6 +373,54 @@ describe("setupSkills", () => {
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote?.title).toBe("Homebrew recommended");
+    expect(mocks.installSkill).not.toHaveBeenCalled();
+    const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+    expect(manualNote?.message).toContain("Homebrew: video-frames");
+  });
+
+  it("skips go and uv installs when local tool prerequisites are not ready", async () => {
+    await withPlatform("linux", async () => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "blogwatcher",
+          description: "RSS helper",
+          bins: ["blogwatcher"],
+          installLabel: "Install blogwatcher (go)",
+          installKind: "go",
+        }),
+        createBundledSkill({
+          name: "nano-pdf",
+          description: "PDF helper",
+          bins: ["nano-pdf"],
+          installLabel: "Install nano-pdf (uv)",
+          installKind: "uv",
+        }),
+        createBundledSkill({
+          name: "mcporter",
+          description: "MCP helper",
+          bins: ["mcporter"],
+          installLabel: "Install mcporter (node)",
+          installKind: "node",
+        }),
+      ]);
+      mocks.detectBinary.mockImplementation(async (bin: string) => bin === "go");
+      mocks.runCommandWithTimeout.mockResolvedValue({
+        code: 0,
+        stdout: "go version go1.18.1 linux/amd64\n",
+        stderr: "",
+      });
+
+      const { prompter, notes } = createPrompter({});
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+      expect(mocks.installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({ skillName: "mcporter", installId: "node" }),
+      );
+      const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+      expect(manualNote?.message).toContain("Go 1.21+: blogwatcher");
+      expect(manualNote?.message).toContain("uv: nano-pdf");
+    });
   });
 
   it("displays a clear empty state note when all skill dependencies are ready", async () => {
