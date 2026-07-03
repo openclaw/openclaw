@@ -169,6 +169,8 @@ struct OpenClawTypographyTests {
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
         #expect(proComponents.contains("Text(primaryActionTitle)"))
         #expect(proComponents.contains("Text(secondaryActionTitle)"))
+        #expect(proComponents.contains("@Environment(\\.isEnabled)"))
+        #expect(proComponents.contains(".animation(.easeOut(duration: 0.15), value: self.isEnabled)"))
 
         #expect(!quickSetup.contains("Button(\"Close\")"))
         #expect(quickSetup.contains("Text(\"Quick Setup\")"))

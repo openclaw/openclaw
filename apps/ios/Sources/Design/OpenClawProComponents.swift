@@ -563,37 +563,48 @@ struct OpenClawStatusBadge: View {
 }
 
 struct OpenClawPrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.headline)
-            .foregroundStyle(.white)
+            .foregroundStyle(self.isEnabled ? Color.white : OpenClawBrand.textSecondary)
             .frame(maxWidth: .infinity, minHeight: 48)
             .background {
                 RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
                     .fill(
-                        configuration.isPressed
+                        !self.isEnabled
+                            ? Color(uiColor: .tertiarySystemFill)
+                            : configuration.isPressed
                             ? OpenClawBrand.accentPressed
                             : OpenClawBrand.accent)
             }
             .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.15), value: self.isEnabled)
     }
 }
 
 struct OpenClawSecondaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.headline)
-            .foregroundStyle(OpenClawBrand.textPrimary)
+            .foregroundStyle(self.isEnabled ? OpenClawBrand.textPrimary : OpenClawBrand.textSecondary.opacity(0.68))
             .frame(maxWidth: .infinity, minHeight: 48)
             .background {
                 RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
+                    .fill(Color(uiColor: self.isEnabled ? .secondarySystemBackground : .tertiarySystemFill))
                     .overlay {
                         RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous)
-                            .strokeBorder(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
+                            .strokeBorder(
+                                Color(uiColor: .separator).opacity(self.isEnabled ? 0.35 : 0.20),
+                                lineWidth: 1)
                     }
             }
-            .opacity(configuration.isPressed ? 0.82 : 1)
+            .opacity(!self.isEnabled ? 0.74 : configuration.isPressed ? 0.82 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .animation(.easeOut(duration: 0.15), value: self.isEnabled)
     }
 }
 
