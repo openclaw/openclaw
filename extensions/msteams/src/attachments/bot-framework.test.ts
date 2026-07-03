@@ -534,39 +534,40 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       const jsonSpy = vi.spyOn(Response.prototype, "json").mockImplementation(async () => {
         throw new Error("raw response.json() should not be used");
       });
-      const fetchFn = createMockFetch([
-        {
-          match: /\/v3\/attachments\/att-1$/,
-          response: new Response(stream, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-        },
-      ]);
-
-      const warn = vi.fn();
-      const media = await downloadMSTeamsBotFrameworkAttachment({
-        serviceUrl: "https://smba.trafficmanager.net/amer",
-        attachmentId: "att-1",
-        tokenProvider: buildTokenProvider(),
-        maxBytes: 10_000_000,
-        fetchFn,
-        fetchFnSupportsDispatcher: true,
-        resolveFn: resolvePublicHost,
-        logger: { warn },
+      const fetchFn: typeof fetch = vi.fn(async () => {
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       });
 
-      expect(media).toBeUndefined();
-      expect(jsonSpy).not.toHaveBeenCalled();
-      // Enforced well before the 64 MiB test ceiling; an unbounded reader would keep pulling.
-      expect(state.enqueued).toBeLessThan(32);
-      expect(warn).toHaveBeenCalledWith(
-        "msteams botFramework attachmentInfo parse failed",
-        expect.objectContaining({
-          error: expect.stringMatching(/JSON response exceeds 16777216 bytes/),
-        }),
-      );
-      jsonSpy.mockRestore();
+      try {
+        const warn = vi.fn();
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+          logger: { warn },
+        });
+
+        expect(media).toBeUndefined();
+        expect(jsonSpy).not.toHaveBeenCalled();
+        // Enforced well before the 64 MiB test ceiling; an unbounded reader would keep pulling.
+        expect(state.enqueued).toBeLessThan(32);
+        expect(state.canceled).toBe(true);
+        expect(warn).toHaveBeenCalledWith(
+          "msteams botFramework attachmentInfo parse failed",
+          expect.objectContaining({
+            error: expect.stringMatching(/JSON response exceeds 16777216 bytes/),
+          }),
+        );
+      } finally {
+        jsonSpy.mockRestore();
+      }
     });
   });
 });
