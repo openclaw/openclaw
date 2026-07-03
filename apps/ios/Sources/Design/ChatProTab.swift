@@ -35,6 +35,10 @@ struct ChatProTab: View {
                 NavigationStack {
                     self.content
                 }
+            } else if self.headerTitle == nil {
+                // Phone tab embeds in the host's NavigationStack; the native bar
+                // there renders our title/toolbar, so no custom header.
+                self.content
             } else {
                 VStack(spacing: 0) {
                     // Embedded (iPad sidebar) chat draws its own header; the phone
