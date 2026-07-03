@@ -6,7 +6,6 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective as loadToolsEffectiveShared,
@@ -21,10 +20,10 @@ import {
 } from "../../lib/gateway-errors.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { loadChannels } from "../channels/data.ts";
-import { loadAgentFiles } from "./files.ts";
-import { loadAgentIdentities, loadAgentIdentity } from "./identity.ts";
-import { loadAgentSkills } from "./skills.ts";
+import { loadChannels, type ChannelsState } from "../channels/data.ts";
+import { loadAgentFiles, type AgentFilesState } from "./files.ts";
+import { loadAgentIdentities, loadAgentIdentity, type AgentIdentityState } from "./identity.ts";
+import { loadAgentSkills, type AgentSkillsState } from "./skills.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -51,31 +50,39 @@ export type AgentsState = {
 
 export type AgentsConfigSaveState = AgentsState & ConfigState;
 
-export async function loadAgentsPage(host: SettingsHost, app: SettingsAppHost) {
-  await loadAgents(app);
-  await loadConfig(app);
-  const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+type AgentsPageState = AgentsConfigSaveState &
+  AgentIdentityState &
+  AgentFilesState &
+  AgentSkillsState &
+  ChannelsState & {
+    loadCron?: () => void;
+  };
+
+export async function loadAgentsPage(state: AgentsPageState) {
+  await loadAgents(state);
+  await loadConfig(state);
+  const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
   if (agentIds.length > 0) {
-    void loadAgentIdentities(app, agentIds);
+    void loadAgentIdentities(state, agentIds);
   }
   const agentId =
-    host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+    state.agentsSelectedId ?? state.agentsList?.defaultId ?? state.agentsList?.agents?.[0]?.id;
   if (!agentId) {
     return;
   }
-  void loadAgentIdentity(app, agentId);
-  switch (host.agentsPanel) {
+  void loadAgentIdentity(state, agentId);
+  switch (state.agentsPanel) {
     case "files":
-      void loadAgentFiles(app, agentId);
+      void loadAgentFiles(state, agentId);
       return;
     case "skills":
-      void loadAgentSkills(app, agentId);
+      void loadAgentSkills(state, agentId);
       return;
     case "channels":
-      void loadChannels(app, false);
+      void loadChannels(state, false);
       return;
     case "cron":
-      void host.loadCron?.();
+      void state.loadCron?.();
     case "overview":
     case "tools":
     case undefined:

@@ -14,7 +14,6 @@ import type {
   CronSortDir,
   CronStatus,
 } from "../../api/types.ts";
-import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 // Cron page data, mutations, and loader.
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
@@ -30,7 +29,7 @@ import {
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { loadChannels } from "../channels/data.ts";
+import { loadChannels, type ChannelsState } from "../channels/data.ts";
 import { getCronJobPayload, hasCronJobPayload } from "./payload.ts";
 import { CRON_CHANNEL_LAST } from "./types.ts";
 import type { CronFormState } from "./types.ts";
@@ -144,23 +143,28 @@ export type CronModelSuggestionsState = {
   cronModelSuggestions: string[];
 };
 
-export async function loadCronPage(host: SettingsHost, routeOptions?: RouteHookOptions) {
-  const app = host as SettingsAppHost;
-  const activeCronJobId = app.cronRunsScope === "job" ? app.cronRunsJobId : null;
-  const cronSeq = (host.controlUiCronRefreshSeq ?? 0) + 1;
-  host.controlUiCronRefreshSeq = cronSeq;
+type CronPageState = CronState &
+  ChannelsState & {
+    controlUiCronRefreshSeq?: number;
+    requestUpdate?: () => void;
+  };
+
+export async function loadCronPage(state: CronPageState, routeOptions?: RouteHookOptions) {
+  const activeCronJobId = state.cronRunsScope === "job" ? state.cronRunsJobId : null;
+  const cronSeq = (state.controlUiCronRefreshSeq ?? 0) + 1;
+  state.controlUiCronRefreshSeq = cronSeq;
   const isCurrentCronRefresh = () =>
-    host.controlUiCronRefreshSeq === cronSeq && !routeOptions?.signal.aborted;
+    state.controlUiCronRefreshSeq === cronSeq && !routeOptions?.signal.aborted;
   const useTableFilters = routeOptions ? !routeOptions.signal.aborted : true;
   const runsStartedAtMs = controlUiNowMs();
-  const runsRefresh = loadCronRuns(app, activeCronJobId)
+  const runsRefresh = loadCronRuns(state, activeCronJobId)
     .catch(() => "error" as const)
     .then((status) => {
       if (!isCurrentCronRefresh()) {
         return;
       }
       recordControlUiPerformanceEvent(
-        app,
+        state,
         "control-ui.cron.runs",
         {
           phase: "end",
@@ -172,9 +176,9 @@ export async function loadCronPage(host: SettingsHost, routeOptions?: RouteHookO
     });
   void runsRefresh;
   await Promise.all([
-    loadChannels(app, false),
-    loadCronStatus(app),
-    loadCronJobsPage(app, { tableFilters: useTableFilters }),
+    loadChannels(state, false),
+    loadCronStatus(state),
+    loadCronJobsPage(state, { tableFilters: useTableFilters }),
   ]);
 }
 
