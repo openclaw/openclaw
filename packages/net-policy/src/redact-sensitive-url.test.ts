@@ -5,6 +5,7 @@ import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
   hasSensitiveUrlHintTag,
+  redactBotTokenPath,
   redactSensitiveUrl,
   redactSensitiveUrlLikeString,
 } from "./redact-sensitive-url.js";
@@ -131,5 +132,76 @@ describe("sensitive URL config metadata", () => {
     expect(SENSITIVE_URL_HINT_TAG).toBe("url-secret");
     expect(hasSensitiveUrlHintTag({ tags: [SENSITIVE_URL_HINT_TAG] })).toBe(true);
     expect(hasSensitiveUrlHintTag({ tags: ["security"] })).toBe(false);
+  });
+});
+
+describe("redactBotTokenPath", () => {
+  const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
+
+  it("redacts Telegram bot token from absolute URLs with a matching hostname", () => {
+    expect(
+      redactBotTokenPath(
+        `https://api.telegram.org/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage`,
+        "api.telegram.org",
+      ),
+    ).toBe("https://api.telegram.org/bot***/sendMessage");
+  });
+
+  it("redacts Telegram bot token with percent-encoded colon (%3A)", () => {
+    const colonEncoded = SYNTHETIC_TELEGRAM_BOT_TOKEN.replace(":", "%3A");
+    expect(
+      redactBotTokenPath(`https://api.telegram.org/bot${colonEncoded}/getMe`, "api.telegram.org"),
+    ).toBe("https://api.telegram.org/bot***/getMe");
+  });
+
+  it("redacts Telegram bot token in last path segment (no trailing slash)", () => {
+    expect(
+      redactBotTokenPath(
+        `https://api.telegram.org/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}`,
+        "api.telegram.org",
+      ),
+    ).toBe("https://api.telegram.org/bot***");
+  });
+
+  it("redacts Telegram bot token in fallback strings when no hostname is given", () => {
+    expect(
+      redactBotTokenPath(
+        `timeout /bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage and keep /bot/settings`,
+      ),
+    ).toBe("timeout /bot***/sendMessage and keep /bot/settings");
+  });
+
+  it("does not redact non-matching hostname URLs", () => {
+    expect(
+      redactBotTokenPath(
+        `https://example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage`,
+        "example.com",
+      ),
+    ).toBe(`https://example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage`);
+  });
+
+  it.each([
+    "/bot/settings",
+    "/bots/chat",
+    "/robot/test",
+    "/bot123:status",
+    "/bot123456:short",
+    "/bota1:token",
+  ])("keeps ordinary bot-like path %s unchanged", (path) => {
+    expect(redactBotTokenPath(`https://example.com${path}`)).toBe(`https://example.com${path}`);
+  });
+
+  it("does not match short token IDs (less than 6 digits)", () => {
+    expect(
+      redactBotTokenPath(
+        "https://api.telegram.org/bot12345:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/status",
+      ),
+    ).toBe("https://api.telegram.org/bot12345:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd/status");
+  });
+
+  it("does not match short token secrets (less than 20 characters)", () => {
+    expect(
+      redactBotTokenPath("https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRS/status"),
+    ).toBe("https://api.telegram.org/bot123456:ABCDEFGHIJKLMNOPQRS/status");
   });
 });

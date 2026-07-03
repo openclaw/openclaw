@@ -41,6 +41,38 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 // category Lo, so \p{C}\p{Z} alone would let them splice sensitive key names.
 const URL_QUERY_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
+// Bot API credential path segments must be redacted even in diagnostic/log URLs.
+// Require the real Telegram token shape (\u22656 digits, colon or %3A, \u226520 secret chars)
+// so ordinary `/bot` application routes are not hidden.
+const TELEGRAM_BOT_TOKEN_PATH_RE = /\/bot\d{6,}(?::|%3[aA])[A-Za-z0-9_-]{20,}(?=\/|$)/giu;
+
+function redactTelegramBotTokenPath(value: string): string {
+  return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
+}
+
+// Registry of known Bot API path-token redactors keyed by hostname.
+// A hostname entry applies only to that host; pass no hostname to apply all policies.
+const BOT_TOKEN_PATH_REDACTORS: Record<string, (value: string) => string> = {
+  "api.telegram.org": redactTelegramBotTokenPath,
+};
+
+/**
+ * Redact known Bot API credential path segments from a URL string.
+ * When `hostname` is provided, only matching hostname policies apply.
+ * When omitted, all registered policies are applied (useful for unparseable URL-like strings).
+ */
+export function redactBotTokenPath(value: string, hostname?: string): string {
+  if (hostname) {
+    const redactor = BOT_TOKEN_PATH_REDACTORS[hostname];
+    return redactor ? redactor(value) : value;
+  }
+  let result = value;
+  for (const redactor of Object.values(BOT_TOKEN_PATH_REDACTORS)) {
+    result = redactor(result);
+  }
+  return result;
+}
+
 function normalizeUrlQueryParamName(name: string): string {
   const stripped = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
   try {
