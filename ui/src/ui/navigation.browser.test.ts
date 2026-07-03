@@ -591,7 +591,7 @@ describe("control UI routing", () => {
     // Pinned active row plus the nine-row recents cap.
     expect(rows).toHaveLength(10);
     expect(rows[0]?.dataset.sessionKey).toBe("agent:main:oldest");
-    expect([...rows[0]!.classList]).toContain("sidebar-recent-session--active");
+    expect([...rows[0].classList]).toContain("sidebar-recent-session--active");
   });
 
   it("creates a new chat session from the sidebar", async () => {
