@@ -6,7 +6,7 @@
  * `DeliverDeps.mediaSender`.
  */
 
-import type { GatewayAccount } from "../types.js";
+import { ApiError, type GatewayAccount } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "../utils/image-size.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
@@ -94,6 +94,19 @@ function mergeChunksIfSafe(chunks: string[], byteLimit: number): string[] {
     return [merged];
   }
   return chunks;
+}
+
+/**
+ * Returns `true` when the error proves QQ received and rejected the request.
+ *
+ * Only 4xx `ApiError` responses are treated as deterministic rejections.
+ * Timeout / network errors (`httpStatus === 0`), 5xx server errors, HTML
+ * gateway errors, and non-`ApiError` throwables are ambiguous — the merged
+ * POST may already have been accepted, so falling back to individual chunks
+ * risks double-delivery.
+ */
+function isDeterministicRejection(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.httpStatus >= 400 && err.httpStatus < 500;
 }
 
 interface DeliverEventContext {
@@ -312,11 +325,14 @@ async function sendTextChunksWithRetry(params: {
       );
       log?.info(params.onSuccess(chunk));
     } catch (err) {
-      // When a merged chunk fails, retry with the original split chunks
-      // so the reply is not lost entirely.
-      if (fallbackChunks?.length) {
+      // When a merged chunk fails with a deterministic QQ rejection (4xx),
+      // retry with the original split chunks so the reply is not lost.
+      // Ambiguous failures (timeout, network error, 5xx, non-ApiError) are
+      // NOT retried because the merged POST may already have been accepted
+      // and falling back would risk double-delivery.
+      if (fallbackChunks?.length && isDeterministicRejection(err)) {
         log?.info(
-          `Merged chunk send failed; retrying with ${fallbackChunks.length} original chunk(s)`,
+          `Merged chunk rejected by QQ (HTTP ${err.httpStatus}); retrying with ${fallbackChunks.length} original chunk(s)`,
         );
         for (const fallbackChunk of fallbackChunks) {
           try {

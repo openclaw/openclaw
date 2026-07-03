@@ -1,6 +1,6 @@
 // Tests cover chunk-merge behavior in outbound delivery.
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { GatewayAccount } from "../types.js";
+import { ApiError, type GatewayAccount } from "../types.js";
 import { QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT } from "./markdown-table-chunking.js";
 import { sendTextOnlyReply } from "./outbound-deliver.js";
 
@@ -184,13 +184,13 @@ describe("sendTextOnlyReply chunk merging", () => {
     expect(sendTextMock.mock.calls[0]?.[1]).toBe("Just one chunk.");
   });
 
-  it("retries with original chunks when a merged chunk send fails", async () => {
+  it("retries with original chunks when merged send fails with a deterministic 4xx rejection", async () => {
     // chunkText returns two small chunks that would normally merge.
-    // Make sendText fail on the first call (merged chunk), then succeed.
+    // Make sendText fail with a deterministic QQ rejection (ApiError, 4xx).
     const chunk1 = "First paragraph.";
     const chunk2 = "Second paragraph.";
     sendTextMock
-      .mockRejectedValueOnce(new Error("QQ API reject"))
+      .mockRejectedValueOnce(new ApiError("API Error", 400, "/v2/messages"))
       .mockResolvedValueOnce({ id: "fb-1", timestamp: "2026-07-01T00:00:00.000Z" })
       .mockResolvedValueOnce({ id: "fb-2", timestamp: "2026-07-01T00:00:00.000Z" });
 
@@ -218,5 +218,84 @@ describe("sendTextOnlyReply chunk merging", () => {
     // Fallback: original chunks sent individually in order.
     expect(sendTextMock.mock.calls[1]?.[1]).toBe(chunk1);
     expect(sendTextMock.mock.calls[2]?.[1]).toBe(chunk2);
+  });
+
+  it("does NOT retry original chunks when merged send fails with a timeout (httpStatus 0)", async () => {
+    // Timeout errors have httpStatus 0 — the merged POST may have been accepted.
+    const chunk1 = "A";
+    const chunk2 = "B";
+    sendTextMock.mockRejectedValueOnce(new ApiError("Request timeout", 0, "/v2/messages"));
+
+    const deps = {
+      mediaSender: {} as Parameters<typeof sendTextOnlyReply>[5]["mediaSender"],
+      chunkText: (_text: string, _limit: number) => [chunk1, chunk2],
+    };
+
+    await expect(
+      sendTextOnlyReply(
+        `${chunk1}\n\n${chunk2}`,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    // Only 1 call: the failed merged send. No fallback retries.
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+    expect(sendTextMock.mock.calls[0]?.[1]).toBe("A\n\nB");
+  });
+
+  it("does NOT retry original chunks when merged send fails with a 5xx server error", async () => {
+    // 5xx errors are ambiguous — the server may have processed the request.
+    const chunk1 = "A";
+    const chunk2 = "B";
+    sendTextMock.mockRejectedValueOnce(new ApiError("Server error", 502, "/v2/messages"));
+
+    const deps = {
+      mediaSender: {} as Parameters<typeof sendTextOnlyReply>[5]["mediaSender"],
+      chunkText: (_text: string, _limit: number) => [chunk1, chunk2],
+    };
+
+    await expect(
+      sendTextOnlyReply(
+        `${chunk1}\n\n${chunk2}`,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    // Only 1 call: the failed merged send. No fallback retries.
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT retry original chunks when merged send fails with a generic Error", async () => {
+    // Generic errors are not ApiError instances — unknown delivery state.
+    const chunk1 = "A";
+    const chunk2 = "B";
+    sendTextMock.mockRejectedValueOnce(new Error("Unexpected failure"));
+
+    const deps = {
+      mediaSender: {} as Parameters<typeof sendTextOnlyReply>[5]["mediaSender"],
+      chunkText: (_text: string, _limit: number) => [chunk1, chunk2],
+    };
+
+    await expect(
+      sendTextOnlyReply(
+        `${chunk1}\n\n${chunk2}`,
+        event,
+        actx,
+        sendWithRetry,
+        consumeQuoteRef,
+        deps,
+      ),
+    ).resolves.toBeUndefined();
+
+    // Only 1 call: the failed merged send. No fallback retries.
+    expect(sendTextMock).toHaveBeenCalledTimes(1);
   });
 });
