@@ -18,10 +18,10 @@ enum OpenClawActivityType {
     }
 
     private static func display(size: CGFloat, weight: Font.Weight) -> Font {
-        .custom("RedHatDisplay-Regular", size: size).weight(weight)
+        .custom("RedHatDisplay-Regular", size: size, relativeTo: .subheadline).weight(weight)
     }
 
     private static func body(size: CGFloat) -> Font {
-        .custom("Inter-Regular", size: size)
+        .custom("Inter-Regular", size: size, relativeTo: .caption)
     }
 }

@@ -2,19 +2,23 @@ import SwiftUI
 
 enum WatchClawType {
     static func avatar(size: CGFloat) -> Font {
-        self.body(size: size, weight: .bold)
+        self.body(size: size, weight: .bold, relativeTo: .caption)
     }
 
     static func label(size: CGFloat = 10, weight: Font.Weight = .bold) -> Font {
-        self.body(size: size, weight: weight)
+        self.body(size: size, weight: weight, relativeTo: .caption2)
     }
 
     static func title(size: CGFloat, weight: Font.Weight = .semibold) -> Font {
-        self.display(size: size, weight: weight)
+        self.display(size: size, weight: weight, relativeTo: .headline)
     }
 
-    static func body(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .custom("Inter-Regular", size: size).weight(weight)
+    static func body(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        relativeTo textStyle: Font.TextStyle = .body) -> Font
+    {
+        .custom("Inter-Regular", size: size, relativeTo: textStyle).weight(weight)
     }
 
     static func symbol(size: CGFloat, weight: Font.Weight) -> Font {
@@ -22,18 +26,18 @@ enum WatchClawType {
     }
 
     static var captionSemiBold: Font {
-        body(size: 12, weight: .semibold)
+        body(size: 12, weight: .semibold, relativeTo: .caption)
     }
 
     static var captionBold: Font {
-        body(size: 12, weight: .bold)
+        body(size: 12, weight: .bold, relativeTo: .caption)
     }
 
     static var caption2: Font {
-        body(size: 11)
+        body(size: 11, relativeTo: .caption2)
     }
 
-    private static func display(size: CGFloat, weight: Font.Weight) -> Font {
-        .custom("RedHatDisplay-Regular", size: size).weight(weight)
+    private static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
+        .custom("RedHatDisplay-Regular", size: size, relativeTo: textStyle).weight(weight)
     }
 }

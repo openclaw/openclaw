@@ -149,48 +149,144 @@ enum OpenClawType {
 
     @MainActor
     static func installUIKitAppearance() {
-        let inlineNavigationTitleFont = self.scaledDisplayUIFont(
-            weight: Display.opticalSemiBold,
-            size: 17,
-            relativeTo: .headline)
-        let largeNavigationTitleFont = self.scaledDisplayUIFont(
-            weight: Display.heavyTitle,
-            size: 34,
-            relativeTo: .largeTitle)
-        let tabBarNormalFont = self.scaledBodyUIFont(weight: Body.medium, size: 11, relativeTo: .caption2)
-        let tabBarSelectedFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 11, relativeTo: .caption2)
-        let segmentedNormalFont = self.scaledBodyUIFont(weight: Body.medium, size: 13, relativeTo: .footnote)
-        let segmentedSelectedFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 13, relativeTo: .footnote)
-        let barButtonFont = self.scaledBodyUIFont(weight: Body.semiBold, size: 17, relativeTo: .body)
-        let disabledBarButtonFont = self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body)
-        let textInputFont = self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body)
+        self.applyUIKitAppearance(self.makeUIKitAppearanceFonts())
+    }
 
+    @MainActor
+    static func refreshUIKitAppearance(in windows: [UIWindow]) {
+        let fonts = self.makeUIKitAppearanceFonts()
+        self.applyUIKitAppearance(fonts)
+        for window in windows {
+            self.applyUIKitTypography(fonts, to: window)
+        }
+    }
+
+    private static func makeUIKitAppearanceFonts() -> UIKitAppearanceFonts {
+        UIKitAppearanceFonts(
+            inlineNavigationTitleFont: self.scaledDisplayUIFont(
+                weight: Display.opticalSemiBold,
+                size: 17,
+                relativeTo: .headline),
+            largeNavigationTitleFont: self.scaledDisplayUIFont(
+                weight: Display.heavyTitle,
+                size: 34,
+                relativeTo: .largeTitle),
+            tabBarNormalFont: self.scaledBodyUIFont(weight: Body.medium, size: 11, relativeTo: .caption2),
+            tabBarSelectedFont: self.scaledBodyUIFont(weight: Body.semiBold, size: 11, relativeTo: .caption2),
+            segmentedNormalFont: self.scaledBodyUIFont(weight: Body.medium, size: 13, relativeTo: .footnote),
+            segmentedSelectedFont: self.scaledBodyUIFont(weight: Body.semiBold, size: 13, relativeTo: .footnote),
+            barButtonFont: self.scaledBodyUIFont(weight: Body.semiBold, size: 17, relativeTo: .body),
+            disabledBarButtonFont: self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body),
+            textInputFont: self.scaledBodyUIFont(weight: Body.regular, size: 17, relativeTo: .body))
+    }
+
+    @MainActor
+    private static func applyUIKitAppearance(_ fonts: UIKitAppearanceFonts) {
         let navigationBar = UINavigationBar.appearance()
+        self.applyNavigationBarTitleAttributes(fonts, to: navigationBar)
+
+        let tabBarItem = UITabBarItem.appearance()
+        self.applyTabBarItemAttributes(fonts, to: tabBarItem)
+
+        let segmentedControl = UISegmentedControl.appearance()
+        self.applySegmentedControlAttributes(fonts, to: segmentedControl)
+
+        let barButtonItem = UIBarButtonItem.appearance()
+        self.applyBarButtonItemAttributes(fonts, to: barButtonItem)
+
+        UITextField.appearance().font = fonts.textInputFont
+        UITextView.appearance().font = fonts.textInputFont
+        UISearchTextField.appearance().font = fonts.textInputFont
+    }
+
+    @MainActor
+    private static func applyUIKitTypography(_ fonts: UIKitAppearanceFonts, to view: UIView) {
+        switch view {
+        case let navigationBar as UINavigationBar:
+            self.applyNavigationBarTitleAttributes(fonts, to: navigationBar)
+            for item in navigationBar.items ?? [] {
+                self.applyNavigationItemBarButtonAttributes(fonts, to: item)
+            }
+            if let topItem = navigationBar.topItem {
+                self.applyNavigationItemBarButtonAttributes(fonts, to: topItem)
+            }
+        case let tabBar as UITabBar:
+            tabBar.items?.forEach { self.applyTabBarItemAttributes(fonts, to: $0) }
+        case let segmentedControl as UISegmentedControl:
+            self.applySegmentedControlAttributes(fonts, to: segmentedControl)
+        case let toolbar as UIToolbar:
+            toolbar.items?.forEach { self.applyBarButtonItemAttributes(fonts, to: $0) }
+        case let searchTextField as UISearchTextField:
+            searchTextField.font = fonts.textInputFont
+        default:
+            break
+        }
+
+        for subview in view.subviews {
+            self.applyUIKitTypography(fonts, to: subview)
+        }
+    }
+
+    @MainActor
+    private static func applyNavigationBarTitleAttributes(
+        _ fonts: UIKitAppearanceFonts,
+        to navigationBar: UINavigationBar)
+    {
         var titleAttributes = navigationBar.titleTextAttributes ?? [:]
-        titleAttributes[.font] = inlineNavigationTitleFont
+        titleAttributes[.font] = fonts.inlineNavigationTitleFont
         navigationBar.titleTextAttributes = titleAttributes
 
         var largeTitleAttributes = navigationBar.largeTitleTextAttributes ?? [:]
-        largeTitleAttributes[.font] = largeNavigationTitleFont
+        largeTitleAttributes[.font] = fonts.largeNavigationTitleFont
         navigationBar.largeTitleTextAttributes = largeTitleAttributes
+    }
 
-        let tabBarItem = UITabBarItem.appearance()
-        tabBarItem.setTitleTextAttributes([.font: tabBarNormalFont], for: .normal)
-        tabBarItem.setTitleTextAttributes([.font: tabBarSelectedFont], for: .selected)
+    @MainActor
+    private static func applyTabBarItemAttributes(_ fonts: UIKitAppearanceFonts, to tabBarItem: UITabBarItem) {
+        tabBarItem.setTitleTextAttributes([.font: fonts.tabBarNormalFont], for: .normal)
+        tabBarItem.setTitleTextAttributes([.font: fonts.tabBarSelectedFont], for: .selected)
+    }
 
-        let segmentedControl = UISegmentedControl.appearance()
-        segmentedControl.setTitleTextAttributes([.font: segmentedNormalFont], for: .normal)
-        segmentedControl.setTitleTextAttributes([.font: segmentedSelectedFont], for: .selected)
+    @MainActor
+    private static func applySegmentedControlAttributes(
+        _ fonts: UIKitAppearanceFonts,
+        to segmentedControl: UISegmentedControl)
+    {
+        segmentedControl.setTitleTextAttributes([.font: fonts.segmentedNormalFont], for: .normal)
+        segmentedControl.setTitleTextAttributes([.font: fonts.segmentedSelectedFont], for: .selected)
+    }
 
-        let barButtonItem = UIBarButtonItem.appearance()
-        barButtonItem.setTitleTextAttributes([.font: barButtonFont], for: .normal)
-        barButtonItem.setTitleTextAttributes([.font: barButtonFont], for: .highlighted)
-        barButtonItem.setTitleTextAttributes([.font: barButtonFont], for: .selected)
-        barButtonItem.setTitleTextAttributes([.font: disabledBarButtonFont], for: .disabled)
+    @MainActor
+    private static func applyBarButtonItemAttributes(_ fonts: UIKitAppearanceFonts, to barButtonItem: UIBarButtonItem) {
+        barButtonItem.setTitleTextAttributes([.font: fonts.barButtonFont], for: .normal)
+        barButtonItem.setTitleTextAttributes([.font: fonts.barButtonFont], for: .highlighted)
+        barButtonItem.setTitleTextAttributes([.font: fonts.barButtonFont], for: .selected)
+        barButtonItem.setTitleTextAttributes([.font: fonts.disabledBarButtonFont], for: .disabled)
+    }
 
-        UITextField.appearance().font = textInputFont
-        UITextView.appearance().font = textInputFont
-        UISearchTextField.appearance().font = textInputFont
+    @MainActor
+    private static func applyNavigationItemBarButtonAttributes(
+        _ fonts: UIKitAppearanceFonts,
+        to item: UINavigationItem)
+    {
+        let barButtonItems = [
+            item.backBarButtonItem,
+            item.leftBarButtonItem,
+            item.rightBarButtonItem,
+        ] + (item.leftBarButtonItems ?? []) + (item.rightBarButtonItems ?? [])
+        barButtonItems.compactMap(\.self).forEach { self.applyBarButtonItemAttributes(fonts, to: $0) }
+    }
+
+    private struct UIKitAppearanceFonts {
+        let inlineNavigationTitleFont: UIFont
+        let largeNavigationTitleFont: UIFont
+        let tabBarNormalFont: UIFont
+        let tabBarSelectedFont: UIFont
+        let segmentedNormalFont: UIFont
+        let segmentedSelectedFont: UIFont
+        let barButtonFont: UIFont
+        let disabledBarButtonFont: UIFont
+        let textInputFont: UIFont
     }
 
     private enum Display {

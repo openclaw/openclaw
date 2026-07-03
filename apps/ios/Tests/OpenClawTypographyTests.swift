@@ -72,21 +72,50 @@ struct OpenClawTypographyTests {
     }
 
     @Test func `extension text surfaces use branded typography helpers`() throws {
+        let activityTypeSource = try String(contentsOf: Self.activityWidgetTypographySourceURL(), encoding: .utf8)
         let activitySource = try String(contentsOf: Self.activityWidgetSourceURL(), encoding: .utf8)
+        let watchTypeSource = try String(contentsOf: Self.watchTypographySourceURL(), encoding: .utf8)
         let watchSource = try String(contentsOf: Self.watchInboxSourceURL(), encoding: .utf8)
 
+        #expect(activityTypeSource.contains("relativeTo: .subheadline"))
+        #expect(activityTypeSource.contains("relativeTo: .caption"))
+        #expect(!activityTypeSource.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
+        #expect(!activityTypeSource.contains(".custom(\"Inter-Regular\", size: size)"))
         #expect(activitySource.contains("OpenClawActivityType.subheadSemiBold"))
         #expect(activitySource.contains("OpenClawActivityType.subheadBold"))
         #expect(activitySource.contains("OpenClawActivityType.caption"))
         #expect(!activitySource.contains(".font(.subheadline"))
         #expect(!activitySource.contains(".font(.caption"))
 
+        #expect(watchTypeSource.contains("relativeTo textStyle: Font.TextStyle"))
+        #expect(watchTypeSource.contains("body(size: 12, weight: .semibold, relativeTo: .caption)"))
+        #expect(watchTypeSource.contains("body(size: 12, weight: .bold, relativeTo: .caption)"))
+        #expect(watchTypeSource.contains("body(size: 11, relativeTo: .caption2)"))
+        #expect(watchTypeSource.contains("relativeTo: .caption2"))
+        #expect(watchTypeSource.contains("relativeTo: .headline"))
+        #expect(!watchTypeSource.contains(".custom(\"RedHatDisplay-Regular\", size: size).weight"))
+        #expect(!watchTypeSource.contains(".custom(\"Inter-Regular\", size: size).weight"))
         #expect(watchSource.contains("WatchClawType.title"))
         #expect(watchSource.contains("WatchClawType.body"))
         #expect(watchSource.contains("WatchClawType.caption"))
         #expect(!watchSource.contains(".font(.system"))
         #expect(!watchSource.contains(".font(.caption"))
         #expect(!watchSource.contains(".font(.title"))
+    }
+
+    @Test func `UIKit typography refreshes when Dynamic Type changes`() throws {
+        let appSource = try String(contentsOf: Self.appSourceURL(), encoding: .utf8)
+        let typographySource = try String(
+            contentsOf: Self.sourceURL("Design/OpenClawTypography.swift"),
+            encoding: .utf8)
+
+        #expect(appSource.contains("UIContentSizeCategory.didChangeNotification"))
+        #expect(appSource.contains("OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())"))
+        #expect(typographySource.contains("static func refreshUIKitAppearance(in windows: [UIWindow])"))
+        #expect(typographySource.contains("applyUIKitTypography(fonts, to: window)"))
+        #expect(typographySource.contains("case let searchTextField as UISearchTextField"))
+        #expect(!typographySource.contains("case let textField as UITextField"))
+        #expect(!typographySource.contains("case let textView as UITextView"))
     }
 
     @Test func `listed iOS app surfaces enforce branded control typography`() throws {
@@ -247,8 +276,20 @@ struct OpenClawTypographyTests {
         self.iosRootURL().appendingPathComponent("ActivityWidget/OpenClawLiveActivity.swift")
     }
 
+    private static func activityWidgetTypographySourceURL() -> URL {
+        self.iosRootURL().appendingPathComponent("ActivityWidget/OpenClawActivityTypography.swift")
+    }
+
     private static func watchInboxSourceURL() -> URL {
         self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchInboxView.swift")
+    }
+
+    private static func watchTypographySourceURL() -> URL {
+        self.iosRootURL().appendingPathComponent("WatchApp/Sources/WatchClawTypography.swift")
+    }
+
+    private static func appSourceURL() -> URL {
+        self.sourceURL("OpenClawApp.swift")
     }
 
     private static func sourceURL(_ relativePath: String) -> URL {
