@@ -1683,9 +1683,9 @@ describe("runCodexAppServerAttempt", () => {
       registeredTools,
     );
 
-    const sortedRegisteredToolNames = [...registeredToolNames].sort();
-    expect(specNames(heartbeatBridge.specs).sort()).toEqual(sortedRegisteredToolNames);
-    expect(specNames(nextNormalBridge.specs).sort()).toEqual(sortedRegisteredToolNames);
+    const sortedRegisteredToolNames = registeredToolNames.toSorted();
+    expect(specNames(heartbeatBridge.specs).toSorted()).toEqual(sortedRegisteredToolNames);
+    expect(specNames(nextNormalBridge.specs).toSorted()).toEqual(sortedRegisteredToolNames);
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {

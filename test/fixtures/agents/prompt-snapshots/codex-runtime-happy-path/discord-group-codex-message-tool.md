@@ -88,6 +88,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
     "message",
+    "sessions_spawn",
     "sessions_yield",
     "nodes",
     "cron",
@@ -97,7 +98,6 @@
     "sessions_list",
     "sessions_history",
     "sessions_send",
-    "sessions_spawn",
     "subagents",
     "session_status",
     "web_search",
@@ -227,20 +227,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 50951,
-    "roughTokens": 12738
+    "chars": 50461,
+    "roughTokens": 12616
   },
   "openClawDeveloperInstructions": {
-    "chars": 3074,
-    "roughTokens": 769
+    "chars": 3058,
+    "roughTokens": 765
   },
   "totalTextOnly": {
-    "chars": 27692,
-    "roughTokens": 6923
+    "chars": 27676,
+    "roughTokens": 6919
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78645,
-    "roughTokens": 19662
+    "chars": 78139,
+    "roughTokens": 19535
   },
   "userInputText": {
     "chars": 1535,
@@ -427,7 +427,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
@@ -560,6 +560,7 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
 ```json
 [
   "message",
+  "sessions_spawn",
   "sessions_yield",
   "nodes",
   "cron",
@@ -569,7 +570,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "sessions_list",
   "sessions_history",
   "sessions_send",
-  "sessions_spawn",
   "subagents",
   "session_status",
   "web_search",

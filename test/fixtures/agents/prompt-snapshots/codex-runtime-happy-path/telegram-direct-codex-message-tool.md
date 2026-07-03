@@ -88,6 +88,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
     "message",
+    "sessions_spawn",
     "sessions_yield",
     "nodes",
     "cron",
@@ -97,7 +98,6 @@
     "sessions_list",
     "sessions_history",
     "sessions_send",
-    "sessions_spawn",
     "subagents",
     "session_status",
     "web_search",
@@ -227,20 +227,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 50620,
-    "roughTokens": 12655
+    "chars": 50150,
+    "roughTokens": 12538
   },
   "openClawDeveloperInstructions": {
-    "chars": 1965,
-    "roughTokens": 492
+    "chars": 1949,
+    "roughTokens": 488
   },
   "totalTextOnly": {
-    "chars": 26081,
-    "roughTokens": 6521
+    "chars": 26065,
+    "roughTokens": 6517
   },
   "totalWithDynamicToolsJson": {
-    "chars": 76703,
-    "roughTokens": 19176
+    "chars": 76217,
+    "roughTokens": 19055
   },
   "userInputText": {
     "chars": 1033,
@@ -427,7 +427,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
@@ -537,6 +537,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   "message",
+  "sessions_spawn",
   "sessions_yield",
   "nodes",
   "cron",
@@ -546,7 +547,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "sessions_list",
   "sessions_history",
   "sessions_send",
-  "sessions_spawn",
   "subagents",
   "session_status",
   "web_search",

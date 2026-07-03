@@ -251,7 +251,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(bridge.specs).sort()).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
+    expect(specNames(bridge.specs).toSorted()).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
 
     const result = await bridge.handleToolCall(
       {
