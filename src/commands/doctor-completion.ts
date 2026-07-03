@@ -26,9 +26,13 @@ export type ShellCompletionStatusOptions = {
 };
 
 function isProfileWriteError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
+  if (!(err instanceof Error)) {
+    return false;
+  }
   const code = "code" in err ? (err as NodeJS.ErrnoException).code : undefined;
-  if (code === "EACCES" || code === "EPERM" || code === "EROFS") return true;
+  if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
+    return true;
+  }
   if ("cause" in err && err.cause instanceof Error) {
     return isProfileWriteError(err.cause);
   }
