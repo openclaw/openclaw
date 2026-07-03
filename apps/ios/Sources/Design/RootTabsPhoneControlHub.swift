@@ -5,10 +5,13 @@ struct RootTabsPhoneControlHub: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var navigationPath: [RootTabs.SidebarDestination] = []
     @State private var didApplyInitialDestination = false
+    @State private var handledNavigationRequestID = 0
 
     let groups: [RootTabs.SidebarGroup]
     let initialDestination: RootTabs.SidebarDestination?
+    let navigationRequest: RootTabs.PhoneControlNavigationRequest?
     let openRootDestination: (RootTabs.SidebarDestination) -> Void
+    let openChatFromControlDetail: (RootTabs.SidebarDestination) -> Void
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
@@ -42,6 +45,10 @@ struct RootTabsPhoneControlHub: View {
             }
             .onAppear {
                 self.applyInitialDestinationIfNeeded()
+                self.applyNavigationRequestIfNeeded()
+            }
+            .onChange(of: self.navigationRequest) { _, _ in
+                self.applyNavigationRequestIfNeeded()
             }
         }
     }
@@ -124,18 +131,18 @@ struct RootTabsPhoneControlHub: View {
                 usesNativeNavigationChrome: true,
                 headerTitle: "Overview",
                 showsHeaderMark: false,
-                openChat: { self.openPhoneRootDestination(.chat) },
+                openChat: { self.openChatFromControlDetail(.overview) },
                 openSettings: { self.openGatewayDetail() },
                 openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
                 usesNativeNavigationChrome: true,
-                openChat: { self.openPhoneRootDestination(.chat) },
+                openChat: { self.openChatFromControlDetail(.activity) },
                 openSettings: { self.openGatewayDetail() })
         case .workboard:
             IPadWorkboardScreen(
                 usesNativeNavigationChrome: true,
-                openChat: { self.openPhoneRootDestination(.chat) },
+                openChat: { self.openChatFromControlDetail(.workboard) },
                 openSettings: { self.openGatewayDetail() })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
@@ -149,7 +156,7 @@ struct RootTabsPhoneControlHub: View {
         case .sessions:
             CommandSessionsScreen(
                 usesNativeNavigationChrome: true,
-                openChat: { self.openPhoneRootDestination(.chat) })
+                openChat: { self.openChatFromControlDetail(.sessions) })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -201,10 +208,25 @@ struct RootTabsPhoneControlHub: View {
         guard !self.didApplyInitialDestination else { return }
         self.didApplyInitialDestination = true
         guard let initialDestination, initialDestination != .overview else { return }
-        if self.opensRootTab(initialDestination) {
-            self.openPhoneRootDestination(initialDestination)
+        self.applyDestination(initialDestination)
+    }
+
+    private func applyNavigationRequestIfNeeded() {
+        guard let navigationRequest, navigationRequest.id != self.handledNavigationRequestID else { return }
+        self.handledNavigationRequestID = navigationRequest.id
+        switch navigationRequest.target {
+        case .root:
+            self.navigationPath.removeAll()
+        case let .detail(destination):
+            self.applyDestination(destination)
+        }
+    }
+
+    private func applyDestination(_ destination: RootTabs.SidebarDestination) {
+        if self.opensRootTab(destination) {
+            self.openPhoneRootDestination(destination)
         } else {
-            self.navigationPath = [initialDestination]
+            self.navigationPath = [destination]
         }
     }
 
@@ -300,7 +322,9 @@ extension RootTabsPhoneControlHub {
         RootTabsPhoneControlHub(
             groups: RootTabs.phoneControlGroups,
             initialDestination: nil,
-            openRootDestination: { _ in })
+            navigationRequest: nil,
+            openRootDestination: { _ in },
+            openChatFromControlDetail: { _ in })
             .environment(appModel)
     }
 }

@@ -409,13 +409,8 @@ img.chat-avatar {
   border-color: transparent;
 }
 
-:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
-  background: var(--accent-subtle);
-}
-
 .chat-group.user .chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 /* Streaming animation */

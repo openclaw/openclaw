@@ -140,6 +140,22 @@ describe("qa channel transport", () => {
     expect(transport.state.getSnapshot().messages).toEqual([]);
   });
 
+  it("injects native commands with transport metadata", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+
+    await transport.sendNativeCommand({
+      command: "stop",
+      conversation: { id: "alice", kind: "direct" },
+      senderId: "alice",
+    });
+
+    const [message] = transport.state.getSnapshot().messages;
+    expect(message).toMatchObject({
+      text: "/stop",
+      nativeCommand: { name: "stop" },
+    });
+  });
+
   it("inherits the shared failure-aware wait helper", async () => {
     const transport = createQaChannelTransport(createQaBusState());
     let injected = false;

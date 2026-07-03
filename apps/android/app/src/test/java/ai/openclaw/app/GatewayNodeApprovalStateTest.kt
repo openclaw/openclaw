@@ -9,6 +9,33 @@ import org.junit.Test
 
 class GatewayNodeApprovalStateTest {
   @Test
+  fun exactApprovalCommandsAgeOutToStatusFallbacks() {
+    assertEquals(
+      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
+      GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1").withoutExactRequestId(),
+    )
+    assertEquals(
+      GatewayNodeCapabilityApproval.PendingReapproval(requestId = null),
+      GatewayNodeCapabilityApproval.PendingReapproval(requestId = "request-2").withoutExactRequestId(),
+    )
+    assertNull(GatewayNodeCapabilityApproval.PendingApproval(requestId = null).withoutExactRequestId())
+
+    val summary =
+      GatewayNodesDevicesSummary(
+        nodes = listOf(pendingNode(requestId = "request-1")),
+        pendingDevices = emptyList(),
+        pairedDevices = emptyList(),
+      )
+    assertNull(
+      summary
+        .withoutExactApprovalRequestIds()
+        .nodes
+        .single()
+        .pendingRequestId,
+    )
+  }
+
+  @Test
   fun parsesGatewayNodeApprovalState() {
     assertEquals(GatewayNodeApprovalState.Approved, parseGatewayNodeApprovalState("approved"))
     assertEquals(GatewayNodeApprovalState.PendingApproval, parseGatewayNodeApprovalState("pending-approval"))
@@ -54,8 +81,8 @@ class GatewayNodeApprovalStateTest {
     requireNotNull(node)
     assertEquals(GatewayNodeApprovalState.Unsupported, node.approvalState)
     assertEquals(
-      GatewayNodeApprovalState.Unsupported,
-      currentNodeCapabilityApprovalState(nodes = listOf(node), selfNodeId = "android-node"),
+      GatewayNodeCapabilityApproval.Unsupported,
+      currentNodeCapabilityApproval(nodes = listOf(node), selfNodeId = "android-node"),
     )
     assertNull(node.pendingRequestId)
   }
@@ -93,26 +120,56 @@ class GatewayNodeApprovalStateTest {
       )
 
     assertEquals(
-      GatewayNodeApprovalState.PendingApproval,
-      currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "self"),
+      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
+      currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "self"),
     )
     assertEquals(
-      GatewayNodeApprovalState.Loading,
-      currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "missing"),
+      GatewayNodeCapabilityApproval.Loading,
+      currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "missing"),
+    )
+  }
+
+  @Test
+  fun currentPhoneApprovalCarriesOnlySafePendingRequestIds() {
+    val safe = pendingNode(requestId = "request-1")
+    val unsafe = pendingNode(requestId = "request-1;echo unsafe")
+
+    assertEquals(
+      GatewayNodeCapabilityApproval.PendingApproval("request-1"),
+      currentNodeCapabilityApproval(nodes = listOf(safe), selfNodeId = "self"),
+    )
+    assertEquals(
+      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
+      currentNodeCapabilityApproval(nodes = listOf(unsafe), selfNodeId = "self"),
     )
   }
 
   @Test
   fun ignoresStaleNodeApprovalRefreshResults() {
     val guard = GatewayNodeApprovalRefreshGuard()
-    var approvalState = GatewayNodeApprovalState.Loading
+    var approval: GatewayNodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading
     val staleRefresh = guard.begin()
     val currentRefresh = guard.begin()
 
-    assertFalse(guard.publishIfCurrent(staleRefresh) { approvalState = GatewayNodeApprovalState.Approved })
+    assertFalse(guard.publishIfCurrent(staleRefresh) { approval = GatewayNodeCapabilityApproval.Approved })
     assertTrue(
-      guard.publishIfCurrent(currentRefresh) { approvalState = GatewayNodeApprovalState.PendingReapproval },
+      guard.publishIfCurrent(currentRefresh) { approval = GatewayNodeCapabilityApproval.PendingReapproval("request-2") },
     )
-    assertEquals(GatewayNodeApprovalState.PendingReapproval, approvalState)
+    assertEquals(GatewayNodeCapabilityApproval.PendingReapproval("request-2"), approval)
   }
+
+  private fun pendingNode(requestId: String): GatewayNodeSummary =
+    GatewayNodeSummary(
+      id = "self",
+      displayName = null,
+      remoteIp = null,
+      version = null,
+      deviceFamily = null,
+      paired = true,
+      connected = true,
+      approvalState = GatewayNodeApprovalState.PendingApproval,
+      pendingRequestId = requestId,
+      capabilities = emptyList(),
+      commands = emptyList(),
+    )
 }

@@ -159,6 +159,7 @@ const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
+const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
@@ -282,6 +283,31 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+async function writeSseWithPreviewPause(
+  res: ServerResponse,
+  events: StreamEvent[],
+  pauseMs: number,
+) {
+  const completionIndex = events.findIndex((event) => event.type === "response.output_text.done");
+  if (completionIndex < 0) {
+    writeSse(res, events);
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  for (const event of events.slice(0, completionIndex)) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  await sleep(pauseMs);
+  for (const event of events.slice(completionIndex)) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  res.end("data: [DONE]\n\n");
 }
 
 type AnthropicStreamEvent = Record<string, unknown> & {
@@ -2418,6 +2444,16 @@ async function buildResponsesPayload(
       },
     ]);
   }
+  if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_final_only_marker_stream",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
+        text: exactReplyDirective,
+      },
+    ]);
+  }
   if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents([
       {
@@ -3612,6 +3648,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
+  let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
   const server = createServer((req, res) => {
     void (async () => {
@@ -3640,6 +3678,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
         writeJson(res, 200, requests);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
+        writeJson(res, 200, [...inflightRequests.values()]);
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/image-generations") {
@@ -3708,13 +3750,22 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-        const events = await buildResponsesPayload(body, scenarioState);
+        const prompt = extractLastUserText(input);
+        const allInputText = extractAllRequestTexts(input, body);
+        const inflightRequestId = nextInflightRequestId++;
+        inflightRequests.set(inflightRequestId, { prompt, allInputText });
+        let events: StreamEvent[];
+        try {
+          events = await buildResponsesPayload(body, scenarioState);
+        } finally {
+          inflightRequests.delete(inflightRequestId);
+        }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
         lastRequest = {
           raw,
           body,
-          prompt: extractLastUserText(input),
-          allInputText: extractAllRequestTexts(input, body),
+          prompt,
+          allInputText,
           instructions: extractInstructionsText(body) || undefined,
           toolOutput: extractToolOutput(input),
           model: resolvedModel,
@@ -3739,7 +3790,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           writeJson(res, 200, completion.response);
           return;
         }
-        writeSse(res, events);
+        if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
+          await writeSseWithPreviewPause(res, events, 1_500);
+        } else {
+          writeSse(res, events);
+        }
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {

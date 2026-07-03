@@ -136,6 +136,43 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeCloseErrorDisablesTalkButKeepsFailureStatus() {
+    var stoppedByRelay = false
+    val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertFalse(manager.isEnabled.value)
+    assertTrue(stoppedByRelay)
+    assertEquals(
+      "Talk failed: Realtime provider closed unexpectedly.",
+      manager.statusText.value,
+    )
+  }
+
+  @Test
+  fun realtimeClosePreservesDetailedProviderFailure() {
+    val manager = createManager()
+
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+    setMutableStateFlow(manager, "_statusText", "Talk failed: Provider rejected the session.")
+
+    manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"relay-1","type":"close","reason":"error"}""",
+    )
+
+    assertEquals("Talk failed: Provider rejected the session.", manager.statusText.value)
+  }
+
+  @Test
   fun realtimeTranscriptsPopulateVoiceConversation() {
     val manager = createManager()
 

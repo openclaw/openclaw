@@ -36,6 +36,7 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
+import { detectOpenAICompletionsCompat } from "../openai-completions-compat.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
@@ -960,14 +961,29 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
  * format (plus `reasoning_effort`). Honor an explicit `compat.thinkingFormat`
  * override that selects a different reasoning format: some OpenAI-compatible
  * deployments — notably Azure AI Foundry DeepSeek V4 — reject the `thinking`
- * parameter outright, even `thinking: { type: "disabled" }`. When the format is
- * unset we keep id-based auto-detection so genuine DeepSeek V4 endpoints still
- * receive the native thinking payload; an explicit `"deepseek"` also keeps it.
+ * parameter outright, even `thinking: { type: "disabled" }`. When no override
+ * exists, honor provider-level detection for non-native formats such as
+ * OpenRouter while keeping id-based fallback for unknown DeepSeek-compatible
+ * proxy routes.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
-  const compat = (model as ProviderRuntimeModel).compat;
-  const thinkingFormat = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
+  const thinkingFormat = resolveDeepSeekV4ThinkingFormatOverride(model);
   return thinkingFormat === undefined || thinkingFormat === "deepseek";
+}
+
+function resolveDeepSeekV4ThinkingFormatOverride(
+  model: Parameters<StreamFn>[0],
+): string | undefined {
+  const compat = (model as ProviderRuntimeModel).compat;
+  const configured = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
+  if (typeof configured === "string") {
+    return configured;
+  }
+  const detected = detectOpenAICompletionsCompat(model as ProviderRuntimeModel).defaults
+    .thinkingFormat;
+  return detected === "openrouter" || detected === "together" || detected === "zai"
+    ? detected
+    : undefined;
 }
 
 function createDeepSeekV4NonNativeCompatSanitizerWrapper(

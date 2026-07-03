@@ -1,6 +1,7 @@
 // Slack plugin module implements channel actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
@@ -13,8 +14,6 @@ type SlackActionInvoke = (
   toolContext: unknown,
 ) => Promise<AgentToolResult<unknown>>;
 
-let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
-
 const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
   "deleteMessage",
   "editMessage",
@@ -25,10 +24,7 @@ const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
   "uploadFile",
 ]);
 
-async function loadSlackActionRuntime() {
-  slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
-  return await slackActionRuntimePromise;
-}
+const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
 function resolveSlackActionContext(params: {
   toolContext: unknown;

@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "Готово"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "Потрібне налаштування"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "Не підтверджено"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "${state.provider.label} через ретранслятор Gateway"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Каталог розмов Gateway не завантажено"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Не вдалося завантажити каталог розмов Gateway"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway не повернув налаштування ${issue.target.title}"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "На Gateway не налаштовано постачальника ${issue.target.title}"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway вибрав невідомого постачальника ${issue.providerId}"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway не повернув готовність ${issue.target.title}"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Налаштуйте постачальника ${issue.target.title} на Gateway"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway не визначив активного постачальника ${issue.target.title}"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Виберіть підтримуваного постачальника ${issue.target.title} на Gateway"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Налаштуйте ${issue.providerLabel} на Gateway"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -589,9 +659,9 @@
       "translated": "Увімкніть це для Tailscale або публічних хостів. Приватна LAN ws:// і надалі підтримується."
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "токен"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "Залиште порожнім, щоб зберегти збережений токен"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -857,11 +927,6 @@
       "id": "native.android.c8ce503b95d13058",
       "source": "Linked phones and node hosts will appear here after pairing.",
       "translated": "Пов’язані телефони та хости вузлів з’являться тут після спарювання."
-    },
-    {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "Адміністрування спарювання пристроїв потребує підвищеного доступу. Підключені вузли й надалі працюють."
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -1484,24 +1549,14 @@
       "translated": "Готово"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Постачальник у реальному часі"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "Розмова в реальному часі"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "Наживо"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "Голос"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "Транспорт"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "Диктування"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -1622,6 +1677,21 @@
       "id": "native.android.53928793ec65d766",
       "source": "While Using",
       "translated": "Під час використання"
+    },
+    {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "Замінити налаштування gateway?"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "Замінити налаштування"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "Скасувати"
     },
     {
       "id": "native.android.718cb50d1bff3e32",
@@ -1752,6 +1822,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Оновити"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Ліцензії"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw цінує своїх партнерів у спільноті відкритого коду."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "У цій збірці не включено жодних повідомлень про ліцензії."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "Відкрити ${license.title}"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2619,9 +2709,9 @@
       "translated": "Зупинити диктування"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "Провайдер"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "Налаштування голосу"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -3079,11 +3169,6 @@
       "translated": "Надсилання голосу з черги"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "Вимкнено"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "Слухає"
@@ -3092,6 +3177,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "Готово"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "Вимкнено"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "Помилка розмови: постачальник Realtime несподівано закрив з’єднання."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "Помилка розмови: постачальник Realtime закрив з’єднання: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",
@@ -5234,14 +5334,14 @@
       "translated": "OpenClaw не може визначити поточний стан дозволу на сповіщення."
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "Виберіть системне, світле або темне оформлення"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "Зовнішній вигляд"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "Виберіть системний, світлий або темний вигляд"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5382,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "Про застосунок"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Ліцензії"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5567,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Ліцензії не включено"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Файли ліцензій недоступні в цій збірці."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw цінує своїх партнерів у спільноті відкритого коду."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6419,9 @@
       "translated": "OpenClaw може використовувати дані про рух для підтримки взаємодій і автоматизацій з урахуванням пристрою."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw потрібен доступ до фототеки, коли ви вибираєте наявні фото, щоб поділитися ними зі своїм асистентом."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw дає змогу вашому асистенту читати дозволені вами фото й дає вам змогу вибирати фото для надсилання."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +7054,11 @@
       "translated": "Шукайте й додавайте контакти з помічника."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Фото"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Календар (додавання подій)"
@@ -6962,6 +7087,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Переглядайте список, додавайте й позначайте нагадування як виконані."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Обмежено"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Читати вибрані вами фото для асистента."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Читати нещодавні фото для асистента."
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7214,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "Офлайн"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "Готово"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "Слухання"
@@ -7102,16 +7252,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "Нативний WebRTC"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "Офлайн"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "Готово"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7322,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "Оновлення OpenClaw"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "Вимкнено"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "Призупинено"
     },
     {
       "id": "native.apple.732051c3e897a9f1",
