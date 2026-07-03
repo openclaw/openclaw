@@ -1351,6 +1351,9 @@ export const fa: TranslationMap = {
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
+    sidebar: {
+      allSessions: "همهٔ نشست‌ها",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

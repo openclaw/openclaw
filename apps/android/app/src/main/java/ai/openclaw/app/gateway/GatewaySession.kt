@@ -85,6 +85,14 @@ data class GatewayConnectErrorDetails(
   val minimumProbeProtocol: Int? = null,
 )
 
+private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+/** Keeps copied approval commands single-argument and safe for a gateway host shell. */
+internal fun normalizeGatewayApprovalRequestId(requestId: String?): String? {
+  val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+  return trimmed.takeIf { gatewayApprovalRequestIdPattern.matches(it) }
+}
+
 /**
  * Server hello fields cached by the Android runtime after a successful connect.
  */
@@ -144,7 +152,6 @@ class GatewaySession(
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
     private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
-    private val PAIRING_REQUEST_ID_PATTERN = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
   }
 
   /**
@@ -944,7 +951,7 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
-                requestId = normalizePairingRequestId(it["requestId"].asStringOrNull()),
+                requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true,
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
@@ -973,11 +980,6 @@ class GatewaySession(
         return
       }
       onEvent(event, payloadJson)
-    }
-
-    private fun normalizePairingRequestId(requestId: String?): String? {
-      val trimmed = requestId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-      return trimmed.takeIf { PAIRING_REQUEST_ID_PATTERN.matches(it) }
     }
 
     private suspend fun awaitConnectNonce(): String =
@@ -1310,7 +1312,6 @@ class GatewaySession(
       hasBootstrapToken = target?.bootstrapToken?.trim()?.isNotEmpty() == true,
       role = target?.options?.role,
       scopes = target?.options?.scopes ?: emptyList(),
-      deviceTokenRetryBudgetUsed = deviceTokenRetryBudgetUsed,
       pendingDeviceTokenRetry = pendingDeviceTokenRetry,
     )
   }
@@ -1334,33 +1335,52 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   hasBootstrapToken: Boolean,
   role: String?,
   scopes: List<String>,
-  deviceTokenRetryBudgetUsed: Boolean,
   pendingDeviceTokenRetry: Boolean,
-): Boolean =
-  when (error.details?.code) {
+): Boolean {
+  val details = error.details
+  val code = details?.code
+  if (code == "PAIRING_REQUIRED") {
+    val pairingDetails = details
+    return !(
+      hasBootstrapToken &&
+        role?.trim() == "node" &&
+        scopes.isEmpty() &&
+        pairingDetails.reason == "not-paired" &&
+        (
+          pairingDetails.pauseReconnect == false ||
+            pairingDetails.recommendedNextStep == "wait_then_retry"
+        )
+    )
+  }
+  // Gateway rate limits last minutes; generic retry advice must not trigger the short reconnect loop.
+  if (code == "AUTH_RATE_LIMITED") return true
+  when (details?.recommendedNextStep) {
+    "wait_then_retry" -> return false
+    "retry_with_device_token" -> return !pendingDeviceTokenRetry
+    "update_auth_configuration",
+    "update_auth_credentials",
+    "review_auth_configuration",
+    -> return true
+  }
+  return when (code) {
     "AUTH_TOKEN_MISSING",
+    "AUTH_TOKEN_NOT_CONFIGURED",
+    "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_BOOTSTRAP_TOKEN_INVALID",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
-    "AUTH_RATE_LIMITED",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
+    "AUTH_SCOPE_MISMATCH",
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true
-    "PAIRING_REQUIRED" ->
-      !(
-        hasBootstrapToken &&
-          role?.trim() == "node" &&
-          scopes.isEmpty() &&
-          error.details.reason == "not-paired" &&
-          (
-            error.details.pauseReconnect == false ||
-              error.details.recommendedNextStep == "wait_then_retry"
-          )
-      )
-    "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
+    // The first shared-token mismatch may schedule one trusted stored-device-token retry.
+    // Once no retry is pending, keep the terminal recovery action visible until credentials change.
+    "AUTH_TOKEN_MISMATCH" -> !pendingDeviceTokenRetry
     "PROTOCOL_MISMATCH" -> true
     else -> false
   }
+}
 
 /** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
 internal fun buildGatewayWebSocketUrl(

@@ -1,11 +1,12 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
@@ -144,7 +145,7 @@ fun OnboardingFlow(
     val gatewayConnectionProblem = gatewayConnectionDisplay.problem
     val isConnected = gatewayConnectionDisplay.isConnected
     val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-    val nodeCapabilityApprovalState by viewModel.nodeCapabilityApprovalState.collectAsState()
+    val nodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
     val runtimeInitialized by viewModel.runtimeInitialized.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
     val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -160,7 +161,7 @@ fun OnboardingFlow(
       canFinishOnboarding(
         isConnected = isConnected,
         isNodeConnected = isNodeConnected,
-        nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+        nodeCapabilityApproval = nodeCapabilityApproval,
       )
 
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
@@ -210,6 +211,40 @@ fun OnboardingFlow(
         token = token,
         password = password,
       )
+
+    fun scanGatewaySetupCode() {
+      setupError = null
+      qrScanner
+        .startScan()
+        .addOnSuccessListener { barcode ->
+          val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
+          val scannedSetupCode = scanned.setupCode
+          if (scannedSetupCode == null) {
+            setupError =
+              gatewayEndpointValidationMessage(
+                scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
+                GatewayEndpointInputSource.QR_SCAN,
+              )
+            step = OnboardingStep.Gateway
+            return@addOnSuccessListener
+          }
+          val plan = resolveCurrentGatewayPlan(setupCodeValue = scannedSetupCode)
+          if (plan == null) {
+            setupError =
+              gatewayEndpointValidationMessage(
+                GatewayEndpointValidationError.INVALID_URL,
+                GatewayEndpointInputSource.QR_SCAN,
+              )
+            step = OnboardingStep.Gateway
+            return@addOnSuccessListener
+          }
+          setupCode = scannedSetupCode
+          connectToGatewayPlan(plan)
+        }.addOnFailureListener {
+          setupError = "Could not open the scanner."
+          step = OnboardingStep.Gateway
+        }
+    }
 
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
@@ -300,34 +335,7 @@ fun OnboardingFlow(
           discoveryStarted = runtimeInitialized,
           error = setupError,
           onBack = { step = OnboardingStep.Welcome },
-          onScan = {
-            setupError = null
-            qrScanner
-              .startScan()
-              .addOnSuccessListener { barcode ->
-                val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
-                val scannedSetupCode = scanned.setupCode
-                if (scannedSetupCode == null) {
-                  setupError =
-                    gatewayEndpointValidationMessage(
-                      scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
-                      GatewayEndpointInputSource.QR_SCAN,
-                    )
-                  return@addOnSuccessListener
-                }
-                val plan = resolveCurrentGatewayPlan(setupCodeValue = scannedSetupCode)
-                if (plan == null) {
-                  setupError =
-                    gatewayEndpointValidationMessage(
-                      GatewayEndpointValidationError.INVALID_URL,
-                      GatewayEndpointInputSource.QR_SCAN,
-                    )
-                  return@addOnSuccessListener
-                }
-                setupCode = scannedSetupCode
-                connectToGatewayPlan(plan)
-              }.addOnFailureListener { setupError = "Could not open the scanner." }
-          },
+          onScan = ::scanGatewaySetupCode,
           onSetupCodeChange = {
             setupCode = it
             setupError = null
@@ -368,7 +376,7 @@ fun OnboardingFlow(
           attemptedGatewayName = attemptedGatewayName,
           remoteAddress = remoteAddress,
           ready = ready,
-          nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+          nodeCapabilityApproval = nodeCapabilityApproval,
           gatewayConnectionProblem = gatewayConnectionProblem,
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onBack = { step = OnboardingStep.Gateway },
@@ -377,6 +385,7 @@ fun OnboardingFlow(
             connectToGatewayPlan(plan.copy(savedAuthAction = GatewaySavedAuthAction.PRESERVE))
           },
           onEdit = { step = OnboardingStep.Gateway },
+          onScan = ::scanGatewaySetupCode,
           onContinue = { step = OnboardingStep.Permissions },
         )
       OnboardingStep.Permissions ->
@@ -637,12 +646,13 @@ private fun GatewayRecoveryScreen(
   attemptedGatewayName: String?,
   remoteAddress: String?,
   ready: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
   gatewayConnectionProblem: GatewayConnectionProblem?,
   connectSettling: Boolean,
   onBack: () -> Unit,
   onRetry: () -> Unit,
   onEdit: () -> Unit,
+  onScan: () -> Unit,
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -651,9 +661,10 @@ private fun GatewayRecoveryScreen(
       ready = ready,
       statusText = statusText,
       connectSettling = connectSettling,
-      nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+      nodeCapabilityApproval = nodeCapabilityApproval,
       gatewayConnectionProblem = gatewayConnectionProblem,
     )
+  val primaryAction = gatewayRecoveryPrimaryAction(ready, gatewayConnectionProblem)
   val context = LocalContext.current
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
@@ -667,6 +678,7 @@ private fun GatewayRecoveryScreen(
               GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
               GatewayRecoveryUiState.NodeCapabilityApprovalPending -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.ApprovalRequired -> Icons.Default.WifiTethering
+              GatewayRecoveryUiState.AuthenticationRequired -> Icons.Default.Security
               GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.Finishing -> Icons.Default.WifiTethering
               GatewayRecoveryUiState.Failed -> Icons.Default.ErrorOutline
@@ -678,6 +690,7 @@ private fun GatewayRecoveryScreen(
               GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
               GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawTheme.colors.warning
               GatewayRecoveryUiState.ApprovalRequired -> ClawTheme.colors.warning
+              GatewayRecoveryUiState.AuthenticationRequired -> ClawTheme.colors.warning
               GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
               GatewayRecoveryUiState.Finishing -> ClawTheme.colors.text
               GatewayRecoveryUiState.Failed -> ClawTheme.colors.warning
@@ -702,13 +715,13 @@ private fun GatewayRecoveryScreen(
                 ready = ready,
                 remoteAddress = remoteAddress,
                 statusText = statusText,
-                nodeCapabilityApprovalState = nodeCapabilityApprovalState,
+                nodeCapabilityApproval = nodeCapabilityApproval,
                 gatewayConnectionProblem = gatewayConnectionProblem,
               ),
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
-          recoveryGatewayApprovalCommand(gatewayConnectionProblem)?.let { command ->
+          recoveryGatewayApprovalCommand(nodeCapabilityApproval, gatewayConnectionProblem)?.let { command ->
             ApprovalCommandBlock(command = command, onCopy = { copyApprovalCommand(context, command) })
           }
           ClawStatusPill(
@@ -717,6 +730,7 @@ private fun GatewayRecoveryScreen(
                 GatewayRecoveryUiState.Connected -> "Healthy"
                 GatewayRecoveryUiState.NodeCapabilityApprovalPending -> "Node approval"
                 GatewayRecoveryUiState.ApprovalRequired -> "Needs approval"
+                GatewayRecoveryUiState.AuthenticationRequired -> "Needs authentication"
                 GatewayRecoveryUiState.Pairing -> "Pairing"
                 GatewayRecoveryUiState.Finishing -> "Connecting"
                 GatewayRecoveryUiState.Failed -> "Needs attention"
@@ -726,6 +740,7 @@ private fun GatewayRecoveryScreen(
                 GatewayRecoveryUiState.Connected -> ClawStatus.Success
                 GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawStatus.Warning
                 GatewayRecoveryUiState.ApprovalRequired -> ClawStatus.Warning
+                GatewayRecoveryUiState.AuthenticationRequired -> ClawStatus.Warning
                 GatewayRecoveryUiState.Pairing -> ClawStatus.Neutral
                 GatewayRecoveryUiState.Finishing -> ClawStatus.Neutral
                 GatewayRecoveryUiState.Failed -> ClawStatus.Warning
@@ -736,13 +751,44 @@ private fun GatewayRecoveryScreen(
 
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ClawPrimaryButton(
-          text = if (ready) "Continue" else "Retry connection",
-          icon = if (ready) Icons.Default.CheckCircle else Icons.Default.Refresh,
-          onClick = if (ready) onContinue else onRetry,
+          text = gatewayRecoveryPrimaryActionLabel(primaryAction),
+          icon =
+            when (primaryAction) {
+              GatewayRecoveryPrimaryAction.Continue -> Icons.Default.CheckCircle
+              GatewayRecoveryPrimaryAction.ScanFreshSetupCode -> Icons.Default.QrCode2
+              GatewayRecoveryPrimaryAction.EditConnection -> Icons.Default.Edit
+              GatewayRecoveryPrimaryAction.RetryConnection -> Icons.Default.Refresh
+            },
+          onClick =
+            when (primaryAction) {
+              GatewayRecoveryPrimaryAction.Continue -> onContinue
+              GatewayRecoveryPrimaryAction.ScanFreshSetupCode -> onScan
+              GatewayRecoveryPrimaryAction.EditConnection -> onEdit
+              GatewayRecoveryPrimaryAction.RetryConnection -> onRetry
+            },
           modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedAction(title = "Edit connection", icon = Icons.Default.Edit, onClick = onEdit)
-        OutlinedAction(title = "Copy diagnostic", icon = Icons.Default.ContentCopy, onClick = { copyGatewayDiagnostic(context, statusText, serverName, remoteAddress, ready, gatewayConnectionProblem) })
+        if (
+          primaryAction != GatewayRecoveryPrimaryAction.ScanFreshSetupCode &&
+          primaryAction != GatewayRecoveryPrimaryAction.EditConnection
+        ) {
+          OutlinedAction(title = "Edit connection", icon = Icons.Default.Edit, onClick = onEdit)
+        }
+        OutlinedAction(
+          title = "Copy diagnostic",
+          icon = Icons.Default.ContentCopy,
+          onClick = {
+            copyGatewayDiagnostic(
+              context,
+              statusText,
+              serverName,
+              remoteAddress,
+              ready,
+              nodeCapabilityApproval,
+              gatewayConnectionProblem,
+            )
+          },
+        )
       }
     }
   }
@@ -1075,6 +1121,10 @@ internal enum class GatewayRecoveryUiState(
     title = "Pairing Gateway",
     message = "Approve this phone on the gateway.\nThen retry the connection.",
   ),
+  AuthenticationRequired(
+    title = "Authentication needed",
+    message = "Update this Gateway connection to continue.",
+  ),
   NodeCapabilityApprovalPending(
     title = "Node Approval Pending",
     message = "Gateway pairing worked.\nApprove this phone's node capabilities from an operator UI.",
@@ -1092,6 +1142,56 @@ internal enum class GatewayRecoveryUiState(
     message = "We could not reach your Gateway.\nLet's fix this.",
   ),
 }
+
+internal enum class GatewayRecoveryPrimaryAction {
+  Continue,
+  ScanFreshSetupCode,
+  EditConnection,
+  RetryConnection,
+}
+
+internal fun gatewayRecoveryPrimaryActionLabel(action: GatewayRecoveryPrimaryAction): String =
+  when (action) {
+    GatewayRecoveryPrimaryAction.Continue -> "Continue"
+    GatewayRecoveryPrimaryAction.ScanFreshSetupCode -> "Scan fresh setup code"
+    GatewayRecoveryPrimaryAction.EditConnection -> "Edit connection"
+    GatewayRecoveryPrimaryAction.RetryConnection -> "Retry connection"
+  }
+
+/** Selects the action that can actually recover the current structured gateway failure. */
+internal fun gatewayRecoveryPrimaryAction(
+  ready: Boolean,
+  problem: GatewayConnectionProblem?,
+): GatewayRecoveryPrimaryAction =
+  when {
+    ready -> GatewayRecoveryPrimaryAction.Continue
+    problem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" -> GatewayRecoveryPrimaryAction.ScanFreshSetupCode
+    gatewayProblemNeedsCredentialUpdate(problem) -> GatewayRecoveryPrimaryAction.EditConnection
+    else -> GatewayRecoveryPrimaryAction.RetryConnection
+  }
+
+private fun gatewayProblemNeedsCredentialUpdate(problem: GatewayConnectionProblem?): Boolean =
+  when (problem?.code) {
+    "AUTH_DEVICE_TOKEN_MISMATCH",
+    "AUTH_TOKEN_MISMATCH",
+    "AUTH_SCOPE_MISMATCH",
+    "AUTH_PASSWORD_MISSING",
+    "AUTH_PASSWORD_MISMATCH",
+    "AUTH_TOKEN_MISSING",
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+    -> true
+    else ->
+      problem?.recommendedNextStep == "update_auth_credentials"
+  }
+
+private fun gatewayProblemNeedsAuthenticationRecovery(problem: GatewayConnectionProblem?): Boolean =
+  gatewayProblemNeedsCredentialUpdate(problem) ||
+    problem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" ||
+    problem?.code == "AUTH_TOKEN_NOT_CONFIGURED" ||
+    problem?.code == "AUTH_PASSWORD_NOT_CONFIGURED" ||
+    problem?.recommendedNextStep == "update_auth_configuration" ||
+    problem?.recommendedNextStep == "review_auth_configuration"
 
 internal data class NearbyGatewayUiState(
   val subtitle: String,
@@ -1136,19 +1236,19 @@ internal fun gatewayRecoveryUiState(
   ready: Boolean,
   statusText: String,
   connectSettling: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
   gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): GatewayRecoveryUiState =
   when {
     ready -> GatewayRecoveryUiState.Connected
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved -> GatewayRecoveryUiState.NodeCapabilityApprovalPending
+    nodeCapabilityApproval.needsApproval() -> GatewayRecoveryUiState.NodeCapabilityApprovalPending
     gatewayConnectionProblem?.isPairingRequired == true &&
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
+    gatewayProblemNeedsAuthenticationRecovery(gatewayConnectionProblem) ->
+      GatewayRecoveryUiState.AuthenticationRequired
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading -> GatewayRecoveryUiState.Finishing
+    nodeCapabilityApproval == GatewayNodeCapabilityApproval.Loading -> GatewayRecoveryUiState.Finishing
     connectSettling -> GatewayRecoveryUiState.Finishing
     gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
     gatewayStatusLooksLikePartialConnect(statusText) -> GatewayRecoveryUiState.Finishing
@@ -1204,26 +1304,24 @@ internal fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): String =
   if (ready) {
     remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
-  } else if (
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
-    nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
-  ) {
-    "Gateway paired. Waiting for node capability approval."
+  } else if (nodeCapabilityApproval.needsApproval()) {
+    recoveryGatewayApprovalCommand(nodeCapabilityApproval, gatewayConnectionProblem)
+      ?.let { "Gateway paired. Run this on the gateway host:" }
+      ?: "Gateway paired. Waiting for node capability approval."
   } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
-    recoveryGatewayApprovalCommand(gatewayConnectionProblem)
+    recoveryGatewayApprovalCommand(nodeCapabilityApproval, gatewayConnectionProblem)
       ?.let { "Gateway approval is pending. Run this on the gateway host:" }
       ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
   } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
     "Gateway approval is in progress. OpenClaw will retry automatically."
   } else if (gatewayConnectionProblem != null) {
     recoveryGatewayAuthDetail(gatewayConnectionProblem)
-  } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+  } else if (nodeCapabilityApproval == GatewayNodeCapabilityApproval.Loading) {
     "Gateway paired. Checking node capability approval."
   } else if (statusText.contains("operator offline", ignoreCase = true)) {
     "Gateway paired. Waiting for operator access."
@@ -1240,6 +1338,10 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
     -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
+    "AUTH_TOKEN_NOT_CONFIGURED",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
+    -> "Gateway authentication is not configured. Configure it on the gateway host, then retry."
+    "AUTH_SCOPE_MISMATCH" -> "Gateway access needs review. Check gateway authentication scopes, then retry."
     "AUTH_PASSWORD_MISSING" -> "Gateway password is required. Enter it again or edit this connection."
     "AUTH_PASSWORD_MISMATCH" -> "Gateway password is invalid. Re-enter it or reset this gateway connection."
     "AUTH_TOKEN_MISSING" -> "Gateway token is required. Enter it again or edit this connection."
@@ -1249,7 +1351,7 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
     else ->
       when (gatewayConnectionProblem.recommendedNextStep) {
         "update_auth_credentials" -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
-        "update_auth_configuration" -> "Gateway authentication is not configured. Edit this connection and try again."
+        "update_auth_configuration" -> "Gateway authentication is not configured. Configure it on the gateway host, then retry."
         "review_auth_configuration" -> "Gateway authentication needs review. Check gateway settings, then retry."
         else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
       }
@@ -1289,9 +1391,18 @@ private fun protocolMismatchVersions(
     ?.joinToString(prefix = "(", postfix = ").")
 }
 
-private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConnectionProblem?): String? {
+private fun GatewayNodeCapabilityApproval.needsApproval(): Boolean =
+  this is GatewayNodeCapabilityApproval.PendingApproval ||
+    this is GatewayNodeCapabilityApproval.PendingReapproval ||
+    this == GatewayNodeCapabilityApproval.Unapproved
+
+internal fun recoveryGatewayApprovalCommand(
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
+  gatewayConnectionProblem: GatewayConnectionProblem?,
+): String? {
+  gatewayNodeApprovalCommand(nodeCapabilityApproval)?.let { return it }
   if (gatewayConnectionProblem?.isPairingRequired != true || gatewayConnectionProblem.canAutoRetry) return null
-  val requestId = gatewayConnectionProblem.requestId?.trim()?.takeIf { it.isNotEmpty() }
+  val requestId = normalizeGatewayApprovalRequestId(gatewayConnectionProblem.requestId)
   return if (requestId != null) {
     "openclaw devices approve $requestId"
   } else {
@@ -1315,9 +1426,10 @@ private fun copyGatewayDiagnostic(
   serverName: String?,
   remoteAddress: String?,
   ready: Boolean,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ) {
-  val approvalCommand = recoveryGatewayApprovalCommand(gatewayConnectionProblem)
+  val approvalCommand = recoveryGatewayApprovalCommand(nodeCapabilityApproval, gatewayConnectionProblem)
   val diagnostic =
     listOfNotNull(
       "OpenClaw Android gateway diagnostic",
@@ -1353,18 +1465,18 @@ private class PermissionState(
 internal fun canFinishOnboarding(
   isConnected: Boolean,
   isNodeConnected: Boolean,
-  nodeCapabilityApprovalState: GatewayNodeApprovalState,
+  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): Boolean =
   isConnected &&
     isNodeConnected &&
-    when (nodeCapabilityApprovalState) {
-      GatewayNodeApprovalState.PendingApproval,
-      GatewayNodeApprovalState.PendingReapproval,
-      GatewayNodeApprovalState.Unapproved,
-      GatewayNodeApprovalState.Loading,
+    when (nodeCapabilityApproval) {
+      is GatewayNodeCapabilityApproval.PendingApproval,
+      is GatewayNodeCapabilityApproval.PendingReapproval,
+      GatewayNodeCapabilityApproval.Unapproved,
+      GatewayNodeCapabilityApproval.Loading,
       -> false
-      GatewayNodeApprovalState.Approved,
-      GatewayNodeApprovalState.Unsupported,
+      GatewayNodeCapabilityApproval.Approved,
+      GatewayNodeCapabilityApproval.Unsupported,
       -> true
     }
 

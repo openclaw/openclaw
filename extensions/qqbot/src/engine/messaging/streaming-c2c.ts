@@ -25,6 +25,7 @@ import {
 } from "../types.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { sanitizeQQBotVisibleText } from "../utils/visible-text.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import type { MediaTargetContext } from "./outbound.js";
 import { getMessageApi } from "./sender.js";
 import {
@@ -1108,7 +1109,7 @@ export class StreamingController {
 // ============ 流式媒体发送 ============
 
 /** 流式媒体发送上下文（由 gateway 注入到 StreamingController） */
-interface StreamingMediaContext {
+interface StreamingMediaContext extends OutboundMediaAccessContext {
   /** 账户信息 */
   account: GatewayAccount;
   /** 事件信息 */
@@ -1132,6 +1133,11 @@ interface StreamingMediaContext {
  */
 function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
   const { account, event, log } = ctx;
+  const mediaAccessContext: OutboundMediaAccessContext = {
+    ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
+    ...(ctx.mediaLocalRoots ? { mediaLocalRoots: ctx.mediaLocalRoots } : {}),
+    ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+  };
 
   const mediaTarget: MediaTargetContext = {
     targetType: event.type,
@@ -1144,6 +1150,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     logPrefix: `[qqbot:${account.accountId}]`,
+    ...mediaAccessContext,
   };
 
   const qualifiedTarget =
@@ -1155,6 +1162,7 @@ function toMediaSendContext(ctx: StreamingMediaContext): MediaSendContext {
     account,
     replyToId: event.messageId,
     log,
+    ...mediaAccessContext,
   };
 }
 

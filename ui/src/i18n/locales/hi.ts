@@ -1335,6 +1335,9 @@ export const hi: TranslationMap = {
     updateNow: "अभी अपडेट करें",
     dismissUpdateBanner: "अपडेट बैनर हटाएँ",
     switchedSession: "{session} पर स्विच किया गया",
+    sidebar: {
+      allSessions: "All sessions",
+    },
     welcome: {
       ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
