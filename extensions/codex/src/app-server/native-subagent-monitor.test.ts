@@ -94,8 +94,14 @@ function createRuntime() {
   };
 }
 
-function createTaskScope(requesterSessionKey = "agent:main:discord:channel:C123") {
-  return { requesterSessionKey } as AgentHarnessTaskRuntimeScope;
+function createTaskScope(
+  requesterSessionKey = "agent:main:discord:channel:C123",
+  requesterOrigin?: AgentHarnessTaskRuntimeScope["requesterOrigin"],
+) {
+  return {
+    requesterSessionKey,
+    ...(requesterOrigin ? { requesterOrigin } : {}),
+  } as AgentHarnessTaskRuntimeScope;
 }
 
 async function notifyChildStarted(
@@ -231,6 +237,53 @@ describe("CodexNativeSubagentMonitor", () => {
       }),
     );
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("passes parent requester origin into native subagent task mirroring", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope("agent:main:discord:channel:C123", {
+        channel: "discord",
+        to: "channel:C123",
+        threadId: "T456",
+      }),
+      agentId: "main",
+    });
+
+    await client.notify({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "child-thread",
+          preview: "inspect the repo",
+          source: {
+            subAgent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        notifyPolicy: "state_changes",
+        deliveryStatus: "pending",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:C123",
+          threadId: "T456",
+        },
+      }),
+    );
   });
 
   it.each([
