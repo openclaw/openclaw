@@ -336,6 +336,16 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs)).toBe(false);
   });
 
+  it("isBuildReadyForRestart returns false when stamp exists but has no head field while current HEAD is known", () => {
+    const readFileSync = vi.fn().mockReturnValue(JSON.stringify({ builtAt: Date.now() }));
+    const mockFs = {
+      existsSync: vi.fn((p: string) => p.includes("entry.js") || p.includes(".buildstamp")),
+      readFileSync,
+    };
+    const mockResolveHead = vi.fn().mockReturnValue("dddddddddddddddddddddddddddddddddddddddd");
+    expect(isBuildReadyForRestart("/tmp/test-cwd", mockFs, mockResolveHead)).toBe(false);
+  });
+
   // ── Exit handler guard tests ──────────────────────────────────────
 
   it("does not restart after child SIGTERM exit when build not ready", () => {

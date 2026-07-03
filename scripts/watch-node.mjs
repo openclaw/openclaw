@@ -104,7 +104,10 @@ export const isBuildReadyForRestart = (cwd, fsModule, resolveHead) => {
     const raw = fsModule.readFileSync(stampPath, "utf8");
     const stamp = JSON.parse(raw);
     const currentHead = (resolveHead ?? resolveGitHead)({ cwd });
-    if (currentHead && stamp.head && currentHead !== stamp.head) return false;
+    // If stamp HEAD is missing or mismatched vs current checkout, the build
+    // is stale and restarting would crash-loop into a half-rebuilt dist/
+    // (issue #99603).
+    if (currentHead && (!stamp.head || currentHead !== stamp.head)) return false;
   } catch {
     return false;
   }
