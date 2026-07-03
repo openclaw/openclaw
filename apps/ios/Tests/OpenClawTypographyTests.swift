@@ -1,3 +1,4 @@
+import CoreText
 import Testing
 import UIKit
 @testable import OpenClaw
@@ -10,8 +11,8 @@ struct OpenClawTypographyTests {
     }
 
     @Test func `dynamic type scales display fonts`() {
-        guard let base = UIFont(name: "PlusJakartaSans-ExtraBold", size: 34) else {
-            Issue.record("PlusJakartaSans-ExtraBold should be bundled")
+        guard let base = UIFont(name: "RedHatDisplay-Regular", size: 34) else {
+            Issue.record("RedHatDisplay-Regular should be bundled")
             return
         }
 
@@ -23,5 +24,24 @@ struct OpenClawTypographyTests {
         let largeSize = metrics.scaledFont(for: base, compatibleWith: largeTraits).pointSize
 
         #expect(largeSize > defaultSize)
+    }
+
+    @Test func `display variable weight axis instantiates heavy weights`() {
+        guard UIFont(name: "RedHatDisplay-Regular", size: 15) != nil else {
+            Issue.record("RedHatDisplay-Regular should be bundled")
+            return
+        }
+
+        let weightAxis = NSNumber(value: 2_003_265_652) // "wght"
+        let descriptor = UIFontDescriptor(fontAttributes: [
+            .name: "RedHatDisplay-Regular",
+            kCTFontVariationAttribute as UIFontDescriptor.AttributeName: [weightAxis: 900],
+        ])
+        let font = UIFont(descriptor: descriptor, size: 15)
+        let variations = font.fontDescriptor.object(
+            forKey: kCTFontVariationAttribute as UIFontDescriptor.AttributeName) as? [NSNumber: Any]
+        let weightValue = variations?[weightAxis] as? NSNumber
+
+        #expect(weightValue?.doubleValue == 900)
     }
 }

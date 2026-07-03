@@ -217,7 +217,7 @@ struct OpenClawChatComposer: View {
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
                 Text(session.displayName ?? session.key)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                     .tag(session.key)
             }
         }
@@ -287,7 +287,7 @@ struct OpenClawChatComposer: View {
 
     private var compactAttachmentLabel: some View {
         Image(systemName: "paperclip")
-            .font(.system(size: 15, weight: .semibold))
+            .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
             .foregroundStyle(.secondary)
             .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
             .contentShape(Rectangle())
@@ -407,9 +407,9 @@ struct OpenClawChatComposer: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                 Text(talkControl.isEnabled ? "Stop" : "Talk")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                     .lineLimit(1)
             }
             .foregroundStyle(talkControl.isEnabled ? .white : .primary)
@@ -437,7 +437,7 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                .font(.system(size: 14, weight: .semibold))
+                .font(OpenClawChatTypography.display(size: 14, weight: .semibold, relativeTo: .subheadline))
                 .foregroundStyle(talkControl.isEnabled ? .white : .secondary)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
                 .background {
@@ -500,7 +500,7 @@ struct OpenClawChatComposer: View {
                 .fill(self.connectionOK ? .green : .orange)
                 .frame(width: 7, height: 7)
             Text(self.connectionStatusText)
-                .font(.caption2)
+                .font(OpenClawChatTypography.caption2)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, self.composerChrome == .clean ? 0 : 8)
@@ -523,7 +523,7 @@ struct OpenClawChatComposer: View {
         ZStack(alignment: self.editorOverlayAlignment) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(self.placeholderText)
-                    .font(.body)
+                    .font(OpenClawChatTypography.body)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
@@ -549,7 +549,7 @@ struct OpenClawChatComposer: View {
                 "",
                 text: self.$viewModel.input,
                 axis: .vertical)
-                .font(.body)
+                .font(OpenClawChatTypography.body)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .fixedSize(horizontal: false, vertical: true)
@@ -576,7 +576,7 @@ struct OpenClawChatComposer: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                     }
                 }
                 .buttonStyle(.plain)
@@ -597,7 +597,7 @@ struct OpenClawChatComposer: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                     }
                 }
                 .buttonStyle(.plain)

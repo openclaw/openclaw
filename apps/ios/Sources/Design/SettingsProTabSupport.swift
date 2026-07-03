@@ -36,7 +36,7 @@ struct SettingsApprovalRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: self.item.icon)
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.captionBold)
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
                 .background {
@@ -54,7 +54,7 @@ struct SettingsApprovalRow: View {
             }
             Spacer(minLength: 8)
             Text(self.item.priority)
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.captionBold)
                 .foregroundStyle(self.item.color)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)

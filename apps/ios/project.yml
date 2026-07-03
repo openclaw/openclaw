@@ -179,17 +179,9 @@ targets:
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
         UIAppFonts:
-          - PlusJakartaSans-Light.ttf
-          - PlusJakartaSans-Regular.ttf
-          - PlusJakartaSans-Medium.ttf
-          - PlusJakartaSans-SemiBold.ttf
-          - PlusJakartaSans-Bold.ttf
-          - PlusJakartaSans-ExtraBold.ttf
-          - DMSans-Light.ttf
-          - DMSans-Regular.ttf
-          - DMSans-Italic.ttf
-          - DMSans-Medium.ttf
-          - DMSans-SemiBold.ttf
+          - RedHatDisplay[wght].ttf
+          - Inter[opsz,wght].ttf
+          - Inter-Italic[opsz,wght].ttf
           - JetBrainsMono-Regular.ttf
           - JetBrainsMono-Medium.ttf
           - JetBrainsMono-SemiBold.ttf

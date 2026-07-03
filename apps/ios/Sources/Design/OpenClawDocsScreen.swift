@@ -120,7 +120,7 @@ struct OpenClawDocsScreen: View {
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "arrow.up.right")
-                    .font(OpenClawType.captionSemiBold)
+                    .font(OpenClawType.captionBold)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14)

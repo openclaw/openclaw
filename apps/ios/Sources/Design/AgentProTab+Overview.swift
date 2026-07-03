@@ -77,7 +77,7 @@ extension AgentProTab {
                     }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(OpenClawType.title3)
+                        .font(.title3)
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
                         .contentShape(Circle())
@@ -313,7 +313,7 @@ extension AgentProTab {
     func agentAvatar(_ agent: AgentSummary, state: AgentRosterState) -> some View {
         ZStack(alignment: .bottomTrailing) {
             Text(self.agentBadge(for: agent))
-                .font(.system(size: self.agentBadge(for: agent).count > 2 ? 14 : 18, weight: .bold, design: .rounded))
+                .font(OpenClawType.avatar(size: self.agentBadge(for: agent).count > 2 ? 14 : 18))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.62)
                 .lineLimit(1)

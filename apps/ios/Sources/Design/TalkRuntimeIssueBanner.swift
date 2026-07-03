@@ -43,7 +43,7 @@ struct TalkRuntimeIssueDetailsSheet: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(self.issue.fallbackBannerTitle)
-                            .font(OpenClawType.title3)
+                            .font(OpenClawType.title3SemiBold)
                         Text(self.issue.fallbackBannerMessage)
                             .font(OpenClawType.body)
                             .foregroundStyle(.secondary)

@@ -673,7 +673,7 @@ struct CommandSessionsScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Text("Recent sessions")
-                        .font(OpenClawType.subheadSemiBold)
+                        .font(OpenClawType.subheadBold)
                     Spacer(minLength: 8)
                     if self.isLoading {
                         ProgressView()

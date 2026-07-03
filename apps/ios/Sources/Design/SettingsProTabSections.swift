@@ -42,16 +42,16 @@ extension SettingsProTab {
                 color: .secondary)
 
             Text("Appearance")
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
 
             HStack(spacing: 5) {
                 Text(self.currentAppearancePreference.label)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2.weight(.bold))
+                    .font(OpenClawType.caption2Bold)
             }
             .foregroundStyle(OpenClawBrand.accent)
         }
@@ -576,9 +576,9 @@ extension SettingsProTab {
                         ProIconBadge(systemName: "doc.text", color: .secondary)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("No licenses bundled")
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                             Text("License files are not available in this build.")
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
@@ -589,7 +589,7 @@ extension SettingsProTab {
                 let lastDocumentID = documents.last?.id
 
                 Text("OpenClaw appreciates its partners in the open-source community.")
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -619,11 +619,11 @@ extension SettingsProTab {
         HStack(spacing: 12) {
             ProIconBadge(systemName: "doc.text", color: .secondary)
             Text(document.title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.primary)
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 14)

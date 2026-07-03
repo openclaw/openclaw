@@ -1099,7 +1099,7 @@ struct IPadWorkboardQueueRow: View {
                 self.actionMenuItems
             } label: {
                 Image(systemName: self.isBusy ? "hourglass" : "ellipsis.circle")
-                    .font(OpenClawType.headline)
+                    .font(.system(size: 19, weight: .semibold))
                     .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }

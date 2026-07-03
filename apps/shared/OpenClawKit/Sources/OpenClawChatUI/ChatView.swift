@@ -829,12 +829,12 @@ private struct ChatAssistantIntroCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Image(systemName: "sparkles")
-                .font(.title3.weight(.medium))
+                .font(OpenClawChatTypography.title3)
                 .foregroundStyle(OpenClawChatTheme.accent)
                 .accessibilityHidden(true)
 
             Text(self.text)
-                .font(.title3.weight(.semibold))
+                .font(OpenClawChatTypography.title3SemiBold)
                 .foregroundStyle(OpenClawChatTheme.assistantText)
                 .multilineTextAlignment(.leading)
         }
@@ -851,7 +851,7 @@ private struct ChatLoadingBubble: View {
             ProgressView()
                 .controlSize(.small)
             Text("Loading chat")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawChatTypography.captionSemiBold)
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 9)
@@ -874,17 +874,17 @@ private struct ChatNoticeCard: View {
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: self.systemImage)
-                .font(.system(size: 19, weight: .semibold))
+                .font(OpenClawChatTypography.display(size: 19, weight: .semibold, relativeTo: .headline))
                 .foregroundStyle(self.tint)
                 .frame(width: 42, height: 42)
                 .background(self.tint.opacity(0.14), in: Circle())
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.title)
-                    .font(.headline)
+                    .font(OpenClawChatTypography.headline)
 
                 Text(self.message)
-                    .font(.callout)
+                    .font(OpenClawChatTypography.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
                     .lineLimit(3)
@@ -920,16 +920,16 @@ private struct ChatNoticeBanner: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: self.systemImage)
-                .font(.system(size: 15, weight: .semibold))
+                .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
                 .foregroundStyle(self.tint)
                 .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(self.title)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
 
                 Text(self.message)
-                    .font(.caption)
+                    .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }

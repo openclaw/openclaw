@@ -540,7 +540,7 @@ extension AgentProTab {
                 self.detailMetric(label: "Source", value: self.normalized(skill.source) ?? "unknown")
                 if let filePath = self.normalized(skill.filePath) {
                     Text(filePath)
-                        .font(OpenClawType.monoSmall)
+                        .font(OpenClawType.monoCaption2)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }

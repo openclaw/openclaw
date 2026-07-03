@@ -274,7 +274,7 @@ struct OpenClawSidebarRevealButton: View {
     var body: some View {
         let button = Button(action: headerAction.action) {
             Image(systemName: self.headerAction.systemName)
-                .font(OpenClawType.subhead)
+                .font(OpenClawType.subheadSemiBold)
                 .frame(
                     width: OpenClawProMetric.compactControlSize,
                     height: OpenClawProMetric.compactControlSize)
@@ -389,7 +389,7 @@ struct OpenClawNoticeBanner: View {
                     .fixedSize(horizontal: false, vertical: true)
             case let .requestID(value):
                 Text("Request ID: \(value)")
-                    .font(OpenClawType.monoSmall)
+                    .font(OpenClawType.monoSmallMedium)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
             }
@@ -400,7 +400,7 @@ struct OpenClawNoticeBanner: View {
 struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
     let title: String
     let subtitle: String?
-    var titleFont: Font = OpenClawType.title3
+    var titleFont: Font = OpenClawType.title3SemiBold
     var subtitleFont: Font = OpenClawType.subhead
     var subtitleLineLimit: Int? = 2
     @ViewBuilder let leading: Leading
@@ -409,7 +409,7 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
     init(
         title: String,
         subtitle: String? = nil,
-        titleFont: Font = OpenClawType.title3,
+        titleFont: Font = OpenClawType.title3SemiBold,
         subtitleFont: Font = OpenClawType.subhead,
         subtitleLineLimit: Int? = 2,
         @ViewBuilder leading: () -> Leading,
@@ -710,7 +710,7 @@ struct ProMetricTile: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.value)
-                    .font(OpenClawType.headline)
+                    .font(OpenClawType.headlineBold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                 Text(self.title)

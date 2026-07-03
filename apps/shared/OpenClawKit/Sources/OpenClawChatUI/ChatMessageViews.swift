@@ -15,7 +15,7 @@ struct ChatAgentAvatar: View {
 
     var body: some View {
         Text(self.displayText)
-            .font(.system(size: self.fontSize, weight: .bold, design: .rounded))
+            .font(OpenClawChatTypography.avatar(size: self.fontSize))
             .foregroundStyle(.white)
             .minimumScaleFactor(0.6)
             .lineLimit(1)
@@ -468,7 +468,7 @@ private struct AttachmentRow: View {
         HStack(spacing: 8) {
             Image(systemName: "paperclip")
             Text(self.att.fileName ?? "Attachment")
-                .font(.footnote)
+                .font(OpenClawChatTypography.footnote)
                 .lineLimit(1)
                 .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
             Spacer()
@@ -487,13 +487,13 @@ private struct ToolCallCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(self.toolName)
-                    .font(.footnote.weight(.semibold))
+                    .font(OpenClawChatTypography.footnoteSemiBold)
                 Spacer(minLength: 0)
             }
 
             if let summary = self.summary, !summary.isEmpty {
                 Text(summary)
-                    .font(.footnote.monospaced())
+                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -532,12 +532,12 @@ private struct ToolResultCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(self.title)
-                        .font(.footnote.weight(.semibold))
+                        .font(OpenClawChatTypography.footnoteSemiBold)
                     Spacer(minLength: 0)
                 }
 
                 Text(self.displayText)
-                    .font(.footnote.monospaced())
+                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                     .foregroundStyle(self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText)
                     .lineLimit(self.expanded ? nil : Self.previewLineLimit)
 
@@ -546,7 +546,7 @@ private struct ToolResultCard: View {
                         self.expanded.toggle()
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                 }
             }
@@ -602,7 +602,7 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 TypingDots()
                 Text("Writing")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -694,7 +694,7 @@ struct ChatPendingToolsBubble: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Running tools…", systemImage: "hammer")
-                .font(.caption)
+                .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
 
             ForEach(self.toolCalls) { call in
@@ -702,14 +702,14 @@ struct ChatPendingToolsBubble: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(display.emoji) \(display.label)")
-                            .font(.footnote.monospaced())
+                            .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         ProgressView().controlSize(.mini)
                     }
                     if let detail = display.detailLine, !detail.isEmpty {
                         Text(detail)
-                            .font(.caption.monospaced())
+                            .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     }

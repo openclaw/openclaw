@@ -60,10 +60,10 @@ struct RootTabsPhoneControlHub: View {
                 color: self.gatewayStateColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Gateway")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(.primary)
                 Text(self.sidebarActiveAgentTitle)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -71,10 +71,10 @@ struct RootTabsPhoneControlHub: View {
             HStack(spacing: 6) {
                 ProStatusDot(color: self.gatewayStateColor)
                 Text(self.gatewayStateText)
-                    .font(.footnote.weight(.semibold))
+                    .font(OpenClawType.footnoteSemiBold)
                     .foregroundStyle(self.gatewayStateColor)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                     .foregroundStyle(.secondary)
             }
         }
@@ -95,7 +95,7 @@ struct RootTabsPhoneControlHub: View {
                     self.rowLabel(destination)
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
@@ -111,6 +111,8 @@ struct RootTabsPhoneControlHub: View {
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
         Label {
             Text(destination.title)
+                .font(OpenClawType.subheadSemiBold)
+                .foregroundStyle(.primary)
         } icon: {
             ProIconBadge(systemName: destination.systemImage, color: .secondary)
         }

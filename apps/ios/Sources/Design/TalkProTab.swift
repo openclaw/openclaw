@@ -109,8 +109,8 @@ struct TalkProTab: View {
         OpenClawAdaptiveHeaderRow(
             title: "Talk",
             subtitle: self.headerSubtitle,
-            titleFont: .system(size: 30, weight: .bold),
-            subtitleFont: .caption.weight(.medium),
+            titleFont: OpenClawType.display(size: 30, weight: 750, relativeTo: .title1),
+            subtitleFont: OpenClawType.captionMedium,
             subtitleLineLimit: 1)
         {
             if let headerLeadingAction {
@@ -137,14 +137,14 @@ struct TalkProTab: View {
                         .font(OpenClawType.title3)
                         .multilineTextAlignment(.center)
                     Text(self.heroSubtitle)
-                        .font(OpenClawType.subhead)
+                        .font(OpenClawType.subheadMedium)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
                 Button(action: self.handlePrimaryAction) {
                     Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
-                        .font(OpenClawType.subheadSemiBold)
+                        .font(OpenClawType.subheadBold)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
                 }

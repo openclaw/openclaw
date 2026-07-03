@@ -288,7 +288,7 @@ struct HostedPushRelayDisclosureSheet: View {
                         .font(OpenClawType.title2SemiBold)
                         .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
-                        .font(OpenClawType.title3)
+                        .font(OpenClawType.title3SemiBold)
                     Text(self.message)
                         .font(OpenClawType.body)
                         .foregroundStyle(.secondary)

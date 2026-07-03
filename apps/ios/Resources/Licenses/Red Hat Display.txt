@@ -1,18 +1,13 @@
-Plus Jakarta Sans
+Red Hat Display
 
-Copyright 2020 The Plus Jakarta Sans Project Authors
+Copyright 2024 The Red Hat Project Authors (https://github.com/RedHatOfficial/RedHatFont)
 
-Source: https://github.com/tokotype/PlusJakartaSans
-Version: 2.7.1
+Source: https://github.com/google/fonts/tree/main/ofl/redhatdisplay
+Version: Google Fonts variable release
 License: SIL Open Font License 1.1
 
 Bundled files:
-- PlusJakartaSans-Light.ttf
-- PlusJakartaSans-Regular.ttf
-- PlusJakartaSans-Medium.ttf
-- PlusJakartaSans-SemiBold.ttf
-- PlusJakartaSans-Bold.ttf
-- PlusJakartaSans-ExtraBold.ttf
+- RedHatDisplay[wght].ttf
 
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 

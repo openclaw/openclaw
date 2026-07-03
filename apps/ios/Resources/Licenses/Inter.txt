@@ -1,17 +1,14 @@
-DM Sans
+Inter
 
-Copyright 2014 The DM Sans Project Authors
+Copyright 2016 The Inter Project Authors
 
-Source: https://github.com/google/fonts/tree/main/ofl/dmsans
-Version: 2.100, static instances extracted from variable fonts
+Source: https://github.com/google/fonts/tree/main/ofl/inter
+Version: Google Fonts variable release
 License: SIL Open Font License 1.1
 
 Bundled files:
-- DMSans-Light.ttf
-- DMSans-Regular.ttf
-- DMSans-Italic.ttf
-- DMSans-Medium.ttf
-- DMSans-SemiBold.ttf
+- Inter[opsz,wght].ttf
+- Inter-Italic[opsz,wght].ttf
 
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 

@@ -97,7 +97,7 @@ struct CommandSessionRow: View {
 struct CommandViewMoreRow: View {
     var body: some View {
         Label("View More", systemImage: "chevron.right")
-            .font(OpenClawType.subheadSemiBold)
+            .font(OpenClawType.subheadBold)
             .foregroundStyle(OpenClawBrand.accent)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
@@ -113,7 +113,7 @@ struct CommandEmptyStateRow: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: self.icon)
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.captionBold)
                 .foregroundStyle(OpenClawBrand.ok)
                 .frame(width: 30, height: 30)
                 .background {

@@ -448,7 +448,7 @@ struct IPadSkillWorkshopScreen: View {
                             .font(OpenClawType.subheadSemiBold)
                         ForEach(proposal.supportFiles, id: \.path) { file in
                             Text(file.path)
-                                .font(OpenClawType.monoSmall)
+                                .font(OpenClawType.monoCaption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }

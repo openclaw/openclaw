@@ -129,7 +129,7 @@ struct ChatProTab: View {
     private var headerIdentityBadge: some View {
         if self.showsAgentBadge {
             Text(self.agentBadge)
-                .font(.system(size: self.agentBadge.count > 2 ? 13 : 16, weight: .bold, design: .rounded))
+                .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 13 : 16))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)

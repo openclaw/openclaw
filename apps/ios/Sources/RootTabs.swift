@@ -306,7 +306,7 @@ struct RootTabs: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
-                    .font(.headline.weight(.semibold))
+                    .font(OpenClawType.headline)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
@@ -317,7 +317,7 @@ struct RootTabs: View {
                     Text(self.sidebarGatewayStatusTitle)
                         .lineLimit(1)
                 }
-                .font(.caption.weight(.medium))
+                .font(OpenClawType.captionMedium)
                 .foregroundStyle(.secondary)
             }
 
@@ -608,7 +608,7 @@ struct RootTabs: View {
             self.hideSidebar()
         } label: {
             Image(systemName: self.isSidebarDrawerLayout ? "xmark" : "sidebar.left")
-                .font(.system(size: 15, weight: .semibold))
+                .font(OpenClawType.subheadSemiBold)
         }
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())

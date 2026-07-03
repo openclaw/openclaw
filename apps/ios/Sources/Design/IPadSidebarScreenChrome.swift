@@ -34,7 +34,7 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                         OpenClawAdaptiveHeaderRow(
                             title: self.title,
                             subtitle: self.subtitle,
-                            titleFont: self.isCompactHeight ? .headline.weight(.semibold) : .title2.weight(.semibold),
+                            titleFont: self.isCompactHeight ? OpenClawType.headline : OpenClawType.title2SemiBold,
                             subtitleLineLimit: self.isCompactHeight ? 1 : 2)
                         {
                             if let headerLeadingAction {
