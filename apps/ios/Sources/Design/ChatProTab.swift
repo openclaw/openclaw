@@ -87,9 +87,9 @@ struct ChatProTab: View {
                     ProCard {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Chat is preparing")
-                                .font(.headline)
+                                .font(OpenClawType.headline)
                             Text("The operator session will attach when the gateway is ready.")
-                                .font(.subheadline)
+                                .font(OpenClawType.subhead)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -108,8 +108,8 @@ struct ChatProTab: View {
         OpenClawAdaptiveHeaderRow(
             title: self.headerDisplayTitle,
             subtitle: self.headerDisplaySubtitle,
-            titleFont: .headline.weight(.semibold),
-            subtitleFont: .caption,
+            titleFont: OpenClawType.headline,
+            subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
         {
             HStack(spacing: 11) {
@@ -122,22 +122,23 @@ struct ChatProTab: View {
             self.connectionStatusButton
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.bottom, 2)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
     private var headerIdentityBadge: some View {
         if self.showsAgentBadge {
             Text(self.agentBadge)
-                .font(.system(size: self.agentBadge.count > 2 ? 11 : 14, weight: .bold, design: .rounded))
+                .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 13 : 16))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
-                .frame(width: 32, height: 32)
+                .frame(width: 38, height: 38)
                 .background(
                     Circle()
-                        .fill(OpenClawBrand.accent))
+                        .fill(OpenClawBrand.accent.gradient))
                 .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                .shadow(color: OpenClawBrand.accent.opacity(0.14), radius: 5, y: 2)
         } else {
             ProIconBadge(systemName: "bubble.left", color: OpenClawBrand.accent)
         }
@@ -214,7 +215,7 @@ struct ChatProTab: View {
 
     private var connectionStatusIcon: some View {
         Image(systemName: self.gatewayStatusSymbol)
-            .font(.subheadline.weight(.semibold))
+            .font(OpenClawType.subheadSemiBold)
             .foregroundStyle(self.gatewayPillColor)
             .frame(width: 44, height: 44)
     }
@@ -232,10 +233,6 @@ struct ChatProTab: View {
         }
     }
 
-    private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
-    }
-
     private var gatewayConnected: Bool {
         guard self.gatewayDisplayState == .connected else {
             return false
@@ -245,6 +242,10 @@ struct ChatProTab: View {
 
     private var gatewayDisplayState: GatewayDisplayState {
         GatewayStatusBuilder.build(appModel: self.appModel)
+    }
+
+    private var gatewayAccessibilityLabel: String {
+        "Gateway: \(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
     }
 
     private var gatewayPillColor: Color {

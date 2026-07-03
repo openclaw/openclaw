@@ -244,7 +244,7 @@ struct RootTabsSourceGuardTests {
             from: "var appearanceRow: some View",
             to: "var appearanceRowLabel: some View")
 
-        #expect(gatewayStatus.contains("HStack(spacing: 6)"))
+        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: self.title, tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
         #expect(agentDestinationsSource.contains("List {"))
@@ -259,7 +259,8 @@ struct RootTabsSourceGuardTests {
         #expect(!talkSource.contains("conversationCard"))
         #expect(!talkSource.contains("voiceModeCard"))
         #expect(!talkSource.contains("statusChip"))
-        #expect(settingsList.contains("Section(\"Device\")"))
+        #expect(settingsList.contains("Text(\"Device\")"))
+        #expect(settingsList.contains(".font(OpenClawType.captionSemiBold)"))
         #expect(!settingsList.contains("ProCard("))
         #expect(settingsRow.contains("NavigationLink(value: route)"))
         #expect(!settingsRow.contains("chevron.right"))
