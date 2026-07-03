@@ -27,7 +27,6 @@ export {
   buildMediaTarget,
   parseTarget,
   resolveOutboundMediaPath,
-  sendAutoDetectedMedia,
   sendDocument,
   sendPhoto,
   sendVideoMsg,
