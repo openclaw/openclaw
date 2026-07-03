@@ -100,12 +100,12 @@ describe("qa scenario catalog", () => {
         .every((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
     ).toBe(true);
     expect(
-      pack.scenarios.every(
-        (scenario) =>
-          (scenario.coverage?.primary?.length ?? 0) > 0 ||
-          (scenario.coverage?.secondary?.length ?? 0) > 0,
-      ),
-    ).toBe(true);
+      pack.scenarios
+        .filter(
+          (scenario) => !scenario.coverage?.primary.length && !scenario.coverage?.secondary?.length,
+        )
+        .map((scenario) => scenario.id),
+    ).toStrictEqual([]);
     expect(
       pack.scenarios.every(
         (scenario) =>
@@ -118,30 +118,6 @@ describe("qa scenario catalog", () => {
       ),
     ).toBe(true);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
-  });
-
-  it.each([
-    "browser-talk-start-stop",
-    "cli-channel-picker",
-    "docker-compose-setup",
-    "gateway-smoke",
-    "heartbeat-active-hours",
-    "mcp-gateway-connect-startup-retry",
-    "mcp-plugin-tools-call",
-    "openai-compatible-chat-tools",
-    "openai-web-search-minimal",
-    "openai-web-search-native-assertions",
-    "openwebui-openai-compatible",
-    "package-openclaw-for-docker",
-    "packaged-bundled-plugin-install-uninstall",
-    "plugin-lifecycle-probe",
-    "qa-otel-smoke",
-    "webchat-auto-tts",
-  ])("keeps helper-backed boundary claim %s as supporting evidence", (scenarioId) => {
-    const scenario = readQaScenarioById(scenarioId);
-
-    expect(scenario.coverage?.primary).toBeUndefined();
-    expect(scenario.coverage?.secondary?.length).toBeGreaterThan(0);
   });
 
   it("exposes bootstrap data from the YAML pack", () => {
@@ -380,7 +356,7 @@ describe("qa scenario catalog", () => {
       const scenario = readQaScenarioById(scenarioId);
       expect(scenario.runtimeParityTier).toBe("live-only");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
-      expect(scenario.coverage?.primary?.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
     }
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
       "qa/scenarios/channels/webchat-direct-reply-routing.yaml",
@@ -473,7 +449,7 @@ describe("qa scenario catalog", () => {
     for (const scenarioId of scenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
       expect(scenario.runtimeParityTier).toBe("standard");
-      expect(scenario.coverage?.primary?.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
       expect(scenario.execution.flow?.steps.length).toBe(1);
     }
     expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({

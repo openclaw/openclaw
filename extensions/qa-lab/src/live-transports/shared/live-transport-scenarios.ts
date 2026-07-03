@@ -36,12 +36,6 @@ export type LiveTransportCoverageLaneSummary = {
   transportId: string;
 };
 
-export type LegacyLiveScenarioOwner = {
-  id: string;
-  sourcePath: string;
-  transportId: string;
-};
-
 export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
   {
     transportId: "discord",
@@ -117,43 +111,31 @@ export function buildLiveTransportCoverageLaneSummaries(
     .toSorted((left, right) => left.transportId.localeCompare(right.transportId));
 }
 
-export async function loadLegacyLiveScenarioOwners(): Promise<LegacyLiveScenarioOwner[]> {
+export async function loadNonYamlScenarioRefs() {
   const [discord, slack, telegram, whatsapp] = await Promise.all([
     import("../discord/discord-live.runtime.js"),
     import("../slack/slack-live.runtime.js"),
     import("../telegram/telegram-live.runtime.js"),
     import("../whatsapp/whatsapp-live.runtime.js"),
   ]);
-  const catalogs = [
-    {
-      transportId: "discord",
-      sourcePath: "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
-      scenarios: discord.listDiscordQaScenarioCatalog(),
-    },
-    {
-      transportId: "slack",
-      sourcePath: "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",
-      scenarios: slack.listSlackQaScenarioCatalog(),
-    },
-    {
-      transportId: "telegram",
-      sourcePath: "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
-      scenarios: telegram.listTelegramQaScenarioCatalog(),
-    },
-    {
-      transportId: "whatsapp",
-      sourcePath: "extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts",
-      scenarios: whatsapp.listWhatsAppQaScenarioCatalog(),
-    },
-  ] as const;
-
-  return catalogs
-    .flatMap((catalog) =>
-      catalog.scenarios.map((scenario) => ({
-        id: scenario.id,
-        sourcePath: catalog.sourcePath,
-        transportId: catalog.transportId,
-      })),
-    )
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+  const refs = (sourcePath: string, scenarios: readonly { id: string }[]) =>
+    scenarios.map(({ id }) => ({ id, sourcePath }));
+  return [
+    ...refs(
+      "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
+      discord.listDiscordQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",
+      slack.listSlackQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+      telegram.listTelegramQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts",
+      whatsapp.listWhatsAppQaScenarioCatalog(),
+    ),
+  ].toSorted((left, right) => left.id.localeCompare(right.id));
 }

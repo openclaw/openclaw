@@ -17,7 +17,6 @@ const {
   buildQaDockerHarnessImage,
   runQaDockerUp,
   defaultQaRuntimeModelForMode,
-  loadLegacyLiveScenarioOwners,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
   runQaFlowSuiteFromRuntime: vi.fn(),
@@ -32,7 +31,6 @@ const {
   runQaDockerUp: vi.fn(),
   defaultQaRuntimeModelForMode:
     vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  loadLegacyLiveScenarioOwners: vi.fn(() => Promise.resolve([])),
 }));
 
 vi.mock("./manual-lane.runtime.js", () => ({
@@ -55,11 +53,6 @@ vi.mock("./multipass.runtime.js", () => ({
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
   listTelegramQaScenarioCatalog,
   runTelegramQaLive,
-}));
-
-vi.mock("./live-transports/shared/live-transport-scenarios.js", async (importOriginal) => ({
-  ...(await importOriginal()),
-  loadLegacyLiveScenarioOwners,
 }));
 
 vi.mock("./lab-server.js", () => ({
@@ -1646,7 +1639,6 @@ describe("qa cli runtime", () => {
   it("prints a markdown coverage report from scenario metadata", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd() });
 
-    expect(loadLegacyLiveScenarioOwners).toHaveBeenCalledTimes(1);
     expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
     expectWriteContains(stdoutWrite, "memory.recall");
   });

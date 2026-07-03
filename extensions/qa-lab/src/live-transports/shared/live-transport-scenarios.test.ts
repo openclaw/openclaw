@@ -11,19 +11,16 @@ import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
   findMissingLiveTransportStandardScenarios,
-  loadLegacyLiveScenarioOwners,
+  loadNonYamlScenarioRefs,
   selectLiveTransportScenarios,
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
-  it("loads every legacy live scenario id exactly once", async () => {
-    const owners = await loadLegacyLiveScenarioOwners();
+  it("loads every non-YAML scenario id exactly once", async () => {
+    const refs = await loadNonYamlScenarioRefs();
 
-    expect(owners.length).toBeGreaterThan(0);
-    expect(new Set(owners.map((owner) => owner.id)).size).toBe(owners.length);
-    expect(new Set(owners.map((owner) => owner.transportId))).toEqual(
-      new Set(["discord", "slack", "telegram", "whatsapp"]),
-    );
+    expect(refs.length).toBeGreaterThan(0);
+    expect(new Set(refs.map((ref) => ref.id)).size).toBe(refs.length);
   });
 
   it("uses the public live transport scenario SDK seam", () => {

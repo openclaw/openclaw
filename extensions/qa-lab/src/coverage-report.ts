@@ -2,7 +2,6 @@
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildLiveTransportCoverageLaneSummaries,
-  type LegacyLiveScenarioOwner,
   type LiveTransportCoverageLaneSummary,
 } from "./live-transports/shared/live-transport-scenarios.js";
 import { QA_SCENARIO_PACKS, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
@@ -57,70 +56,35 @@ type QaCoverageInventory = {
   coverageIdCount: number;
   primaryCoverageIdCount: number;
   secondaryCoverageIdCount: number;
-  legacyScenarioOwnerCount: number;
   coverageIds: QaCoverageIdSummary[];
   overlappingCoverage: QaCoverageIdSummary[];
   missingCoverage: QaCoverageScenarioSummary[];
   byTheme: Record<string, QaCoverageIdSummary[]>;
   bySurface: Record<string, QaCoverageIdSummary[]>;
   scenarioPacks: QaCoverageScenarioPackSummary[];
-  scenarioOwners: QaScenarioOwner[];
   liveTransportLanes: LiveTransportCoverageLaneSummary[];
   scorecardTaxonomy: QaScorecardTaxonomyReport;
 };
 
-type QaScenarioOwnerKind =
-  | "yaml-flow"
-  | "yaml-playwright"
-  | "yaml-script"
-  | "yaml-vitest"
-  | "legacy-live";
-
-type QaScenarioOwner = {
-  id: string;
-  kind: QaScenarioOwnerKind;
-  sourcePath: string;
-  transportId?: string;
-};
-
-function buildQaScenarioOwners(
+function assertUniqueQaScenarioIds(
   scenarios: readonly QaSeedScenarioWithSource[],
-  legacyLiveScenarios: readonly LegacyLiveScenarioOwner[],
-): QaScenarioOwner[] {
-  const owners: QaScenarioOwner[] = [
-    ...scenarios.map((scenario) => ({
-      id: scenario.id,
-      kind: `yaml-${scenario.execution.kind}` as QaScenarioOwnerKind,
-      sourcePath: scenario.sourcePath,
-    })),
-    ...legacyLiveScenarios.map((scenario) => ({
-      id: scenario.id,
-      kind: "legacy-live" as const,
-      sourcePath: scenario.sourcePath,
-      transportId: scenario.transportId,
-    })),
-  ];
-  const ownersById = new Map<string, QaScenarioOwner[]>();
-  for (const owner of owners) {
-    const matchingOwners = ownersById.get(owner.id) ?? [];
-    matchingOwners.push(owner);
-    ownersById.set(owner.id, matchingOwners);
+  nonYamlScenarios: readonly { id: string; sourcePath: string }[],
+): void {
+  const sourcePathsById = new Map<string, string[]>();
+  for (const { id, sourcePath } of [...scenarios, ...nonYamlScenarios]) {
+    const sourcePaths = sourcePathsById.get(id) ?? [];
+    sourcePaths.push(sourcePath);
+    sourcePathsById.set(id, sourcePaths);
   }
-  const duplicates = [...ownersById.entries()]
-    .filter(([, matchingOwners]) => matchingOwners.length > 1)
+  const duplicates = [...sourcePathsById.entries()]
+    .filter(([, sourcePaths]) => sourcePaths.length > 1)
     .toSorted(([left], [right]) => left.localeCompare(right));
   if (duplicates.length > 0) {
     const details = duplicates
-      .map(([id, matchingOwners]) => {
-        const refs = matchingOwners
-          .map((owner) => `${owner.kind}:${owner.sourcePath}`)
-          .join(", ");
-        return `${id} (${refs})`;
-      })
+      .map(([id, sourcePaths]) => `${id} (${sourcePaths.join(", ")})`)
       .join("; ");
-    throw new Error(`duplicate qa scenario owner id(s): ${details}`);
+    throw new Error(`duplicate qa scenario id(s): ${details}`);
   }
-  return owners.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 function scenarioTheme(sourcePath: string) {
@@ -261,9 +225,9 @@ function buildScenarioPackSummaries(
 
 export function buildQaCoverageInventory(
   scenarios: readonly QaSeedScenarioWithSource[],
-  params?: { legacyLiveScenarios?: readonly LegacyLiveScenarioOwner[] },
+  params?: { nonYamlScenarios?: readonly { id: string; sourcePath: string }[] },
 ): QaCoverageInventory {
-  const scenarioOwners = buildQaScenarioOwners(scenarios, params?.legacyLiveScenarios ?? []);
+  assertUniqueQaScenarioIds(scenarios, params?.nonYamlScenarios ?? []);
   const byCoverageId = new Map<string, QaCoverageIdSummary>();
   const primaryCoverageIds = new Set<string>();
   const secondaryCoverageIds = new Set<string>();
@@ -328,14 +292,12 @@ export function buildQaCoverageInventory(
     coverageIdCount: coverageIds.length,
     primaryCoverageIdCount: primaryCoverageIds.size,
     secondaryCoverageIdCount: secondaryCoverageIds.size,
-    legacyScenarioOwnerCount: scenarioOwners.filter((owner) => owner.kind === "legacy-live").length,
     coverageIds,
     overlappingCoverage,
     missingCoverage,
     byTheme,
     bySurface,
     scenarioPacks: buildScenarioPackSummaries(scenarios),
-    scenarioOwners,
     liveTransportLanes: buildLiveTransportCoverageLaneSummaries(),
     scorecardTaxonomy: readQaScorecardTaxonomyReport(scenarios),
   };
@@ -451,8 +413,6 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
     "# QA Coverage Inventory",
     "",
     `- Scenarios: ${inventory.scenarioCount}`,
-    `- Scenario owners: ${inventory.scenarioOwners.length}`,
-    `- Legacy live scenario owners: ${inventory.legacyScenarioOwnerCount}`,
     `- Taxonomy coverage IDs: ${inventory.coverageIdCount}`,
     `- Primary coverage IDs: ${inventory.primaryCoverageIdCount}`,
     `- Secondary coverage IDs: ${inventory.secondaryCoverageIdCount}`,

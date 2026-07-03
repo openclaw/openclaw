@@ -131,7 +131,7 @@ function scenarioWithCoverage(params: {
     title: "Test scenario",
     surface: "test",
     coverage: {
-      ...(params.primary ? { primary: [...params.primary] } : {}),
+      primary: [...(params.primary ?? [])],
       ...(params.secondary ? { secondary: [...params.secondary] } : {}),
     },
     objective: "Exercise test coverage.",
@@ -146,12 +146,6 @@ describe("qa coverage report", () => {
     const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
 
     expect(inventory.scenarioCount).toBeGreaterThan(0);
-    expect(inventory.scenarioOwners).toHaveLength(inventory.scenarioCount);
-    expect(inventory.scenarioOwners).toContainEqual({
-      id: "channel-message-flows",
-      kind: "yaml-flow",
-      sourcePath: "qa/scenarios/channels/channel-message-flows.yaml",
-    });
     expect(inventory.coverageIdCount).toBeGreaterThan(0);
     expect(inventory.primaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
@@ -237,7 +231,7 @@ describe("qa coverage report", () => {
     expect(inventory.bySurface.memory.map((coverage) => coverage.id)).toContain("memory.recall");
   });
 
-  it("rejects duplicate ownership across YAML and legacy live catalogs", () => {
+  it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {
     const scenario = scenarioWithCoverage({
       primary: [TEST_EXECUTABLE_COVERAGE_ID],
       executionKind: "script",
@@ -246,16 +240,15 @@ describe("qa coverage report", () => {
 
     expect(() =>
       buildQaCoverageInventory([scenario], {
-        legacyLiveScenarios: [
+        nonYamlScenarios: [
           {
             id: scenario.id,
             sourcePath: "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
-            transportId: "telegram",
           },
         ],
       }),
     ).toThrow(
-      "duplicate qa scenario owner id(s): test-scenario (yaml-script:qa/scenarios/test/test-scenario.yaml, legacy-live:extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts)",
+      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts)",
     );
   });
 
@@ -265,8 +258,6 @@ describe("qa coverage report", () => {
     );
 
     expect(report).toContain("# QA Coverage Inventory");
-    expect(report).toContain("- Scenario owners:");
-    expect(report).toContain("- Legacy live scenario owners: 0");
     expect(report).toContain("- Missing coverage metadata: 0");
     expect(report).toContain("- Overlapping coverage IDs:");
     expect(report).toContain("memory.recall");

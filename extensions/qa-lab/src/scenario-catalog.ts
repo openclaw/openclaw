@@ -141,7 +141,11 @@ const qaScenarioCoverageSchema = z
         });
       }
     }
-  });
+  })
+  .transform((coverage) => ({
+    primary: coverage.primary ?? [],
+    ...(coverage.secondary ? { secondary: coverage.secondary } : {}),
+  }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),

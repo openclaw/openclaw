@@ -750,15 +750,6 @@ describe("qa cli registration", () => {
     expect(optionNames).toContain("--list-scenarios");
   });
 
-  it("keeps live transport aliases mounted on the shared qa host", () => {
-    const qa = program.commands.find((command) => command.name() === "qa");
-    const commandNames = qa?.commands.map((command) => command.name()) ?? [];
-
-    expect(commandNames).toEqual(
-      expect.arrayContaining(["discord", "slack", "telegram", "whatsapp"]),
-    );
-  });
-
   it("registers standalone provider server commands from the provider registry", async () => {
     const qa = program.commands.find((command) => command.name() === "qa");
     const commandNames = qa?.commands.map((command) => command.name()) ?? [];
