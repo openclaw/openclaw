@@ -42,8 +42,8 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
 
 function isEmptyExistingSourcePage(error: unknown): boolean {
   return (
-    !!error &&
     typeof error === "object" &&
+    error !== null &&
     ((error as NodeJS.ErrnoException).code === "ENOENT" ||
       (error as NodeJS.ErrnoException).code === "EISDIR")
   );
