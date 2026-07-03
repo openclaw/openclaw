@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
@@ -615,12 +616,14 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       const realpathCache = new Map<string, string>();
       const installRecords = extractPluginInstallRecordsFromInstalledPluginIndex(params.index);
       const configuredLoadPaths = normalizePluginsConfig(params.config?.plugins).loadPaths;
+      const bundledRoot = resolveBundledPluginsDir(env);
       const loadPathDiscovery =
         configuredLoadPaths.length > 0
           ? discoverConfiguredPluginLoadPaths({
               workspaceDir: params.workspaceDir,
               extraPaths: configuredLoadPaths,
               env,
+              bundledRoot,
             })
           : { candidates: [], diagnostics: [] };
       const diagnostics = pluginIdSet

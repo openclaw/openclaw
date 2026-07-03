@@ -478,6 +478,40 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins.map((plugin) => plugin.origin)).toEqual(["config", "global"]);
   });
 
+  it("ignores redundant bundled load paths while reconstructing an installed-index registry", () => {
+    const installedRoot = makeTempDir();
+    const packageRoot = path.join(makeTempDir(), "node_modules", "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const bundledPluginRoot = path.join(bundledRoot, "telegram");
+    writePlugin(installedRoot, "installed", "installed-");
+    fs.mkdirSync(bundledPluginRoot, { recursive: true });
+    writePlugin(bundledPluginRoot, "telegram", "telegram-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [bundledPluginRoot] },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["installed"]);
+    expect(registry.diagnostics).toHaveLength(1);
+    expect(registry.diagnostics[0]).toMatchObject({
+      level: "warn",
+      source: bundledPluginRoot,
+    });
+    expect(registry.diagnostics[0]?.message).toContain("ignored plugins.load.paths entry");
+  });
+
   it("reconstructs bundle candidates with their bundle manifest format", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });
