@@ -173,7 +173,7 @@ describe("modelsAuthRemoveCommand", () => {
 
   it("rejects profiles inherited from the default agent store", async () => {
     const runtime = createRuntime();
-    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockReturnValue(undefined);
+    mocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(() => undefined);
 
     await expect(
       modelsAuthRemoveCommand(

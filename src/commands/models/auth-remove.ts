@@ -178,7 +178,7 @@ export async function modelsAuthRemoveCommand(
       cfg,
       store,
       profileId,
-      profile: store.profiles[profileId]!,
+      profile: store.profiles[profileId],
     }),
   );
 
