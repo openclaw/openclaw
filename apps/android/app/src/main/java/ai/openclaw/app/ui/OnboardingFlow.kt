@@ -1175,23 +1175,23 @@ private fun gatewayProblemNeedsCredentialUpdate(problem: GatewayConnectionProble
   when (problem?.code) {
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
-    "AUTH_TOKEN_NOT_CONFIGURED",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
-    "AUTH_PASSWORD_NOT_CONFIGURED",
     "AUTH_TOKEN_MISSING",
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true
     else ->
-      problem?.recommendedNextStep == "update_auth_credentials" ||
-        problem?.recommendedNextStep == "update_auth_configuration"
+      problem?.recommendedNextStep == "update_auth_credentials"
   }
 
 private fun gatewayProblemNeedsAuthenticationRecovery(problem: GatewayConnectionProblem?): Boolean =
   gatewayProblemNeedsCredentialUpdate(problem) ||
     problem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" ||
+    problem?.code == "AUTH_TOKEN_NOT_CONFIGURED" ||
+    problem?.code == "AUTH_PASSWORD_NOT_CONFIGURED" ||
     problem?.code == "AUTH_SCOPE_MISMATCH" ||
+    problem?.recommendedNextStep == "update_auth_configuration" ||
     problem?.recommendedNextStep == "review_auth_configuration"
 
 internal data class NearbyGatewayUiState(
@@ -1341,7 +1341,7 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
     -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
     "AUTH_TOKEN_NOT_CONFIGURED",
     "AUTH_PASSWORD_NOT_CONFIGURED",
-    -> "Gateway authentication is not configured. Edit this connection and try again."
+    -> "Gateway authentication is not configured. Configure it on the gateway host, then retry."
     "AUTH_SCOPE_MISMATCH" -> "Gateway access needs review. Check gateway authentication scopes, then retry."
     "AUTH_PASSWORD_MISSING" -> "Gateway password is required. Enter it again or edit this connection."
     "AUTH_PASSWORD_MISMATCH" -> "Gateway password is invalid. Re-enter it or reset this gateway connection."
@@ -1352,7 +1352,7 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
     else ->
       when (gatewayConnectionProblem.recommendedNextStep) {
         "update_auth_credentials" -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
-        "update_auth_configuration" -> "Gateway authentication is not configured. Edit this connection and try again."
+        "update_auth_configuration" -> "Gateway authentication is not configured. Configure it on the gateway host, then retry."
         "review_auth_configuration" -> "Gateway authentication needs review. Check gateway settings, then retry."
         else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
       }

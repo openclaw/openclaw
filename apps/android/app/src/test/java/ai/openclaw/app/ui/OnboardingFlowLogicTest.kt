@@ -348,7 +348,7 @@ class OnboardingFlowLogicTest {
       listOf(
         "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired. Scan a fresh setup QR.",
         "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
-        "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway authentication is not configured. Edit this connection and try again.",
+        "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
         "AUTH_SCOPE_MISMATCH" to "Gateway access needs review. Check gateway authentication scopes, then retry.",
         "AUTH_PASSWORD_MISMATCH" to "Gateway password is invalid. Re-enter it or reset this gateway connection.",
         "AUTH_TOKEN_MISSING" to "Gateway token is required. Enter it again or edit this connection.",
@@ -414,7 +414,7 @@ class OnboardingFlowLogicTest {
       ),
     )
     assertEquals(
-      GatewayRecoveryPrimaryAction.EditConnection,
+      GatewayRecoveryPrimaryAction.RetryConnection,
       gatewayRecoveryPrimaryAction(
         ready = false,
         problem = authProblem(code = "AUTH_TOKEN_NOT_CONFIGURED"),
@@ -547,7 +547,7 @@ class OnboardingFlowLogicTest {
   @Test
   fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
     assertEquals(
-      "Gateway authentication is not configured. Edit this connection and try again.",
+      "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
       recoveryGatewayAuthDetail(
         GatewayConnectionProblem(
           code = "UNKNOWN",

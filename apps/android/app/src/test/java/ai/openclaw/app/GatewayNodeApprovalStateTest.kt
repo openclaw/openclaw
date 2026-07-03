@@ -9,6 +9,33 @@ import org.junit.Test
 
 class GatewayNodeApprovalStateTest {
   @Test
+  fun exactApprovalCommandsAgeOutToStatusFallbacks() {
+    assertEquals(
+      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
+      GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1").withoutExactRequestId(),
+    )
+    assertEquals(
+      GatewayNodeCapabilityApproval.PendingReapproval(requestId = null),
+      GatewayNodeCapabilityApproval.PendingReapproval(requestId = "request-2").withoutExactRequestId(),
+    )
+    assertNull(GatewayNodeCapabilityApproval.PendingApproval(requestId = null).withoutExactRequestId())
+
+    val summary =
+      GatewayNodesDevicesSummary(
+        nodes = listOf(pendingNode(requestId = "request-1")),
+        pendingDevices = emptyList(),
+        pairedDevices = emptyList(),
+      )
+    assertNull(
+      summary
+        .withoutExactApprovalRequestIds()
+        .nodes
+        .single()
+        .pendingRequestId,
+    )
+  }
+
+  @Test
   fun parsesGatewayNodeApprovalState() {
     assertEquals(GatewayNodeApprovalState.Approved, parseGatewayNodeApprovalState("approved"))
     assertEquals(GatewayNodeApprovalState.PendingApproval, parseGatewayNodeApprovalState("pending-approval"))

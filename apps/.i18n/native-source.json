@@ -179,7 +179,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 497,
+      "line": 498,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -187,7 +187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1992,
+      "line": 1993,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -195,7 +195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1994,
+      "line": 1995,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1996,
+      "line": 1997,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -1957,9 +1957,9 @@
       "kind": "conditional-branch",
       "line": 1355,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
       "surface": "android",
-      "id": "native.android.214b03b4cd2199b1"
+      "id": "native.android.3f61f2c34784ed0f"
     },
     {
       "kind": "conditional-branch",
