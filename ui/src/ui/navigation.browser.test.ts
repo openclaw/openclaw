@@ -465,20 +465,20 @@ describe("control UI routing", () => {
   });
 
   it("hides child nav items when the active group is collapsed", async () => {
-    const app = mountApp("/chat");
+    const app = mountApp("/dreaming");
     await app.updateComplete;
 
     app.applySettings({
       ...app.settings,
-      navGroupsCollapsed: { ...app.settings.navGroupsCollapsed, chat: true },
+      navGroupsCollapsed: { ...app.settings.navGroupsCollapsed, agent: true },
     });
     await app.updateComplete;
 
-    const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
-    const section = chatLink.closest(".nav-section");
+    const dreamingLink = expectElement(app, 'a.nav-item[href="/dreaming"]', HTMLAnchorElement);
+    const section = dreamingLink.closest(".nav-section");
     expect(section).toBeInstanceOf(HTMLElement);
     if (!(section instanceof HTMLElement)) {
-      throw new Error("Expected chat link to be inside a nav section");
+      throw new Error("Expected dreaming link to be inside a nav section");
     }
 
     expect([...section.classList]).toContain("nav-section--collapsed");
@@ -542,6 +542,56 @@ describe("control UI routing", () => {
     expect(app.sessionKey).toBe("agent:main:first");
     expect(window.location.pathname).toBe("/chat");
     expect(window.location.search).toBe("?session=agent%3Amain%3Afirst");
+  });
+
+  it("keeps the provider quota pill reachable from the sidebar footer (regression #93041)", async () => {
+    const app = mountApp("/overview");
+    app.modelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [
+              { label: "5h", usedPercent: 42 },
+              { label: "Week", usedPercent: 71 },
+            ],
+          },
+        },
+      ],
+    } as typeof app.modelAuthStatusResult;
+    await app.updateComplete;
+
+    const pill = app.querySelector<HTMLAnchorElement>(
+      '.sidebar-quota [data-chat-provider-usage="true"]',
+    );
+    expect(pill).toBeInstanceOf(HTMLAnchorElement);
+    expect(pill?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 29%");
+    expect(pill?.getAttribute("href")).toBe("/usage");
+  });
+
+  it("keeps the active session pinned even when the session list omits it", async () => {
+    const app = mountApp("/chat");
+    app.sessionKey = "agent:main:oldest";
+    app.sessionsResult = createSessionsResult(
+      // The active key is intentionally absent: the pinned row must survive
+      // capped or filtered session lists as the way back to the open chat.
+      Array.from({ length: 11 }, (_, index) => ({
+        key: `agent:main:recent-${index}`,
+        label: `Recent ${index}`,
+        updatedAt: Date.now() - index * 1_000,
+      })),
+    ) as typeof app.sessionsResult;
+    await app.updateComplete;
+
+    const rows = Array.from(app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session"));
+    // Pinned active row plus the nine-row recents cap.
+    expect(rows).toHaveLength(10);
+    expect(rows[0]?.dataset.sessionKey).toBe("agent:main:oldest");
+    expect([...rows[0].classList]).toContain("sidebar-recent-session--active");
   });
 
   it("creates a new chat session from the sidebar", async () => {
@@ -639,10 +689,26 @@ describe("control UI routing", () => {
 
   it("preserves session navigation without hiding the page chrome", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
+    app.sessionsResult = createSessionsResult([
+      // The active subagent session stays listed in the sidebar even though
+      // subagent sessions are otherwise filtered from recents.
+      {
+        key: "agent:main:subagent:task-123",
+        label: "Subagent task",
+        spawnedBy: "agent:main:main",
+      },
+      { key: "agent:main:main", label: "Main workspace" },
+    ]) as typeof app.sessionsResult;
     await app.updateComplete;
 
-    const link = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const activeRow = expectElement(
+      app,
+      'a.sidebar-recent-session[data-session-key="agent:main:subagent:task-123"]',
+      HTMLAnchorElement,
+    );
+    activeRow.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    );
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
@@ -652,14 +718,10 @@ describe("control UI routing", () => {
 
     const shell = expectElement(app, ".shell", HTMLElement);
     const topbar = expectElement(app, ".topbar", HTMLElement);
-    const sessionSelect = expectElement(app, ".sidebar-session-select", HTMLElement);
     expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
     expect(topbar.hasAttribute("inert")).toBe(false);
     expect(topbar.hasAttribute("aria-hidden")).toBe(false);
     expect(app.querySelector(".content-header")).toBeNull();
-    expect(sessionSelect.querySelector(".chat-controls__session-picker")).toBeInstanceOf(
-      HTMLElement,
-    );
 
     app.setTab("channels");
 
@@ -672,8 +734,12 @@ describe("control UI routing", () => {
     expect(channelsContentHeader.hasAttribute("inert")).toBe(false);
     expect(channelsContentHeader.hasAttribute("aria-hidden")).toBe(false);
 
-    const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
-    chatLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    const chatRow = expectElement(
+      app,
+      'a.sidebar-recent-session[data-session-key="agent:main:subagent:task-123"]',
+      HTMLAnchorElement,
+    );
+    chatRow.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");

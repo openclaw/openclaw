@@ -21,8 +21,10 @@ import {
   runCapability,
 } from "./runner.js";
 import type {
+  DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
+  PrepareImageDescriptionInputParams,
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
@@ -30,8 +32,11 @@ import type {
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 export type {
+  DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
+  PreparedImageDescriptionInput,
+  PrepareImageDescriptionInputParams,
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
@@ -240,11 +245,9 @@ export async function describeImageFile(
   return await runMediaUnderstandingFile({ ...params, capability: "image" });
 }
 
-/** Describes one image with an explicit provider/model, bypassing configured media model selection. */
-export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
+/** Reads and normalizes image input once before explicit-model fallback attempts. */
+export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   const image = await readImageDescriptionInput({
     filePath: params.filePath,
     mediaUrl: params.mediaUrl,
@@ -258,11 +261,23 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     mime: image.mime,
     maxBytes: DEFAULT_MAX_BYTES.image,
   });
-  const describeImage = provider?.describeImage ?? describeImageWithModel;
-  return await describeImage({
+  return {
     buffer: normalizedImage.buffer,
     fileName: image.fileName,
     mime: normalizedImage.mime,
+  };
+}
+
+/** Describes a prepared image with an explicit provider/model. */
+export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
+  const describeImage = provider?.describeImage ?? describeImageWithModel;
+  return await describeImage({
+    buffer: params.image.buffer,
+    fileName: params.image.fileName,
+    mime: params.image.mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,
@@ -271,6 +286,15 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+}
+
+/** Describes one image with an explicit provider/model, bypassing configured media model selection. */
+export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
+  const image = await prepareImageDescriptionInput(params);
+  return await describePreparedImageWithModel({
+    ...params,
+    image,
   });
 }
 

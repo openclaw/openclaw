@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveMemoryWikiConfig, type MemoryWikiPluginConfig } from "./src/config.js";
 export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   countMemoryWikiImportRunStateRows,
   createMemoryWikiImportRunStateStore,
@@ -23,10 +24,6 @@ import {
   resolveMemoryWikiSourceSyncStatePath,
   writeMemoryWikiSourceSyncState,
 } from "./src/source-sync-state.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function resolveHomeDir(env: NodeJS.ProcessEnv): string | undefined {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || undefined;

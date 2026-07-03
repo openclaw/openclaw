@@ -11,10 +11,18 @@ import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
   findMissingLiveTransportStandardScenarios,
+  loadNonYamlScenarioRefs,
   selectLiveTransportScenarios,
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
+  it("loads every non-YAML scenario id exactly once", async () => {
+    const refs = await loadNonYamlScenarioRefs();
+
+    expect(refs.length).toBeGreaterThan(0);
+    expect(new Set(refs.map((ref) => ref.id)).size).toBe(refs.length);
+  });
+
   it("uses the public live transport scenario SDK seam", () => {
     const source = fs.readFileSync(
       fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),

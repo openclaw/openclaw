@@ -1,22 +1,13 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
-import type { CompactEmbeddedAgentSessionDirect } from "../agents/embedded-agent-runner/compact.runtime.types.js";
 import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
-type CompactRuntimeModule = {
-  compactEmbeddedAgentSessionDirect: CompactEmbeddedAgentSessionDirect;
-};
-
-let compactRuntimePromise: Promise<CompactRuntimeModule> | null = null;
-
-function loadCompactRuntime(): Promise<CompactRuntimeModule> {
-  // Use a literal specifier so the bundler rewrites the runtime chunk path
-  // instead of resolving a source-tree path at runtime.
-  compactRuntimePromise ??= import("../agents/embedded-agent-runner/compact.runtime.js");
-  return compactRuntimePromise;
-}
+const loadCompactRuntime = createLazyRuntimeModule(
+  () => import("../agents/embedded-agent-runner/compact.runtime.js"),
+);
 
 /**
  * Delegate a context-engine compaction request to OpenClaw's built-in runtime compaction path.

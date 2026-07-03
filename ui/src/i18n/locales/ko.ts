@@ -1320,6 +1320,8 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
+    commentaryToggle: "최종 답변 후에도 해설 유지",
+    commentaryLabel: "해설",
     autoScrollMode: "자동 스크롤 모드",
     autoScrollAlways: "항상",
     autoScrollNearBottom: "하단 근처",
@@ -1338,6 +1340,9 @@ export const ko: TranslationMap = {
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
     switchedSession: "{session}(으)로 전환됨",
+    sidebar: {
+      allSessions: "모든 세션",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1364,6 +1369,11 @@ export const ko: TranslationMap = {
       retry: "다시 시도",
       retrySend: "보내기 다시 시도",
       retryQueuedMessage: "대기 중인 메시지 다시 시도",
+    },
+    pairingQrExpired: {
+      title: "페어링 QR 만료됨",
+      reason: "새 설정 코드를 생성하려면 /pair qr을 다시 실행하세요.",
+      badge: "만료됨",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

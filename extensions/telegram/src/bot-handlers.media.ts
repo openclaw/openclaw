@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot handlers.media behavior.
 import type { Message } from "grammy/types";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export function isMediaSizeLimitError(err: unknown): boolean {
   const errMsg = String(err);
@@ -9,6 +10,33 @@ export function isMediaSizeLimitError(err: unknown): boolean {
 
 export function isRecoverableMediaGroupError(err: unknown): boolean {
   return err instanceof MediaFetchError || isMediaSizeLimitError(err);
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if ("name" in err && err.name === "AbortError") {
+    return true;
+  }
+  return "message" in err && err.message === "This operation was aborted";
+}
+
+export function isDurablyRetryableInboundMediaError(err: unknown): boolean {
+  if (!(err instanceof MediaFetchError)) {
+    return false;
+  }
+  if (err.code === "http_error") {
+    return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
+  }
+  if (err.code !== "fetch_failed") {
+    return false;
+  }
+  return (
+    isAbortError(err) ||
+    isAbortError(err.cause) ||
+    isRecoverableTelegramNetworkError(err, { context: "polling" })
+  );
 }
 
 export function hasInboundMedia(msg: Message): boolean {

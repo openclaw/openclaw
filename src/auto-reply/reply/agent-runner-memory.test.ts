@@ -46,12 +46,14 @@ function createReplyOperation(): TestReplyOperation {
     sessionId: "session",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
+    terminalRecovery: false,
     phase: "queued",
     result: null,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
+    freezeAbort: vi.fn(),
     retainFailureUntilComplete: vi.fn(),
     complete: vi.fn(),
     completeThen: vi.fn((afterClear: () => void) => {
@@ -59,8 +61,9 @@ function createReplyOperation(): TestReplyOperation {
     }),
     completeWithAfterClearBarrier: vi.fn(),
     fail: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
+    abortByUser: vi.fn(() => true),
+    abortForRestart: vi.fn(() => true),
+    markTerminalRecovery: vi.fn(),
   };
 }
 
@@ -100,6 +103,7 @@ type EmbeddedAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   abortSignal?: AbortSignal;
+  isFinalFallbackAttempt?: boolean;
 };
 
 type CompactEmbeddedAgentSessionParams = {
@@ -814,6 +818,24 @@ describe("runMemoryFlushIfNeeded", () => {
       agentRuntimeOverride: "codex",
     };
     const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (
+          provider: string,
+          model: string,
+          options?: { isFinalFallbackAttempt?: boolean },
+        ) => Promise<unknown>;
+      }) => ({
+        result: await params.run(params.provider, params.model, {
+          isFinalFallbackAttempt: false,
+        }),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }),
+    );
 
     await runMemoryFlushIfNeeded({
       cfg,
@@ -841,6 +863,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(fallbackCall.agentId).toBe("main");
     expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
     expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+    expect(requireEmbeddedAgentCall().isFinalFallbackAttempt).toBe(false);
 
     await fallbackCall.prepareAgentHarnessRuntime?.({
       provider: "openai",

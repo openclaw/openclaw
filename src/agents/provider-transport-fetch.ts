@@ -51,10 +51,11 @@ const log = createSubsystemLogger("provider-transport-fetch");
  *  without Content-Length. */
 const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
-/** Max bytes for the internal SSE sanitization buffer between event boundaries.
- *  A response that cannot find a \n\n boundary within this many characters is
- *  almost certainly hostile or broken — cap the buffer rather than let it grow. */
-const SSE_SANITIZE_BUFFER_MAX_BYTES = 64 * 1024;
+/** Max bytes read from a non-OK response body before truncation. */
+const SSE_NONOK_BODY_MAX_BYTES = 64 * 1024;
+
+/** Max decoded characters buffered while waiting for the next SSE event boundary. */
+const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
@@ -96,13 +97,43 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
+function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
+  const source = response.body;
+  if (!source) {
+    return response;
+  }
+  let total = 0;
+  const capped = source.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        const nextTotal = total + chunk.byteLength;
+        if (nextTotal > maxBytes) {
+          const remaining = maxBytes - total;
+          if (remaining > 0) {
+            controller.enqueue(chunk.subarray(0, remaining));
+          }
+          total = maxBytes;
+          controller.terminate();
+          return;
+        }
+        total = nextTotal;
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+  return new Response(capped, response);
+}
+
 function sanitizeOpenAISdkSseResponse(
   response: Response,
   options?: { synthesizeJsonAsSse?: boolean },
 ): Response {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!response.ok || !response.body) {
+  if (!response.body) {
     return response;
+  }
+  if (!response.ok) {
+    return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
   }
   if (
     options?.synthesizeJsonAsSse === true &&
@@ -177,9 +208,9 @@ function sanitizeOpenAISdkSseResponse(
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_BYTES) {
+        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_CHARS) {
           throw new Error(
-            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_BYTES} bytes) without event boundary`,
+            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_CHARS} chars) without event boundary`,
           );
         }
         return enqueued;
@@ -713,13 +744,13 @@ function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
   );
 }
 
-function resolveModelTransportSsrFPolicy(params: {
-  model: Model;
+export function resolveProviderTransportSsrFPolicy(params: {
+  baseUrl?: string;
   url: string;
   allowPrivateNetwork?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
-  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
+  const baseUrl = params.baseUrl;
   const baseOrigin = resolveHttpOrigin(baseUrl);
   const requestOrigin = resolveHttpOrigin(params.url);
   const requestMatchesBaseOrigin =
@@ -781,8 +812,8 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
-    const policy = resolveModelTransportSsrFPolicy({
-      model,
+    const policy = resolveProviderTransportSsrFPolicy({
+      baseUrl: model.baseUrl,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
       // Only operator-configured custom/local endpoints get exact-origin trust;

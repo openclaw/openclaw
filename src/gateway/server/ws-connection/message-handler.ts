@@ -1398,8 +1398,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             // This is the native QR/setup-code onboarding seam. Mobile clients
             // must prove their canonical client id and platform/family metadata
             // agree before the Gateway can skip owner approval and hand off the
-            // bounded operator token below. Admin/pairing scopes still require
-            // an explicit owner flow.
+            // bounded operator token below. Admin/pairing still require an explicit owner flow.
             const bootstrapPairingRoles = allowSetupCodeMobileBootstrapPairing
               ? uniqueStrings([role, ...boundBootstrapProfile.roles])
               : undefined;

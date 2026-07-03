@@ -1,4 +1,5 @@
 // Qa Lab tests cover credential lease plugin behavior.
+import { createServer } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -37,6 +38,74 @@ function fetchInit(fetchImpl: FetchMock, index = 0): RequestInit {
     throw new Error(`expected fetch call ${index} init`);
   }
   return init;
+}
+
+async function startStreamingFailureBroker(params: {
+  chunkBytes?: number;
+  intervalMs?: number;
+  totalBytes?: number;
+}) {
+  const chunkBytes = params.chunkBytes ?? 64 * 1024;
+  const intervalMs = params.intervalMs ?? 1;
+  const totalBytes = params.totalBytes ?? 4 * 1024 * 1024;
+  let bytesWritten = 0;
+  let requestCount = 0;
+  let resolveClose: () => void = () => {};
+  const closePromise = new Promise<void>((resolve) => {
+    resolveClose = resolve;
+  });
+
+  const server = createServer((_req, res) => {
+    requestCount += 1;
+    res.writeHead(500, { "content-type": "text/plain" });
+    const interval = setInterval(() => {
+      if (bytesWritten >= totalBytes || res.destroyed) {
+        clearInterval(interval);
+        if (!res.destroyed) {
+          res.end();
+        }
+        return;
+      }
+      const nextBytes = Math.min(chunkBytes, totalBytes - bytesWritten);
+      bytesWritten += nextBytes;
+      res.write("x".repeat(nextBytes));
+    }, intervalMs);
+    res.on("close", () => {
+      clearInterval(interval);
+      resolveClose();
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected streaming broker address");
+  }
+  return {
+    closePromise,
+    getBytesWritten: () => bytesWritten,
+    getRequestCount: () => requestCount,
+    totalBytes,
+    url: `http://127.0.0.1:${address.port}`,
+    stop: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
 }
 
 describe("credential lease runtime", () => {
@@ -105,6 +174,60 @@ describe("credential lease runtime", () => {
     const firstInit = fetchInit(fetchImpl);
     const headers = firstInit?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maintainer-secret");
+  });
+
+  it("bounds oversized convex broker failure bodies before parsing", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response("x".repeat(1_048_577), {
+        status: 500,
+        headers: { "content-type": "text/plain" },
+      }),
+    );
+
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        role: "maintainer",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+        },
+        fetchImpl,
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: (payload) =>
+          payload as { groupId: string; driverToken: string; sutToken: string },
+      }),
+    ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a streaming convex broker failure body after the response cap", async () => {
+    const broker = await startStreamingFailureBroker({});
+    try {
+      await expect(
+        acquireQaCredentialLease({
+          kind: "telegram",
+          source: "convex",
+          role: "maintainer",
+          env: {
+            OPENCLAW_QA_CONVEX_SITE_URL: broker.url,
+            OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+            OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+          },
+          resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+          parsePayload: (payload) =>
+            payload as { groupId: string; driverToken: string; sutToken: string },
+        }),
+      ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
+
+      await broker.closePromise;
+      expect(broker.getRequestCount()).toBe(1);
+      expect(broker.getBytesWritten()).toBeLessThan(broker.totalBytes);
+    } finally {
+      await broker.stop();
+    }
   });
 
   it("hydrates chunked convex credential payloads after acquire", async () => {

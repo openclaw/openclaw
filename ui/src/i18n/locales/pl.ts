@@ -1334,6 +1334,8 @@ export const pl: TranslationMap = {
     settings: "Ustawienia czatu",
     thinkingToggle: "Przełącz wyświetlanie myślenia/pracy asystenta",
     toolCallsToggle: "Przełącz wyświetlanie wywołań narzędzi i wyników narzędzi",
+    commentaryToggle: "Zachowaj komentarz po ostatecznej odpowiedzi",
+    commentaryLabel: "Komentarz",
     autoScrollMode: "Tryb automatycznego przewijania",
     autoScrollAlways: "Zawsze",
     autoScrollNearBottom: "Blisko dołu",
@@ -1352,6 +1354,9 @@ export const pl: TranslationMap = {
     updateNow: "Aktualizuj teraz",
     dismissUpdateBanner: "Odrzuć baner aktualizacji",
     switchedSession: "Przełączono na {session}",
+    sidebar: {
+      allSessions: "Wszystkie sesje",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1378,6 +1383,11 @@ export const pl: TranslationMap = {
       retry: "Ponów",
       retrySend: "Ponów wysłanie",
       retryQueuedMessage: "Ponów wiadomość w kolejce",
+    },
+    pairingQrExpired: {
+      title: "Kod QR parowania wygasł",
+      reason: "Uruchom ponownie /pair qr, aby wygenerować nowy kod konfiguracyjny.",
+      badge: "Wygasł",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

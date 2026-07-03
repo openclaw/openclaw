@@ -17,6 +17,7 @@ import {
   validateNodePresenceAlivePayload,
   validateTasksCancelParams,
   validateTasksListParams,
+  validateTalkCatalogResult,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -91,6 +92,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        offset: 100,
       }),
     ).toBe(true);
     expect(
@@ -322,6 +324,32 @@ describe("validateTalkConfigResult", () => {
               brain: "agent-consult",
             },
           },
+        },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkCatalogResult", () => {
+  it("accepts provider registry aliases", () => {
+    expect(
+      validateTalkCatalogResult({
+        modes: ["realtime"],
+        transports: ["gateway-relay"],
+        brains: ["agent-consult"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "google",
+          providers: [
+            {
+              id: "google",
+              aliases: ["gemini-live"],
+              label: "Google Live Voice",
+              configured: true,
+            },
+          ],
         },
       }),
     ).toBe(true);

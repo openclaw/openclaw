@@ -35,6 +35,7 @@ type RuntimeFactoryOptions = NonNullable<
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
 const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
 const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 
 async function writeListToolsMcpServer(params: {
   filePath: string;
@@ -45,7 +46,10 @@ async function writeListToolsMcpServer(params: {
   inputSchema?: unknown;
   tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
   capabilities?: Record<string, unknown>;
+  pidPath?: string;
   notifyListChangedOnInitialized?: boolean;
+  notifyListChangedAfterFirstList?: boolean;
+  exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
@@ -61,7 +65,10 @@ const delayMs = ${params.delayMs ?? 0};
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
+const pidPath = ${JSON.stringify(params.pidPath)};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
+const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
+const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
 const tools = ${JSON.stringify(
       params.tools ?? [
@@ -77,8 +84,12 @@ const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
 
 let buffer = "";
+let listCount = 0;
 let pendingTimer;
 let keepAlive;
+if (pidPath) {
+  await fs.writeFile(pidPath, String(process.pid), "utf8");
+}
 function log(line) {
   void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
 }
@@ -115,6 +126,11 @@ function handle(message) {
     return;
   }
   if (message.method === "tools/list") {
+    listCount += 1;
+    if (listCount === exitOnListCall) {
+      log("exit tools/list " + listCount);
+      process.exit(1);
+    }
     if (listToolsMethodNotFound) {
       log("reject tools/list method not found");
       send({
@@ -129,6 +145,7 @@ function handle(message) {
       keepAlive = setInterval(() => {}, 1000);
       return;
     }
+    const currentListCount = listCount;
     log("delay tools/list " + delayMs);
     pendingTimer = setTimeout(() => {
       send({
@@ -138,6 +155,10 @@ function handle(message) {
           tools,
         },
       });
+      if (notifyListChangedAfterFirstList && currentListCount === 1) {
+        log("notify tools/list_changed");
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      }
     }, delayMs);
   }
   if (message.method === "tools/call") {
@@ -244,6 +265,29 @@ async function waitForPredicate(
     });
   }
   throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function waitForErrorMessage(
+  action: () => Promise<unknown>,
+  expectedText: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let lastMessage = "";
+  while (Date.now() < deadline) {
+    try {
+      await action();
+    } catch (error) {
+      lastMessage = error instanceof Error ? error.message : String(error);
+      if (lastMessage.includes(expectedText)) {
+        return lastMessage;
+      }
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error(`Timed out waiting for ${expectedText}; saw ${JSON.stringify(lastMessage)}`);
 }
 
 function makeRuntime(
@@ -1035,6 +1079,92 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("fails fast with an attributable error after an MCP child process exits", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-child-exit-"));
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const pidPath = path.join(tempDir, "server.pid");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, pidPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-child-exit",
+      sessionKey: "agent:test:session-child-exit",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            child: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      await expect(runtime.callTool("child", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+      await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      process.kill(pid);
+
+      const message = await waitForErrorMessage(
+        () => runtime.callTool("child", "slow_tool", {}),
+        "is disconnected",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      expect(message).toBe('bundle-mcp server "child" is disconnected: mcp transport closed');
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retires a reused MCP session that exits during catalog refresh", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-refresh-exit-"));
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: { listChanged: true } },
+      notifyListChangedAfterFirstList: true,
+      exitOnListCall: 2,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-refresh-exit",
+      sessionKey: "agent:test:session-refresh-exit",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            child: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      await waitForFileText(logPath, "notify tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForPredicate(
+        () => runtime.peekCatalog() === null,
+        "list_changed to invalidate the catalog",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+
+      const refreshedCatalog = await runtime.getCatalog();
+      expect(refreshedCatalog.tools).toEqual([]);
+      expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("child");
+      await expect(runtime.callTool("child", "slow_tool", {})).rejects.toThrow(
+        'bundle-mcp server "child" is not connected',
+      );
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not cache a catalog invalidated while discovery is in flight", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-inflight-invalidated-"));
     const serverPath = path.join(tempDir, "inflight-invalidated.mjs");
@@ -1505,6 +1635,9 @@ process.on("SIGINT", shutdown);`,
     );
 
     expect(runtimeA).not.toBe(runtimeB);
+    expect(runtimeA.configFingerprint).toMatch(SHA256_HEX_PATTERN);
+    expect(runtimeB.configFingerprint).toMatch(SHA256_HEX_PATTERN);
+    expect(runtimeA.configFingerprint).not.toBe(runtimeB.configFingerprint);
     const contentA = resultA.content[0];
     const contentB = resultB.content[0];
     if (contentA?.type !== "text" || contentB?.type !== "text") {

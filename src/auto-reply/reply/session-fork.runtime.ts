@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   migrateSessionEntries,
   parseSessionEntries,
@@ -114,10 +115,6 @@ export async function resolveParentForkTokenCountRuntime(params: {
   }
 
   return maxPositiveTokenCount(cachedTokens, byteEstimateTokens);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function generateEntryId(existingIds: Set<string>): string {

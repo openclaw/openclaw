@@ -14,6 +14,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -151,7 +152,9 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let activeRunReservations = 0;
-let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
+const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
+  cacheRejections: true,
+});
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
@@ -438,8 +441,7 @@ async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
     return typescriptRuntimeForTest;
   }
-  typescriptRuntimePromise ??= import("typescript");
-  return await typescriptRuntimePromise;
+  return await typescriptRuntimeLoader.load();
 }
 
 async function prepareSource(input: {
@@ -1274,7 +1276,8 @@ export const testing = {
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
-  getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
+    typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },

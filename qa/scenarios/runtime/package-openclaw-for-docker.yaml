@@ -4,9 +4,8 @@ scenario:
   id: package-openclaw-for-docker
   surface: docker-podman-hosting
   coverage:
-    primary:
-      - docker.package-artifact-generation
     secondary:
+      - docker.package-artifact-generation
       - cli.package-manager-installs
       - runtime.package-update
   objective: Exercise bounded OpenClaw package artifact generation through QA Lab evidence.

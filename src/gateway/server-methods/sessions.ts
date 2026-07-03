@@ -82,6 +82,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -124,7 +125,7 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -184,9 +185,6 @@ function inheritSessionRuntimeSelection(
       : {}),
     ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
     ...(parentEntry.model ? { model: parentEntry.model } : {}),
-    ...(typeof parentEntry.contextTokens === "number"
-      ? { contextTokens: parentEntry.contextTokens }
-      : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
@@ -202,14 +200,7 @@ function inheritSessionRuntimeSelection(
   };
 }
 
-type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
-
-let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
-
-function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
-  sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
-  return sessionsRuntimeModulePromise;
-}
+const loadSessionsRuntimeModule = createLazyRuntimeModule(() => import("./sessions.runtime.js"));
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
@@ -833,6 +824,7 @@ async function handleSessionSend(params: {
       await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
+        task: (p as { message: string }).message,
       });
     }
     emitSessionsChanged(params.context, {
@@ -902,10 +894,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () => {
             return result.sessions.map((session) =>
               Object.assign({}, session, {
-                hasActiveRun: hasTrackedActiveSessionRun({
+                hasActiveRun: hasVisibleActiveSessionRun({
                   context,
                   requestedKey: session.key,
                   canonicalKey: session.key,
+                  sessionId: session.sessionId,
                   ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
                   defaultAgentId: resolveDefaultAgentId(cfg),
                 }),

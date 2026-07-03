@@ -17,6 +17,7 @@ import {
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
+  listControlledSubagentRuns,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
 } from "./subagent-control.js";
@@ -124,6 +125,7 @@ function setSubagentControlDepsForTest(
   // while swapping process-owned queues and embedded-run aborts for fakes.
   testing.setDepsForTest({
     abortEmbeddedAgentRun: () => false,
+    isEmbeddedAgentRunActive: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     patchSessionEntry: async (
       scope: SessionAccessScope,
@@ -600,6 +602,46 @@ describe("killSubagentRunAdmin", () => {
     });
 
     expect(result).toEqual({ found: false, killed: false });
+  });
+
+  it("does not mark a finalizing run killed when its abort is rejected", async () => {
+    const childSessionKey = "agent:main:subagent:worker-finalizing";
+    const storePath = writeSessionStoreFixture("admin-kill-finalizing", {
+      [childSessionKey]: {
+        sessionId: "sess-worker-finalizing",
+        updatedAt: Date.now(),
+      },
+    });
+
+    addSubagentRunForTests({
+      runId: "run-worker-finalizing",
+      childSessionKey,
+      controllerSessionKey: "agent:main:other-controller",
+      requesterSessionKey: "agent:main:other-requester",
+      requesterDisplayKey: "other-requester",
+      task: "finish the reply",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    setSubagentControlDepsForTest({
+      isEmbeddedAgentRunActive: () => true,
+      abortEmbeddedAgentRun: () => false,
+    });
+
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
+
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(false);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeUndefined();
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
+    expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
   });
 
   it("does not kill a newest finished run when only a stale older row is still active", async () => {
@@ -1263,6 +1305,70 @@ describe("steerControlledSubagentRun", () => {
     }
   });
 
+  it("does not replace a finalizing run when its abort is rejected", async () => {
+    const childSessionKey = "agent:main:subagent:steer-finalizing";
+    const storePath = writeSessionStoreFixture("steer-finalizing", {
+      [childSessionKey]: {
+        sessionId: "sess-steer-finalizing",
+        updatedAt: Date.now(),
+      },
+    });
+    addSubagentRunForTests({
+      runId: "run-steer-finalizing",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish the reply",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway should not be called");
+    });
+    setSubagentControlDepsForTest({
+      callGateway,
+      isEmbeddedAgentRunActive: () => true,
+      abortEmbeddedAgentRun: () => false,
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(storePath),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-steer-finalizing",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "finish the reply",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "new direction",
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      runId: "run-steer-finalizing",
+      sessionKey: childSessionKey,
+      sessionId: "sess-steer-finalizing",
+      error: "Subagent reply is already finalizing and can no longer be restarted.",
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    const storedRun = getSubagentRunByChildSessionKey(childSessionKey);
+    expect(storedRun?.runId).toBe("run-steer-finalizing");
+    expect(storedRun?.endedAt).toBeUndefined();
+    expect(storedRun?.suppressAnnounceReason).toBeUndefined();
+  });
+
   it("rejects steering runs that are no longer tracked in the registry", async () => {
     setSubagentControlDepsForTest({
       callGateway: async () => {
@@ -1510,4 +1616,53 @@ describe("steerControlledSubagentRun", () => {
     const agentParams = agentCalls[0]?.params as { sessionId?: string } | undefined;
     expect(agentParams?.sessionId).toBe(result.sessionId);
   });
+});
+
+describe("listControlledSubagentRuns", () => {
+  beforeEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
+  it.each([
+    {
+      name: "control owner",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:telegram:direct:abc123",
+      expectedCount: 1,
+    },
+    {
+      name: "completion owner",
+      controllerSessionKey: "agent:main:telegram:direct:abc123",
+      requesterSessionKey: "agent:main:main",
+      expectedCount: 1,
+    },
+    {
+      name: "unrelated session",
+      controllerSessionKey: "agent:other:discord:direct:xyz",
+      requesterSessionKey: "agent:other:main",
+      expectedCount: 0,
+    },
+  ])(
+    "applies read visibility for the $name",
+    ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
+      const childSessionKey = "agent:main:subagent:list-visibility";
+      addSubagentRunForTests({
+        runId: "run-list-visibility",
+        childSessionKey,
+        controllerSessionKey,
+        requesterSessionKey,
+        requesterDisplayKey: requesterSessionKey,
+        task: "visibility test",
+        cleanup: "keep",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+
+      const results = listControlledSubagentRuns("agent:main:main");
+      expect(results).toHaveLength(expectedCount);
+      if (expectedCount === 1) {
+        expect(results[0]?.childSessionKey).toBe(childSessionKey);
+      }
+    },
+  );
 });

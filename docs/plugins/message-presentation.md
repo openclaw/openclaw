@@ -344,6 +344,26 @@ Fallback text includes:
 - button labels, including URLs for link buttons
 - select option labels
 
+### Button value fallback visibility
+
+When a channel cannot render interactive controls, button and select values
+fall back to plain text. The fallback behavior preserves usability while
+keeping opaque callback data private:
+
+- **`command`-typed actions** render as `label: \`command\`` so users can
+  copy the command and run it manually in the channel input.
+- **`callback`-typed actions** and legacy **`value`** fields render as
+  label-only. The opaque callback value is not exposed in fallback text.
+- **`url` / `webApp`** buttons render the URL text alongside the button
+  label, since the URL is user-facing.
+- **Select options** render as label-only. The underlying option value is not
+  exposed in fallback text.
+
+Channel adapters that add manual-command guidance in their fallback UI (e.g.
+Feishu document-comment instructions) must derive the command-present check
+from the same presentation blocks that the fallback renderer uses, so the
+guidance text only appears when a manual command is actually shown.
+
 Unsupported native controls should degrade rather than fail the whole send.
 Examples:
 

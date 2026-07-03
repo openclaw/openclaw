@@ -1,13 +1,23 @@
 // Tests migration cleanup for orphaned state keys.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   migrateOrphanedSessionKeys,
   sessionStoreTextMayNeedCanonicalization,
 } from "./state-migrations.js";
+
+const listPluginDoctorSessionStoreAgentIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    listPluginDoctorSessionStoreAgentIds: listPluginDoctorSessionStoreAgentIdsMock,
+  };
+});
 
 function writeStore(storePath: string, store: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -55,14 +65,24 @@ function sharedMainOpsConfig(sharedStorePath: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-async function migrateFixtureState(stateDir: string, cfg: OpenClawConfig = OPS_WORK_CONFIG) {
+async function migrateFixtureState(
+  stateDir: string,
+  cfg: OpenClawConfig = OPS_WORK_CONFIG,
+  additionalAgentIds?: readonly string[],
+) {
   return migrateOrphanedSessionKeys({
     cfg,
     env: { OPENCLAW_STATE_DIR: stateDir },
+    additionalAgentIds,
   });
 }
 
 describe("migrateOrphanedSessionKeys", () => {
+  beforeEach(() => {
+    listPluginDoctorSessionStoreAgentIdsMock.mockReset();
+    listPluginDoctorSessionStoreAgentIdsMock.mockReturnValue([]);
+  });
+
   it("recognizes canonical stores without parsing them for migration", () => {
     const raw = JSON.stringify({
       "agent:main:discord:channel:123": { sessionId: "channel", updatedAt: 1 },
@@ -238,6 +258,7 @@ describe("migrateOrphanedSessionKeys", () => {
       const result = await migrateOrphanedSessionKeys({
         cfg,
         env: { OPENCLAW_STATE_DIR: stateDir },
+        additionalAgentIds: ["voice"],
       });
 
       const store = readStore(voiceStorePath);
@@ -248,6 +269,41 @@ describe("migrateOrphanedSessionKeys", () => {
         updatedAt: 1500,
         groupActivation: "always",
       });
+      expect(store["voice:15550001111"]).toBeUndefined();
+      expect(result.changes).toHaveLength(1);
+      expect(result.warnings).toHaveLength(0);
+    });
+  });
+
+  it("discovers plugin-owned agents through doctor contracts", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      listPluginDoctorSessionStoreAgentIdsMock.mockReturnValue(["voice"]);
+      const storeTemplate = path.join(tmpDir, "stores", "{agentId}", "sessions.json");
+      const voiceStorePath = path.join(tmpDir, "stores", "voice", "sessions.json");
+      writeStore(voiceStorePath, {
+        "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+      });
+      const cfg = {
+        session: { store: storeTemplate },
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          entries: {
+            "voice-call": { config: { agentId: "voice" } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      expect(listPluginDoctorSessionStoreAgentIdsMock).toHaveBeenCalledWith({
+        config: cfg,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        pluginIds: ["voice-call"],
+      });
+      const store = readStore(voiceStorePath);
+      expect(requireStoreEntry(store, "agent:voice:voice:15550001111").sessionId).toBe(
+        "legacy-voice",
+      );
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);
@@ -278,7 +334,7 @@ describe("migrateOrphanedSessionKeys", () => {
           },
         } as OpenClawConfig;
 
-        const result = await migrateFixtureState(stateDir, cfg);
+        const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
 
         const store = readStore(voiceStorePath);
         expect(requireStoreEntry(store, "agent:main:main").sessionId).toBe("explicit-foreign");
@@ -310,7 +366,7 @@ describe("migrateOrphanedSessionKeys", () => {
         },
       } as OpenClawConfig;
 
-      const result = await migrateFixtureState(stateDir, cfg);
+      const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
 
       const store = readStore(sharedStorePath);
       expect(requireStoreEntry(store, "agent:main:main").sessionId).toBe("ambiguous-main");
@@ -336,7 +392,7 @@ describe("migrateOrphanedSessionKeys", () => {
         },
       } as OpenClawConfig;
 
-      const result = await migrateFixtureState(stateDir, cfg);
+      const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
 
       const store = readStore(sharedStorePath);
       expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("ambiguous-main");
@@ -370,8 +426,8 @@ describe("migrateOrphanedSessionKeys", () => {
         },
       } as OpenClawConfig;
 
-      const result = await migrateFixtureState(stateDir, cfg);
-      const rerun = await migrateFixtureState(stateDir, cfg);
+      const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
+      const rerun = await migrateFixtureState(stateDir, cfg, ["voice"]);
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
@@ -457,7 +513,7 @@ describe("migrateOrphanedSessionKeys", () => {
         },
       } as OpenClawConfig;
 
-      const result = await migrateFixtureState(stateDir, cfg);
+      const result = await migrateFixtureState(stateDir, cfg, ["voice"]);
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
