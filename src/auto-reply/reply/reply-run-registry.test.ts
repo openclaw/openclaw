@@ -499,6 +499,7 @@ describe("reply run registry", () => {
     expect(operation.abortSignal.aborted).toBe(false);
     expect(operation.abortByUser()).toBe(false);
     expect(operation.abortForRestart()).toBe(false);
+    expect(operation.abortForStuckRecovery()).toBe(false);
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
     expect(operation.phase).toBe("failed");
     expect(cancel).not.toHaveBeenCalled();
@@ -832,6 +833,30 @@ describe("reply run registry", () => {
 
     operation.complete();
     expect(replyRunRegistry.isActive("agent:main:restart-finalizing")).toBe(false);
+  });
+
+  it("rejects stuck recovery aborts while the attached backend is finalizing", () => {
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:stuck-recovery-finalizing",
+      sessionId: "session-stuck-recovery-finalizing",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => false,
+      isAbortable: () => false,
+    });
+    operation.setPhase("running");
+
+    expect(operation.abortForStuckRecovery()).toBe(false);
+    expect(replyRunRegistry.isActive("agent:main:stuck-recovery-finalizing")).toBe(true);
+    expect(operation.result).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+
+    operation.complete();
+    expect(replyRunRegistry.isActive("agent:main:stuck-recovery-finalizing")).toBe(false);
   });
 
   it("keeps abort frozen after the backend detaches for reply delivery", () => {

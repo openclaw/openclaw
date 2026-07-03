@@ -872,6 +872,9 @@ export function createReplyOperation(params: {
       return true;
     },
     abortForStuckRecovery() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
       const phaseBeforeAbort = phase;
       abortWithReason("stuck_recovery", new Error("Agent run aborted for stuck recovery"), {
         abortedCode: "aborted_for_stuck_recovery",
