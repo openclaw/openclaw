@@ -478,6 +478,62 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins.map((plugin) => plugin.origin)).toEqual(["config", "global"]);
   });
 
+  it("skips configured load path discovery when load.paths is empty", () => {
+    const installedRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [] },
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["installed"]);
+  });
+
+  it("preserves plugin id scoping for configured load path candidates", () => {
+    const installedRoot = makeTempDir();
+    const workspacePluginRoot = makeTempDir();
+    const unrelatedPluginRoot = makeTempDir();
+    writePlugin(installedRoot, "installed", "installed-");
+    writePlugin(workspacePluginRoot, "workspace", "workspace-");
+    writePlugin(unrelatedPluginRoot, "unrelated", "unrelated-");
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: createIndex(installedRoot),
+      config: {
+        plugins: {
+          load: { paths: [workspacePluginRoot, unrelatedPluginRoot] },
+          entries: {
+            workspace: { enabled: true },
+            unrelated: { enabled: true },
+          },
+          allow: ["workspace", "unrelated"],
+        },
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      pluginIds: ["workspace"],
+      includeDisabled: true,
+    });
+
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["workspace"]);
+    expect(registry.plugins[0]?.modelSupport).toEqual({
+      modelPrefixes: ["workspace-"],
+    });
+  });
+
   it("ignores redundant bundled load paths while reconstructing an installed-index registry", () => {
     const installedRoot = makeTempDir();
     const packageRoot = path.join(makeTempDir(), "node_modules", "openclaw");
