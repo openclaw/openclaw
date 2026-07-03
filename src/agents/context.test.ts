@@ -419,6 +419,9 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
+    ["anthropic", "claude-sonnet-5", ANTHROPIC_CONTEXT_1M_TOKENS],
+    ["claude-cli", "claude-sonnet-5", ANTHROPIC_CONTEXT_1M_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
     "returns the fixed context for unconfigured %s model %s",
