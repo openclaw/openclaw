@@ -14,6 +14,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -151,7 +152,9 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let activeRunReservations = 0;
-let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
+const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
+  cacheRejections: true,
+});
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
@@ -438,8 +441,7 @@ async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
     return typescriptRuntimeForTest;
   }
-  typescriptRuntimePromise ??= import("typescript");
-  return await typescriptRuntimePromise;
+  return await typescriptRuntimeLoader.load();
 }
 
 async function prepareSource(input: {
@@ -773,17 +775,9 @@ function createPendingBridgeStates(params: {
       onUpdate: params.onUpdate,
     });
     const state: PendingBridgeState = { ...request, promise };
-    // Record both fulfilled and rejected bridge promises as settled state at
-    // creation time so late rejections are captured instead of surfacing as
-    // unhandledRejection through a bare .then(onFulfilled).
-    promise.then(
-      (settled) => {
-        state.settled = settled;
-      },
-      (error) => {
-        state.settled = { id: request.id, ok: false, error: String(error) };
-      },
-    );
+    void promise.then((settled) => {
+      state.settled = settled;
+    });
     return state;
   });
 }
@@ -929,17 +923,10 @@ async function waitForPending(pending: PendingBridgeState[], timeoutMs: number):
   if (pendingPromises.length === 0) {
     return true;
   }
-  // Individual bridge promises have rejection handlers attached at creation time
-  // (see createPendingBridgeStates) so unhandledRejection is prevented. Promise.all
-  // still rejects if one rejects; the () => false handler keeps the race from
-  // throwing when a bridge request fails.
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      Promise.all(pendingPromises).then(
-        () => true,
-        () => false,
-      ),
+      Promise.all(pendingPromises).then(() => true),
       new Promise<boolean>((resolve) => {
         timer = setTimeout(() => resolve(false), timeoutMs);
       }),
@@ -1289,8 +1276,8 @@ export const testing = {
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
-  waitForPending,
-  getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
+    typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },

@@ -25,10 +25,7 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 
 ```bash
 pnpm install
-./scripts/ios-configure-signing.sh
-cd apps/ios
-xcodegen generate
-open OpenClaw.xcodeproj
+pnpm ios:open
 ```
 
 3. In Xcode:
@@ -40,10 +37,10 @@ open OpenClaw.xcodeproj
    - Use unique local bundle IDs via `apps/ios/LocalSigning.xcconfig`.
    - Start from `apps/ios/LocalSigning.xcconfig.example`.
 
-Shortcut command (same flow + open project):
+Generate without opening Xcode:
 
 ```bash
-pnpm ios:open
+pnpm ios:gen
 ```
 
 ## App Store Release Flow
@@ -165,10 +162,10 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
-4. If you are starting a brand-new production release train, add or update the matching iOS changelog section and sync generated metadata:
+4. If you are starting a brand-new production release train, add or update the matching iOS changelog section and validate the release notes:
 
 ```bash
-pnpm ios:version:sync -- --version 2026.6.11
+pnpm ios:version:check -- --version 2026.6.11
 ```
 
 5. Upload the build with explicit release intent:
@@ -183,7 +180,7 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 
 7. Expected behavior:
    - Fastlane reads the explicit `--version` value
-   - verifies synced iOS versioning artifacts for that version
+   - validates iOS versioning inputs for that version
    - resolves the next App Store Connect build number for that short version
    - generates deterministic App Store screenshots
    - uploads release notes, screenshots, and the App Review PDF attachment to the editable App Store version
@@ -205,16 +202,17 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 - Release upload version: explicit `--version`
 - Local default version: root `package.json`
 - iOS-only changelog: `apps/ios/CHANGELOG.md`
-- Generated checked-in artifacts:
-  - `apps/ios/Config/Version.xcconfig`
-  - `apps/ios/fastlane/metadata/en-US/release_notes.txt`
+- Generated local artifacts:
+  - `apps/ios/build/Version.xcconfig`
+  - `apps/ios/SwiftSources.input.xcfilelist`
+  - temporary Fastlane metadata containing release notes rendered from `apps/ios/CHANGELOG.md`
 - Useful commands:
 
 ```bash
 pnpm ios:version
 pnpm ios:version:check
 pnpm ios:version -- --version 2026.6.11
-pnpm ios:version:sync -- --version 2026.6.11
+pnpm ios:filelist:gen
 ```
 
 Recommended flow:
@@ -223,7 +221,7 @@ Recommended flow:
 
 1. Choose the App Store train explicitly, for example `2026.6.11`.
 2. Update `apps/ios/CHANGELOG.md`, usually under `## Unreleased` while iterating.
-3. Run `pnpm ios:version:sync -- --version 2026.6.11` after changelog changes.
+3. Run `pnpm ios:version:check -- --version 2026.6.11` after changelog changes.
 4. Upload additional App Store Connect builds with `pnpm ios:release:upload -- --version 2026.6.11`.
 5. Let Fastlane bump only the numeric build number.
 
@@ -231,7 +229,7 @@ Recommended flow:
 
 1. Confirm the target gateway version in root `package.json`.
 2. Update `apps/ios/CHANGELOG.md` for the new release as needed.
-3. Run `pnpm ios:version:sync -- --version <release-version>`.
+3. Run `pnpm ios:version:check -- --version <release-version>`.
 4. Submit the first App Store Connect build with `pnpm ios:release:upload -- --version <release-version>`.
 5. Keep iterating on that same explicit version until the release candidate is ready.
 

@@ -734,18 +734,33 @@ def release_signing_check!
   sync_app_store_signing!(readonly: true)
 end
 
-def release_notes_path
-  File.join(__dir__, "metadata", "en-US", "release_notes.txt")
+def render_ios_release_notes(release_version:)
+  script_path = File.join(repo_root, "scripts", "ios-version.ts")
+  args = [
+    "node",
+    "--import",
+    "tsx",
+    script_path,
+    "--field",
+    "releaseNotes"
+  ]
+  args.push("--version", release_version) if env_present?(release_version)
+  stdout, stderr, status = Open3.capture3(
+    *args,
+    chdir: repo_root
+  )
+  return stdout if status.success?
+
+  detail = stderr.to_s.strip
+  detail = stdout.to_s.strip if detail.empty?
+  UI.user_error!("Failed to render iOS release notes: #{detail}")
 end
 
-def release_notes_metadata_path
-  source = release_notes_path
-  UI.user_error!("Missing release notes at #{source}. Run `pnpm ios:version:sync -- --version <release-version>`.") unless File.exist?(source)
-
+def release_notes_metadata_path(release_version:)
   temp_root = Dir.mktmpdir("openclaw-release-notes")
   target_dir = File.join(temp_root, "en-US")
   FileUtils.mkdir_p(target_dir)
-  FileUtils.cp(source, File.join(target_dir, "release_notes.txt"))
+  File.write(File.join(target_dir, "release_notes.txt"), render_ios_release_notes(release_version: release_version))
   temp_root
 end
 
@@ -780,7 +795,7 @@ def assert_no_app_review_notes_field_metadata!(metadata_path)
   end
 end
 
-def public_metadata_path
+def public_metadata_path(release_version: nil)
   source = File.join(__dir__, "metadata")
   temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
   Dir.children(source).each do |entry|
@@ -789,6 +804,12 @@ def public_metadata_path
     next unless PUBLIC_METADATA_FILENAMES.any? { |filename| File.exist?(File.join(source_entry, filename)) }
 
     FileUtils.cp_r(source_entry, File.join(temp_root, entry))
+  end
+  Dir[File.join(temp_root, "*", "release_notes.txt")].each { |path| FileUtils.rm_f(path) }
+  if release_notes_upload_requested?
+    target_dir = File.join(temp_root, "en-US")
+    FileUtils.mkdir_p(target_dir)
+    File.write(File.join(target_dir, "release_notes.txt"), render_ios_release_notes(release_version: release_version))
   end
   temp_root
 end
@@ -1100,8 +1121,8 @@ def sync_ios_versioning!(release_version: nil)
 
   detail = stderr.to_s.strip
   detail = stdout.to_s.strip if detail.empty?
-  sync_command = env_present?(release_version) ? "pnpm ios:version:sync -- --version #{release_version}" : "pnpm ios:version:sync"
-  UI.user_error!("iOS versioning artifacts are stale. Run `#{sync_command}`.\n#{detail}")
+  check_command = env_present?(release_version) ? "pnpm ios:version:check -- --version #{release_version}" : "pnpm ios:version:check"
+  UI.user_error!("iOS versioning inputs are invalid. Run `#{check_command}`.\n#{detail}")
 end
 
 def shell_join(parts)
@@ -1463,10 +1484,10 @@ platform :ios do
     end
 
     assert_no_app_review_notes_field_metadata!(File.join(__dir__, "metadata"))
-    metadata_path = public_metadata_path
+    metadata_path = public_metadata_path(release_version: release_version)
     skip_metadata = ENV["DELIVER_METADATA"] != "1"
     if release_notes_upload_requested? && skip_metadata
-      metadata_path = release_notes_metadata_path
+      metadata_path = release_notes_metadata_path(release_version: release_version)
       skip_metadata = false
     end
     assert_no_app_review_notes_field_metadata!(metadata_path) unless skip_metadata
@@ -1517,6 +1538,7 @@ platform :ios do
 
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
+    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
 
     capture_ios_screenshots(
@@ -1549,6 +1571,7 @@ platform :ios do
 
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
+    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
     capture_watch_screenshot
   end

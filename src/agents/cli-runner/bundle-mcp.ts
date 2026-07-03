@@ -15,6 +15,7 @@ import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
   findClaudeMcpConfigPath,
+  findClaudeMcpConfigPaths,
   injectClaudeMcpConfigArgs,
   writeClaudeMcpCaptureConfig,
 } from "./bundle-mcp-claude.js";
@@ -23,6 +24,7 @@ import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bund
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
@@ -188,14 +190,17 @@ export async function prepareCliBundleMcpConfig(params: {
   }
 
   const mode = resolveBundleMcpMode(params.mode);
-  const existingMcpConfigPath =
-    mode === "claude-config-file"
-      ? (findClaudeMcpConfigPath(params.backend.resumeArgs) ??
-        findClaudeMcpConfigPath(params.backend.args))
-      : undefined;
+  const resumeMcpConfigPaths =
+    mode === "claude-config-file" ? findClaudeMcpConfigPaths(params.backend.resumeArgs) : [];
+  const existingMcpConfigPaths =
+    mode === "claude-config-file" && resumeMcpConfigPaths.length > 0
+      ? resumeMcpConfigPaths
+      : mode === "claude-config-file"
+        ? findClaudeMcpConfigPaths(params.backend.args)
+        : [];
   let mergedConfig: BundleMcpConfig = { mcpServers: {} };
 
-  if (existingMcpConfigPath) {
+  for (const existingMcpConfigPath of existingMcpConfigPaths) {
     // Merge any user-provided Claude MCP config first so bundle/plugin config can
     // override intentionally managed server entries.
     const resolvedExistingPath = path.isAbsolute(existingMcpConfigPath)

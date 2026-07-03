@@ -788,6 +788,9 @@ struct IPadWorkboardScreen: View {
 
     private func open(_ card: IPadWorkboardCard) {
         guard let sessionKey = normalized(card.sessionKey) else { return }
+        // Card details are a sheet. Dismiss it before changing tabs or the requested
+        // Chat session and contextual return action remain obscured by the old card.
+        self.presentedSheet = nil
         self.appModel.openChat(sessionKey: sessionKey)
         self.openChat()
     }
@@ -1039,10 +1042,10 @@ private struct IPadWorkboardKanbanCard: View {
     private var color: Color {
         switch self.card.status {
         case "running": OpenClawBrand.ok
-        case "review": OpenClawBrand.accent
+        case "review": OpenClawBrand.accentForeground
         case "blocked": OpenClawBrand.warn
         case "done": .secondary
-        default: OpenClawBrand.accentHot
+        default: OpenClawBrand.accentHotForeground
         }
     }
 
@@ -1164,10 +1167,10 @@ struct IPadWorkboardQueueRow: View {
     private var color: Color {
         switch self.card.status {
         case "running": OpenClawBrand.ok
-        case "review": OpenClawBrand.accent
+        case "review": OpenClawBrand.accentForeground
         case "blocked": OpenClawBrand.warn
         case "done": .secondary
-        default: OpenClawBrand.accentHot
+        default: OpenClawBrand.accentHotForeground
         }
     }
 

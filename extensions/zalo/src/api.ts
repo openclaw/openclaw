@@ -21,8 +21,9 @@ export type ZaloApiResponse<T = unknown> = {
 
 export type ZaloBotInfo = {
   id: string;
-  name: string;
-  avatar?: string;
+  account_name: string;
+  account_type: string;
+  can_join_groups: boolean;
 };
 
 export type ZaloMessage = {

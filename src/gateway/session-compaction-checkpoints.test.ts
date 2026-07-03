@@ -789,7 +789,7 @@ describe("session-compaction-checkpoints", () => {
     const messages = SessionManager.open(forked.sessionFile, dir).buildSessionContext().messages;
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "legacy first",
-      "legacy second",
+      [{ type: "text", text: "legacy second" }],
     ]);
   });
 

@@ -60,6 +60,9 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+      - path: Resources/Licenses
+        type: folder
+        buildPhase: resources
     resources:
       - path: Resources/Localizable.xcstrings
     dependencies:

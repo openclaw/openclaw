@@ -10,6 +10,7 @@ import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
   QaTransportGatewayClient,
+  QaTransportNativeCommandInput,
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
@@ -147,6 +148,14 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
     replyChannel: QA_CHANNEL_ID,
     replyTo: target,
   });
+  override async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
+    const { command, ...message } = input;
+    await this.sendInbound({
+      ...message,
+      text: `/${command}`,
+      nativeCommand: { name: command },
+    });
+  }
   handleAction = handleQaChannelAction;
   createReportNotes = createQaChannelReportNotes;
 }

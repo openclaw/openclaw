@@ -19,6 +19,7 @@ import type {
   QaTransportActionName,
   QaTransportGatewayClient,
   QaTransportGatewayConfig,
+  QaTransportNativeCommandInput,
   QaTransportReportParams,
   QaTransportState,
 } from "./qa-transport.js";
@@ -259,6 +260,20 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   };
 
   createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
+
+  override async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
+    if (this.#selection.channel !== "telegram") {
+      throw new Error(
+        `Crabline ${this.#selection.channel} does not support native command injection.`,
+      );
+    }
+    const { command, ...message } = input;
+    await this.sendInbound({
+      ...message,
+      text: `/${command}`,
+      nativeCommand: { name: command },
+    });
+  }
 
   handleAction = async (_params: {
     action: QaTransportActionName;

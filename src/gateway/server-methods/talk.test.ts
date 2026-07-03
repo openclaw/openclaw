@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => ({
   getResolvedSpeechProviderConfig: vi.fn(() => ({})),
   resolveTtsConfig: vi.fn(() => ({ timeoutMs: 30_000 })),
   synthesizeSpeech: vi.fn(),
-  canonicalizeRealtimeVoiceProviderId: vi.fn((providerId: string | undefined) => providerId),
+  canonicalizeRealtimeVoiceProviderId: vi.fn((providerId: string | undefined) =>
+    providerId?.trim().toLowerCase(),
+  ),
   listRealtimeVoiceProviders: vi.fn(() => []),
   listRealtimeTranscriptionProviders: vi.fn(() => []),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
@@ -417,6 +419,119 @@ describe("talk.speak handler", () => {
 describe("talk.config handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("projects effective legacy realtime provider config for native routing", async () => {
+    const resolveConfig = vi.fn(
+      ({ rawConfig }: { rawConfig: Record<string, unknown> }): Record<string, unknown> => ({
+        ...rawConfig,
+        apiKey: normalizeResolvedSecretInputString({
+          value: rawConfig.apiKey,
+          path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
+        }),
+      }),
+    );
+    mocks.listRealtimeVoiceProviders.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI Realtime",
+        models: ["gpt-realtime"],
+        resolveConfig,
+        isConfigured: ({ providerConfig }: { providerConfig: Record<string, unknown> }) =>
+          providerConfig.apiKey === "runtime-azure-secret",
+      },
+    ] as never);
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          voiceModel: { primary: "openai/gpt-realtime" },
+        },
+      },
+      talk: {
+        realtime: {
+          speakerVoice: "marin",
+          speakerVoiceId: "voice-id",
+        },
+      },
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                providers: {
+                  " OpenAI ": {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "AZURE_OPENAI_API_KEY",
+                    },
+                    azureEndpoint: "https://example.openai.azure.com",
+                    azureDeployment: "realtime-prod",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                providers: {
+                  " OpenAI ": {
+                    apiKey: "runtime-azure-secret",
+                    azureEndpoint: "https://example.openai.azure.com",
+                    azureDeployment: "realtime-prod",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: sourceConfig,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+    const realtime = expectRecordFields(response.config?.talk?.realtime, {
+      provider: "openai",
+      model: "gpt-realtime",
+      speakerVoice: "marin",
+      speakerVoiceId: "voice-id",
+    });
+    const providers = realtime.providers as Record<string, unknown> | undefined;
+    expectRecordFields(providers?.openai, {
+      apiKey: {
+        source: "__OPENCLAW_REDACTED__",
+        provider: "__OPENCLAW_REDACTED__",
+        id: "__OPENCLAW_REDACTED__",
+      },
+      azureEndpoint: "https://example.openai.azure.com",
+      azureDeployment: "realtime-prod",
+    });
+    expect(resolveConfig).toHaveBeenCalledOnce();
+    expect(JSON.stringify(mockCallArg(resolveConfig))).toContain("runtime-azure-secret");
+    expect(JSON.stringify(response)).not.toContain("runtime-azure-secret");
   });
 
   it("passes runtime-resolved messages.tts provider secrets to strict provider resolvers", async () => {
