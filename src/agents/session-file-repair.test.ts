@@ -493,6 +493,71 @@ describe("repairSessionFileIfNeeded", () => {
     ]);
   });
 
+  it("rewrites payload-less image blocks (missing data) so replay can continue", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const payloadlessToolResultEntry = {
+      type: "message",
+      id: "msg-payloadless-image",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call-1",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image", mimeType: "image/png" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(payloadlessToolResultEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCorruptedImageBlocks).toBe(1);
+    expect(requireFirstLogMessage(debug)).toContain("removed 1 corrupted image block(s)");
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
+    expect(repairedEntry.message.content).toEqual([
+      { type: "text", text: "inspect this" },
+      { type: "text", text: CORRUPTED_IMAGE_FALLBACK_TEXT },
+    ]);
+  });
+
+  it("rewrites image blocks with empty-string data and no mimeType so replay can continue", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const emptyDataEntry = {
+      type: "message",
+      id: "msg-empty-image",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "inspect this" },
+          { type: "image", data: "" },
+        ],
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(emptyDataEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.removedCorruptedImageBlocks).toBe(1);
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
+    expect(repairedEntry.message.content).toEqual([
+      { type: "text", text: "inspect this" },
+      { type: "text", text: CORRUPTED_IMAGE_FALLBACK_TEXT },
+    ]);
+  });
+
   it("preserves valid image blocks during repair", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();

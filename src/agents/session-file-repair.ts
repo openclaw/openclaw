@@ -246,8 +246,16 @@ function isCorruptedImageContentBlock(block: unknown): boolean {
     mediaType?: unknown;
     media_type?: unknown;
   };
-  if (record.type !== "image" || typeof record.data !== "string") {
+  if (record.type !== "image") {
     return false;
+  }
+  // A payload-less `{ type: "image" }` block (missing/empty `data`) is never a
+  // legitimate canonical shape -- ImageContent always carries inline base64 --
+  // so treat it as corrupted the same as a garbled payload. Left un-repaired,
+  // it replays to providers as an opaque media block with nothing to show,
+  // silently dropping the underlying content (#98673).
+  if (typeof record.data !== "string" || record.data.trim().length === 0) {
+    return true;
   }
   const mimeType = [record.mimeType, record.mediaType, record.media_type].find(isImageMimeType);
   if (!mimeType) {
