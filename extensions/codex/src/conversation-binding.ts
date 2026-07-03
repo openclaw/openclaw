@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
@@ -975,21 +976,7 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
   const state = getGlobalState();
-  const previous = state.queues.get(key) ?? Promise.resolve();
-  const next = previous.then(run, run);
-  const queued = next.then(
-    () => undefined,
-    () => undefined,
-  );
-  state.queues.set(key, queued);
-  void next
-    .finally(() => {
-      if (state.queues.get(key) === queued) {
-        state.queues.delete(key);
-      }
-    })
-    .catch(() => undefined);
-  return next;
+  return enqueueKeyedTask({ tails: state.queues, key, task: run });
 }
 
 function resolveThreadRequestModelProvider(params: {

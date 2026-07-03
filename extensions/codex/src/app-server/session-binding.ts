@@ -12,6 +12,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
@@ -118,30 +119,16 @@ export async function withCodexAppServerBindingLock<T>(
   // The SDK file lock is process-reentrant, so pair it with a local queue.
   // Nested writes from the same guarded mutation can proceed, but unrelated
   // same-process tasks cannot slip between compare/clear/start.
-  const previous = bindingMutationQueues.get(bindingPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.then(
-    () => current,
-    () => current,
-  );
-  bindingMutationQueues.set(bindingPath, queued);
-  await previous.catch(() => undefined);
-
   const nestedOwnedBindings = new Set(ownedBindings);
   nestedOwnedBindings.add(bindingPath);
-  try {
-    return await bindingMutationContext.run(nestedOwnedBindings, () =>
-      withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run),
-    );
-  } finally {
-    releaseCurrent();
-    if (bindingMutationQueues.get(bindingPath) === queued) {
-      bindingMutationQueues.delete(bindingPath);
-    }
-  }
+  return await enqueueKeyedTask({
+    tails: bindingMutationQueues,
+    key: bindingPath,
+    task: () =>
+      bindingMutationContext.run(nestedOwnedBindings, () =>
+        withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run),
+      ),
+  });
 }
 
 /** Reads and normalizes a Codex app-server binding sidecar, returning undefined on stale data. */

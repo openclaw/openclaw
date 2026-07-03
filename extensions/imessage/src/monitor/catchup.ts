@@ -1,5 +1,6 @@
 // Imessage plugin module implements catchup behavior.
 import { createHash } from "node:crypto";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageRuntime } from "../runtime.js";
 
@@ -29,7 +30,7 @@ const MAX_FAILURE_RETRY_MAP_JSON_BYTES = 48_000;
 const textEncoder = new TextEncoder();
 export const IMESSAGE_CATCHUP_CURSOR_NAMESPACE = "imessage.catchup-cursors";
 export const IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES = 256;
-const cursorWriteQueues = new Map<string, Promise<unknown>>();
+const cursorWriteQueues = new Map<string, Promise<void>>();
 
 export type IMessageCatchupConfig = {
   enabled?: boolean;
@@ -119,17 +120,7 @@ function updateCatchupCursorStore(
 
 function enqueueCursorWrite<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
   const key = resolveIMessageCatchupCursorKey(accountId);
-  const prev = cursorWriteQueues.get(key) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  cursorWriteQueues.set(key, next);
-  next
-    .finally(() => {
-      if (cursorWriteQueues.get(key) === next) {
-        cursorWriteQueues.delete(key);
-      }
-    })
-    .catch(() => {});
-  return next;
+  return enqueueKeyedTask({ tails: cursorWriteQueues, key, task: fn });
 }
 
 function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   createApplicationCommand,
@@ -36,22 +37,7 @@ type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 const cachePersistLocks = new Map<string, Promise<void>>();
 
 async function withCachePersistLock<T>(storePath: string, fn: () => Promise<T>): Promise<T> {
-  const previous = cachePersistLocks.get(storePath) ?? Promise.resolve();
-  let release: () => void = () => {};
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const chained = previous.then(() => next);
-  cachePersistLocks.set(storePath, chained);
-  try {
-    await previous;
-    return await fn();
-  } finally {
-    release();
-    if (cachePersistLocks.get(storePath) === chained) {
-      cachePersistLocks.delete(storePath);
-    }
-  }
+  return await enqueueKeyedTask({ tails: cachePersistLocks, key: storePath, task: fn });
 }
 
 export class DiscordCommandDeployer {

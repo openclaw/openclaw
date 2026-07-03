@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
@@ -849,23 +850,7 @@ function isProcessLikelyAlive(pid: number): boolean {
 }
 
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
-  const previous = inProcessShortTermLocks.get(lockPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => current);
-  inProcessShortTermLocks.set(lockPath, queued);
-
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    releaseCurrent();
-    if (inProcessShortTermLocks.get(lockPath) === queued) {
-      inProcessShortTermLocks.delete(lockPath);
-    }
-  }
+  return await enqueueKeyedTask({ tails: inProcessShortTermLocks, key: lockPath, task });
 }
 
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {

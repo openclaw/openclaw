@@ -8,6 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -80,28 +81,7 @@ function checkRateLimit(accountId: string): boolean {
 const publishLocks = new Map<string, Promise<void>>();
 
 async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
-  // Atomic mutex using promise chaining - prevents TOCTOU race condition
-  const prev = publishLocks.get(accountId) ?? Promise.resolve();
-  let resolve: () => void;
-  const next = new Promise<void>((r) => {
-    resolve = r;
-  });
-  // Atomically replace the lock before awaiting - any concurrent request
-  // will now wait on our `next` promise
-  publishLocks.set(accountId, next);
-
-  // Wait for previous operation to complete
-  await prev.catch(() => {});
-
-  try {
-    return await fn();
-  } finally {
-    resolve!();
-    // Clean up if we're the last in chain
-    if (publishLocks.get(accountId) === next) {
-      publishLocks.delete(accountId);
-    }
-  }
+  return await enqueueKeyedTask({ tails: publishLocks, key: accountId, task: fn });
 }
 
 // ============================================================================

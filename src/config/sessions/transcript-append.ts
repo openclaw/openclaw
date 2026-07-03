@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
   acquireSessionWriteLock,
@@ -397,24 +398,9 @@ export async function withSessionTranscriptAppendQueue<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const queueKey = await resolveTranscriptAppendQueueKey(transcriptPath);
-  const previous = transcriptAppendQueues.get(queueKey) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const tail = previous.catch(() => undefined).then(() => current);
   // Per-file queue is in-process only; the external session write lock still owns cross-process
   // ordering.
-  transcriptAppendQueues.set(queueKey, tail);
-  await previous.catch(() => undefined);
-  try {
-    return await fn();
-  } finally {
-    releaseCurrent();
-    if (transcriptAppendQueues.get(queueKey) === tail) {
-      transcriptAppendQueues.delete(queueKey);
-    }
-  }
+  return await enqueueKeyedTask({ tails: transcriptAppendQueues, key: queueKey, task: fn });
 }
 
 export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {

@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
@@ -187,28 +188,17 @@ async function withConfigMutationLock<T>(
   assertConfigWriteAllowedInCurrentMode({ configPath });
   await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
 
-  const previousTail = configMutationQueueTails.get(configPath) ?? Promise.resolve();
-  let releaseQueueSlot!: () => void;
-  const currentRun = new Promise<void>((resolve) => {
-    releaseQueueSlot = resolve;
+  const nextActiveLocks = new Set(activeLocks ?? []);
+  nextActiveLocks.add(configPath);
+  return await enqueueKeyedTask({
+    tails: configMutationQueueTails,
+    key: configPath,
+    task: () =>
+      activeConfigMutationLocks.run(
+        nextActiveLocks,
+        async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
+      ),
   });
-  const currentTail = previousTail.catch(() => undefined).then(() => currentRun);
-  configMutationQueueTails.set(configPath, currentTail);
-
-  await previousTail.catch(() => undefined);
-  try {
-    const nextActiveLocks = new Set(activeLocks ?? []);
-    nextActiveLocks.add(configPath);
-    return await activeConfigMutationLocks.run(
-      nextActiveLocks,
-      async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
-    );
-  } finally {
-    releaseQueueSlot();
-    if (configMutationQueueTails.get(configPath) === currentTail) {
-      configMutationQueueTails.delete(configPath);
-    }
-  }
 }
 
 function markActiveConfigMutationPath(configPath: string): void {

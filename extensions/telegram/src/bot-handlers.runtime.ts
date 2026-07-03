@@ -31,6 +31,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -284,13 +285,13 @@ export const registerTelegramHandlers = ({
     key: string,
     task: () => Promise<void>,
   ) => {
-    const previous = processingByKey.get(key) ?? Promise.resolve();
-    const current = previous.then(task).catch(() => undefined);
-    processingByKey.set(key, current);
-    await current;
-    if (processingByKey.get(key) === current) {
-      processingByKey.delete(key);
-    }
+    await enqueueKeyedTask({
+      tails: processingByKey,
+      key,
+      task: async () => {
+        await task().catch(() => undefined);
+      },
+    });
   };
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });

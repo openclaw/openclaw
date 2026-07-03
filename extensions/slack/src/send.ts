@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
@@ -488,22 +489,7 @@ function createSlackSendQueueKey(params: {
 }
 
 async function runQueuedSlackSend<T>(key: string, task: () => Promise<T>): Promise<T> {
-  const previous = slackSendQueues.get(key) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queuedCurrent = previous.catch(() => undefined).then(() => current);
-  slackSendQueues.set(key, queuedCurrent);
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    releaseCurrent();
-    if (slackSendQueues.get(key) === queuedCurrent) {
-      slackSendQueues.delete(key);
-    }
-  }
+  return await enqueueKeyedTask({ tails: slackSendQueues, key, task });
 }
 
 function createSlackDmCacheKey(params: {
