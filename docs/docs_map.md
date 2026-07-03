@@ -5857,6 +5857,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/clawrouter.md
+
+- Route: /plugins/reference/clawrouter
+- Headings:
+  - H1: ClawRouter plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/clickclack.md
 
 - Route: /plugins/reference/clickclack
@@ -7270,6 +7279,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in catalog
   - H2: Advanced configuration
   - H2: Notes
+  - H2: Related
+
+## providers/clawrouter.md
+
+- Route: /providers/clawrouter
+- Headings:
+  - H2: Getting started
+  - H2: Protocol and provider plugins
+  - H2: Quotas and usage
+  - H2: Security behavior
   - H2: Related
 
 ## providers/cloudflare-ai-gateway.md
