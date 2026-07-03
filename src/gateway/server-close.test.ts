@@ -133,6 +133,7 @@ function createGatewayCloseTestDeps(
     getPendingReplyCount: vi.fn(() => 0),
     clients: new Set<GatewayCloseClient>(),
     configReloader: { stop: vi.fn(async () => undefined) },
+    removeAllSessionLocksOnShutdown: vi.fn(async () => 0),
     wss: {
       clients: new Set(),
       close: (cb: () => void) => cb(),

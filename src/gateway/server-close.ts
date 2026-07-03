@@ -704,6 +704,7 @@ export function createGatewayCloseHandler(
       reason: "shutdown" | "restart";
       totalTimeoutMs?: number;
     }) => Promise<{ emittedSessionIds: string[]; timedOut: boolean }>;
+    removeAllSessionLocksOnShutdown?: () => Promise<number>;
   } & RestartRunAbortParams,
 ) {
   return async (opts?: {
@@ -868,6 +869,18 @@ export function createGatewayCloseHandler(
         ]);
       });
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+      await measureCloseStep("session-lock-teardown", () =>
+        shutdownStep(
+          "session-lock-teardown",
+          async () => {
+            const removeAllSessionLocksOnShutdown =
+              params.removeAllSessionLocksOnShutdown ??
+              (await import("./stale-lock-cleanup-shutdown.js")).removeAllSessionLocksOnShutdown;
+            await removeAllSessionLocksOnShutdown();
+          },
+          warnings,
+        ),
+      );
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );

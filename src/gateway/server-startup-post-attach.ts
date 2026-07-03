@@ -855,6 +855,20 @@ export async function startGatewaySidecars(params: {
 
   schedulePostReadySidecarTask({
     startupTrace: params.startupTrace,
+    name: "sidecars.stale-lock-cleanup-startup",
+    log: params.log,
+    run: async () => {
+      try {
+        const { sweepStaleSessionLocksOnStartup } = await import("./stale-lock-cleanup-startup.js");
+        await sweepStaleSessionLocksOnStartup(process.env);
+      } catch (err) {
+        params.log.warn(`stale session lock startup sweep failed: ${String(err)}`);
+      }
+    },
+  });
+
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
     name: "sidecars.restart-sentinel",
     log: params.log,
     run: async () => {
