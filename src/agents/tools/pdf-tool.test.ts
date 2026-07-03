@@ -568,31 +568,34 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("rejects fractional page selections before fallback extraction", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        api: "openai-responses",
-        input: ["text"],
-      });
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
-      const cfg = withPdfModel(OPENAI_PDF_MODEL);
-      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+  it.each(["1.5", "1,2.5"])(
+    "rejects fractional page selection %s before fallback extraction",
+    async (pages) => {
+      await withTempPdfAgentDir(async (agentDir) => {
+        await stubPdfToolInfra(agentDir, {
+          provider: "openai",
+          api: "openai-responses",
+          input: ["text"],
+        });
+        const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+          text: "Extracted content",
+          images: [],
+        });
+        const cfg = withPdfModel(OPENAI_PDF_MODEL);
+        const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
-      await expect(
-        tool.execute("t1", {
-          prompt: "summarize",
-          pdf: "/tmp/doc.pdf",
-          pages: "1.5",
-        }),
-      ).rejects.toThrow('Invalid page number: "1.5"');
-      expect(extractSpy).not.toHaveBeenCalled();
-      expect(completeMock).not.toHaveBeenCalled();
-    });
-  });
+        await expect(
+          tool.execute("t1", {
+            prompt: "summarize",
+            pdf: "/tmp/doc.pdf",
+            pages,
+          }),
+        ).rejects.toThrow(`Invalid page number: "${pages.includes(",") ? "2.5" : pages}"`);
+        expect(extractSpy).not.toHaveBeenCalled();
+        expect(completeMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("rejects password parameter for native PDF providers", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
