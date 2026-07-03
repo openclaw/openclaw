@@ -217,10 +217,17 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 ### Google Vertex and Gemini CLI
 
 - Providers: `google-vertex`, `google-gemini-cli`
-- Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow
+- Auth: Vertex uses gcloud ADC. Gemini CLI requires an official Gemini CLI sign-in cache created by running `gemini` and choosing **Sign in with Google**.
+- Cache source: OpenClaw imports `oauth_creds.json` from `GEMINI_CLI_HOME/.gemini/oauth_creds.json` when `GEMINI_CLI_HOME` is set, otherwise from the user's `~/.gemini/oauth_creds.json`.
+- Runtime isolation: OpenClaw stages the imported OAuth credential into an isolated Gemini CLI auth home for the selected profile before launching the CLI backend.
+- Headless setup: use the `google` provider with `GEMINI_API_KEY` for AI Studio API-key auth, or configure `google-vertex` separately for Vertex auth.
+
+<Note>
+OpenClaw does not start a Google OAuth browser/callback flow for `google-gemini-cli`. Complete the official Gemini CLI login first, then import the resulting cache through OpenClaw setup.
+</Note>
 
 <Warning>
-Gemini CLI OAuth in OpenClaw is an unofficial integration. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
+The retired OpenClaw-owned Gemini CLI OAuth env vars are no longer the setup path: `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`, `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`, `GEMINI_CLI_OAUTH_CLIENT_ID`, and `GEMINI_CLI_OAUTH_CLIENT_SECRET`. Do not add OAuth client ids or secrets to `openclaw.json`.
 </Warning>
 
 Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
@@ -240,21 +247,29 @@ Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
       </Tab>
     </Tabs>
   </Step>
+  <Step title="Sign in with the official Gemini CLI">
+    ```bash
+    gemini
+    ```
+
+    Choose **Sign in with Google** and complete the browser flow. This creates the official Gemini CLI OAuth cache under the Gemini CLI home directory.
+
+  </Step>
   <Step title="Enable plugin">
     ```bash
     openclaw plugins enable google
     ```
   </Step>
-  <Step title="Login">
+  <Step title="Import the Gemini CLI cache">
     ```bash
     openclaw models auth login --provider google-gemini-cli --set-default
     ```
 
-    Default model: `google-gemini-cli/gemini-3-flash-preview`. You do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores tokens in auth profiles on the gateway host.
+    Default model: `google-gemini-cli/gemini-3-flash-preview`. OpenClaw imports the official Gemini CLI cache into an auth profile; it does **not** ask for an OAuth client id, client secret, redirect URL, or raw authorization code.
 
   </Step>
   <Step title="Set project (if needed)">
-    If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
+    If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host before importing the cache.
   </Step>
 </Steps>
 
