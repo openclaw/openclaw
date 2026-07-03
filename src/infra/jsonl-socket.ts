@@ -76,7 +76,7 @@ async function requestJsonlSocketWithMaxLineBytes<T>(
     });
     client.on("data", (data: Buffer) => {
       let offset = 0;
-      while (offset < data.byteLength && !settled) {
+      while (offset < data.byteLength) {
         const newlineIndex = data.indexOf(0x0a, offset);
         if (newlineIndex === -1) {
           appendLineChunk(data.subarray(offset));
