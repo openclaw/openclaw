@@ -32,7 +32,6 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
-  buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
@@ -41,18 +40,14 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "../accounts.js";
+import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
-import {
-  discordTextHasBroadcastMention,
-  discordTextHasTargetedMention,
-  rewriteDiscordKnownMentions,
-} from "../mentions.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
+import type { DiscordMessageEdit } from "../send.types.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import {
   createDiscordAckReactionAdapter,
@@ -874,16 +869,7 @@ async function processDiscordMessageInner(
     const shouldFinalizeDraftPreview =
       draftStream && isFinal && !draftPreview.isProgressMode && !deliverablePayload.isError;
     if (shouldFinalizeDraftPreview) {
-      const reply = resolveSendableOutboundReplyParts(deliverablePayload);
-      const hasMedia = reply.hasMedia;
       const ttsSupplement = getReplyPayloadTtsSupplement(deliverablePayload);
-      const previewSourceText = deliverablePayload.text ?? ttsSupplement?.spokenText;
-      const previewFinalText = draftPreview.resolvePreviewFinalText(previewSourceText);
-      const previewReplyToId = replyReference.peek();
-      const hasExplicitReplyDirective =
-        Boolean(deliverablePayload.replyToTag || deliverablePayload.replyToCurrent) ||
-        (typeof previewSourceText === "string" &&
-          /\[\[\s*reply_to(?:_current|\s*:)/i.test(previewSourceText));
 
       const result = await deliverWithFinalizableLivePreviewAdapter({
         kind: info.kind,
@@ -896,31 +882,8 @@ async function processDiscordMessageInner(
             seal: () => draftStream.seal(),
             id: draftStream.messageId,
           },
-          buildFinalEdit: () => {
-            if (
-              draftPreview.finalizedViaPreviewMessage ||
-              (hasMedia && !ttsSupplement) ||
-              typeof previewFinalText !== "string" ||
-              hasExplicitReplyDirective ||
-              deliverablePayload.isError
-            ) {
-              return undefined;
-            }
-            // Discord pings only on create, not edits: send a targeted mention fresh, but keep mixed @everyone/@here in place so the create cannot escalate a broadcast.
-            const rewrittenFinal = rewriteDiscordKnownMentions(previewFinalText, {
-              accountId,
-              mentionAliases: resolveDiscordAccount({ cfg, accountId }).config.mentionAliases,
-            });
-            if (
-              discordTextHasTargetedMention(rewrittenFinal) &&
-              !discordTextHasBroadcastMention(rewrittenFinal)
-            ) {
-              return undefined;
-            }
-            return {
-              content: previewFinalText,
-              ...(finalPreviewFlags ? { flags: finalPreviewFlags } : {}),
-            };
+          buildFinalEdit: (): DiscordMessageEdit | undefined => {
+            return undefined;
           },
           editFinal: async (previewMessageId, edit) => {
             if (isProcessAborted(abortSignal)) {
@@ -937,41 +900,6 @@ async function processDiscordMessageInner(
             markUserFacingFinalDelivered();
             draftPreview.markPreviewFinalized();
             replyReference.markSent();
-          },
-          buildSupplementalPayload: () =>
-            ttsSupplement ? buildTtsSupplementMediaPayload(deliverablePayload) : undefined,
-          deliverSupplemental: async (supplementalPayload) => {
-            if (isProcessAborted(abortSignal)) {
-              return false;
-            }
-            const supplementalReplyToId =
-              previewReplyToId ??
-              replyReference.peek() ??
-              (replyToMode === "all"
-                ? typeof message.id === "string" && message.id
-                  ? message.id
-                  : ctxPayload.MessageSid
-                : undefined);
-            await deliverDiscordReply({
-              cfg,
-              replies: [supplementalPayload],
-              target: deliverTarget,
-              token,
-              accountId,
-              rest: deliveryRest,
-              runtime,
-              replyToId: supplementalReplyToId,
-              replyToMode,
-              textLimit,
-              maxLinesPerMessage,
-              tableMode,
-              chunkMode,
-              sessionKey: ctxPayload.SessionKey,
-              threadBindings,
-              mediaLocalRoots,
-              kind: info.kind,
-            });
-            return true;
           },
           logPreviewEditFailure: (err) => {
             logVerbose(
