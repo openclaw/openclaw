@@ -1,5 +1,5 @@
 // Formats finalized message context into prompt-visible text.
-import { readStringAlias } from "@openclaw/normalization-core/string-coerce";
+import { readStringAlias } from "../../utils/string-readers.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Message context fields that can carry user-visible command text. */

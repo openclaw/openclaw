@@ -1,6 +1,6 @@
 // Proxy environment helpers mirror undici EnvHttpProxyAgent selection while
 // adding OpenClaw NO_PROXY CIDR/wildcard bypass checks.
-import { readTrimmedStringAlias } from "@openclaw/normalization-core/string-coerce";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 
 export const PROXY_ENV_KEYS = [
   "HTTP_PROXY",

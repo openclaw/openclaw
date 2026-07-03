@@ -1,11 +1,11 @@
 // Defines model selection and provider configuration types.
-import { isStringOption } from "@openclaw/normalization-core/string-coerce";
 import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
   ThinkingLevelMap,
 } from "../llm/types.js";
+import { isStringOption } from "../utils/string-readers.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";

@@ -1,13 +1,11 @@
 /**
  * Resolves MCP transport command, environment, and timeout configuration.
  */
-import {
-  normalizeLowercaseStringOrEmpty,
-  readTrimmedStringAlias,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,

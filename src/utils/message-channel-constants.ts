@@ -1,5 +1,5 @@
 // Message channel constants define internal channel ids shared across routing.
-import { isStringOption } from "@openclaw/normalization-core/string-coerce";
+import { isStringOption } from "./string-readers.js";
 
 export const INTERNAL_MESSAGE_CHANNEL = "webchat" as const;
 export type InternalMessageChannel = typeof INTERNAL_MESSAGE_CHANNEL;

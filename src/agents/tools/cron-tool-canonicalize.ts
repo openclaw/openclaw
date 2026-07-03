@@ -4,8 +4,8 @@
  * Recovers flat or partial model/tool inputs into the structured cron job/patch shape.
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { isStringOption } from "@openclaw/normalization-core/string-coerce";
 import { isRecord } from "../../utils.js";
+import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;

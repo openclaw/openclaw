@@ -6,7 +6,6 @@
  *
  * Zero external dependencies.
  */
-import { readStringOption } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Lowercase and trim a string, returning empty string for falsy input. */
 function lc(s: string): string {
@@ -126,9 +125,8 @@ export const FUZZY_MEDIA_TAG_REGEX = new RegExp(
 /** Normalize a raw tag name into the canonical tag set. */
 function resolveTagName(raw: string): (typeof VALID_TAGS)[number] {
   const lower = lc(raw);
-  const validTag = readStringOption(lower, VALID_TAGS);
-  if (validTag) {
-    return validTag;
+  if ((VALID_TAGS as readonly string[]).includes(lower)) {
+    return lower as (typeof VALID_TAGS)[number];
   }
   return TAG_ALIASES[lower] ?? "qqimg";
 }

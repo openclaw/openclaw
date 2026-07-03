@@ -3,7 +3,6 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  readTrimmedStringAlias,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -14,6 +13,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
 type SourceReplyTranscriptMirrorParams = {

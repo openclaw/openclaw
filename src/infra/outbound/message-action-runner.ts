@@ -3,7 +3,6 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  readTrimmedStringAlias,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -52,6 +51,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
