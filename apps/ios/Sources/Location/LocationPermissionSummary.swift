@@ -17,7 +17,7 @@ struct LocationPermissionSummary: Equatable {
         guard currentMode != .off else { return .off }
         switch authorizationStatus {
         case .authorizedAlways:
-            return .always
+            return currentMode
         case .authorizedWhenInUse:
             return currentMode == .always ? .always : .whileUsing
         default:

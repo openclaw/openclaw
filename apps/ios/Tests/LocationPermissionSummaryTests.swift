@@ -106,6 +106,15 @@ import Testing
         #expect(mode == .off)
     }
 
+    @Test func `external ios always grant preserves while using app mode`() {
+        let mode = LocationPermissionSummary.reconciledDesiredMode(
+            currentMode: .whileUsing,
+            locationServicesEnabled: true,
+            authorizationStatus: .authorizedAlways)
+
+        #expect(mode == .whileUsing)
+    }
+
     @Test func `ios while using grant preserves always intent for mismatch warning`() {
         let mode = LocationPermissionSummary.reconciledDesiredMode(
             currentMode: .always,
