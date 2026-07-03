@@ -108,6 +108,37 @@ describe("native command auth in groups", () => {
     });
   });
 
+  it("omits sender-allowed status detail when normal ingress has an empty allowlist", async () => {
+    clearNativeCommandRuntimeMocksForTest();
+    const { handlers, sendMessage } = setup({
+      cfg: {
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+          },
+        },
+        commands: {
+          allowFrom: {
+            telegram: ["12345"],
+          },
+        },
+      } as OpenClawConfig,
+      telegramCfg: { groupPolicy: "allowlist" } as TelegramAccountConfig,
+      useAccessGroups: true,
+    });
+
+    const ctx = createTelegramGroupCommandContext();
+
+    await handlers.status?.(ctx);
+
+    expect(findNotAuthorizedCalls(sendMessage)).toHaveLength(0);
+    const contexts = getFinalizedNativeCommandContextsForTest();
+    expect(contexts.at(-1)).toMatchObject({
+      StatusNotes: [expect.stringContaining("no effective allowFrom entries")],
+    });
+    expect(contexts.at(-1)?.StatusNotes?.[0]).not.toContain("sender allowed=");
+  });
+
   it("uses commands.allowFrom.telegram as the sole auth source when configured", async () => {
     const { handlers, sendMessage } = setup({
       cfg: {
