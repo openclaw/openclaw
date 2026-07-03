@@ -10,6 +10,14 @@ const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
 /** Maximum string length accepted for schema-gated JSON coercion. */
 const MAX_JSON_COERCE_LENGTH = 64 * 1024;
 
+const TOOL_NAME_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  agent: ["sessions_spawn"],
+  glob: ["find"],
+  grep: ["grep"],
+  knowledgesearch: ["memory_search", "knowledge_search", "wiki_search", "search"],
+  task: ["sessions_spawn"],
+};
+
 interface JsonSchemaObject {
   type?: string | string[];
   properties?: Record<string, JsonSchemaObject>;
@@ -22,6 +30,72 @@ interface JsonSchemaObject {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function normalizeToolNameForLookup(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export function resolveToolNameCandidates(
+  name: string,
+  options: { aliasesFirst?: boolean; includeNormalized?: boolean } = {},
+): string[] {
+  const trimmed = name.trim();
+  const normalized = normalizeToolNameForLookup(trimmed);
+  const aliases = TOOL_NAME_ALIASES[normalized] ?? [];
+  const normalizedCandidates = options.includeNormalized === false ? [] : [normalized];
+  const candidates = options.aliasesFirst
+    ? [...aliases, trimmed, ...normalizedCandidates]
+    : [trimmed, ...aliases, ...normalizedCandidates];
+  return candidates.filter(
+    (candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index,
+  );
+}
+
+export function resolveToolByName<TTool extends { name: string }>(
+  tools: readonly TTool[],
+  name: string,
+): TTool | undefined {
+  const exact = tools.find((tool) => tool.name === name);
+  if (exact) {
+    return exact;
+  }
+  const toolByExactName = new Map<string, TTool>();
+  const toolByNormalizedName = new Map<string, TTool | undefined>();
+  for (const tool of tools) {
+    toolByExactName.set(tool.name, tool);
+    const normalized = normalizeToolNameForLookup(tool.name);
+    if (!normalized) {
+      continue;
+    }
+    if (!toolByNormalizedName.has(normalized)) {
+      toolByNormalizedName.set(normalized, tool);
+    } else {
+      toolByNormalizedName.set(normalized, undefined);
+    }
+  }
+  for (const candidate of resolveToolNameCandidates(name)) {
+    const exactCandidate = toolByExactName.get(candidate);
+    if (exactCandidate) {
+      return exactCandidate;
+    }
+    const resolved = toolByNormalizedName.get(normalizeToolNameForLookup(candidate));
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return undefined;
+}
+
+export function formatToolNotFoundMessage(
+  name: string,
+  tools: readonly { name: string }[] | undefined,
+): string {
+  const available = tools?.map((tool) => tool.name).filter(Boolean) ?? [];
+  return `Tool ${name} not found. Available tools: ${available.length > 0 ? available.join(", ") : "none"}`;
 }
 
 function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
@@ -336,9 +410,9 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 
 /** Finds the target tool and validates/coerces a model-emitted tool call. */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
-  const tool = tools.find((t) => t.name === toolCall.name);
+  const tool = resolveToolByName(tools, toolCall.name);
   if (!tool) {
-    throw new Error(`Tool "${toolCall.name}" not found`);
+    throw new Error(formatToolNotFoundMessage(toolCall.name, tools));
   }
   return validateToolArguments(tool, toolCall);
 }

@@ -1,7 +1,7 @@
 // LLM Core tests cover validation behavior.
 import { describe, expect, it } from "vitest";
 import type { Tool } from "./types.js";
-import { validateToolArguments } from "./validation.js";
+import { validateToolArguments, validateToolCall } from "./validation.js";
 
 const decimalTool = {
   name: "decimal-tool",
@@ -63,6 +63,102 @@ describe("validateToolArguments", () => {
         arguments: { insight_id: null, cluster_name: "testenv" },
       }),
     ).toEqual({ insight_id: null, cluster_name: "testenv" });
+  });
+});
+
+describe("validateToolCall", () => {
+  it("resolves tool names case-insensitively", () => {
+    expect(
+      validateToolCall([decimalTool], {
+        type: "toolCall",
+        id: "call-case",
+        name: "Decimal-Tool",
+        arguments: { amount: "2.5", count: "4" },
+      }),
+    ).toEqual({ amount: 2.5, count: 4 });
+  });
+
+  it("maps Claude Code tool aliases to OpenClaw runtime tool names", () => {
+    const findTool = {
+      name: "find",
+      description: "find files",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string" },
+        },
+        required: ["pattern"],
+      },
+    } as Tool;
+    const memorySearchTool = {
+      name: "memory_search",
+      description: "search memory",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+        required: ["query"],
+      },
+    } as Tool;
+
+    expect(
+      validateToolCall([findTool], {
+        type: "toolCall",
+        id: "call-glob",
+        name: "Glob",
+        arguments: { pattern: "**/*.ts" },
+      }),
+    ).toEqual({ pattern: "**/*.ts" });
+    expect(
+      validateToolCall([memorySearchTool], {
+        type: "toolCall",
+        id: "call-knowledge",
+        name: "KnowledgeSearch",
+        arguments: { query: "launch notes" },
+      }),
+    ).toEqual({ query: "launch notes" });
+  });
+
+  it("reports available tools when no exact, case-insensitive, or alias match exists", () => {
+    expect(() =>
+      validateToolCall([decimalTool, arrayTool], {
+        type: "toolCall",
+        id: "call-missing",
+        name: "MissingTool",
+        arguments: {},
+      }),
+    ).toThrow("Tool MissingTool not found. Available tools: decimal-tool, array-tool");
+  });
+
+  it("does not use ambiguous normalized tool-name matches", () => {
+    const underscoreTool = {
+      name: "foo_bar",
+      description: "underscore variant",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    } as Tool;
+    const dashTool = {
+      name: "foo-bar",
+      description: "dash variant",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    } as Tool;
+
+    expect(
+      validateToolCall([underscoreTool, dashTool], {
+        type: "toolCall",
+        id: "call-exact",
+        name: "foo-bar",
+        arguments: {},
+      }),
+    ).toEqual({});
+    expect(() =>
+      validateToolCall([underscoreTool, dashTool], {
+        type: "toolCall",
+        id: "call-ambiguous",
+        name: "Foo-Bar",
+        arguments: {},
+      }),
+    ).toThrow("Tool Foo-Bar not found. Available tools: foo_bar, foo-bar");
   });
 });
 

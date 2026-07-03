@@ -16,6 +16,7 @@ import type {
   AgentMessage,
   AgentTool,
   AgentToolResult,
+  DeferredToolCallContext,
   StreamFn,
 } from "./types.js";
 
@@ -376,6 +377,295 @@ describe("runAgentLoop deferred tool hydration", () => {
       ["hidden_search"],
     ]);
     expect(messages.some((message) => message.role === "toolResult")).toBe(true);
+  });
+
+  it("executes Claude Code tool-name aliases through matching OpenClaw tools", async () => {
+    const grepExecute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "grep ok" }],
+        details: { ok: true },
+      }),
+    );
+    const spawnExecute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "spawn ok" }],
+        details: { ok: true },
+      }),
+    );
+    const grepTool: AgentTool = {
+      name: "grep",
+      label: "grep",
+      description: "Search files",
+      parameters: Type.Object({ pattern: Type.String() }),
+      execute: grepExecute,
+    };
+    const sessionsSpawnTool: AgentTool = {
+      name: "sessions_spawn",
+      label: "sessions_spawn",
+      description: "Spawn a subagent",
+      parameters: Type.Object({
+        task: Type.String(),
+        agentId: Type.Optional(Type.String()),
+        label: Type.Optional(Type.String()),
+      }),
+      execute: spawnExecute,
+    };
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-grep",
+                    name: "Grep",
+                    arguments: { pattern: "needle" },
+                  },
+                  {
+                    type: "toolCall" as const,
+                    id: "call-agent",
+                    name: "Agent",
+                    arguments: {
+                      prompt: "summarize the proof",
+                      subagent_type: "researcher",
+                      description: "Research",
+                    },
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+
+    const events: AgentEvent[] = [];
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "use aliases", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [grepTool, sessionsSpawnTool] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+      },
+      (event: AgentEvent) => {
+        events.push(event);
+      },
+      undefined,
+      streamFn,
+    );
+
+    expect(grepExecute).toHaveBeenCalledWith(
+      "call-grep",
+      { pattern: "needle" },
+      undefined,
+      expect.any(Function),
+    );
+    expect(spawnExecute).toHaveBeenCalledWith(
+      "call-agent",
+      { task: "summarize the proof", agentId: "researcher", label: "Research" },
+      undefined,
+      expect.any(Function),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({ role: "toolResult", toolName: "grep", isError: false }),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({ role: "toolResult", toolName: "sessions_spawn", isError: false }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_execution_start",
+        toolCallId: "call-grep",
+        toolName: "grep",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_execution_end",
+        toolCallId: "call-agent",
+        toolName: "sessions_spawn",
+      }),
+    );
+  });
+
+  it("hydrates deferred tools through canonical alias candidates", async () => {
+    const execute = vi.fn(
+      async (): Promise<AgentToolResult<unknown>> => ({
+        content: [{ type: "text", text: "spawn ok" }],
+        details: { ok: true },
+      }),
+    );
+    const sessionsSpawnTool: AgentTool = {
+      name: "sessions_spawn",
+      label: "sessions_spawn",
+      description: "Spawn a subagent",
+      parameters: Type.Object({
+        task: Type.String(),
+        agentId: Type.Optional(Type.String()),
+      }),
+      execute,
+    };
+    const contexts: Context[] = [];
+    let streamCalls = 0;
+    const streamFn: StreamFn = (_model, context) => {
+      contexts.push({ ...context, tools: context.tools?.slice() });
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        streamCalls += 1;
+        const message =
+          streamCalls === 1
+            ? {
+                role: "assistant" as const,
+                content: [
+                  {
+                    type: "toolCall" as const,
+                    id: "call-agent-deferred",
+                    name: "Agent",
+                    arguments: {
+                      prompt: "summarize the proof",
+                      agent: "researcher",
+                    },
+                  },
+                ],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "toolUse" as const,
+                timestamp: Date.now(),
+              }
+            : {
+                role: "assistant" as const,
+                content: [{ type: "text" as const, text: "done" }],
+                api: "faux",
+                provider: "faux",
+                model: "faux-1",
+                usage: TEST_USAGE,
+                stopReason: "stop" as const,
+                timestamp: Date.now(),
+              };
+        stream.push({ type: "done", reason: message.stopReason, message });
+      });
+      return stream;
+    };
+    const resolveDeferredTool = vi.fn((context: DeferredToolCallContext) =>
+      context.toolCall.name === "sessions_spawn" ? sessionsSpawnTool : undefined,
+    );
+    const events: AgentEvent[] = [];
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "use hidden alias", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        resolveDeferredTool,
+      },
+      (event: AgentEvent) => {
+        events.push(event);
+      },
+      undefined,
+      streamFn,
+    );
+
+    expect(resolveDeferredTool).toHaveBeenCalledTimes(1);
+    expect(resolveDeferredTool.mock.calls[0]?.[0].toolCall.name).toBe("sessions_spawn");
+    expect(execute).toHaveBeenCalledWith(
+      "call-agent-deferred",
+      { task: "summarize the proof", agentId: "researcher" },
+      undefined,
+      expect.any(Function),
+    );
+    expect(contexts.map((context) => context.tools?.map((tool) => tool.name) ?? [])).toEqual([
+      [],
+      ["sessions_spawn"],
+    ]);
+    expect(messages).toContainEqual(
+      expect.objectContaining({ role: "toolResult", toolName: "sessions_spawn", isError: false }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_execution_start",
+        toolCallId: "call-agent-deferred",
+        toolName: "sessions_spawn",
+      }),
+    );
+  });
+
+  it("returns available tools when a tool call cannot be resolved", async () => {
+    const grepTool: AgentTool = {
+      name: "grep",
+      label: "grep",
+      description: "Search files",
+      parameters: Type.Object({ pattern: Type.String() }),
+      execute: vi.fn(),
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = {
+          role: "assistant" as const,
+          content: [
+            {
+              type: "toolCall" as const,
+              id: "call-missing",
+              name: "MissingTool",
+              arguments: {},
+            },
+          ],
+          api: "faux",
+          provider: "faux",
+          model: "faux-1",
+          usage: TEST_USAGE,
+          stopReason: "toolUse" as const,
+          timestamp: Date.now(),
+        };
+        stream.push({ type: "done", reason: "toolUse", message });
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "call missing tool", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [grepTool] },
+      {
+        model,
+        convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never,
+        shouldStopAfterTurn: () => true,
+      },
+      (_event: AgentEvent) => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "MissingTool",
+        isError: true,
+        content: [{ type: "text", text: "Tool MissingTool not found. Available tools: grep" }],
+      }),
+    );
   });
 
   it("resolves a missing deferred tool once across pre-scan and preparation", async () => {

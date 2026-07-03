@@ -21,7 +21,12 @@ import type {
   AgentToolResult,
   StreamFn,
 } from "./types.js";
-import { validateToolArguments } from "./validation.js";
+import {
+  formatToolNotFoundMessage,
+  resolveToolByName,
+  resolveToolNameCandidates,
+  validateToolArguments,
+} from "./validation.js";
 
 /** Callback used by synchronous loop runners to publish agent lifecycle events. */
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
@@ -605,6 +610,25 @@ type ResolvedToolCallOutcome =
   | { kind: "resolved"; tool?: AgentTool }
   | { kind: "error"; error: unknown };
 
+function canonicalizeToolCall(toolCall: AgentToolCall, tool: AgentTool): AgentToolCall {
+  if (toolCall.name === tool.name) {
+    return toolCall;
+  }
+  return {
+    ...toolCall,
+    name: tool.name,
+  };
+}
+
+function resolveToolCallForEvent(
+  toolCall: AgentToolCall,
+  resolution: ResolvedToolCallOutcome,
+): AgentToolCall {
+  return resolution.kind === "resolved" && resolution.tool
+    ? canonicalizeToolCall(toolCall, resolution.tool)
+    : toolCall;
+}
+
 async function executeToolCallsSequential(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -618,11 +642,20 @@ async function executeToolCallsSequential(
   const messages: ToolResultMessage[] = [];
 
   for (const toolCall of toolCalls) {
+    const startResolution = await resolveToolCallTool(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+    );
+    const startToolCall = resolveToolCallForEvent(toolCall, startResolution);
     await emit({
       type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
+      toolCallId: startToolCall.id,
+      toolName: startToolCall.name,
+      args: startToolCall.arguments,
     });
 
     const preparation = await prepareToolCall(
@@ -636,7 +669,7 @@ async function executeToolCallsSequential(
     let finalized: FinalizedToolCallOutcome;
     if (preparation.kind === "immediate") {
       finalized = {
-        toolCall,
+        toolCall: preparation.toolCall,
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
@@ -682,11 +715,20 @@ async function executeToolCallsParallel(
   const finalizedCalls: FinalizedToolCallEntry[] = [];
 
   for (const toolCall of toolCalls) {
+    const startResolution = await resolveToolCallTool(
+      currentContext,
+      assistantMessage,
+      toolCall,
+      config,
+      signal,
+      resolvedToolCalls,
+    );
+    const startToolCall = resolveToolCallForEvent(toolCall, startResolution);
     await emit({
       type: "tool_execution_start",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      args: toolCall.arguments,
+      toolCallId: startToolCall.id,
+      toolName: startToolCall.name,
+      args: startToolCall.arguments,
     });
 
     const preparation = await prepareToolCall(
@@ -699,7 +741,7 @@ async function executeToolCallsParallel(
     );
     if (preparation.kind === "immediate") {
       const finalized = {
-        toolCall,
+        toolCall: preparation.toolCall,
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
@@ -755,6 +797,7 @@ type PreparedToolCall = {
 
 type ImmediateToolCallOutcome = {
   kind: "immediate";
+  toolCall: AgentToolCall;
   result: AgentToolResult<unknown>;
   isError: boolean;
 };
@@ -780,11 +823,85 @@ function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): b
   );
 }
 
-function prepareToolCallArguments(tool: AgentTool, toolCall: AgentToolCall): AgentToolCall {
-  if (!tool.prepareArguments) {
-    return toolCall;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeToolNameForAliasCheck(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function readStringArg(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
   }
-  const preparedArguments = tool.prepareArguments(toolCall.arguments);
+  return undefined;
+}
+
+function prepareToolAliasArguments(
+  tool: AgentTool,
+  sourceToolName: string,
+  args: unknown,
+): unknown {
+  if (
+    tool.name !== "sessions_spawn" ||
+    !["agent", "task"].includes(normalizeToolNameForAliasCheck(sourceToolName)) ||
+    !isRecord(args)
+  ) {
+    return args;
+  }
+
+  const prepared: Record<string, unknown> = { ...args };
+  const task = readStringArg(prepared, "task", "prompt", "message", "input", "query");
+  if (task && !readStringArg(prepared, "task")) {
+    prepared.task = task;
+  }
+
+  const agentId = readStringArg(
+    prepared,
+    "agentId",
+    "agent_id",
+    "agent",
+    "subagentType",
+    "subagent_type",
+  );
+  if (agentId && !readStringArg(prepared, "agentId")) {
+    prepared.agentId = agentId;
+  }
+
+  const label = readStringArg(prepared, "label", "description");
+  if (label && !readStringArg(prepared, "label")) {
+    prepared.label = label;
+  }
+
+  delete prepared.prompt;
+  delete prepared.message;
+  delete prepared.input;
+  delete prepared.query;
+  delete prepared.agent;
+  delete prepared.agent_id;
+  delete prepared.subagentType;
+  delete prepared.subagent_type;
+  delete prepared.description;
+
+  return prepared;
+}
+
+function prepareToolCallArguments(
+  tool: AgentTool,
+  toolCall: AgentToolCall,
+  sourceToolName = toolCall.name,
+): AgentToolCall {
+  const toolPreparedArguments = tool.prepareArguments
+    ? tool.prepareArguments(toolCall.arguments)
+    : toolCall.arguments;
+  const preparedArguments = prepareToolAliasArguments(tool, sourceToolName, toolPreparedArguments);
   if (preparedArguments === toolCall.arguments) {
     return toolCall;
   }
@@ -808,18 +925,33 @@ async function resolveToolCallTool(
   }
   let resolution: ResolvedToolCallOutcome;
   try {
-    let tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+    let tool = currentContext.tools
+      ? resolveToolByName(currentContext.tools, toolCall.name)
+      : undefined;
     if (!tool) {
-      const resolvedTool = await config.resolveDeferredTool?.(
-        {
-          assistantMessage,
-          toolCall,
-          context: currentContext,
-        },
-        signal,
-      );
+      let resolvedTool: AgentTool | undefined;
+      let resolvedCandidate = toolCall.name;
+      for (const candidateName of resolveToolNameCandidates(toolCall.name, {
+        aliasesFirst: true,
+        includeNormalized: false,
+      })) {
+        const candidateToolCall =
+          candidateName === toolCall.name ? toolCall : { ...toolCall, name: candidateName };
+        resolvedTool = await config.resolveDeferredTool?.(
+          {
+            assistantMessage,
+            toolCall: candidateToolCall,
+            context: currentContext,
+          },
+          signal,
+        );
+        if (resolvedTool) {
+          resolvedCandidate = candidateName;
+          break;
+        }
+      }
       // Keep execution and lifecycle/audit identity aligned with the original model call.
-      if (resolvedTool && resolvedTool.name !== toolCall.name) {
+      if (resolvedTool && resolveToolByName([resolvedTool], resolvedCandidate) !== resolvedTool) {
         throw new Error(
           `Deferred tool resolver returned "${resolvedTool.name}" for requested "${toolCall.name}"`,
         );
@@ -857,6 +989,7 @@ async function prepareToolCall(
   if (resolution.kind === "error") {
     return {
       kind: "immediate",
+      toolCall,
       result: createErrorToolResult(
         signal?.aborted
           ? "Operation aborted"
@@ -871,19 +1004,21 @@ async function prepareToolCall(
   if (!tool) {
     return {
       kind: "immediate",
-      result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+      toolCall,
+      result: createErrorToolResult(formatToolNotFoundMessage(toolCall.name, currentContext.tools)),
       isError: true,
     };
   }
 
+  const resolvedToolCall = canonicalizeToolCall(toolCall, tool);
   try {
-    const preparedToolCall = prepareToolCallArguments(tool, toolCall);
+    const preparedToolCall = prepareToolCallArguments(tool, resolvedToolCall, toolCall.name);
     const validatedArgs = validateToolArguments(tool, preparedToolCall);
     if (config.beforeToolCall) {
       const beforeResult = await config.beforeToolCall(
         {
           assistantMessage,
-          toolCall,
+          toolCall: preparedToolCall,
           args: validatedArgs,
           context: currentContext,
         },
@@ -892,6 +1027,7 @@ async function prepareToolCall(
       if (signal?.aborted) {
         return {
           kind: "immediate",
+          toolCall: preparedToolCall,
           result: createErrorToolResult("Operation aborted"),
           isError: true,
         };
@@ -899,6 +1035,7 @@ async function prepareToolCall(
       if (beforeResult?.block) {
         return {
           kind: "immediate",
+          toolCall: preparedToolCall,
           result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
           isError: true,
         };
@@ -907,19 +1044,21 @@ async function prepareToolCall(
     if (signal?.aborted) {
       return {
         kind: "immediate",
+        toolCall: resolvedToolCall,
         result: createErrorToolResult("Operation aborted"),
         isError: true,
       };
     }
     return {
       kind: "prepared",
-      toolCall,
+      toolCall: preparedToolCall,
       tool,
       args: validatedArgs,
     };
   } catch (error) {
     return {
       kind: "immediate",
+      toolCall: resolvedToolCall,
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
     };
