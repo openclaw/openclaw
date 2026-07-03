@@ -1,18 +1,22 @@
 // find tool tests cover custom search operation wiring and result-limit
 // normalization for session file discovery.
-import { chmodSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { createFindToolDefinition, type FindOperations } from "./find.js";
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(),
+}));
 
 vi.mock("../../utils/tools-manager.js", () => ({
   ensureTool: vi.fn(),
 }));
 
+const mockedSpawn = vi.mocked(spawn);
 const mockedEnsureTool = vi.mocked(ensureTool);
-const tempDirs = useAutoCleanupTempDirTracker();
 
 function operations(results: string[]): FindOperations {
   return {
@@ -70,24 +74,25 @@ describe("find tool", () => {
   });
 
   it("rejects partial fd output when fd exits with an error", async () => {
-    const tempDir = tempDirs.make("openclaw-find-fd-");
-    const fdPath = join(tempDir, "fd");
-    writeFileSync(
-      fdPath,
-      `#!/usr/bin/env node
-const searchRoot = process.argv[process.argv.length - 1];
-process.stdout.write(searchRoot + "/partial.ts\\n");
-process.stderr.write("fd failed while reading subtree\\n");
-process.exit(2);
-`,
-    );
-    chmodSync(fdPath, 0o755);
-    mockedEnsureTool.mockResolvedValue(fdPath);
+    const child = Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      killed: false,
+      kill: vi.fn(() => true),
+    }) as unknown as ChildProcessWithoutNullStreams;
+    mockedSpawn.mockReturnValue(child);
+    mockedEnsureTool.mockResolvedValue("fd");
 
-    const tool = createFindToolDefinition(tempDir);
+    const tool = createFindToolDefinition("/workspace");
+    const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(mockedSpawn).toHaveBeenCalledOnce());
+    child.stdout.write("/workspace/partial.ts\n");
+    child.stderr.write("fd failed while reading subtree\n");
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 2, null);
 
-    await expect(
-      tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never),
-    ).rejects.toThrow("fd failed while reading subtree");
+    await expect(result).rejects.toThrow("fd failed while reading subtree");
   });
 });
