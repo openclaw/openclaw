@@ -34,4 +34,29 @@ struct ChatReaderScrollStateTests {
 
         #expect(transition == .added(newUserID))
     }
+
+    @Test func `removed transient content does not offer a latest jump`() {
+        let userID = UUID()
+
+        let hasNewerContent = chatReaderHasNewerContent(
+            after: userID,
+            visibleIDs: [userID],
+            hasTransientContent: false)
+
+        #expect(!hasNewerContent)
+    }
+
+    @Test func `assistant or transient content after the user offers a latest jump`() {
+        let userID = UUID()
+        let assistantID = UUID()
+
+        #expect(chatReaderHasNewerContent(
+            after: userID,
+            visibleIDs: [userID, assistantID],
+            hasTransientContent: false))
+        #expect(chatReaderHasNewerContent(
+            after: userID,
+            visibleIDs: [userID],
+            hasTransientContent: true))
+    }
 }

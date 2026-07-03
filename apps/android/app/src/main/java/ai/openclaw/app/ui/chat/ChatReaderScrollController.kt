@@ -251,12 +251,14 @@ private fun ChatTimeline.containsMessage(id: String): Boolean =
     .filterIsInstance<ChatTimelineItem.Message>()
     .any { item -> item.message.id == id }
 
-private fun ChatTimeline.followTargetForIndex(index: Int?): ChatScrollFollowTarget? =
-  when (index) {
-    latestContentIndex -> ChatScrollFollowTarget.LatestContent
-    readAnchorIndex -> ChatScrollFollowTarget.ReadAnchor
+private fun ChatTimeline.followTargetForIndex(index: Int?): ChatScrollFollowTarget? {
+  if (index == null) return null
+  return when {
+    latestUserMessageId != null && index == readAnchorIndex -> ChatScrollFollowTarget.ReadAnchor
+    index == latestContentIndex -> ChatScrollFollowTarget.LatestContent
     else -> null
   }
+}
 
 private fun isAtTarget(
   index: Int,

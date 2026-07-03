@@ -23,6 +23,15 @@ func chatReaderUserTransition(
     return .unchanged
 }
 
+func chatReaderHasNewerContent(
+    after messageID: UUID,
+    visibleIDs: [UUID],
+    hasTransientContent: Bool) -> Bool
+{
+    guard let messageIndex = visibleIDs.firstIndex(of: messageID) else { return false }
+    return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
+}
+
 @MainActor
 public struct OpenClawChatView: View {
     public enum Style {
@@ -476,18 +485,15 @@ public struct OpenClawChatView: View {
         if !self.visibleMessages.isEmpty {
             return true
         }
-        if let text = self.viewModel.streamingAssistantText,
-           AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-        {
-            return true
-        }
-        if self.viewModel.pendingRunCount > 0 {
-            return true
-        }
-        if !self.viewModel.pendingToolCalls.isEmpty {
-            return true
-        }
-        return false
+        return self.hasVisibleTransientContent
+    }
+
+    private var hasVisibleTransientContent: Bool {
+        self.viewModel.pendingRunCount > 0 ||
+            !self.viewModel.pendingToolCalls.isEmpty ||
+            (self.viewModel.streamingAssistantText.map {
+                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
+            } ?? false)
     }
 
     @ViewBuilder
@@ -596,7 +602,12 @@ public struct OpenClawChatView: View {
             self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
             return
         }
-        let visibleUserMessageIDs = self.visibleUserMessageIDs
+        let visibleMessages = self.visibleMessages
+        let visibleUserMessageIDs = visibleMessages.compactMap { message in
+            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+                ? message.id
+                : nil
+        }
         switch chatReaderUserTransition(
             previousID: self.lastUserMessageID,
             visibleIDs: visibleUserMessageIDs)
@@ -625,7 +636,10 @@ public struct OpenClawChatView: View {
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
         case let .user(messageID):
-            self.hasNewerContentBelow = true
+            self.hasNewerContentBelow = chatReaderHasNewerContent(
+                after: messageID,
+                visibleIDs: visibleMessages.map(\.id),
+                hasTransientContent: self.hasVisibleTransientContent)
             self.moveScrollPosition(to: messageID, anchor: Layout.newTurnAnchor, animated: false)
         case nil:
             self.hasNewerContentBelow = true

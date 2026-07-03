@@ -23,6 +23,19 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
+  fun userAtLiveEdgeRemainsReaderAnchorWhenRemoteReplyArrives() {
+    val initial = initialChatReaderTransition(timeline(user("user-1")))
+    val replied = timeline(user("user-1"), assistant("assistant-1"))
+
+    val transition = initial.state.onTimelineChanged(replied)
+
+    assertEquals(ChatScrollFollowTarget.ReadAnchor, initial.state.followTarget)
+    assertEquals(replied.readAnchorIndex, transition.scrollIndex)
+    assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
+    assertTrue(transition.state.hasNewerContent)
+  }
+
+  @Test
   fun contentAfterManualDeparturePreservesPositionAndOffersJump() {
     val before = initialChatReaderTransition(timeline(user("user-1"), assistant("assistant-1"))).state
     val readerMoved = before.onViewportChanged(index = 3, offset = 50, timeline = timeline(user("user-1")), targetTolerancePx = 24)
