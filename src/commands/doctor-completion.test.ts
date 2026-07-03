@@ -2,14 +2,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
+  doctorShellCompletion,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
+
+const installCompletionMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    installCompletion: (...args: unknown[]) => installCompletionMock(...args),
+  };
+});
 
 const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
 const tempDirs: string[] = [];
@@ -100,5 +111,63 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([]);
+  });
+});
+
+describe("doctorShellCompletion", () => {
+  beforeEach(() => {
+    installCompletionMock.mockReset();
+  });
+
+  it("does not throw when installCompletion fails with EACCES in the slow-pattern upgrade path", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
+    tempDirs.push(homeDir, stateDir);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/zsh");
+
+    // Create .zshrc with a slow dynamic completion line so usesSlowDynamicCompletion is true
+    const zshrc = path.join(homeDir, ".zshrc");
+    await fs.writeFile(zshrc, "source <(openclaw completion zsh)\n", "utf8");
+
+    installCompletionMock.mockRejectedValue(
+      new Error("EACCES: permission denied, open '/some/.zshrc'"),
+    );
+
+    await expect(
+      doctorShellCompletion(
+        { log: vi.fn(), error: vi.fn() } as unknown as import("../runtime.js").RuntimeEnv,
+        {
+          confirm: vi.fn(),
+          shouldRepair: true,
+        } as unknown as import("./doctor-prompter.js").DoctorPrompter,
+        { nonInteractive: false },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not throw when installCompletion fails with EACCES in the new-install path", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
+    tempDirs.push(homeDir, stateDir);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/zsh");
+
+    installCompletionMock.mockRejectedValue(
+      new Error("EACCES: permission denied, open '/some/.zshrc'"),
+    );
+
+    await expect(
+      doctorShellCompletion(
+        { log: vi.fn(), error: vi.fn() } as unknown as import("../runtime.js").RuntimeEnv,
+        {
+          confirm: vi.fn().mockResolvedValue(true),
+          shouldRepair: true,
+        } as unknown as import("./doctor-prompter.js").DoctorPrompter,
+        { nonInteractive: false },
+      ),
+    ).resolves.toBeUndefined();
   });
 });

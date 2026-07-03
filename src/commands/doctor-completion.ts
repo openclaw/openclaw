@@ -195,8 +195,15 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletion(status.shell, true, cliName);
-    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    try {
+      await installCompletion(status.shell, true, cliName);
+      note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    } catch {
+      note(
+        `Shell completion not installed: ${resolveCompletionProfilePath(status.shell)} is not writable. Run \`${cliName} completion install\` against a writable shell profile.`,
+        "Shell completion",
+      );
+    }
     return;
   }
 
@@ -237,8 +244,15 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletion(status.shell, true, cliName);
-      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      try {
+        await installCompletion(status.shell, true, cliName);
+        note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      } catch {
+        note(
+          `Shell completion not installed: ${resolveCompletionProfilePath(status.shell)} is not writable. Run \`${cliName} completion install\` against a writable shell profile.`,
+          "Shell completion",
+        );
+      }
     }
   }
 }
