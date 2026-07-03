@@ -3088,6 +3088,8 @@ describe("dispatchReplyFromConfig", () => {
     const onToolStart = vi.fn();
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -3097,6 +3099,8 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -3110,12 +3114,56 @@ describe("dispatchReplyFromConfig", () => {
         onToolStart,
         onItemEvent,
         onCommandOutput,
+        onCompactionStart,
+        onCompactionEnd,
       },
     });
 
     expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onCompactionStart).toHaveBeenCalledTimes(1);
+    expect(onCompactionEnd).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not forward compaction lifecycle feedback while verbose is off by default", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    });
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onCompactionStart,
+        onCompactionEnd,
+      },
+    });
+
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 

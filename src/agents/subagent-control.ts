@@ -140,6 +140,14 @@ export function resolveSubagentController(params: {
   };
 }
 
+function isSubagentRunVisibleToSession(entry: SubagentRunRecord, sessionKey: string): boolean {
+  const controllerKey = entry.controllerSessionKey?.trim();
+  const requesterKey = entry.requesterSessionKey.trim();
+  // Completion routing can target a different session than control ownership.
+  // Both owners may read the run, while ensureControllerOwnsRun still gates mutations.
+  return controllerKey === sessionKey || requesterKey === sessionKey;
+}
+
 /** Lists latest child runs controlled by a session key. */
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
   const key = controllerSessionKey.trim();
@@ -149,11 +157,9 @@ export function listControlledSubagentRuns(controllerSessionKey: string): Subage
 
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const latestByChildSessionKey = buildLatestSubagentRunIndex(snapshot).latestByChildSessionKey;
-  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) => {
-    const latestControllerSessionKey =
-      entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
-    return latestControllerSessionKey === key;
-  });
+  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) =>
+    isSubagentRunVisibleToSession(entry, key),
+  );
   return sortSubagentRuns(filtered);
 }
 

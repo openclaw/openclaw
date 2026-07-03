@@ -17,6 +17,7 @@ import {
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
+  listControlledSubagentRuns,
   sendControlledSubagentMessage,
   steerControlledSubagentRun,
 } from "./subagent-control.js";
@@ -1615,4 +1616,53 @@ describe("steerControlledSubagentRun", () => {
     const agentParams = agentCalls[0]?.params as { sessionId?: string } | undefined;
     expect(agentParams?.sessionId).toBe(result.sessionId);
   });
+});
+
+describe("listControlledSubagentRuns", () => {
+  beforeEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+  });
+
+  it.each([
+    {
+      name: "control owner",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:telegram:direct:abc123",
+      expectedCount: 1,
+    },
+    {
+      name: "completion owner",
+      controllerSessionKey: "agent:main:telegram:direct:abc123",
+      requesterSessionKey: "agent:main:main",
+      expectedCount: 1,
+    },
+    {
+      name: "unrelated session",
+      controllerSessionKey: "agent:other:discord:direct:xyz",
+      requesterSessionKey: "agent:other:main",
+      expectedCount: 0,
+    },
+  ])(
+    "applies read visibility for the $name",
+    ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
+      const childSessionKey = "agent:main:subagent:list-visibility";
+      addSubagentRunForTests({
+        runId: "run-list-visibility",
+        childSessionKey,
+        controllerSessionKey,
+        requesterSessionKey,
+        requesterDisplayKey: requesterSessionKey,
+        task: "visibility test",
+        cleanup: "keep",
+        createdAt: Date.now(),
+        startedAt: Date.now(),
+      });
+
+      const results = listControlledSubagentRuns("agent:main:main");
+      expect(results).toHaveLength(expectedCount);
+      if (expectedCount === 1) {
+        expect(results[0]?.childSessionKey).toBe(childSessionKey);
+      }
+    },
+  );
 });

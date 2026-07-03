@@ -289,6 +289,24 @@ Groups:
 - **Read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw forwards read receipts for allowed DMs.
 - Signal-cli does not expose read receipts for groups.
 
+## Lifecycle status reactions
+
+Set `messages.statusReactions.enabled: true` to let Signal show the shared
+queued/thinking/tool/compaction/done/error reaction lifecycle on inbound turns.
+Signal uses the inbound message timestamp as the reaction target; group
+reactions are sent with the Signal group id plus the original sender as the
+target author.
+
+Status reactions also require an ack reaction and a matching
+`messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`).
+Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
+The message-tool `react` action remains stricter: it requires
+`reactionLevel: "minimal"` or `"extensive"`.
+
+`messages.removeAckAfterReply: true` clears the final status reaction after the
+configured hold time. Otherwise Signal restores the initial ack reaction after
+the final done/error state.
+
 ## Reactions (message tool)
 
 - Use `message action=react` with `channel=signal`.

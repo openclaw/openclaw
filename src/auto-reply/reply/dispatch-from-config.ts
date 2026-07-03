@@ -3117,11 +3117,15 @@ export async function dispatchReplyFromConfig(
               },
             }),
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
