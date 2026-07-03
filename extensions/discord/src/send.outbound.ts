@@ -318,7 +318,7 @@ export async function sendMessageDiscord(
     );
   }
 
-  let result: DiscordChannelMessageResult;
+  let result: DiscordChannelMessageResult | undefined;
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -389,7 +389,7 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
     direction: "outbound",
   });
-  return toDiscordSendResult(result, channelId, {
+  return toDiscordSendResult(result!, channelId, {
     kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
     replyToId: opts.replyTo,
   });
