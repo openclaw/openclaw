@@ -157,22 +157,32 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
     ).toBe(true);
     expect(report.pluginSdkConsumer).toMatchObject({
       activeJsonlForSessionExists: false,
+      activeTrajectoryPointerForSessionExists: false,
+      activeTrajectoryRuntimeSidecarForSessionExists: false,
+      activeTrajectorySessionSidecarForSessionExists: false,
       latestAssistantTextBeforeAppend: report.fullTurnAssistantText,
       latestAssistantTextAfterAppend: "sqlite sdk consumer appended by identity",
       sessionKey: report.pluginSdkSessionKey,
+      trajectoryEventType: "e2e.sdk.trajectory",
     });
     expect(report.pluginSdkConsumer?.sessionFileMarker.startsWith("sqlite:")).toBe(true);
     expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
     expect(report.pluginSdkConsumer?.transcriptEventsAfterAppend).toBeGreaterThan(
       report.pluginSdkConsumer?.transcriptEventsBeforeAppend ?? 0,
     );
+    expect(report.pluginSdkConsumer?.trajectoryEventsAfterAppend).toBeGreaterThan(
+      report.pluginSdkConsumer?.trajectoryEventsBeforeAppend ?? 0,
+    );
     expect(
       report.checkpoints.some(
         (checkpoint) =>
           checkpoint.label === "after-plugin-sdk-consumer" &&
+          checkpoint.sqlite.trajectoryRuntimeEvents >= 1 &&
           checkpoint.sqlite.trackedEntries.some(
             (entry) =>
-              entry.sessionKey === report.pluginSdkSessionKey && entry.transcriptEvents >= 3,
+              entry.sessionKey === report.pluginSdkSessionKey &&
+              entry.trajectoryEvents >= 1 &&
+              entry.transcriptEvents >= 3,
           ),
       ),
     ).toBe(true);

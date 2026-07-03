@@ -107,10 +107,14 @@ Each step snapshots before and after state and writes a structured assertion
 record:
 
 - SQLite row counts advance only where expected.
+- Trajectory runtime rows advance for marker-backed proof sessions that record
+  runtime events.
 - The proof session row has the expected `session_id`, status, timestamps,
   metadata, and route rows.
 - Gateway history/session projection matches the SQLite transcript tail.
 - No proof-session JSONL file is created or modified.
+- No proof-session `.trajectory.jsonl`, `.trajectory-path.json`, or
+  marker-derived `trajectory/<session>.jsonl` sidecar is created.
 - Existing legacy JSONL files and `sessions.json` remain unchanged unless the
   step is explicitly an offline migration or archive operation.
 - The Gateway process does not open `.jsonl` or `sessions.json` handles.

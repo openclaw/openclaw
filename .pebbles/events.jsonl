@@ -1746,3 +1746,8 @@
 {"type":"comment","timestamp":"2026-07-03T17:36:01.634601Z","issue_id":"oc-08c.8","payload":{"body":"Final proof: focused trajectory/cleanup/doctor/budget test set passed (6 Vitest shards, 142 tests), pnpm tsgo:core passed, pnpm docs:list passed, and git diff --check passed. Autoreview was attempted but blocked before review by the local codex wrapper pointing at a missing vendored binary: /Users/josh/.nvm/versions/node/v22.22.1/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex ENOENT."}}
 {"type":"close","timestamp":"2026-07-03T17:36:05.80934Z","issue_id":"oc-08c.8","payload":{}}
 {"type":"close","timestamp":"2026-07-03T17:36:06.39963Z","issue_id":"oc-08c","payload":{}}
+{"type":"create","timestamp":"2026-07-03T17:41:59.889705Z","issue_id":"oc-a85","payload":{"description":"Extend the SQLite sessions/transcripts flip proof harness with trajectory runtime-row evidence: append a marker-backed trajectory event through the SDK/runtime seam, assert it lands in trajectory_runtime_events, and assert no JSONL or pointer sidecar appears during the flip proof.","priority":"1","title":"AN-0009: add trajectory coverage to SQLite flip E2E","type":"task"}}
+{"type":"status_update","timestamp":"2026-07-03T17:42:03.5015Z","issue_id":"oc-a85","payload":{"status":"in_progress"}}
+{"type":"rename","timestamp":"2026-07-03T17:42:03.5015Z","issue_id":"oc-a85","payload":{"new_id":"oc-08c.9"}}
+{"type":"dep_add","timestamp":"2026-07-03T17:42:03.5015Z","issue_id":"oc-08c.9","payload":{"dep_type":"parent-child","depends_on":"oc-08c"}}
+{"type":"close","timestamp":"2026-07-03T17:44:47.739182Z","issue_id":"oc-08c.9","payload":{}}

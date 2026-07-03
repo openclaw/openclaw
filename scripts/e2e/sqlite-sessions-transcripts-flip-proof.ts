@@ -22,6 +22,8 @@ import {
   getSessionEntry as getSdkSessionEntry,
   listSessionEntries as listSdkSessionEntries,
   loadTranscriptEventsSync as loadSdkTranscriptEventsSync,
+  appendTrajectoryRuntimeEvents,
+  type SessionStoreTrajectoryEvent,
 } from "../../src/plugin-sdk/session-store-runtime.js";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -74,6 +76,7 @@ type SqliteSessionEntryEvidence = {
   entry?: Record<string, unknown>;
   sessionId: string;
   sessionKey: string;
+  trajectoryEvents: number;
   transcriptEvents: number;
 };
 
@@ -82,6 +85,7 @@ type SqliteEvidence = {
   path: string;
   sessionEntries: number;
   sessions: number;
+  trajectoryRuntimeEvents: number;
   transcriptEvents: number;
   trackedEntries: SqliteSessionEntryEvidence[];
 };
@@ -98,6 +102,9 @@ type ProofCheckpoint = {
 
 type PluginSdkConsumerEvidence = {
   activeJsonlForSessionExists: boolean;
+  activeTrajectoryPointerForSessionExists: boolean;
+  activeTrajectoryRuntimeSidecarForSessionExists: boolean;
+  activeTrajectorySessionSidecarForSessionExists: boolean;
   appendedMessageId: string;
   identityMemoryKey: string;
   latestAssistantTextBeforeAppend: string;
@@ -107,6 +114,9 @@ type PluginSdkConsumerEvidence = {
   sessionId: string;
   sessionKey: string;
   storeTranscriptEvents: number;
+  trajectoryEventsAfterAppend: number;
+  trajectoryEventsBeforeAppend: number;
+  trajectoryEventType: string;
   transcriptEventsAfterAppend: number;
   transcriptEventsBeforeAppend: number;
 };
@@ -1262,9 +1272,42 @@ async function runPluginSdkConsumerProbe(
   const transcriptEventsBeforeAppend = (await readSessionTranscriptEvents(scope)).length;
   const storeTranscriptEvents = loadSdkTranscriptEventsSync(scope).length;
   const activeJsonlPath = path.join(context.activeSessionsDir, `${sessionId}.jsonl`);
+  const activeTrajectorySessionSidecarPath = path.join(
+    context.activeSessionsDir,
+    `${sessionId}.trajectory.jsonl`,
+  );
+  const activeTrajectoryPointerPath = path.join(
+    context.activeSessionsDir,
+    `${sessionId}.trajectory-path.json`,
+  );
+  const activeTrajectoryRuntimeSidecarPath = path.join(
+    context.activeSessionsDir,
+    "trajectory",
+    `${sessionId}.jsonl`,
+  );
   const activeJsonlForSessionExists = fsSync.existsSync(activeJsonlPath);
   if (activeJsonlForSessionExists) {
     throw new Error(`SDK probe found active JSONL for SQLite session at ${activeJsonlPath}`);
+  }
+  const activeTrajectorySessionSidecarForSessionExists = fsSync.existsSync(
+    activeTrajectorySessionSidecarPath,
+  );
+  const activeTrajectoryPointerForSessionExists = fsSync.existsSync(activeTrajectoryPointerPath);
+  const activeTrajectoryRuntimeSidecarForSessionExists = fsSync.existsSync(
+    activeTrajectoryRuntimeSidecarPath,
+  );
+  if (
+    activeTrajectorySessionSidecarForSessionExists ||
+    activeTrajectoryPointerForSessionExists ||
+    activeTrajectoryRuntimeSidecarForSessionExists
+  ) {
+    throw new Error(
+      `SDK trajectory probe found active sidecar paths: ${JSON.stringify({
+        pointer: activeTrajectoryPointerPath,
+        runtime: activeTrajectoryRuntimeSidecarPath,
+        session: activeTrajectorySessionSidecarPath,
+      })}`,
+    );
   }
 
   const appended = await appendSessionTranscriptMessageByIdentity({
@@ -1293,9 +1336,44 @@ async function runPluginSdkConsumerProbe(
       `SDK transcript append did not increase event count for ${context.pluginSdkSessionKey}`,
     );
   }
+  const trajectoryEventsBeforeAppend = countSqliteTrajectoryRuntimeEvents(
+    context.agentDbPath,
+    sessionId,
+  );
+  const trajectoryEventType = "e2e.sdk.trajectory";
+  const trajectoryEvent: SessionStoreTrajectoryEvent = {
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    traceId: sessionId,
+    source: "runtime",
+    type: trajectoryEventType,
+    ts: new Date().toISOString(),
+    seq: 1,
+    sourceSeq: 1,
+    sessionId,
+    sessionKey: context.pluginSdkSessionKey,
+    runId: "sqlite-flip-e2e-sdk",
+    data: { proof: "sqlite trajectory runtime row" },
+  };
+  appendTrajectoryRuntimeEvents({
+    ...scope,
+    events: [trajectoryEvent],
+  });
+  const trajectoryEventsAfterAppend = countSqliteTrajectoryRuntimeEvents(
+    context.agentDbPath,
+    sessionId,
+  );
+  if (trajectoryEventsAfterAppend <= trajectoryEventsBeforeAppend) {
+    throw new Error(
+      `SDK trajectory append did not increase event count for ${context.pluginSdkSessionKey}`,
+    );
+  }
 
   return {
     activeJsonlForSessionExists,
+    activeTrajectoryPointerForSessionExists,
+    activeTrajectoryRuntimeSidecarForSessionExists,
+    activeTrajectorySessionSidecarForSessionExists,
     appendedMessageId: appended.messageId,
     identityMemoryKey: identity.memoryKey,
     latestAssistantTextBeforeAppend: latestBefore.text,
@@ -1305,6 +1383,9 @@ async function runPluginSdkConsumerProbe(
     sessionId,
     sessionKey: context.pluginSdkSessionKey,
     storeTranscriptEvents,
+    trajectoryEventsAfterAppend,
+    trajectoryEventsBeforeAppend,
+    trajectoryEventType,
     transcriptEventsAfterAppend,
     transcriptEventsBeforeAppend,
   };
@@ -2069,6 +2150,22 @@ function countSqliteTranscriptEvents(dbPath: string, sessionId: string): number 
   }
 }
 
+function countSqliteTrajectoryRuntimeEvents(dbPath: string, sessionId: string): number {
+  if (!fsSync.existsSync(dbPath)) {
+    return 0;
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return scalarNumber(
+      db,
+      "SELECT COUNT(*) AS count FROM trajectory_runtime_events WHERE session_id = ?",
+      [sessionId],
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function captureCheckpoint(
   context: ProofContext,
   label: string,
@@ -2221,6 +2318,7 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
       sessionEntries: 0,
       sessions: 0,
       trackedEntries: [],
+      trajectoryRuntimeEvents: 0,
       transcriptEvents: 0,
     };
   }
@@ -2232,6 +2330,10 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
       path: dbPath,
       sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_entries"),
       sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM sessions"),
+      trajectoryRuntimeEvents: scalarNumber(
+        db,
+        "SELECT COUNT(*) AS count FROM trajectory_runtime_events",
+      ),
       trackedEntries,
       transcriptEvents: scalarNumber(db, "SELECT COUNT(*) AS count FROM transcript_events"),
     };
@@ -2262,6 +2364,11 @@ function readTrackedEntries(
       const result: SqliteSessionEntryEvidence = {
         sessionId,
         sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : "",
+        trajectoryEvents: scalarNumber(
+          db,
+          "SELECT COUNT(*) AS count FROM trajectory_runtime_events WHERE session_id = ?",
+          [sessionId],
+        ),
         transcriptEvents: scalarNumber(
           db,
           "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
