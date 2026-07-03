@@ -1185,6 +1185,11 @@ describe("post-compaction delegate dispatch extraction", () => {
         await expect(
           deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps),
         ).rejects.toBeDefined();
+        expect(persistSpy).toHaveBeenCalledWith(
+          storePath,
+          expect.any(Function),
+          expect.objectContaining({ requireWriteSuccess: true }),
+        );
       } finally {
         persistSpy.mockRestore();
       }

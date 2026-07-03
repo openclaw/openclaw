@@ -22,6 +22,9 @@ const acceptedChildSessionKeys = new Set<string>();
 const loadSessionStoreForRecoveryMock = vi.fn(
   (_storePath: string) => ({}) as Record<string, unknown>,
 );
+const pendingSessionDeliveriesForRecovery: Record<string, unknown>[] = [];
+const updateSessionStoreForRecoveryOptions: Array<Record<string, unknown> | undefined> = [];
+let updateSessionStoreForRecoveryShouldThrow = false;
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
@@ -57,11 +60,21 @@ vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
   updateSessionStore: async <T>(
     storePath: string,
     mutator: (store: Record<string, unknown>) => Promise<T> | T,
+    options?: Record<string, unknown>,
   ): Promise<T> => {
+    updateSessionStoreForRecoveryOptions.push(options);
+    if (updateSessionStoreForRecoveryShouldThrow && options?.requireWriteSuccess === true) {
+      throw new Error("session store write failed");
+    }
     const store = recoveryStoreByPath.get(storePath) ?? {};
     recoveryStoreByPath.set(storePath, store);
     return await mutator(store);
   },
+}));
+
+vi.mock("../../infra/session-delivery-queue-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/session-delivery-queue-storage.js")>()),
+  loadPendingSessionDeliveries: vi.fn(async () => pendingSessionDeliveriesForRecovery),
 }));
 
 vi.mock("../../logging/subsystem.js", () => {
@@ -261,6 +274,9 @@ beforeEach(() => {
   staleRegistryChildSessionKeys.clear();
   acceptedChildSessionKeys.clear();
   recoveryStoreByPath.clear();
+  pendingSessionDeliveriesForRecovery.length = 0;
+  updateSessionStoreForRecoveryOptions.length = 0;
+  updateSessionStoreForRecoveryShouldThrow = false;
   vi.useFakeTimers();
 });
 
@@ -274,6 +290,9 @@ afterEach(() => {
   activeRegistryChildSessionKeys.clear();
   staleRegistryChildSessionKeys.clear();
   acceptedChildSessionKeys.clear();
+  pendingSessionDeliveriesForRecovery.length = 0;
+  updateSessionStoreForRecoveryOptions.length = 0;
+  updateSessionStoreForRecoveryShouldThrow = false;
   vi.useRealTimers();
 });
 
@@ -2111,6 +2130,91 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     // The accepted row is finalized (terminal) so it cannot replay.
     expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
+
+  it("defers TaskFlow recovery while a queued delivery still owns the same source flow", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover-delivery-owned";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate via queued delivery");
+    pendingSessionDeliveriesForRecovery.push({
+      id: "delivery-1",
+      kind: "postCompactionDelegate",
+      sessionKey,
+      task: "rehydrate via queued delivery",
+      createdAt: Date.now(),
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      sourceFlowId: flowId,
+      sourceExpectedRevision: 1,
+    });
+
+    const deferred = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(deferred).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "info",
+        message: expect.stringContaining("post-compaction-recovery-deferred-for-delivery"),
+      }),
+    );
+
+    pendingSessionDeliveriesForRecovery.length = 0;
+    const orphaned = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(orphaned).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+  });
+
+  it("keeps accepted rows recoverable when required recovered chain-state persist fails", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover-persist-fail";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate then persist fails");
+    spawnSubagentDirectMock.mockResolvedValue({ status: "accepted" });
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    const first = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(updateSessionStoreForRecoveryOptions).toContainEqual({ requireWriteSuccess: true });
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toBeUndefined();
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("post-compaction-recovery-chain-persist-failed"),
+      }),
+    );
+
+    const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    updateSessionStoreForRecoveryShouldThrow = false;
+    spawnSubagentDirectMock.mockClear();
+
+    const reconciled = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(reconciled).toMatchObject({ sessions: 1, dispatched: 1, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 0,
+    });
   });
 
   it("finalizes a crash-orphaned row whose deterministic child was already accepted", async () => {

@@ -32,6 +32,10 @@ import {
   startContinuationDelegateSpan,
 } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
+import {
+  loadPendingSessionDeliveries,
+  type QueuedSessionDelivery,
+} from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
@@ -714,6 +718,30 @@ export async function recoverPendingContinuationDelegates(
 
 const postCompactionLog = createSubsystemLogger("continuation/compaction");
 
+function pendingPostCompactionSourceKey(sessionKey: string, sourceFlowId: string): string {
+  return `${sessionKey}\0${sourceFlowId}`;
+}
+
+function isPendingPostCompactionDeliveryForSourceFlow(
+  entry: QueuedSessionDelivery,
+): entry is QueuedSessionDelivery & {
+  kind: "postCompactionDelegate";
+  sourceFlowId: string;
+} {
+  return entry.kind === "postCompactionDelegate" && typeof entry.sourceFlowId === "string";
+}
+
+async function loadPendingPostCompactionDeliverySourceKeys(): Promise<Set<string>> {
+  const sourceKeys = new Set<string>();
+  for (const entry of await loadPendingSessionDeliveries()) {
+    if (!isPendingPostCompactionDeliveryForSourceFlow(entry)) {
+      continue;
+    }
+    sourceKeys.add(pendingPostCompactionSourceKey(entry.sessionKey, entry.sourceFlowId));
+  }
+  return sourceKeys;
+}
+
 export interface PostCompactionSpawnContext {
   agentSessionKey: string;
   agentChannel?: string;
@@ -1010,11 +1038,29 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
   if (recoverable.length === 0) {
     return { sessions: 0, dispatched: 0, failed: 0 };
   }
+  let pendingDeliverySourceKeys: Set<string>;
+  try {
+    pendingDeliverySourceKeys = await loadPendingPostCompactionDeliverySourceKeys();
+  } catch (err) {
+    postCompactionLog.warn(
+      `[continuation:post-compaction-recovery-delivery-gate-failed] leaving staged delegates recoverable: ${formatErrorMessage(err)}`,
+    );
+    return { sessions: 0, dispatched: 0, failed: 0 };
+  }
 
   // Group the crash-orphaned rows by owner session so each session releases once
   // against its own persisted chain-state basis.
   const delegatesBySession = new Map<string, PendingContinuationDelegate[]>();
   for (const { sessionKey, delegate } of recoverable) {
+    if (
+      delegate.flowId &&
+      pendingDeliverySourceKeys.has(pendingPostCompactionSourceKey(sessionKey, delegate.flowId))
+    ) {
+      postCompactionLog.info(
+        `[continuation:post-compaction-recovery-deferred-for-delivery] session=${sessionKey} flowId=${delegate.flowId}`,
+      );
+      continue;
+    }
     const list = delegatesBySession.get(sessionKey) ?? [];
     list.push(delegate);
     delegatesBySession.set(sessionKey, list);
@@ -1071,17 +1117,28 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     // the next restart recovers them again — never a silent drop or premature
     // finish.
     if (result.dispatchedFlowIds.length > 0) {
-      await updateSessionStore(storePath, (store) => {
-        const sessionEntry = store[sessionKey] ?? {};
-        persistContinuationChainState({
-          sessionEntry,
-          count: result.chainState.currentChainCount,
-          startedAt: result.chainState.chainStartedAt,
-          tokens: result.chainState.accumulatedChainTokens,
-          ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
-        });
-        store[sessionKey] = sessionEntry;
-      });
+      try {
+        await updateSessionStore(
+          storePath,
+          (store) => {
+            const sessionEntry = store[sessionKey] ?? {};
+            persistContinuationChainState({
+              sessionEntry,
+              count: result.chainState.currentChainCount,
+              startedAt: result.chainState.chainStartedAt,
+              tokens: result.chainState.accumulatedChainTokens,
+              ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
+            });
+            store[sessionKey] = sessionEntry;
+          },
+          { requireWriteSuccess: true },
+        );
+      } catch (err) {
+        postCompactionLog.warn(
+          `[continuation:post-compaction-recovery-chain-persist-failed] session=${sessionKey} leaving accepted rows recoverable: ${formatErrorMessage(err)}`,
+        );
+        continue;
+      }
       const inMemoryEntry = sessionStore[sessionKey] ?? {};
       persistContinuationChainState({
         sessionEntry: inMemoryEntry,

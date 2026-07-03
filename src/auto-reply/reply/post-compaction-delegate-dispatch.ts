@@ -407,24 +407,28 @@ async function persistPostCompactionDelegateChainState(params: {
   }
   if (params.storePath) {
     try {
-      await updateSessionStore(params.storePath, (store) => {
-        const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-        const existingEntry = resolved.existing ?? store[params.sessionKey];
-        if (existingEntry) {
-          store[resolved.existing ? resolved.normalizedKey : params.sessionKey] = {
-            ...existingEntry,
-            continuationChainCount: params.count,
-            continuationChainStartedAt: params.startedAt,
-            continuationChainTokens: params.tokens,
-            continuationChainId: chainId,
-          };
-          if (resolved.existing) {
-            for (const legacyKey of resolved.legacyKeys) {
-              delete store[legacyKey];
+      await updateSessionStore(
+        params.storePath,
+        (store) => {
+          const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+          const existingEntry = resolved.existing ?? store[params.sessionKey];
+          if (existingEntry) {
+            store[resolved.existing ? resolved.normalizedKey : params.sessionKey] = {
+              ...existingEntry,
+              continuationChainCount: params.count,
+              continuationChainStartedAt: params.startedAt,
+              continuationChainTokens: params.tokens,
+              continuationChainId: chainId,
+            };
+            if (resolved.existing) {
+              for (const legacyKey of resolved.legacyKeys) {
+                delete store[legacyKey];
+              }
             }
           }
-        }
-      });
+        },
+        { requireWriteSuccess: true },
+      );
     } catch (err) {
       params.log(
         `Failed to persist post-compaction delegate chain state for ${params.sessionKey}: ${String(
