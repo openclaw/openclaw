@@ -169,7 +169,8 @@ const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
 const QA_STRANDED_FINAL_RECOVERY_PROMPT_RE = /qa stranded final recovery check/i;
 const QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE = /qa stranded final retry failure check/i;
 const QA_STRANDED_FINAL_RETRY_PROMPT_RE = /you did not call message\(action=send\)/i;
-const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER_RE = /QA-STRANDED-RETRY-FAIL-RAW/;
+const QA_STRANDED_FINAL_RETRY_FAILURE_MARKER =
+  "QA-STRANDED-RETRY-FAIL-RAW";
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
@@ -211,7 +212,7 @@ function isStrandedFinalRetryFailureRequest(allInputText: string): boolean {
   return (
     QA_STRANDED_FINAL_RETRY_FAILURE_PROMPT_RE.test(allInputText) ||
     (QA_STRANDED_FINAL_RETRY_PROMPT_RE.test(allInputText) &&
-      QA_STRANDED_FINAL_RETRY_FAILURE_MARKER_RE.test(allInputText))
+      allInputText.includes(QA_STRANDED_FINAL_RETRY_FAILURE_MARKER))
   );
 }
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
