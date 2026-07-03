@@ -2,6 +2,8 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionFiltersTest {
@@ -56,5 +58,30 @@ class SessionFiltersTest {
       ).map { it.key }
 
     assertEquals(listOf("main", "active-old", "recent-1", "recent-2"), result)
+  }
+
+  @Test
+  fun sessionChoicesFilterAgentDeviceAndInternalSessions() {
+    val now = 1_700_000_000_000L
+    val recent = now - 10 * 60 * 1000L
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "agent:main:node-android", updatedAtMs = recent),
+        ChatSessionEntry(key = "agent:main:slack:channel:C1", updatedAtMs = recent),
+        ChatSessionEntry(key = "agent:main:main", updatedAtMs = recent),
+        ChatSessionEntry(key = "main", updatedAtMs = recent),
+      )
+
+    val result = resolveSessionChoices("main", sessions, mainSessionKey = "main", nowMs = now).map { it.key }
+
+    assertEquals(listOf("main", "agent:main:slack:channel:C1"), result)
+  }
+
+  @Test
+  fun isSelectableChatSession_matchesIosRecentSessionFilter() {
+    assertFalse(isSelectableChatSession("agent:main:node-0b88d67b7e42", "main"))
+    assertFalse(isSelectableChatSession("agent:main:main", "main"))
+    assertFalse(isSelectableChatSession("onboarding", "main"))
+    assertTrue(isSelectableChatSession("agent:main:slack:channel:C1", "main"))
   }
 }
