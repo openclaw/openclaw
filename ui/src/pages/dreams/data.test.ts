@@ -1,5 +1,6 @@
 // Control UI tests cover dreaming behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -17,6 +18,10 @@ import {
 } from "./data.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+type DreamingConfigCapability = Pick<
+  RuntimeConfigCapability,
+  "lookupSchemaPath" | "patch" | "state"
+>;
 
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -51,6 +56,19 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
   return { state, request };
 }
 
+function createConfig(state: DreamingState): DreamingConfigCapability {
+  const configState = {
+    client: state.client,
+    connected: state.connected,
+    configSnapshot: state.configSnapshot,
+  } as DreamingConfigCapability["state"];
+  return {
+    state: configState,
+    lookupSchemaPath: vi.fn(async () => null),
+    patch: vi.fn(async () => true),
+  };
+}
+
 function createDeferred<T>() {
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   let reject: ((reason?: unknown) => void) | undefined;
@@ -64,39 +82,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function getConfigPatchRawPayload(
-  request: ReturnType<typeof vi.fn<TestRequest>>,
-): Record<string, unknown> {
-  const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
-  if (!patchCall) {
-    throw new Error("Expected config.patch request");
+function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<string, unknown> {
+  const patch = vi.mocked(config.patch).mock.calls[0]?.[0]?.raw;
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    throw new Error("Expected config patch object");
   }
-  const requestPayload = patchCall[1] as { raw?: string };
-  return JSON.parse(String(requestPayload.raw)) as Record<string, unknown>;
-}
-
-function getRequestPayload(
-  request: ReturnType<typeof vi.fn<TestRequest>>,
-  method: string,
-): Record<string, unknown> {
-  const call = request.mock.calls.find((entry) => entry[0] === method);
-  if (!call) {
-    throw new Error(`Expected ${method} request`);
-  }
-  const payload = call[1];
-  if (
-    payload === undefined ||
-    payload === null ||
-    typeof payload !== "object" ||
-    Array.isArray(payload)
-  ) {
-    throw new Error(`Expected ${method} payload object`);
-  }
-  return payload as Record<string, unknown>;
-}
-
-function hasRequestMethodCall(request: ReturnType<typeof vi.fn>, method: string): boolean {
-  return request.mock.calls.some((entry) => entry[0] === method);
+  return patch as Record<string, unknown>;
 }
 
 describe("dreaming controller", () => {
@@ -775,14 +766,16 @@ describe("dreaming controller", () => {
       },
     };
     request.mockResolvedValue({ ok: true });
+    const config = createConfig(state);
 
-    const ok = await updateDreamingEnabled(state, false);
+    const ok = await updateDreamingEnabled(state, config, false);
 
     expect(ok).toBe(true);
-    const patchPayload = getRequestPayload(request, "config.patch");
-    expect(patchPayload.baseHash).toBe("hash-1");
-    expect(patchPayload.sessionKey).toBe("main");
-    expect(getConfigPatchRawPayload(request)).toEqual({
+    expect(config.patch).toHaveBeenCalledWith({
+      note: "Dreaming settings updated from the Dreaming tab.",
+      raw: expect.any(Object),
+    });
+    expect(getConfigPatchRawPayload(config)).toEqual({
       plugins: {
         entries: {
           "memos-local-openclaw-plugin": {
@@ -812,11 +805,12 @@ describe("dreaming controller", () => {
       },
     };
     request.mockResolvedValue({ ok: true });
+    const config = createConfig(state);
 
-    const ok = await updateDreamingEnabled(state, true);
+    const ok = await updateDreamingEnabled(state, config, true);
 
     expect(ok).toBe(true);
-    expect(getConfigPatchRawPayload(request)).toEqual({
+    expect(getConfigPatchRawPayload(config)).toEqual({
       plugins: {
         entries: {
           "memory-core": {
@@ -843,32 +837,23 @@ describe("dreaming controller", () => {
         },
       },
     };
-    request.mockImplementation(async (method: string) => {
-      if (method === "config.schema.lookup") {
-        return {
-          path: "plugins.entries.memory-lancedb.config",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-          },
-          children: [
-            { key: "retentionDays", path: "plugins.entries.memory-lancedb.config.retentionDays" },
-          ],
-        };
-      }
-      if (method === "config.patch") {
-        return { ok: true };
-      }
-      return {};
+    const config = createConfig(state);
+    vi.mocked(config.lookupSchemaPath).mockResolvedValue({
+      path: "plugins.entries.memory-lancedb.config",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+      },
+      children: [
+        { key: "retentionDays", path: "plugins.entries.memory-lancedb.config.retentionDays" },
+      ],
     });
 
-    const ok = await updateDreamingEnabled(state, true);
+    const ok = await updateDreamingEnabled(state, config, true);
 
     expect(ok).toBe(false);
-    expect(request).toHaveBeenCalledWith("config.schema.lookup", {
-      path: "plugins.entries.memory-lancedb.config",
-    });
-    expect(hasRequestMethodCall(request, "config.patch")).toBe(false);
+    expect(config.lookupSchemaPath).toHaveBeenCalledWith("plugins.entries.memory-lancedb.config");
+    expect(config.patch).not.toHaveBeenCalled();
     expect(state.dreamingStatusError).toBe(
       'Selected memory plugin "memory-lancedb" does not support dreaming settings.',
     );
@@ -932,11 +917,13 @@ describe("dreaming controller", () => {
   it("fails gracefully when config hash is missing", async () => {
     const { state, request } = createState();
     state.configSnapshot = {};
+    const config = createConfig(state);
 
-    const ok = await updateDreamingEnabled(state, true);
+    const ok = await updateDreamingEnabled(state, config, true);
 
     expect(ok).toBe(false);
-    expect(request).not.toHaveBeenCalled();
+    expect(config.patch).not.toHaveBeenCalled();
+    expect(config.lookupSchemaPath).not.toHaveBeenCalled();
     expect(state.dreamingStatusError).toBe("Config hash missing; refresh and retry.");
   });
 

@@ -1,7 +1,7 @@
 import type { NostrProfile } from "../../api/types.ts";
 // Channels page owns its mutations and profile effects.
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
-import { loadConfig, saveConfig, type ConfigState } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import {
   loadChannels,
   logoutWhatsApp,
@@ -13,14 +13,15 @@ import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
-type ChannelsActionHost = ChannelsState &
-  ConfigState & {
-    hello?: { auth?: { deviceToken?: string | null } | null } | null;
-    password?: string;
-    settings: { token?: string };
-    nostrProfileFormState: NostrProfileFormState;
-    nostrProfileAccountId: string | null;
-  };
+type ChannelsActionHost = ChannelsState & {
+  hello?: { auth?: { deviceToken?: string | null } | null } | null;
+  password?: string;
+  settings: { token?: string };
+  nostrProfileFormState: NostrProfileFormState;
+  nostrProfileAccountId: string | null;
+};
+
+type ChannelConfigCapability = Pick<RuntimeConfigCapability, "refresh" | "save" | "state">;
 
 export async function handleWhatsAppStart(host: ChannelsActionHost, force: boolean) {
   await startWhatsAppLogin(host as ChannelsState, force);
@@ -37,21 +38,27 @@ export async function handleWhatsAppLogout(host: ChannelsActionHost) {
   await loadChannels(host as ChannelsState, true);
 }
 
-export async function handleChannelConfigSave(host: ChannelsActionHost) {
-  const saved = await saveConfig(host as ConfigState);
-  const saveError = host.lastError;
+export async function handleChannelConfigSave(
+  host: ChannelsActionHost,
+  config: ChannelConfigCapability,
+) {
+  const saved = await config.save();
+  const saveError = config.state.lastError;
   if (!saved) {
-    await loadConfig(host as ConfigState);
-    if (saveError && !host.lastError) {
-      host.lastError = saveError;
+    await config.refresh();
+    if (saveError && !config.state.lastError) {
+      config.state.lastError = saveError;
     }
     return;
   }
   await loadChannels(host as ChannelsState, true);
 }
 
-export async function handleChannelConfigReload(host: ChannelsActionHost) {
-  await loadConfig(host as ConfigState, { discardPendingChanges: true });
+export async function handleChannelConfigReload(
+  host: ChannelsActionHost,
+  config: ChannelConfigCapability,
+) {
+  await config.refresh({ discardPendingChanges: true });
   await loadChannels(host as ChannelsState, true);
 }
 

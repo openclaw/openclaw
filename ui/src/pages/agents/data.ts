@@ -12,8 +12,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
 } from "../../lib/agents/tools-effective.ts";
-import { loadConfig, saveConfig, stageDefaultAgentConfigEntry } from "../../lib/config/index.ts";
-import type { ConfigState } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -48,9 +47,12 @@ export type AgentsState = {
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 };
 
-export type AgentsConfigSaveState = AgentsState & ConfigState;
+export type AgentsConfigCapability = Pick<
+  RuntimeConfigCapability,
+  "refresh" | "save" | "stageDefaultAgent" | "state"
+>;
 
-type AgentsPageState = AgentsConfigSaveState &
+type AgentsPageState = AgentsState &
   AgentIdentityState &
   AgentFilesState &
   AgentSkillsState &
@@ -58,9 +60,9 @@ type AgentsPageState = AgentsConfigSaveState &
     loadCron?: () => void;
   };
 
-export async function loadAgentsPage(state: AgentsPageState) {
+export async function loadAgentsPage(state: AgentsPageState, config: AgentsConfigCapability) {
   await loadAgents(state);
-  await loadConfig(state);
+  await config.refresh();
   const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
   if (agentIds.length > 0) {
     void loadAgentIdentities(state, agentIds);
@@ -185,9 +187,9 @@ export async function loadToolsEffective(
   });
 }
 
-export async function saveAgentsConfig(state: AgentsConfigSaveState) {
+export async function saveAgentsConfig(state: AgentsState, config: AgentsConfigCapability) {
   const selectedBefore = state.agentsSelectedId;
-  await saveConfig(state);
+  await config.save();
   await loadAgents(state);
   if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
     state.agentsSelectedId = selectedBefore;
@@ -195,16 +197,17 @@ export async function saveAgentsConfig(state: AgentsConfigSaveState) {
 }
 
 export async function setDefaultAgent(
-  state: AgentsConfigSaveState,
+  state: AgentsState,
+  config: AgentsConfigCapability,
   agentId: string,
 ): Promise<void> {
-  const hadPendingConfigDraft = state.configFormDirty;
+  const hadPendingConfigDraft = config.state.configFormDirty;
   // Set Default is a one-click action on a clean draft, but saveConfig serializes the
   // whole form. If other edits were already dirty, keep them staged for the explicit
   // Save button instead of committing unrelated pending config changes.
-  if (stageDefaultAgentConfigEntry(state, agentId)) {
-    if (!hadPendingConfigDraft && state.configFormDirty) {
-      await saveAgentsConfig(state);
+  if (config.stageDefaultAgent(agentId)) {
+    if (!hadPendingConfigDraft && config.state.configFormDirty) {
+      await saveAgentsConfig(state, config);
     }
   }
 }

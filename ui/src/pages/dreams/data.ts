@@ -1,5 +1,5 @@
 import type { ConfigSnapshot } from "../../api/types.ts";
-import { lookupConfigSchemaPath, patchConfig } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 // Control UI controller manages dreaming gateway state.
@@ -241,6 +241,11 @@ export type DreamingState = {
   wikiMemoryPalace: WikiMemoryPalace | null;
   lastError: string | null;
 };
+
+type DreamingConfigCapability = Pick<
+  RuntimeConfigCapability,
+  "lookupSchemaPath" | "patch" | "state"
+>;
 
 function confirmDreamingAction(message: string): boolean {
   if (typeof globalThis.confirm !== "function") {
@@ -1063,6 +1068,7 @@ export async function dedupeDreamDiary(state: DreamingState): Promise<boolean> {
 
 async function writeDreamingPatch(
   state: DreamingState,
+  config: DreamingConfigCapability,
   patch: Record<string, unknown>,
 ): Promise<boolean> {
   if (state.dreamingModeSaving) {
@@ -1072,12 +1078,13 @@ async function writeDreamingPatch(
   state.dreamingModeSaving = true;
   state.dreamingStatusError = null;
   try {
-    const updated = await patchConfig(state, {
+    const updated = await config.patch({
       raw: patch,
       note: "Dreaming settings updated from the Dreaming tab.",
     });
     if (!updated) {
-      state.dreamingStatusError = state.lastError ?? "Could not update dreaming settings.";
+      state.dreamingStatusError =
+        config.state.lastError ?? state.lastError ?? "Could not update dreaming settings.";
     }
     return updated;
   } finally {
@@ -1105,13 +1112,14 @@ function lookupDisallowsUnknownProperties(value: unknown): boolean {
 
 async function ensureDreamingPathSupported(
   state: DreamingState,
+  config: DreamingConfigCapability,
   pluginId: string,
 ): Promise<boolean> {
-  if (!state.client || !state.connected) {
+  if (!config.state.client || !config.state.connected) {
     return true;
   }
   try {
-    const lookup = await lookupConfigSchemaPath(state, `plugins.entries.${pluginId}.config`);
+    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
     if (lookupIncludesDreamingProperty(lookup)) {
       return true;
     }
@@ -1129,20 +1137,23 @@ async function ensureDreamingPathSupported(
 
 export async function updateDreamingEnabled(
   state: DreamingState,
+  config: DreamingConfigCapability,
   enabled: boolean,
 ): Promise<boolean> {
   if (state.dreamingModeSaving) {
     return false;
   }
-  if (!state.configSnapshot?.hash) {
+  if (!config.state.configSnapshot?.hash) {
     state.dreamingStatusError = "Config hash missing; refresh and retry.";
     return false;
   }
-  const { pluginId } = resolveConfiguredDreaming(asRecord(state.configSnapshot?.config) ?? null);
-  if (!(await ensureDreamingPathSupported(state, pluginId))) {
+  const { pluginId } = resolveConfiguredDreaming(
+    asRecord(config.state.configSnapshot?.config) ?? null,
+  );
+  if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
     return false;
   }
-  const ok = await writeDreamingPatch(state, {
+  const ok = await writeDreamingPatch(state, config, {
     plugins: {
       entries: {
         [pluginId]: {

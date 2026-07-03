@@ -7,7 +7,7 @@ import {
   saveAgentsConfig,
   setDefaultAgent,
 } from "./data.ts";
-import type { AgentsConfigSaveState, AgentsState } from "./data.ts";
+import type { AgentsConfigCapability, AgentsState } from "./data.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
@@ -54,56 +54,27 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
 }
 
 function createSaveState(): {
-  state: AgentsConfigSaveState;
+  state: AgentsState;
+  config: AgentsConfigCapability;
   request: ReturnType<typeof vi.fn<TestRequest>>;
 } {
   const { state, request } = createState();
+  const configState = {
+    configFormDirty: true,
+    configForm: { agents: { list: [{ id: "main" }] } },
+    configFormOriginal: { agents: { list: [{ id: "main" }] } },
+  } as AgentsConfigCapability["state"];
+  const config: AgentsConfigCapability = {
+    state: configState,
+    refresh: vi.fn(async () => undefined),
+    save: vi.fn(async () => true),
+    stageDefaultAgent: vi.fn(() => false),
+  };
   return {
-    state: {
-      ...state,
-      applySessionKey: "session-1",
-      configLoading: false,
-      configRawOriginal: "{}",
-      configValid: true,
-      configIssues: [],
-      configSaving: false,
-      configApplying: false,
-      updateRunning: false,
-      configSnapshot: { hash: "hash-1" },
-      configFormDirty: true,
-      configFormMode: "form",
-      configForm: { agents: { list: [{ id: "main" }] } },
-      configRaw: "{}",
-      configSchema: null,
-      configSchemaVersion: null,
-      configSchemaLoading: false,
-      configUiHints: {},
-      configFormOriginal: { agents: { list: [{ id: "main" }] } },
-      configSearchQuery: "",
-      configActiveSection: null,
-      configActiveSubsection: null,
-      pendingUpdateExpectedVersion: null,
-      pendingUpdateHandoff: false,
-      updateStatusBanner: null,
-      lastError: null,
-    },
+    state,
+    config,
     request,
   };
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
-  const [call] = request.mock.calls;
-  if (!call) {
-    throw new Error("Expected client request call");
-  }
-  return call;
 }
 
 describe("loadAgents", () => {
@@ -363,138 +334,112 @@ describe("loadToolsEffective", () => {
 
 describe("saveAgentsConfig", () => {
   it("restores the pre-save agent after reload when it still exists", async () => {
-    const { state, request } = createSaveState();
+    const { state, config, request } = createSaveState();
     state.agentsSelectedId = "kimi";
-    request
-      .mockImplementationOnce(async () => undefined)
-      .mockImplementationOnce(async () => {
-        state.agentsSelectedId = null;
-        return {
-          hash: "hash-2",
-          raw: '{"agents":{"list":[{"id":"main"},{"id":"kimi"}]}}',
-          config: {
-            agents: {
-              list: [{ id: "main" }, { id: "kimi" }],
-            },
-          },
-          valid: true,
-          issues: [],
-        };
-      })
-      .mockImplementationOnce(async () => {
-        state.agentsSelectedId = null;
-        return {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            { id: "main", name: "main" },
-            { id: "kimi", name: "kimi" },
-          ],
-        };
-      });
-
-    await saveAgentsConfig(state);
-
-    const [method, params] = requireFirstRequestCall(request);
-    const requestParams = requireRecord(params);
-    expect(method).toBe("config.set");
-    expect(requestParams.baseHash).toBe("hash-1");
-    expect(JSON.parse(String(requestParams.raw))).toEqual({
-      agents: { list: [{ id: "main" }] },
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "config.get", {});
-    expect(request).toHaveBeenNthCalledWith(3, "agents.list", {});
-    expect(state.agentsSelectedId).toBe("kimi");
-  });
-
-  it("falls back to the default agent when the saved agent disappears", async () => {
-    const { state, request } = createSaveState();
-    state.agentsSelectedId = "kimi";
-    request
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({
-        hash: "hash-2",
-        raw: '{"agents":{"list":[{"id":"main"}]}}',
-        config: {
-          agents: {
-            list: [{ id: "main" }],
-          },
-        },
-        valid: true,
-        issues: [],
-      })
-      .mockResolvedValueOnce({
+    request.mockImplementationOnce(async () => {
+      state.agentsSelectedId = null;
+      return {
         defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main", name: "main" }],
-      });
-
-    await saveAgentsConfig(state);
-
-    expect(state.agentsSelectedId).toBe("main");
-  });
-});
-
-describe("setDefaultAgent", () => {
-  it("stages the canonical default flag and persists it through config.set", async () => {
-    const { state, request } = createSaveState();
-    state.configForm = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
-    state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
-    state.configFormDirty = false;
-    request
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({
-        hash: "hash-2",
-        raw: '{"agents":{"list":[{"id":"main"},{"id":"kimi","default":true}]}}',
-        config: { agents: { list: [{ id: "main" }, { id: "kimi", default: true }] } },
-        valid: true,
-        issues: [],
-      })
-      .mockResolvedValueOnce({
-        defaultId: "kimi",
         mainKey: "main",
         scope: "per-sender",
         agents: [
           { id: "main", name: "main" },
           { id: "kimi", name: "kimi" },
         ],
-      });
-
-    await setDefaultAgent(state, "kimi");
-
-    const [method, params] = requireFirstRequestCall(request);
-    const requestParams = requireRecord(params);
-    expect(method).toBe("config.set");
-    expect(JSON.parse(String(requestParams.raw))).toEqual({
-      agents: { list: [{ id: "main" }, { id: "kimi", default: true }] },
+      };
     });
+
+    await saveAgentsConfig(state, config);
+
+    expect(config.save).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenNthCalledWith(1, "agents.list", {});
+    expect(state.agentsSelectedId).toBe("kimi");
+  });
+
+  it("falls back to the default agent when the saved agent disappears", async () => {
+    const { state, config, request } = createSaveState();
+    state.agentsSelectedId = "kimi";
+    request.mockResolvedValueOnce({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main", name: "main" }],
+    });
+
+    await saveAgentsConfig(state, config);
+
+    expect(config.save).toHaveBeenCalledTimes(1);
+    expect(state.agentsSelectedId).toBe("main");
+  });
+});
+
+describe("setDefaultAgent", () => {
+  it("stages the default agent and persists a clean draft", async () => {
+    const { state, config, request } = createSaveState();
+    config.state.configForm = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configFormDirty = false;
+    vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
+      config.state.configFormDirty = true;
+      return true;
+    });
+    request.mockResolvedValueOnce({
+      defaultId: "kimi",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", name: "main" },
+        { id: "kimi", name: "kimi" },
+      ],
+    });
+
+    await setDefaultAgent(state, config, "kimi");
+
+    expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
+    expect(config.save).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("agents.list", {});
   });
 
   it("does not persist when the agent is absent from the config list", async () => {
-    const { state, request } = createSaveState();
-    state.configForm = { agents: { list: [{ id: "main" }] } };
+    const { state, config, request } = createSaveState();
+    config.state.configForm = { agents: { list: [{ id: "main" }] } };
+    vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
 
-    await setDefaultAgent(state, "ghost");
+    await setDefaultAgent(state, config, "ghost");
 
+    expect(config.stageDefaultAgent).toHaveBeenCalledWith("ghost");
+    expect(config.save).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
   it("does not persist unrelated dirty agent config drafts", async () => {
-    const { state, request } = createSaveState();
-    state.configFormDirty = true;
-    state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
-    state.configForm = {
+    const { state, config, request } = createSaveState();
+    config.state.configFormDirty = true;
+    config.state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configForm = {
       agents: {
         list: [{ id: "main", model: "gpt-5.5" }, { id: "kimi" }],
       },
     };
+    vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
+      config.state.configForm = {
+        agents: {
+          list: [
+            { id: "main", model: "gpt-5.5" },
+            { id: "kimi", default: true },
+          ],
+        },
+      };
+      config.state.configFormDirty = true;
+      return true;
+    });
 
-    await setDefaultAgent(state, "kimi");
+    await setDefaultAgent(state, config, "kimi");
 
+    expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
+    expect(config.save).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
-    expect(state.configForm).toEqual({
+    expect(config.state.configForm).toEqual({
       agents: {
         list: [
           { id: "main", model: "gpt-5.5" },
@@ -502,6 +447,6 @@ describe("setDefaultAgent", () => {
         ],
       },
     });
-    expect(state.configFormDirty).toBe(true);
+    expect(config.state.configFormDirty).toBe(true);
   });
 });

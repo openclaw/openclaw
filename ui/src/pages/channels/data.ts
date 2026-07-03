@@ -1,6 +1,6 @@
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 // Channels page data owns the shared channel status request and effects.
-import { loadConfig, loadConfigSchema, type ConfigState } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -9,7 +9,7 @@ import type { ChannelsState } from "./data.types.ts";
 
 export type { ChannelsState };
 
-type ChannelsPageState = ChannelsState & ConfigState & { requestUpdate?: () => void };
+type ChannelsPageConfig = Pick<RuntimeConfigCapability, "refresh" | "refreshSchema">;
 
 type LoadChannelsOptions = {
   softTimeoutMs?: number;
@@ -149,11 +149,11 @@ export async function logoutWhatsApp(state: ChannelsState) {
   }
 }
 
-export async function loadChannelsPage(state: ChannelsPageState) {
-  const primaryRefresh = Promise.all([loadChannels(state, false), loadConfig(state)]);
+export async function loadChannelsPage(state: ChannelsState, config: ChannelsPageConfig) {
+  const primaryRefresh = Promise.all([loadChannels(state, false), config.refresh()]);
   void primaryRefresh.then(
     () => {
-      void loadConfigSchema(state).finally(() => state.requestUpdate?.());
+      void config.refreshSchema();
     },
     () => undefined,
   );
