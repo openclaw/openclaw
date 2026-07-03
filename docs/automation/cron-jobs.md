@@ -375,7 +375,7 @@ Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 Wire Gmail inbox triggers to OpenClaw via Google PubSub.
 
 <Note>
-**Prerequisites:** `gcloud` CLI, `gog` (gogcli), OpenClaw hooks enabled, Tailscale for the public HTTPS endpoint.
+**Prerequisites:** `gcloud` CLI, `gog` (gogcli), and OpenClaw hooks enabled. The `openclaw webhooks gmail setup` helper still configures the Pub/Sub push flow, which also needs Tailscale or another HTTPS push endpoint.
 </Note>
 
 ### Wizard setup (recommended)
@@ -388,7 +388,7 @@ This writes `hooks.gmail` config, enables the Gmail preset, and uses Tailscale F
 
 ### Gateway auto-start
 
-When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts the configured `gog gmail watch` delivery runner on boot and auto-renews the watch. Push configs start `gog gmail watch serve`; pull configs start `gog gmail watch pull`. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 
 ### Manual one-time setup
 

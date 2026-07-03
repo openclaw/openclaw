@@ -116,6 +116,13 @@ export const HooksGmailSchema = z
     label: z.string().optional(),
     topic: z.string().optional(),
     subscription: z.string().optional(),
+    delivery: z
+      .object({
+        mode: z.union([z.literal("push"), z.literal("pull")]).optional(),
+        subscription: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     pushToken: z.string().optional().register(sensitive),
     hookUrl: z.string().optional(),
     includeBody: z.boolean().optional(),

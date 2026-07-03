@@ -39,7 +39,7 @@ export function registerWebhooksCli(program: Command) {
 
   gmail
     .command("setup")
-    .description("Configure Gmail watch + Pub/Sub + OpenClaw hooks")
+    .description("Configure Gmail watch + Pub/Sub push + OpenClaw hooks")
     .requiredOption("--account <email>", "Gmail account to watch")
     .option("--project <id>", "GCP project id (OAuth client owner)")
     .option("--topic <name>", "Pub/Sub topic name", DEFAULT_GMAIL_TOPIC)
@@ -78,10 +78,10 @@ export function registerWebhooksCli(program: Command) {
 
   gmail
     .command("run")
-    .description("Run gog watch serve + auto-renew loop")
+    .description("Run configured gog gmail watch delivery + auto-renew loop")
     .option("--account <email>", "Gmail account to watch")
     .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)")
-    .option("--subscription <name>", "Pub/Sub subscription name")
+    .option("--subscription <name>", "Pub/Sub subscription name or full path for pull configs")
     .option("--label <label>", "Gmail label to watch")
     .option("--hook-url <url>", "OpenClaw hook URL")
     .option("--hook-token <token>", "OpenClaw hook token")

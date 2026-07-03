@@ -37,12 +37,21 @@ export type HookMappingConfig = {
 };
 
 export type HooksGmailTailscaleMode = "off" | "serve" | "funnel";
+export type HooksGmailDeliveryMode = "push" | "pull";
 
 export type HooksGmailConfig = {
   account?: string;
   label?: string;
   topic?: string;
   subscription?: string;
+  delivery?: {
+    mode?: HooksGmailDeliveryMode;
+    /**
+     * Pull mode requires a full Pub/Sub resource path:
+     * projects/<project>/subscriptions/<subscription>.
+     */
+    subscription?: string;
+  };
   pushToken?: string;
   hookUrl?: string;
   includeBody?: boolean;
