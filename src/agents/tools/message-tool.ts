@@ -87,8 +87,49 @@ import { isPollVoteEchoText } from "./poll-vote-echo.js";
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
   ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
+// Some actions expose plugin-specific target aliases at the tool schema layer
+// (e.g. WhatsApp list-reply accepts chatJid/chatId). The explicit-target gate
+// runs before plugin discovery, so we recognize the known aliases here.
+const EXPLICIT_TARGET_ACTION_ALIASES: Partial<Record<ChannelMessageActionName, readonly string[]>> =
+  {
+    "list-reply": ["chatJid", "chatId"],
+  };
+
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return action === "broadcast" || shouldApplyCrossContextMarker(action);
+  // list-reply is a visible native send but carries no free text, so it sits
+  // outside the marker set; without this branch it would skip the target gate.
+  return (
+    action === "broadcast" || action === "list-reply" || shouldApplyCrossContextMarker(action)
+  );
+}
+
+function hasNonEmptyStringParam(params: Record<string, unknown>, key: string): boolean {
+  const value = params[key];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasExplicitMessageTarget(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+): boolean {
+  if (
+    hasNonEmptyStringParam(params, "target") ||
+    hasNonEmptyStringParam(params, "to") ||
+    hasNonEmptyStringParam(params, "channelId")
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(params.targets) &&
+    params.targets.some((value) => typeof value === "string" && value.trim().length > 0)
+  ) {
+    return true;
+  }
+  const aliases = EXPLICIT_TARGET_ACTION_ALIASES[action];
+  if (!aliases) {
+    return false;
+  }
+  return aliases.some((alias) => hasNonEmptyStringParam(params, alias));
 }
 
 function normalizeMessageToolIdempotencyKeyPart(value: unknown): string | undefined {
@@ -1342,18 +1383,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         });
       }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
-      if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
-        const explicitTarget =
-          (typeof params.target === "string" && params.target.trim().length > 0) ||
-          (typeof params.to === "string" && params.to.trim().length > 0) ||
-          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
-          (Array.isArray(params.targets) &&
-            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
-        if (!explicitTarget) {
-          throw new Error(
-            "Explicit message target required for this run. Provide target/targets (and channel when needed).",
-          );
-        }
+      if (
+        requireExplicitTarget &&
+        actionNeedsExplicitTarget(action) &&
+        !hasExplicitMessageTarget(action, params)
+      ) {
+        throw new Error(
+          "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+        );
       }
 
       const gatewayOpts = readGatewayCallOptions(params);

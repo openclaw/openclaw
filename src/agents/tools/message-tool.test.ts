@@ -1642,6 +1642,53 @@ describe("message tool explicit target guard", () => {
     const call = firstRunMessageActionInput();
     expect(call?.params?.target).toBe("channel:C999");
   });
+
+  it("requires an explicit target for list-reply when configured", async () => {
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "whatsapp",
+      currentChannelId: "+15551234567",
+    });
+
+    await expect(
+      tool.execute("1", {
+        action: "list-reply",
+        selectedRowId: "slot-morning",
+        title: "Morning slot",
+      }),
+    ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("accepts the chatJid alias as an explicit list-reply target", async () => {
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "whatsapp",
+      action: "list-reply",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "whatsapp", action: "list-reply" },
+      dryRun: true,
+    });
+
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "whatsapp",
+      currentChannelId: "+15551234567",
+    });
+
+    await tool.execute("1", {
+      action: "list-reply",
+      chatJid: "15559998888@s.whatsapp.net",
+      selectedRowId: "slot-morning",
+      title: "Morning slot",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.params?.chatJid).toBe("15559998888@s.whatsapp.net");
+  });
 });
 
 describe("message tool loop detection action runner proof", () => {
