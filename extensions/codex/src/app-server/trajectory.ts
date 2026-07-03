@@ -1,6 +1,6 @@
 /**
- * Records optional Codex runtime trajectory sidecars with bounded, redacted
- * context and completion events.
+ * Records optional Codex runtime trajectory events with bounded, redacted
+ * context and completion payloads.
  */
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
@@ -14,13 +14,17 @@ import {
   appendRegularFile,
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  appendTrajectoryRuntimeEvents,
+  parseSqliteSessionFileMarker,
+  type SessionStoreTrajectoryEvent,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
 /** Runtime trajectory recorder used by Codex run attempts and event projectors. */
 export type CodexTrajectoryRecorder = {
-  filePath: string;
+  filePath?: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
@@ -49,6 +53,12 @@ type CodexTrajectoryOpenFlagConstants = Pick<
   "O_APPEND" | "O_CREAT" | "O_TRUNC" | "O_WRONLY"
 > &
   Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
+
+type CodexTrajectorySink = {
+  filePath?: string;
+  flush: () => Promise<void>;
+  write: (event: SessionStoreTrajectoryEvent) => void;
+};
 
 /** Resolves secure append flags for trajectory runtime files. */
 export function resolveCodexTrajectoryAppendFlags(
@@ -79,11 +89,13 @@ async function safeAppendTrajectoryFile(filePath: string, line: string): Promise
   });
 }
 
-function boundedTrajectoryLine(event: Record<string, unknown>): string | undefined {
+function boundedTrajectoryEvent(
+  event: Record<string, unknown>,
+): SessionStoreTrajectoryEvent | undefined {
   const line = JSON.stringify(event);
   const bytes = Buffer.byteLength(line, "utf8");
   if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-    return `${line}\n`;
+    return event as SessionStoreTrajectoryEvent;
   }
 
   const originalData =
@@ -98,7 +110,9 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
     limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
     reason: "trajectory-event-size-limit",
   };
-  const buildTruncatedLine = (includeDroppedFields: boolean): string | undefined => {
+  const buildTruncatedEvent = (
+    includeDroppedFields: boolean,
+  ): SessionStoreTrajectoryEvent | undefined => {
     const data: Record<string, unknown> = { ...baseData };
     for (const key of TRAJECTORY_RUNTIME_OVERSIZE_PRESERVED_DATA_KEYS) {
       if (preservedDataKeys.has(key)) {
@@ -111,14 +125,15 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
         data.droppedFields = droppedFields;
       }
     }
-    const truncated = JSON.stringify({ ...event, data });
+    const truncatedEvent = { ...event, data };
+    const truncated = JSON.stringify(truncatedEvent);
     if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
-      return `${truncated}\n`;
+      return truncatedEvent as SessionStoreTrajectoryEvent;
     }
     return undefined;
   };
 
-  let best = buildTruncatedLine(true) ?? buildTruncatedLine(false);
+  let best = buildTruncatedEvent(true) ?? buildTruncatedEvent(false);
   if (!best) {
     return undefined;
   }
@@ -128,7 +143,7 @@ function boundedTrajectoryLine(event: Record<string, unknown>): string | undefin
       continue;
     }
     preservedDataKeys.add(key);
-    const next = buildTruncatedLine(true) ?? buildTruncatedLine(false);
+    const next = buildTruncatedEvent(true) ?? buildTruncatedEvent(false);
     if (next) {
       best = next;
       continue;
@@ -192,6 +207,69 @@ function writeTrajectoryPointerBestEffort(params: {
   }
 }
 
+function createCodexFileTrajectorySink(params: {
+  env: NodeJS.ProcessEnv;
+  sessionFile: string;
+  sessionId: string;
+}): CodexTrajectorySink {
+  const filePath = resolveTrajectoryFilePath(params);
+  const ready = fs
+    .mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 })
+    .catch(() => undefined);
+  writeTrajectoryPointerBestEffort({
+    filePath,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
+  let queue = Promise.resolve();
+  return {
+    filePath,
+    write: (event) => {
+      queue = queue
+        .then(() => ready)
+        .then(() => safeAppendTrajectoryFile(filePath, `${JSON.stringify(event)}\n`))
+        .catch(() => undefined);
+    },
+    flush: async () => {
+      await queue;
+    },
+  };
+}
+
+function createCodexSqliteTrajectorySink(params: {
+  env: NodeJS.ProcessEnv;
+  marker: NonNullable<ReturnType<typeof parseSqliteSessionFileMarker>>;
+}): CodexTrajectorySink {
+  let queue = Promise.resolve();
+  let pendingEvents: SessionStoreTrajectoryEvent[] = [];
+  return {
+    write: (event) => {
+      pendingEvents.push(event);
+    },
+    flush: async () => {
+      const events = pendingEvents;
+      pendingEvents = [];
+      if (events.length === 0) {
+        await queue;
+        return;
+      }
+      queue = queue
+        .then(() => {
+          appendTrajectoryRuntimeEvents({
+            agentId: params.marker.agentId,
+            env: params.env,
+            events,
+            maxRuntimeBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+            sessionId: params.marker.sessionId,
+            storePath: params.marker.storePath,
+          });
+        })
+        .catch(() => undefined);
+      await queue;
+    },
+  };
+}
+
 /** Creates a trajectory recorder when trajectory capture is enabled for the environment. */
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
@@ -202,27 +280,23 @@ export function createCodexTrajectoryRecorder(
     return null;
   }
 
-  const filePath = resolveTrajectoryFilePath({
-    env,
-    sessionFile: params.trajectorySessionFile ?? params.attempt.sessionFile,
-    sessionId: params.attempt.sessionId,
-  });
-  const ready = fs
-    .mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 })
-    .catch(() => undefined);
-  writeTrajectoryPointerBestEffort({
-    filePath,
-    sessionFile: params.trajectorySessionFile ?? params.attempt.sessionFile,
-    sessionId: params.attempt.sessionId,
-  });
-  let queue = Promise.resolve();
+  const sessionFile = params.trajectorySessionFile ?? params.attempt.sessionFile;
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  const sink =
+    sqliteMarker && sqliteMarker.sessionId === params.attempt.sessionId
+      ? createCodexSqliteTrajectorySink({ env, marker: sqliteMarker })
+      : createCodexFileTrajectorySink({
+          env,
+          sessionFile,
+          sessionId: params.attempt.sessionId,
+        });
   let seq = 0;
   const attribution = resolveCodexLocalRuntimeAttribution(params.attempt);
 
   return {
-    filePath,
+    ...(sink.filePath ? { filePath: sink.filePath } : {}),
     recordEvent: (type, data) => {
-      const event = {
+      const event = boundedTrajectoryEvent({
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
         traceId: params.attempt.sessionId,
@@ -239,19 +313,12 @@ export function createCodexTrajectoryRecorder(
         modelId: params.attempt.modelId,
         modelApi: attribution.api,
         data: data ? sanitizeValue(data) : undefined,
-      };
-      const line = boundedTrajectoryLine(event);
-      if (!line) {
-        return;
+      });
+      if (event) {
+        sink.write(event);
       }
-      queue = queue
-        .then(() => ready)
-        .then(() => safeAppendTrajectoryFile(filePath, line))
-        .catch(() => undefined);
     },
-    flush: async () => {
-      await queue;
-    },
+    flush: sink.flush,
   };
 }
 

@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadSqliteTrajectoryRuntimeEvents } from "../../../../src/trajectory/runtime-store.sqlite.js";
 import {
   createCodexTrajectoryRecorder,
   recordCodexTrajectoryCompletion,
@@ -87,10 +89,20 @@ describe("Codex trajectory recorder", () => {
     expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
   });
 
-  it("stores SQLite-backed trajectory captures under the session store trajectory dir", async () => {
+  it("stores SQLite-backed trajectory captures in the session database", async () => {
     const tmpDir = makeTempDir();
     const storePath = path.join(tmpDir, "sessions", "sessions.json");
     const trajectorySessionFile = `sqlite:main:session-1:${storePath}`;
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:session-1",
+      storePath,
+      entry: {
+        sessionId: "session-1",
+        sessionFile: trajectorySessionFile,
+        updatedAt: 10,
+      },
+    });
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
@@ -115,8 +127,15 @@ describe("Codex trajectory recorder", () => {
       false,
     );
     expect(fs.existsSync(path.join(tmpDir, "sessions", "trajectory", "session-1.jsonl"))).toBe(
-      true,
+      false,
     );
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({
+        agentId: "main",
+        sessionId: "session-1",
+        storePath,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ type: "session.started" })]);
   });
 
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {

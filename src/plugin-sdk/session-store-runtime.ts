@@ -26,6 +26,8 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
+import type { TrajectoryEvent } from "../trajectory/types.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -47,6 +49,8 @@ type SessionStoreEntrySummary = {
 };
 
 export type SessionStoreTranscriptEvent = SessionTranscriptEvent;
+
+export type SessionStoreTrajectoryEvent = TrajectoryEvent;
 
 type SessionStoreEntryUpdate = (
   entry: SessionEntry,
@@ -82,6 +86,15 @@ type UpdateSessionStoreEntryParams = {
 
 type UpsertSessionEntryParams = SessionStoreReadParams & {
   entry: SessionEntry;
+};
+
+type AppendTrajectoryRuntimeEventsParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  events: readonly TrajectoryEvent[];
+  maxRuntimeBytes?: number;
+  sessionId: string;
+  storePath: string;
 };
 
 type DeleteSessionEntryParams = SessionStoreReadParams & {
@@ -159,6 +172,20 @@ export function readTranscriptStatsSync(params: {
   storePath?: string;
 }): { eventCount: number; maxSeq: number; sizeBytes: number } {
   return readAccessorTranscriptStatsSync(params);
+}
+
+/** Appends runtime trajectory events for one SQLite-backed session identity. */
+export function appendTrajectoryRuntimeEvents(params: AppendTrajectoryRuntimeEventsParams): void {
+  appendSqliteTrajectoryRuntimeEvents(
+    {
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      ...(params.env !== undefined ? { env: params.env } : {}),
+      ...(params.maxRuntimeBytes !== undefined ? { maxRuntimeBytes: params.maxRuntimeBytes } : {}),
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    },
+    params.events,
+  );
 }
 
 /** Resolves the persisted session key for one SQLite transcript identity. */
