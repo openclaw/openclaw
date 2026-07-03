@@ -11,6 +11,10 @@ export type DiscordReceiptResultSource = {
   id?: string | null;
   channel_id?: string | null;
   platformMessageIds?: readonly string[];
+  /** Set when an oversized attachment was stripped and text-only fallback
+   *  was sent instead, so callers can classify the receipt as text
+   *  rather than media (#99021). */
+  mediaStripped?: boolean;
 };
 
 export function createDiscordSendReceipt(params: {

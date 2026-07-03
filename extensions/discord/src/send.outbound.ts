@@ -33,6 +33,23 @@ import {
   type DiscordSendEmbeds,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
+
+/** Returns true when an error indicates Discord's 413 Entity Too Large,
+ *  meaning the attachment exceeded the size limit and the entire request
+ *  (text + file) was rejected.  The caller should re-send as text-only. */
+function isDiscordEntityTooLargeError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const status =
+    "status" in err
+      ? (err as { status?: unknown }).status
+      : "statusCode" in err
+        ? (err as { statusCode?: unknown }).statusCode
+        : undefined;
+  return status === 413 || status === "413";
+}
+
 type DiscordSendOpts = {
   cfg: OpenClawConfig;
   token?: string;
@@ -246,29 +263,54 @@ export async function sendMessageDiscord(
     const resultChannelId = threadRes.message?.channel_id ?? threadId;
     const remainingChunks = chunks.slice(1);
 
+    let mediaStripped = false;
     try {
       if (opts.mediaUrl) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
-        await sendDiscordMedia(
-          rest,
-          threadId,
-          mediaCaption ?? "",
-          opts.mediaUrl,
-          opts.filename,
-          opts.mediaAccess,
-          opts.mediaLocalRoots,
-          opts.mediaReadFile,
-          mediaMaxBytes,
-          undefined,
-          request,
-          maxLinesPerMessage,
-          undefined,
-          undefined,
-          chunkMode,
-          opts.silent,
-          suppressEmbeds,
-          textLimit,
-        );
+        try {
+          await sendDiscordMedia(
+            rest,
+            threadId,
+            mediaCaption ?? "",
+            opts.mediaUrl,
+            opts.filename,
+            opts.mediaAccess,
+            opts.mediaLocalRoots,
+            opts.mediaReadFile,
+            mediaMaxBytes,
+            undefined,
+            request,
+            maxLinesPerMessage,
+            undefined,
+            undefined,
+            chunkMode,
+            opts.silent,
+            suppressEmbeds,
+            textLimit,
+          );
+        } catch (err) {
+          // Discord 413 Entity Too Large: attachment exceeds size limit.
+          // Send media caption as text-only so content isn't lost (#99021).
+          if (isDiscordEntityTooLargeError(err)) {
+            await sendDiscordText(
+              rest,
+              threadId,
+              `${mediaCaption ?? ""}\n\n_Attachment exceeds the size limit and was not sent._`,
+              undefined,
+              request,
+              maxLinesPerMessage,
+              undefined,
+              undefined,
+              chunkMode,
+              opts.silent,
+              suppressEmbeds,
+              textLimit,
+            );
+            mediaStripped = true;
+          } else {
+            throw err;
+          }
+        }
         await sendDiscordThreadTextChunks({
           rest,
           threadId,
@@ -312,35 +354,61 @@ export async function sendMessageDiscord(
       {
         id: messageId,
         channel_id: resultChannelId,
+        ...(mediaStripped ? { mediaStripped: true as const } : {}),
       },
       channelId,
-      { kind: opts.mediaUrl ? "media" : "text", threadId },
+      { kind: mediaStripped ? "text" : opts.mediaUrl ? "media" : "text", threadId },
     );
   }
 
   let result: DiscordChannelMessageResult;
   try {
     if (opts.mediaUrl) {
-      result = await sendDiscordMedia(
-        rest,
-        channelId,
-        textWithMentions,
-        opts.mediaUrl,
-        opts.filename,
-        opts.mediaAccess,
-        opts.mediaLocalRoots,
-        opts.mediaReadFile,
-        mediaMaxBytes,
-        opts.replyTo,
-        request,
-        maxLinesPerMessage,
-        opts.components,
-        opts.embeds,
-        chunkMode,
-        opts.silent,
-        suppressEmbeds,
-        textLimit,
-      );
+      try {
+        result = await sendDiscordMedia(
+          rest,
+          channelId,
+          textWithMentions,
+          opts.mediaUrl,
+          opts.filename,
+          opts.mediaAccess,
+          opts.mediaLocalRoots,
+          opts.mediaReadFile,
+          mediaMaxBytes,
+          opts.replyTo,
+          request,
+          maxLinesPerMessage,
+          opts.components,
+          opts.embeds,
+          chunkMode,
+          opts.silent,
+          suppressEmbeds,
+          textLimit,
+        );
+      } catch (err) {
+        // Discord 413 Entity Too Large: the attachment exceeds the size
+        // limit and the entire request (text + file) was rejected.  Re-send
+        // as text-only so the message content isn't silently lost (#99021).
+        if (isDiscordEntityTooLargeError(err)) {
+          result = await sendDiscordText(
+            rest,
+            channelId,
+            `${textWithMentions}\n\n_Attachment exceeds the size limit and was not sent._`,
+            opts.replyTo,
+            request,
+            maxLinesPerMessage,
+            opts.components,
+            opts.embeds,
+            chunkMode,
+            opts.silent,
+            suppressEmbeds,
+            textLimit,
+          );
+          result = { ...result, mediaStripped: true as const };
+        } else {
+          throw err;
+        }
+      }
     } else {
       result = await sendDiscordText(
         rest,
@@ -373,7 +441,13 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return toDiscordSendResult(result, channelId, {
-    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
+    kind: result.mediaStripped
+      ? "text"
+      : opts.mediaUrl
+        ? "media"
+        : opts.components || opts.embeds
+          ? "card"
+          : "text",
     replyToId: opts.replyTo,
   });
 }

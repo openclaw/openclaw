@@ -437,6 +437,40 @@ describe("sendMessageDiscord", () => {
     expectBodyFileName(requireRestBody(postMock, 1), "photo.jpg");
   });
 
+  it("falls back to text-only in forum thread when Discord rejects media with 413 (#99021)", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
+    // Thread creation succeeds
+    postMock.mockResolvedValueOnce({
+      id: "thread1",
+      message: { id: "starter1", channel_id: "thread1" },
+    });
+    // Media upload fails with 413
+    postMock.mockRejectedValueOnce({ status: 413, message: "Request entity too large" });
+    // Text-only fallback and any remaining text chunks succeed
+    postMock.mockResolvedValue({ id: "fallback-txt", channel_id: "thread1" });
+
+    const res = await sendMessageDiscord("channel:forum1", "Check this video", {
+      rest,
+      token: "t",
+      cfg: { channels: { discord: { token: "t" } } },
+      mediaUrl: "file:///tmp/large.mp4",
+    });
+    expect(res.messageId).toBe("starter1");
+    // First POST call created the thread; the media was rejected (413)
+    // and the fallback text was sent as a follow-up in the thread.
+    expectRestRoute(postMock, 0, Routes.threads("forum1"));
+    // At least one follow-up message was sent in the thread
+    const lastCallIndex = postMock.mock.calls.length - 1;
+    expectRestRoute(postMock, lastCallIndex, Routes.channelMessages("thread1"));
+    // The final text-only fallback should have the size limit note
+    const textBody = requireRestBody(postMock, lastCallIndex);
+    expect(textBody).not.toHaveProperty("files");
+    expect(textBody.content).toContain("limit and was not sent");
+    // Receipt kind reflects text-only (media was stripped)
+    expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "text" });
+  });
+
   it("chunks long forum posts into follow-up messages", async () => {
     const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
@@ -631,6 +665,28 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 32 * 1024 * 1024,
     });
+  });
+
+  it("sends text-only fallback when Discord rejects media with 413 (#99021)", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    // First attempt: Discord rejects oversized media with 413
+    postMock.mockRejectedValueOnce({ status: 413, message: "Request entity too large" });
+    // Fallback: text-only send succeeds
+    postMock.mockResolvedValue({ id: "fallback-txt", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "Check this video", {
+      rest,
+      token: "t",
+      cfg: { channels: { discord: { token: "t" } } },
+      mediaUrl: "file:///tmp/large.mp4",
+    });
+    expect(res.messageId).toBe("fallback-txt");
+    // First call was media upload (413 rejected), second call was text-only
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const textBody = requireRestBody(postMock, 1);
+    expect(textBody).not.toHaveProperty("files");
+    expect(textBody.content).toContain("limit and was not sent");
+    expect(textBody.content).toContain("Check this video");
   });
 
   it("sends media with empty text without content field", async () => {
