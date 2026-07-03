@@ -65,7 +65,8 @@ export function parsePageRange(range: string, maxPages: number): number[] {
         pages.add(i);
       }
     } else {
-      const num = Number(part);
+      const pageMatch = /^\d+$/.exec(part);
+      const num = pageMatch ? Number(pageMatch[0]) : Number.NaN;
       if (!Number.isFinite(num) || num < 1) {
         throw new Error(`Invalid page number: "${part}"`);
       }
