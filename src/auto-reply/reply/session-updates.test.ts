@@ -231,6 +231,10 @@ describe("compaction outcome tracking", () => {
 
     const persisted = JSON.parse(fs.readFileSync(storePath, "utf8"));
     expect(persisted["agent:main:test"]).toBeUndefined();
+    // The stale in-memory copy must not be stamped either — memory mirrors
+    // disk only when the persisted patch confirms the row still exists.
+    expect(sessionStore["agent:main:test"].lastCompactionOutcome).toBeUndefined();
+    expect(sessionStore["agent:main:test"].lastCompactionAt).toBeUndefined();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

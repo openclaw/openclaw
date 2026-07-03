@@ -984,7 +984,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       // preflight compaction did not land even after the run ends.
       const attemptReason = result?.reason ?? "not_compacted";
       await recordCompactionOutcome({
-        sessionEntry: entry,
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,

@@ -312,7 +312,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     });
   } else if (!codexNativeCompactionStarted) {
     await runtime.recordCompactionOutcome({
-      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,

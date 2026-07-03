@@ -359,9 +359,10 @@ export async function incrementCompactionCount(params: {
  * Records a compaction attempt that did not compact (failed/skipped) so
  * /status can report the last outcome after the fact. Deliberately leaves
  * `updatedAt` untouched: a failed/skipped attempt is not session activity.
+ * Metadata-only: never creates a row, in memory or on disk, so a session
+ * deleted/reset while compaction was in flight stays deleted.
  */
 export async function recordCompactionOutcome(params: {
-  sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
@@ -370,13 +371,9 @@ export async function recordCompactionOutcome(params: {
   reason?: string;
   now?: number;
 }): Promise<void> {
-  const { sessionEntry, sessionStore, sessionKey, storePath, outcome, reason } = params;
+  const { sessionStore, sessionKey, storePath, outcome, reason } = params;
   const now = params.now ?? Date.now();
   if (!sessionStore || !sessionKey) {
-    return;
-  }
-  const entry = sessionStore[sessionKey] ?? sessionEntry;
-  if (!entry) {
     return;
   }
   const updates: Partial<SessionEntry> = {
@@ -384,16 +381,21 @@ export async function recordCompactionOutcome(params: {
     lastCompactionOutcome: outcome,
     lastCompactionReason: normalizeOptionalString(reason),
   };
-  const nextEntry = { ...entry, ...updates };
-  sessionStore[sessionKey] = nextEntry;
   if (storePath) {
-    // No fallbackEntry: a metadata-only failed/skipped stamp must never
-    // resurrect a session row deleted/reset while compaction was in flight.
+    // No fallbackEntry, and mirror to memory only after the persisted patch
+    // confirms the row still exists — the disk store is the source of truth
+    // for whether the session survived while compaction was in flight.
     const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
       preserveActivity: true,
     });
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
     }
+    return;
   }
+  const entry = sessionStore[sessionKey];
+  if (!entry) {
+    return;
+  }
+  sessionStore[sessionKey] = { ...entry, ...updates };
 }
