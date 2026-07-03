@@ -36,6 +36,7 @@ export type SessionLockInspection = {
   ageMs: number | null;
   stale: boolean;
   staleReasons: string[];
+  removable: boolean;
   removed: boolean;
 };
 
@@ -858,13 +859,15 @@ export async function cleanStaleLockFiles(params: {
       reclaimLockWithoutStarttime: false,
       readOwnerProcessArgs: ownerProcessArgsReader,
     });
+    const removable = await shouldRemoveLockDuringCleanup(lockPath, inspected, staleMs, nowMs);
     const lockInfo: SessionLockInspection = {
       lockPath,
       ...inspected,
+      removable,
       removed: false,
     };
 
-    if (removeStale && (await shouldRemoveLockDuringCleanup(lockPath, lockInfo, staleMs, nowMs))) {
+    if (removeStale && removable) {
       await fs.rm(lockPath, { force: true });
       lockInfo.removed = true;
       cleaned.push(lockInfo);

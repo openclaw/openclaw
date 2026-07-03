@@ -7,6 +7,7 @@ import {
   assertWebChannel,
   jidToE164,
   markdownToWhatsApp,
+  resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
@@ -41,6 +42,17 @@ describe("markdownToWhatsApp", () => {
     ["returns empty string for empty input", "", ""],
     ["returns plain text unchanged", "no formatting here", "no formatting here"],
     ["handles bold inside a sentence", "This is **very** important", "This is *very* important"],
+    ["converts GFM ***bold italic*** to WhatsApp bold+italic", "***bi***", "*_bi_*"],
+    ["converts GFM __*bold italic*__ to WhatsApp bold+italic", "__*y*__", "*_y_*"],
+    ["converts GFM **_bold italic_** to WhatsApp bold+italic", "**_x_**", "*_x_*"],
+    ["converts GFM ___bold italic___ to WhatsApp bold+italic", "___z___", "*_z_*"],
+    ["converts GFM *__bold italic__* to WhatsApp bold+italic", "*__q__*", "*_q_*"],
+    ["converts GFM _**bold italic**_ to WhatsApp bold+italic", "_**r**_", "*_r_*"],
+    [
+      "preserves inline code containing bold-italic markers",
+      "Use `***not bold italic***` here",
+      "Use `***not bold italic***` here",
+    ],
     // Regression: a digit immediately after an inline-code span must not be
     // absorbed into the placeholder index (which previously dropped both).
     ["preserves inline code immediately followed by a digit", "`a`5", "`a`5"],
@@ -208,5 +220,36 @@ describe("resolveJidToE164", () => {
     };
     await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
     expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
+});
+
+describe("resolveEquivalentWhatsAppDirectChatJids", () => {
+  it.each([
+    ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
+    ["15551230000:2@hosted", "15551230000@hosted"],
+    ["777:1@lid", "777@lid"],
+    ["777:2@hosted.lid", "777@hosted.lid"],
+  ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
+      observedJid,
+      bareJid,
+    ]);
+  });
+
+  it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {
+    await withTempDir("whatsapp-hosted-lid-map-", async (authDir) => {
+      fs.writeFileSync(path.join(authDir, "lid-mapping-15551230000.json"), JSON.stringify("777"));
+      fs.writeFileSync(
+        path.join(authDir, "lid-mapping-777_reverse.json"),
+        JSON.stringify("15551230000"),
+      );
+
+      await expect(
+        resolveEquivalentWhatsAppDirectChatJids("15551230000@hosted", { authDir }),
+      ).resolves.toEqual(["15551230000@hosted", "777@hosted.lid"]);
+      await expect(
+        resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", { authDir }),
+      ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    });
   });
 });

@@ -4,10 +4,9 @@ scenario:
   id: openai-web-search-native-assertions
   surface: model-provider
   coverage:
-    primary:
+    secondary:
       - web-search.openai-native-web-search
       - plugins.web-search-and-fetch
-    secondary:
       - web-search.model-and-filter-routing
       - tools.web-search
   objective: Verify the OpenAI web_search Docker lane assertions require native Responses web_search evidence with bounded diagnostics.

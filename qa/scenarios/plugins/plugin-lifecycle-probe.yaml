@@ -4,9 +4,8 @@ scenario:
   id: plugin-lifecycle-probe
   surface: plugins
   coverage:
-    primary:
-      - plugins.lifecycle
     secondary:
+      - plugins.lifecycle
       - cli.plugin-validation-repair
       - plugins.setup-flows
   objective: Exercise strict plugin load/uninstall proof parsing through QA Lab evidence.

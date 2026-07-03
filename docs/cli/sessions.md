@@ -120,6 +120,7 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Cleanup reports short-lived gateway model-run probe cleanup separately as `modelRunPruned`. This only matches strict explicit keys shaped like `agent:*:explicit:model-run-<uuid>`. The fixed retention is `24h`, but it is pressure-gated: it only removes stale probe rows when session-entry maintenance/cap pressure is reached. When it runs, model-run cleanup happens before global stale cleanup and capping.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.

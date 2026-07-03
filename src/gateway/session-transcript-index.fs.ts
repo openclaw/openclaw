@@ -6,6 +6,12 @@ import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
+import {
+  extractJsonNullableStringFieldPrefix,
+  extractJsonNumberFieldPrefix,
+  extractJsonStringFieldPrefix,
+  normalizeOptionalString,
+} from "./session-transcript-json.js";
 
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TRANSCRIPT_INDEX_CACHE_ENTRIES = 256;
@@ -62,48 +68,6 @@ const transcriptIndexBuilds = new Map<
     promise: Promise<SessionTranscriptIndex>;
   }
 >();
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-  try {
-    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-    return normalizeOptionalString(decoded);
-  } catch {
-    return undefined;
-  }
-}
-
-function extractJsonNullableStringFieldPrefix(
-  prefix: string,
-  field: string,
-): string | null | undefined {
-  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
-    return null;
-  }
-  return extractJsonStringFieldPrefix(prefix, field);
-}
-
-function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
-  const match = new RegExp(
-    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
-  ).exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-  const decoded = Number(match[1]);
-  return Number.isFinite(decoded) ? decoded : undefined;
-}
 
 async function yieldTranscriptIndexScan(): Promise<void> {
   await new Promise<void>((resolve) => {

@@ -23,7 +23,8 @@ Related:
 
 ## Options
 
-- `-m, --message <text>`: required message body
+- `-m, --message <text>`: message body
+- `--message-file <path>`: read the message body from a UTF-8 file
 - `-t, --to <dest>`: recipient used to derive the session key
 - `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
@@ -45,6 +46,7 @@ Related:
 ```bash
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
+openclaw agent --agent ops --message-file ./task.md
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
 openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
@@ -56,6 +58,7 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## Notes
 
+- Pass exactly one of `--message` or `--message-file`. `--message-file` preserves multiline file content after removing an optional UTF-8 BOM, and rejects files that are not valid UTF-8.
 - Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.

@@ -5,10 +5,15 @@ import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
+const logErrorMock = vi.fn();
 
 vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
   persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
     persistGatewaySessionLifecycleEventMock(...args),
+}));
+
+vi.mock("../logger.js", () => ({
+  logError: (...args: unknown[]) => logErrorMock(...args),
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -34,6 +39,7 @@ vi.mock("./session-utils.js", () => ({
     store: {},
     entry: undefined,
     canonicalKey: "session-1",
+    storeKeys: ["session-1"],
     legacyKey: undefined,
   })),
 }));
@@ -60,16 +66,20 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
-    vi.mocked(loadSessionEntry).mockReset().mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      store: {},
-      entry: undefined,
-      canonicalKey: "session-1",
-      legacyKey: undefined,
-    });
+    vi.mocked(loadSessionEntry)
+      .mockReset()
+      .mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        store: {},
+        entry: undefined,
+        canonicalKey: "session-1",
+        storeKeys: ["session-1"],
+        legacyKey: undefined,
+      });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
+    logErrorMock.mockReset();
     resetAgentRunContextForTest();
   });
 
@@ -1493,6 +1503,7 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
       canonicalKey: "session-1",
+      storeKeys: ["session-1"],
       legacyKey: undefined,
     });
 
@@ -1531,6 +1542,7 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "off", updatedAt: 1_500 },
       canonicalKey: "session-1",
+      storeKeys: ["session-1"],
       legacyKey: undefined,
     });
 
@@ -2102,6 +2114,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     const {
@@ -2170,6 +2183,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     const markTrackedRunTerminalPersisted = vi.fn();
@@ -2260,6 +2274,7 @@ describe("agent event handler", () => {
         restartRecoveryRuns,
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
@@ -2330,6 +2345,7 @@ describe("agent event handler", () => {
         restartRecoveryRuns,
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     let currentRow = {
@@ -2419,6 +2435,7 @@ describe("agent event handler", () => {
         status: "running",
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     let currentRow = {
@@ -2489,7 +2506,9 @@ describe("agent event handler", () => {
       startedAt: 1_000,
       abortedLastRun: false,
     });
-    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(new Error("disk full"));
+    persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(
+      new Error("disk full sk-abcdefghijklmnopqrstuvwxyz123456"),
+    );
     const markTrackedRunTerminalPersisted = vi.fn();
     const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
       resolveSessionKeyForRun: () => "session-failed-write",
@@ -2521,6 +2540,10 @@ describe("agent event handler", () => {
       updatedAt: 2_100,
       abortedLastRun: false,
     });
+    expect(logErrorMock).toHaveBeenCalledTimes(1);
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway: terminal session persistence failed session=session-failed-write run=run-failed-write error=Error: disk full sk-abc…3456",
+    );
     expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
   });
 
@@ -2541,6 +2564,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     registerAgentRunContext("shared-run", {
@@ -2633,6 +2657,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     resetAgentRunContextForTest();

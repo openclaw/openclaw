@@ -138,6 +138,7 @@ const config = {
       entry: rootEntries,
       ignoreDependencies: [
         "@openclaw/*",
+        "cross-spawn",
         "file-type",
         "playwright-core",
         "sqlite-vec",

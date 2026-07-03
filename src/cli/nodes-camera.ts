@@ -1,6 +1,7 @@
 // Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { toErrorObject } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
@@ -192,7 +193,7 @@ export async function writeUrlToFile(
 
     if (thrown) {
       await fs.unlink(filePath).catch(() => {});
-      throw toLintErrorObject(thrown, "Non-Error thrown");
+      throw toErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
     await release();
@@ -276,18 +277,4 @@ export async function writeCameraClipPayloadToFile(params: {
     invalidPayloadMessage: "invalid camera.clip payload",
   });
   return filePath;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

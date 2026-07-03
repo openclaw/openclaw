@@ -1,11 +1,12 @@
 // Shared iOS signing defaults for local development + CI.
-#include "Version.xcconfig"
+#include "../build/Version.xcconfig"
 
 OPENCLAW_IOS_DEFAULT_TEAM = FWJYW4S8P8
 OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)
 OPENCLAW_DEVELOPMENT_TEAM = $(OPENCLAW_IOS_SELECTED_TEAM)
 OPENCLAW_CODE_SIGN_STYLE = Automatic
 OPENCLAW_CODE_SIGN_IDENTITY = Apple Development
+OPENCLAW_CODE_SIGN_ENTITLEMENTS = Sources/OpenClaw.entitlements
 OPENCLAW_APP_BUNDLE_ID = ai.openclawfoundation.app
 OPENCLAW_APP_GROUP_ID = group.ai.openclawfoundation.app.shared
 OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclawfoundation.app.watchkitapp

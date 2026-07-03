@@ -93,6 +93,16 @@ function createClawHubInstallResult(params: {
   packageName: string;
   version: string;
   channel: string;
+  trust?: {
+    disposition: "clean" | "review-recommended" | "review-required";
+    scanStatus?: string;
+    moderationState?: string;
+    reasons?: string[];
+    pending?: boolean;
+    stale?: boolean;
+    checkedAt?: string;
+    acknowledgedAt?: string;
+  };
 }): Awaited<ReturnType<typeof installPluginFromClawHub>> {
   return {
     ok: true,
@@ -113,6 +123,22 @@ function createClawHubInstallResult(params: {
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
+      ...(params.trust
+        ? {
+            clawhubTrustDisposition: params.trust.disposition,
+            ...(params.trust.scanStatus ? { clawhubTrustScanStatus: params.trust.scanStatus } : {}),
+            ...(params.trust.moderationState
+              ? { clawhubTrustModerationState: params.trust.moderationState }
+              : {}),
+            ...(params.trust.reasons ? { clawhubTrustReasons: params.trust.reasons } : {}),
+            ...(params.trust.pending ? { clawhubTrustPending: true } : {}),
+            ...(params.trust.stale ? { clawhubTrustStale: true } : {}),
+            ...(params.trust.checkedAt ? { clawhubTrustCheckedAt: params.trust.checkedAt } : {}),
+            ...(params.trust.acknowledgedAt
+              ? { clawhubTrustAcknowledgedAt: params.trust.acknowledgedAt }
+              : {}),
+          }
+        : {}),
     },
   };
 }
@@ -1267,6 +1293,81 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("Installed plugin: demo")).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
+  it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
+    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "official",
+        trust: {
+          disposition: "review-required",
+          scanStatus: "suspicious",
+          reasons: ["payload_strings"],
+          checkedAt: "2026-05-14T18:00:00.000Z",
+          acknowledgedAt: "2026-05-14T18:00:03.000Z",
+        },
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: createEnabledPluginConfig("demo") });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: createEnabledPluginConfig("demo"),
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "clawhub:demo", "--acknowledge-clawhub-risk"]);
+
+    expect(installPluginFromClawHub).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:demo",
+        acknowledgeClawHubRisk: true,
+      }),
+    );
+    const record = persistedInstallRecord("demo");
+    expect(record.clawhubTrustDisposition).toBe("review-required");
+    expect(record.clawhubTrustScanStatus).toBe("suspicious");
+    expect(record.clawhubTrustReasons).toEqual(["payload_strings"]);
+    expect(record.clawhubTrustCheckedAt).toBe("2026-05-14T18:00:00.000Z");
+    expect(record.clawhubTrustAcknowledgedAt).toBe("2026-05-14T18:00:03.000Z");
+  });
+
+  it("prints acknowledgement guidance for unacknowledged ClawHub plugin installs", async () => {
+    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      code: "clawhub_risk_acknowledgement_required",
+      error:
+        "Install cancelled; rerun with --acknowledge-clawhub-risk to continue after reviewing the warning.",
+      warning: "WARNING - ClawHub found security risks in this release",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "clawhub:demo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain("--acknowledge-clawhub-risk");
+  });
+
+  it("prints blocked ClawHub download failures when no trust warning was emitted", async () => {
+    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      code: "clawhub_download_blocked",
+      error:
+        'ClawHub blocked artifact download for "demo@1.2.3"; install was not started. ClawHub /api/v1/packages/demo/versions/1.2.3/artifact/download failed (403): blocked.',
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "clawhub:demo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain("ClawHub blocked artifact download");
   });
 
   it("passes the active profile extensions dir to ClawHub installs", async () => {

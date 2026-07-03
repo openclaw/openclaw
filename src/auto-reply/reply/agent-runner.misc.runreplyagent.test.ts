@@ -25,7 +25,9 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
 import {
@@ -444,6 +446,50 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey].totalTokens).toBe(55_000);
   }, 180_000);
 
+  it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
+
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
     const sessionEntry = {
@@ -558,6 +604,82 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(deliveryOrder).toEqual(["final", "followup"]);
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a settled fallback cancelled by its upstream signal as aborted", async () => {
+    const upstreamAbort = new AbortController();
+    const sessionKey = "upstream-cancelled-settled-fallback";
+    const sessionEntry = {
+      sessionId: "session-upstream-cancelled",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const replyOperation = createReplyOperation({
+      sessionKey,
+      sessionId: sessionEntry.sessionId,
+      resetTriggered: false,
+      upstreamAbortSignal: upstreamAbort.signal,
+    });
+    let releaseFallback: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "late reply" }],
+      meta: { agentMeta: {} },
+    });
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ provider, model, run }: RunWithModelFallbackParams) => {
+        const result = await run(provider, model);
+        markCandidateSettled();
+        await fallbackRelease;
+        return { result, provider, model };
+      },
+    );
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+    followupRun.run.sessionKey = sessionKey;
+
+    try {
+      const pending = runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 200_000,
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+        replyOperation,
+      });
+      await candidateSettled;
+      upstreamAbort.abort(new Error("caller cancelled"));
+      releaseFallback();
+
+      expectReplyText(await pending, SILENT_REPLY_TOKEN);
+      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
@@ -2731,9 +2853,11 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("anthropic🤖 claude 🌘 🐌");
-    expect(text).toContain("↕️ 12/3");
-    expect(text).toContain("🗄 22%");
+    expect(text).toContain("ok\nanthropic🤖claude🌘🐌");
+    expect(text).not.toContain("ok\n\nanthropic");
+    expect(text).toContain("anthropic🤖claude🌘🐌");
+    expect(text).not.toContain("↕️");
+    expect(text).not.toContain("🗄");
     expect(text).not.toContain("Usage:");
     expect(text).not.toContain("· session ");
   });
@@ -2780,7 +2904,7 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
-  it("keeps partial token counts in the built-in full footer", async () => {
+  it("omits partial token counts from the built-in full footer", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2798,11 +2922,12 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("↕️ ?/125");
+    expect(text).toContain("anthropic🤖claude");
+    expect(text).not.toContain("↕️");
     expect(text).not.toContain("Usage:");
   });
 
-  it("shows aggregate-only token totals in the built-in full footer", async () => {
+  it("omits aggregate-only token totals in the built-in full footer", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2829,8 +2954,8 @@ describe("runReplyAgent response usage footer", () => {
     });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("↕️ 1.3k");
-    expect(text).not.toContain("↕️ ?/?");
+    expect(text).toContain("anthropic🤖claude");
+    expect(text).not.toContain("↕️");
     expect(text).not.toContain("💰");
     expect(text).not.toContain("Usage:");
   });
@@ -2877,9 +3002,9 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
 
-    expect(text).toContain("amazon-bedrock🤖 us.anthropic.claude-sonnet-4-6 🌘 🐌");
-    expect(text).toContain("↕️ 1.0k/2.0k");
-    expect(text).toContain("🗄 14%");
+    expect(text).toContain("amazon-bedrock🤖us.anthropic.claude-sonnet-4-6🌘🐌");
+    expect(text).not.toContain("↕️");
+    expect(text).not.toContain("🗄");
     expect(text).toContain("💰0.0406");
     expect(text).not.toContain("Usage:");
     expect(text).not.toContain("· session ");

@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main"],
         legacyKey: undefined,
       }),
     ),
@@ -402,6 +403,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReset();
@@ -426,6 +428,8 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
     mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
     mocks.clearRestartSentinel.mockClear();
+    mocks.formatRestartSentinelMessage.mockClear();
+    mocks.summarizeRestartSentinel.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
     mocks.recordInboundSessionAndDispatchReply.mockReset();
@@ -456,6 +460,8 @@ describe("scheduleRestartSentinelWake", () => {
     });
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
+    expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(expect.anything());
+    expect(mocks.summarizeRestartSentinel).toHaveBeenCalledWith(expect.anything());
     expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
     expectNthSystemEventFields(0, {
       sessionKey: "agent:main:main",
@@ -674,6 +680,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -714,6 +721,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     const replacementEntry: LoadedSessionEntry = {
@@ -727,6 +735,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     };
     mocks.readRestartSentinel.mockResolvedValue({
@@ -802,6 +811,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:main",
+      storeKeys: ["agent:main:main"],
       legacyKey: undefined,
     });
 
@@ -849,6 +859,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:group",
+      storeKeys: ["agent:main:group"],
       legacyKey: undefined,
     });
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
@@ -893,6 +904,7 @@ describe("scheduleRestartSentinelWake", () => {
       store: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:telegram:group:-1003826723328:topic:13757",
+      storeKeys: ["agent:main:telegram:group:-1003826723328:topic:13757"],
       legacyKey: undefined,
     });
     mocks.deliveryContextFromSession.mockReturnValue({
@@ -1508,6 +1520,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event"],
         legacyKey: undefined,
       })
       .mockReturnValueOnce({
@@ -1521,6 +1534,7 @@ describe("scheduleRestartSentinelWake", () => {
         store: {},
         storePath: "/tmp/sessions.json",
         canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
+        storeKeys: ["agent:main:matrix:channel:!lowercased:example.org"],
         legacyKey: undefined,
       });
     mocks.deliveryContextFromSession

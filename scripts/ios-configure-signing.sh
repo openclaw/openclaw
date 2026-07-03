@@ -96,6 +96,7 @@ cat >"${tmp_file}" <<EOF
 // OPENCLAW_IOS_WATCH_APP_PROFILE
 OPENCLAW_CODE_SIGN_STYLE = ${code_sign_style}
 OPENCLAW_CODE_SIGN_IDENTITY = ${code_sign_identity}
+OPENCLAW_CODE_SIGN_ENTITLEMENTS = Sources/OpenClaw.entitlements
 OPENCLAW_DEVELOPMENT_TEAM = ${team_id}
 // Keep legacy key for compatibility with older signing config paths.
 OPENCLAW_IOS_SELECTED_TEAM = ${team_id}

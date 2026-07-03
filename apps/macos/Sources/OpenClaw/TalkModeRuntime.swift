@@ -391,20 +391,40 @@ actor TalkModeRuntime {
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }
+            let normalizedStatus = Self.normalizedChatSendStatus(response.status)
             self.logger.info(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
+                    "status=\(normalizedStatus, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
+            if Self.isTerminalChatSendFailure(response.status) {
+                self.logger.warning(
+                    "talk chat.send terminal ack runId=\(response.runId, privacy: .public) " +
+                        "status=\(normalizedStatus, privacy: .public)")
+                await self.resumeListeningIfNeeded()
+                return
+            }
 
-            var assistantText = await self.waitForAssistantEventText(
-                sessionKey: sessionKey,
-                runId: response.runId,
-                timeoutSeconds: 45)
-            if assistantText == nil {
-                self.logger.warning("talk assistant event text missing; using history fallback")
+            var assistantText: String?
+            if Self.isTerminalChatSendSuccess(response.status) {
+                self.logger.info(
+                    "talk chat.send terminal ok runId=\(response.runId, privacy: .public); " +
+                        "using history fallback")
                 assistantText = await self.waitForAssistantTextFromHistory(
                     sessionKey: sessionKey,
-                    since: startedAt,
+                    since: nil,
                     timeoutSeconds: 12)
+            } else {
+                assistantText = await self.waitForAssistantEventText(
+                    sessionKey: sessionKey,
+                    runId: response.runId,
+                    timeoutSeconds: 45)
+                if assistantText == nil {
+                    self.logger.warning("talk assistant event text missing; using history fallback")
+                    assistantText = await self.waitForAssistantTextFromHistory(
+                        sessionKey: sessionKey,
+                        since: startedAt,
+                        timeoutSeconds: 12)
+                }
             }
             guard let assistantText
             else {
@@ -499,6 +519,19 @@ actor TalkModeRuntime {
         }
     }
 
+    private static func normalizedChatSendStatus(_ status: String) -> String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
+        self.normalizedChatSendStatus(status) == "ok"
+    }
+
+    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
+        let normalized = self.normalizedChatSendStatus(status)
+        return normalized == "timeout" || normalized == "error"
+    }
+
     private static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -509,7 +542,7 @@ actor TalkModeRuntime {
 
     private func waitForAssistantTextFromHistory(
         sessionKey: String,
-        since: Double,
+        since: Double?,
         timeoutSeconds: Int) async -> String?
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))

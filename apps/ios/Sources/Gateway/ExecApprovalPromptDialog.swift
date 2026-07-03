@@ -90,7 +90,7 @@ private struct ExecApprovalPromptCard: View {
             if let errorText = self.normalized(self.errorText) {
                 Text(errorText)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(OpenClawBrand.danger)
             }
 
             if self.isResolving {

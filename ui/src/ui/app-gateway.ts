@@ -66,6 +66,10 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
+  loadModelAuthStatusState,
+  type ModelAuthStatusState,
+} from "./controllers/model-auth-status.ts";
+import {
   applySessionsChangedEvent,
   loadSessions,
   subscribeSessions,
@@ -151,6 +155,8 @@ type GatewayHost = {
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  currentSessionId?: string | null;
+  reconnectResumeSessionId?: string | null;
   reconcileWebPushState?: () => Promise<void> | void;
   realtimeTalkOptionsOpen?: boolean;
   fetchRealtimeTalkCatalog?: () => Promise<void>;
@@ -714,6 +720,10 @@ function prepareHelloScopedComposerRestore(host: GatewayHost) {
 
 async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
   let initialRefreshError: Error | undefined;
+  // The sidebar footer quota pill is a cross-tab surface; only chat/overview
+  // refreshes load auth status, so hydrate it once per connect for direct
+  // loads of other tabs. The gateway caches the probe, so this stays cheap.
+  void loadModelAuthStatusState(host as unknown as ModelAuthStatusState).catch(() => undefined);
   const refreshBeforeAgents = canRefreshActiveTabBeforeAgents(host);
   const agentsListBeforeStartup = host.agentsList;
   const initialRefresh = refreshBeforeAgents
@@ -911,6 +921,11 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      const currentSessionId =
+        typeof host.currentSessionId === "string" ? host.currentSessionId.trim() : "";
+      if (currentSessionId) {
+        host.reconnectResumeSessionId = currentSessionId;
+      }
       markQueuedChatSendsWaitingForReconnect(
         host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
       );

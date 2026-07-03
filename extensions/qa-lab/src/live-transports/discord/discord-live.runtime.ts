@@ -15,6 +15,7 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import { z } from "zod";
+import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
@@ -352,6 +353,10 @@ const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
     scenario.id !== "discord-voice-autojoin" &&
     scenario.id !== "discord-thread-reply-filepath-attachment",
 );
+
+export function listDiscordQaScenarioCatalog() {
+  return DISCORD_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+}
 
 const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   scenarios: DISCORD_QA_SCENARIOS,
@@ -1527,7 +1532,7 @@ export async function runDiscordQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `discord-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `discord-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(
@@ -1862,6 +1867,7 @@ export async function runDiscordQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "discord",
   });
   await fs.writeFile(

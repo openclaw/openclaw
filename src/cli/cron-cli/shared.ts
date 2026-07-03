@@ -265,6 +265,21 @@ export function parseCronToolsAllow(input: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+export function parseCronFallbacks(input: unknown): string[] | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  const raw = Array.isArray(input)
+    ? input.map((value) => String(value)).join(" ")
+    : typeof input === "string"
+      ? input
+      : "";
+  return raw
+    .split(/[,\s]+/u)
+    .map((fallback) => normalizeOptionalString(fallback))
+    .filter((fallback): fallback is string => Boolean(fallback));
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
@@ -368,6 +383,10 @@ const formatSchedule = (schedule: CronSchedule | undefined) => {
   }
   if (schedule?.kind === "every") {
     return `every ${formatDurationHuman(schedule.everyMs)}`;
+  }
+  if (schedule?.kind === "on-exit") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `on-exit ${schedule.command}${cwd}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";

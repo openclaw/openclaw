@@ -37,7 +37,7 @@ import {
 } from "../chat-display-projection.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { waitForAgentJob } from "./agent-job.js";
+import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -592,6 +592,74 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("caps agentRunCache at AGENT_RUN_CACHE_MAX_ENTRIES via FIFO drop", () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const overflow = 25;
+    const prefix = `cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (let i = 0; i < max + overflow; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
+  });
+
+  it("does not evict cached terminal snapshots with active fresh waiters", async () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const prefix = `cap-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitedRunId = `${prefix}-waited`;
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
+    });
+    const waitPromise = waitForAgentJob({
+      runId: waitedRunId,
+      timeoutMs: 5_000,
+      ignoreCachedSnapshot: true,
+    });
+
+    for (let i = 0; i < max + 25; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    const cached = await waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 });
+    expectRecordFields(cached, {
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 1_100,
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
+    });
+
+    const waited = await waitPromise;
+    expectRecordFields(waited, {
+      status: "ok",
+      startedAt: 10_000,
+      endedAt: 10_100,
+    });
+    emitAgentEvent({
+      runId: `${prefix}-after-waiter`,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 20_000, endedAt: 20_100 },
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
@@ -938,6 +1006,43 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result[0]?.content).toEqual([
       { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it.each([
+    ["output_text", ""],
+    ["output_text", "NO_REPLY"],
+    ["input_text", ""],
+    ["input_text", "NO_REPLY"],
+  ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type, text }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it("preserves visible output_text from a failed assistant turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "output_text", text: "A partial reply before the run failed." },
     ]);
   });
 

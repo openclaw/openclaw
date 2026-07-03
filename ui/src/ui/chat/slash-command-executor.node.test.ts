@@ -922,11 +922,67 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
+    expect(result.pendingCurrentRun).toBe(true);
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("try a different approach");
     expect(chatSend.payload.deliver).toBe(false);
   });
+
+  it("does not mark the current run pending when chat.send returns terminal ok", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main", { status: "running" })] };
+      }
+      if (method === "chat.send") {
+        return { status: "ok", runId: "run-ok", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "try a different approach",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(result.pendingCurrentRun).toBeUndefined();
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.deliver).toBe(false);
+  });
+
+  it.each([
+    ["timeout", "The active run ended before the steer message was accepted."],
+    ["error", "Steer failed before it reached the run; try again."],
+  ] as const)(
+    "reports terminal %s ACK without marking the current run pending",
+    async (status, expectedContent) => {
+      const request = vi.fn(async (method: string, _payload?: unknown) => {
+        if (method === "sessions.list") {
+          return { sessions: [row("agent:main:main", { status: "running" })] };
+        }
+        if (method === "chat.send") {
+          return { status, runId: `run-${status}`, summary: "aborted" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+
+      const result = await executeSlashCommand(
+        { request } as unknown as GatewayBrowserClient,
+        "agent:main:main",
+        "steer",
+        "try a different approach",
+      );
+
+      expect(result.content).toBe(expectedContent);
+      expect(result.content).not.toBe("Steered.");
+      expect(result.pendingCurrentRun).toBeUndefined();
+      const chatSend = requireRequestCall(request, "chat.send");
+      expect(chatSend.payload.deliver).toBe(false);
+    },
+  );
 
   it("passes selected-agent scope when steering the selected global session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
@@ -1187,6 +1243,47 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
       key: "agent:main:main",
       message: "start over with a new plan",
     });
+  });
+
+  it("does not track a pending run when sessions.steer returns terminal ok", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.steer") {
+        return { status: "ok", runId: "run-ok", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "redirect",
+      "start over with a new plan",
+    );
+
+    expect(result.content).toBe("Redirected.");
+    expect(result.trackRunId).toBeUndefined();
+  });
+
+  it.each([
+    ["timeout", "The active run ended before the redirect message was accepted."],
+    ["error", "Redirect failed before it reached the run; try again."],
+  ] as const)("reports terminal %s ACK from sessions.steer", async (status, expectedContent) => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.steer") {
+        return { status, runId: `run-${status}`, summary: "aborted" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "redirect",
+      "start over with a new plan",
+    );
+
+    expect(result.content).toBe(expectedContent);
+    expect(result.trackRunId).toBeUndefined();
   });
 
   it("passes selected-agent scope when redirecting the selected global session", async () => {

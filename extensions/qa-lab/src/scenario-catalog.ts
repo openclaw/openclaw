@@ -59,14 +59,25 @@ const qaScenarioRepoRefSchema = z
     message: "repo refs must not be absolute or contain parent-directory segments",
   });
 
+const qaScenarioChannelSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
+    message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
+  });
+
 const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
+  channel: qaScenarioChannelSchema.optional(),
+  suiteIsolation: z.literal("isolated").optional(),
+  isolationReason: z.string().trim().min(1).optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
+  channel: qaScenarioChannelSchema.optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),
 });
@@ -78,6 +89,7 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
     args: z.array(z.string()).optional(),
+    timeoutMs: z.number().int().positive().optional(),
   }),
 ]);
 
@@ -97,10 +109,17 @@ const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 
 const qaScenarioCoverageSchema = z
   .object({
-    primary: qaCoverageIdListSchema,
+    primary: qaCoverageIdListSchema.optional(),
     secondary: qaCoverageIdListSchema.optional(),
   })
   .superRefine((coverage, ctx) => {
+    if (!coverage.primary && !coverage.secondary) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "coverage must declare primary or secondary ids",
+      });
+      return;
+    }
     const seen = new Set<string>();
     const coverageEntries = [
       ["primary", coverage.primary],
@@ -122,7 +141,11 @@ const qaScenarioCoverageSchema = z
         });
       }
     }
-  });
+  })
+  .transform((coverage) => ({
+    primary: coverage.primary ?? [],
+    ...(coverage.secondary ? { secondary: coverage.secondary } : {}),
+  }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
@@ -137,6 +160,31 @@ const qaFlowCallActionSchema = z.object({
   args: z.array(z.unknown()).optional(),
   saveAs: z.string().trim().min(1).optional(),
 });
+
+const qaFlowTransportActionSchema = z.union([
+  z.object({
+    resetTransport: z.literal(true),
+  }),
+  z.object({
+    sendInbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    sendNativeCommand: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutboundSequence: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForNoOutbound: z.unknown(),
+  }),
+]);
 
 const qaFlowSetActionSchema = z.object({
   set: z.string().trim().min(1),
@@ -173,6 +221,7 @@ qaFlowIfShapeBase[qaFlowThenKey] = z.array(z.unknown()).min(1);
 const qaFlowActionSchema: z.ZodType = z.lazy(() =>
   z.union([
     qaFlowCallActionSchema,
+    qaFlowTransportActionSchema,
     qaFlowSetActionSchema,
     qaFlowAssertActionSchema,
     qaFlowThrowActionSchema,

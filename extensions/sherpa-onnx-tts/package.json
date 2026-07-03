@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/sherpa-onnx-tts",
-  "version": "2026.6.9",
+  "version": "2026.6.11",
   "description": "OpenClaw offline local text-to-speech plugin using sherpa-onnx.",
   "repository": {
     "type": "git",
@@ -20,10 +20,10 @@
       "minHostVersion": ">=2026.6.9"
     },
     "compat": {
-      "pluginApi": ">=2026.6.9"
+      "pluginApi": ">=2026.6.11"
     },
     "build": {
-      "openclawVersion": "2026.6.9",
+      "openclawVersion": "2026.6.11",
       "bundledDist": false
     },
     "release": {

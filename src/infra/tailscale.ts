@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
+import { toErrorObject } from "./errors.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -39,12 +40,19 @@ export async function findTailscaleBinary(): Promise<string | null> {
     }
     try {
       // Use Promise.race with runExec to implement timeout
-      await Promise.race([
-        runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("timeout")), 3000);
-        }),
-      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          runExec(path, ["--version"], { timeoutMs: 3000 }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("timeout")), 3000);
+          }),
+        ]);
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
       return true;
     } catch {
       return false;
@@ -147,7 +155,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
     }
   }
 
-  throw toLintErrorObject(
+  throw toErrorObject(
     lastError ?? new Error("Could not determine Tailscale DNS or IP"),
     "Non-Error thrown",
   );
@@ -474,18 +482,4 @@ export async function readTailscaleWhoisIdentity(
     writeCachedWhois(normalized, null, errorTtlMs);
     return null;
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

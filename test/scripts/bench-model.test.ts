@@ -59,6 +59,20 @@ describe("scripts/bench-model", () => {
     expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
   });
 
+  it("rejects duplicate value flags before checking provider credentials", () => {
+    expect(() => testing.parseArgs(["--runs", "1", "--runs", "2"])).toThrow(
+      "--runs was provided more than once",
+    );
+
+    const result = runBenchModel(["--runs", "1", "--runs", "2"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--runs was provided more than once");
+    expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
   it("prints help without checking provider credentials", () => {
     const result = runBenchModel(["--help"]);
 

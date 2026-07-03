@@ -4,6 +4,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
@@ -71,6 +72,8 @@ export type SupplementalContextFacts = {
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
+  /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
+  untrustedGroupSystemPrompt?: string;
 };
 
 /** Raw inbound message context accepted from channels before finalization. */
@@ -132,6 +135,12 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  AmbientTranscriptWatermarkKey?: string;
+  AmbientTranscriptBody?: string;
+  AmbientTranscriptMessageId?: string;
+  AmbientTranscriptTimestampMs?: number;
+  AmbientTranscriptPreviousMessageId?: string;
+  AmbientTranscriptPreviousTimestampMs?: number;
   /** Per-turn reply-threading overrides. */
   ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;
@@ -248,6 +257,7 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  SenderIsBot?: boolean;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -264,6 +274,8 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** Effective channel-owned mention policy before any plugin-binding bypass. */
+  GroupRequireMention?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */
@@ -293,6 +305,10 @@ export type MsgContext = {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
+  ChannelContext?: PluginHookChannelContext;
+  /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
+  ChatId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
   NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */

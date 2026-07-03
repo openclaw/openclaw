@@ -516,6 +516,11 @@ function resolveChannelModelNote(params: {
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
+    directUserIds: [
+      params.entry.origin?.nativeDirectUserId,
+      params.entry.origin?.from,
+      params.entry.origin?.to,
+    ],
   });
   if (!channelOverride) {
     return undefined;
@@ -588,11 +593,17 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const selectedProvider = entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
   const selectedModel = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
+  const parseSelectedProvider = Boolean(
+    entry?.modelOverride?.trim() && !entry?.providerOverride?.trim(),
+  );
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider,
     selectedModel,
     sessionEntry: entry,
+    parseSelectedProvider,
   });
+  const selectedLookupProvider = modelRefs.selected.provider || selectedProvider;
+  const selectedLookupModel = modelRefs.selected.model || selectedModel;
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
     activeModelRef: modelRefs.active.label || "unknown",
@@ -713,8 +724,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
-    provider: selectedProvider,
-    model: selectedModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     allowAsyncLoad: false,
   });
   const explicitRuntimeContextTokens =
@@ -735,8 +746,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
-    selectedProvider,
-    selectedModel,
+    selectedProvider: selectedLookupProvider,
+    selectedModel: selectedLookupModel,
     parentSessionKey: args.parentSessionKey,
   });
   const persistedContextTokens =
@@ -1002,7 +1013,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     { config: args.config },
   );
   const selectedAuthMode =
-    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
+    normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
   const rawSelectedAuthLabelValue =
     selectedAuthMode && selectedAuthMode !== "unknown"
       ? (args.modelAuth ?? selectedAuthMode)
@@ -1065,16 +1076,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
-  const modelLines = configDefaultDiffersFromSession
-    ? [
-        `🧠 Configured default: ${configuredDefaultModelLabel}`,
-        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
-        "⚠️ Reason: session override",
-        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
-        "↩️ Clear with: /model default",
-        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
-      ]
-    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
+  const overrideLabel = configDefaultDiffersFromSession
+    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+    : "";
+  const modelLines = [
+    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
+  ];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {

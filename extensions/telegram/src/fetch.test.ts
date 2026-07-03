@@ -957,7 +957,7 @@ describe("resolveTelegramFetch", () => {
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
-    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
     expectLoggerMessageContaining(
       loggerDebug,
       "fetch fallback: recovered from attempt 2 to attempt 0",
@@ -1191,6 +1191,31 @@ describe("resolveTelegramFetch", () => {
     );
 
     expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not automatically retry structured EADDRNOTAVAIL fetch failures", async () => {
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+    undiciFetch.mockRejectedValue(fetchError);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+
+    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
+      "fetch failed",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves EADDRNOTAVAIL in forced fallback diagnostics", () => {
+    const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
+
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+
+    expectLoggerMessageContaining(loggerWarn, "primary connection path failed");
+    expectLoggerMessageContaining(loggerWarn, "codes=EADDRNOTAVAIL");
+    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
   });
 
   it("retries sticky fallback when the local network is down during connect", async () => {

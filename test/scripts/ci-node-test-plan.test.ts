@@ -150,6 +150,45 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
   });
 
+  it("compacts pull-request shards into isolated groups inside fewer jobs", () => {
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const compact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compact: true,
+    });
+
+    expect(compact.length).toBeLessThan(40);
+    expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
+    expect(compact.some((shard) => shard.requiresDist)).toBe(true);
+    expect(
+      compact.every((shard) =>
+        shard.groups.every((group) => group.requiresDist === shard.requiresDist),
+      ),
+    ).toBe(true);
+    expect(
+      compact
+        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(
+      base.flatMap((shard) => shard.includePatterns ?? []).toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(compact.every((shard) => shard.groups.every((group) => group.configs.length > 0))).toBe(
+      true,
+    );
+    expect(
+      compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
+    ).toEqual({
+      OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+    });
+    expect(
+      compact
+        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
+        .every((shard) => shard.timeoutMinutes === 120),
+    ).toBe(true);
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
@@ -455,6 +494,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-infra-process",
       },
       {
+        configs: ["test/vitest/vitest.tui-pty.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-tui-pty",
+      },
+      {
         configs: [
           "test/vitest/vitest.media.config.ts",
           "test/vitest/vitest.media-understanding.config.ts",
@@ -496,6 +541,21 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-cron-service",
       },
     ]);
+  });
+
+  it("runs the TUI PTY local smoke inside the CI node shard", () => {
+    const tuiPtyShard = createNodeTestShards().find(
+      (shard) => shard.shardName === "core-runtime-tui-pty",
+    );
+
+    expect(tuiPtyShard).toMatchObject({
+      checkName: "checks-node-core-runtime-tui-pty",
+      configs: ["test/vitest/vitest.tui-pty.config.ts"],
+      env: {
+        OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      },
+      requiresDist: false,
+    });
   });
 
   it("covers every infra test exactly once across core runtime infra shards", () => {
@@ -802,7 +862,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).includes("/"))
+      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);

@@ -404,6 +404,12 @@ timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference
 The bundled plugin registers `/codex` as a slash command on any channel that
 supports OpenClaw text commands.
 
+Native execution and control require an owner or an `operator.admin` Gateway
+client. This includes binding or resuming threads, sending or stopping turns,
+changing model, fast-mode, or permission state, compacting or reviewing, and
+detaching a binding. Other authorized senders retain read-only status, help,
+account, model, thread, MCP server, skill, and binding inspection commands.
+
 Common forms:
 
 - `/codex status` checks app-server connectivity, models, account, rate limits,
@@ -465,7 +471,13 @@ do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
 When native Codex plugins are configured, OpenClaw installs or refreshes those
 plugins through the connected app-server before exposing plugin-owned apps to
-the Codex thread.
+the Codex thread. `app/list` remains the source of truth for app ids,
+accessibility, and metadata, but OpenClaw owns the per-thread enablement
+decision: if policy allows a listed accessible app, OpenClaw sends
+`thread/start.config.apps[appId].enabled = true` even when `app/list` currently
+reports that app disabled. This path does not invent app installation for
+unknown ids; OpenClaw only activates marketplace plugins with `plugin/install`
+and then refreshes inventory.
 
 If a subscription profile hits a Codex usage limit, OpenClaw records the reset
 time when Codex reports one and tries the next ordered auth profile for the same
@@ -650,9 +662,16 @@ guard instead of releasing the session lane immediately. Only
 final/non-commentary completed `agentMessage` items and pre-tool raw
 assistant completions arm the assistant-output release: if Codex then goes quiet
 without `turn/completed`, OpenClaw best-effort interrupts the native turn and
-releases the session lane. Replay-safe stdio app-server failures, including
-turn-completion idle timeouts without assistant, tool, active-item, or
-side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+releases the session lane. If another turn watch wins that release race,
+OpenClaw still accepts the completed final assistant item once no native
+request, item, or dynamic tool completion remains active and the
+assistant-output release still belongs to the latest completed item, with no
+later item completion. This can preserve the final answer after completed tool
+work without replaying the turn. Partial assistant deltas, stale earlier
+replies, and empty later completions do not qualify. Replay-safe stdio
+app-server failures,
+including turn-completion idle timeouts without assistant, tool, active-item,
+or side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
 timeouts still retire the stuck app-server client and release the OpenClaw
 session lane. They also clear the stale native thread binding instead of being
 replayed automatically. Completion-watch timeouts surface Codex-specific timeout

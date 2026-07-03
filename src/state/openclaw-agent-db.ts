@@ -10,6 +10,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
@@ -59,11 +60,6 @@ type ExistingSchemaMeta = {
   agentId: string | null;
   role: string | null;
 };
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
 
 function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);

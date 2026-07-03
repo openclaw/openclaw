@@ -278,6 +278,9 @@ function buildEmbeddedContextFromTemplate(params: {
       to: sessionCtx.To,
     }),
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
+    chatId:
+      normalizeOptionalString(sessionCtx.NativeChannelId) ??
+      normalizeOptionalString(sessionCtx.ChatId),
     memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
@@ -301,6 +304,7 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
+    channelContext: sessionCtx.ChannelContext,
     senderName: normalizeOptionalString(sessionCtx.SenderName),
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),

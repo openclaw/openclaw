@@ -47,6 +47,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAgentId: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
+      seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
     };
   }
@@ -787,6 +788,30 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("rewrites public asset hrefs in index.html when Control UI uses a configured base path (#94157)", async () => {
+    const html =
+      '<html><head><link rel="manifest" href="/manifest.webmanifest" /><link rel="icon" href="/favicon.svg" /></head><body></body></html>\n';
+    await withControlUiRoot({
+      indexHtml: html,
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: "/openclaw/chat", method: "GET" } as IncomingMessage,
+          res,
+          {
+            basePath: "/openclaw",
+            root: { kind: "resolved", path: tmp },
+          },
+        );
+        expect(handled).toBe(true);
+        const body = String(end.mock.calls[0]?.[0] ?? "");
+        expect(body).toContain('href="/openclaw/manifest.webmanifest"');
+        expect(body).toContain('href="/openclaw/favicon.svg"');
+        expect(body).not.toContain('href="/manifest.webmanifest"');
+      },
+    });
+  });
+
   it("serves bootstrap config JSON", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -799,7 +824,10 @@ describe("handleControlUiHttpRequest", () => {
             config: {
               agents: { defaults: { workspace: tmp, timeFormat: "24" } },
               gateway: { controlUi: { chatMessageMaxWidth: "min(1280px, 82%)" } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
+              ui: {
+                seamColor: "#1A2b3C",
+                assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
+              },
             },
           },
         );
@@ -810,6 +838,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+        expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },

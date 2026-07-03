@@ -9,6 +9,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -46,10 +47,6 @@ import {
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
-  resolveTelegramGroupHistoryContextModeForAccount,
-  type TelegramGroupHistoryContextMode,
-} from "./group-history-context.js";
-import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
   isTelegramSupportedReactionEmoji,
@@ -64,14 +61,9 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
-type TelegramMessageContextRuntime = typeof import("./bot-message-context.runtime.js");
-
-let telegramMessageContextRuntimePromise: Promise<TelegramMessageContextRuntime> | undefined;
-
-async function loadTelegramMessageContextRuntime() {
-  telegramMessageContextRuntimePromise ??= import("./bot-message-context.runtime.js");
-  return await telegramMessageContextRuntimePromise;
-}
+const loadTelegramMessageContextRuntime = createLazyRuntimeModule(
+  () => import("./bot-message-context.runtime.js"),
+);
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
 type TelegramReactionApi = (
@@ -110,7 +102,6 @@ export type TelegramMessageContext = {
   historyKey?: string;
   historyLimit: BuildTelegramMessageContextParams["historyLimit"];
   groupHistories: BuildTelegramMessageContextParams["groupHistories"];
-  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
   skillFilter: TelegramMessageContextPayload["skillFilter"];
   sendTyping: () => Promise<void>;
@@ -437,15 +428,14 @@ export const buildTelegramMessageContext = async ({
     agentId: route.agentId,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);
+  const groupRequireMention = firstDefined(
+    topicConfig?.requireMention,
+    activationOverride,
+    telegramGroupConfig?.requireMention,
+    baseRequireMention,
+  );
   const requireMention =
-    isGroup && bindingMode.kind === "plugin-owned-runtime"
-      ? false
-      : firstDefined(
-          topicConfig?.requireMention,
-          activationOverride,
-          telegramGroupConfig?.requireMention,
-          baseRequireMention,
-        );
+    isGroup && bindingMode.kind === "plugin-owned-runtime" ? false : groupRequireMention;
 
   const recordChannelActivity =
     runtime?.recordChannelActivity ??
@@ -487,13 +477,6 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  const groupHistoryContextMode = isGroup
-    ? resolveTelegramGroupHistoryContextModeForAccount({
-        cfg,
-        accountId: route.accountId,
-      })
-    : undefined;
-
   if (!(await ensureConfiguredBindingReady())) {
     return null;
   }
@@ -529,10 +512,10 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
-    groupHistoryContextMode,
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    groupRequireMention: Boolean(groupRequireMention),
     mentionFacts: bodyResult.mentionFacts,
     hasControlCommand: bodyResult.hasControlCommand,
     stickerCacheHit: bodyResult.stickerCacheHit,
@@ -667,7 +650,6 @@ export const buildTelegramMessageContext = async ({
     historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
-    groupHistoryContextMode,
     route,
     skillFilter,
     sendTyping,

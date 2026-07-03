@@ -40,7 +40,7 @@ struct OnboardingIntroStep: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(OpenClawBrand.warn)
                     .frame(width: 24)
                     .padding(.top, 2)
 
@@ -177,7 +177,7 @@ struct OnboardingModeRow: View {
                 }
                 Spacer()
                 Image(systemName: self.selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(self.selected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(self.selected ? OpenClawBrand.accent : Color.secondary)
             }
             .contentShape(Rectangle())
         }

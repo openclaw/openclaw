@@ -1,5 +1,9 @@
 // Implements session commands for list, show, fork, reset, and routing state.
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -39,7 +43,7 @@ import {
   isSessionDefaultDirectiveValue,
   normalizeFastMode,
   normalizeUsageDisplay,
-  resolveResponseUsageMode,
+  resolveEffectiveResponseUsage,
 } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
@@ -101,11 +105,7 @@ function resolveSessionBindingDurationMs(
   key: "idleTimeoutMs" | "maxAgeMs",
   fallbackMs: number,
 ): number {
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallbackMs;
-  }
-  return Math.max(0, Math.floor(raw));
+  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
@@ -144,20 +144,8 @@ function resolveUpdatedLifecycleDurationMs(
   binding: UpdatedLifecycleBinding | SessionBindingRecord,
   key: "idleTimeoutMs" | "maxAgeMs",
 ): number | undefined {
-  if (!isSessionBindingRecord(binding)) {
-    const raw = binding[key];
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      return Math.max(0, Math.floor(raw));
-    }
-  }
-  if (!isSessionBindingRecord(binding)) {
-    return undefined;
-  }
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  return Math.max(0, Math.floor(raw));
+  const raw = isSessionBindingRecord(binding) ? binding.metadata?.[key] : binding[key];
+  return resolveOptionalIntegerOption(raw, { min: 0 });
 }
 
 function toUpdatedLifecycleBinding(
@@ -225,11 +213,13 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
       reply: { text: "⚙️ Group activation only applies to group chats." },
     };
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /activation from unauthorized sender in group: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorizedResult = rejectUnauthorizedCommand(params, "/activation");
+  if (unauthorizedResult) {
+    return unauthorizedResult;
+  }
+  const nonOwnerResult = rejectNonOwnerCommand(params, "/activation");
+  if (nonOwnerResult) {
+    return nonOwnerResult;
   }
   if (!activationCommand.mode) {
     return {
@@ -352,24 +342,40 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  if (rawArgs && !requested) {
+  const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
+
+  if (rawArgs && !requested && !isReset) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|reset|cost" },
     };
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (isReset) {
+    if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+      delete targetSessionEntry.responseUsage;
+      params.sessionStore[params.sessionKey] = targetSessionEntry;
+      await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage footer: reset to default." },
+    };
+  }
+
+  const replyChannel = params.command.channel;
   const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveResponseUsageMode(currentRaw);
+  const current = resolveEffectiveResponseUsage(
+    currentRaw,
+    params.cfg.messages?.responseUsage,
+    replyChannel,
+  );
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    if (next === "off") {
-      delete targetSessionEntry.responseUsage;
-    } else {
-      targetSessionEntry.responseUsage = next;
-    }
+    targetSessionEntry.responseUsage = next;
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }

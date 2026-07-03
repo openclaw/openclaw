@@ -24,17 +24,79 @@ title: "Usage tracking"
 ## Where it shows up
 
 - `/status` in chats: emoji-rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window or provider summary text.
-- `/usage off|tokens|full` in chats: per-response usage footer (OAuth shows tokens only).
+- `/usage off|tokens|full` in chats: per-response usage footer.
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
 - macOS menu bar: "Usage" section under Context (only if available).
 
+## Default usage footer mode
+
+`/usage off|tokens|full` sets the footer for a session and is remembered for that
+session. `messages.responseUsage` seeds that mode for sessions that have not
+chosen one, so the footer can be on by default without typing `/usage` each time.
+
+Set one mode for every channel, or a per-channel map with a `default` fallback:
+
+```jsonc
+{
+  "messages": {
+    "responseUsage": "tokens",
+    // or: { "default": "off", "discord": "full" }
+  },
+}
+```
+
+### Three distinct session states
+
+A session's `responseUsage` field has three representable states, each with
+different semantics:
+
+| State               | Stored value                    | Effective mode                                                        |
+| ------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| **Unset / inherit** | `undefined` (absent)            | Falls through to `messages.responseUsage` config default, then `off`. |
+| **Explicit off**    | `"off"` (stored)                | Always off — a non-off config default cannot re-enable the footer.    |
+| **Explicit on**     | `"tokens"` or `"full"` (stored) | That mode, regardless of config default.                              |
+
+### Precedence
+
+Effective mode = session override → channel config entry → `default` → `off`.
+
+An explicit `/usage off` is **persisted** as the literal value `"off"` in the
+session, not the same as "unset." This means a non-off `messages.responseUsage`
+default cannot turn the footer back on once the user has explicitly disabled it.
+
+### Resetting vs. turning off
+
+- `/usage off` — forces the footer off and persists that choice. A configured
+  non-off default cannot override this.
+- `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+  override. The session then **inherits** the effective config default
+  (`messages.responseUsage`). If no default is configured, the footer is off
+  (unchanged from before). Use this to "go back to default" without explicitly
+  turning the footer on.
+- A full session reset (`/reset` or `/new`) or a session rollover **preserves**
+  the explicit usage-mode preference so the user's display choice survives
+  session rollovers. Only `/usage reset` (and its aliases) actually clears the
+  override.
+
+### Toggle behavior
+
+`/usage` with no arguments cycles: off → tokens → full → off. The starting point
+for the cycle is the **effective** current mode (session override falling through
+to the config default when unset), so the cycle is always consistent with what
+the user sees in the footer.
+
+### Config
+
+With no config the prior behavior holds (footer off until `/usage`). Use
+`/usage reset` to clear a session override and re-inherit the configured default.
+
 ## Custom `/usage full` footer
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
-context window, turn tokens, cache, and cost when those fields are available. No
-template file is required.
+context window, and cost when those fields are available. Token and cache fields
+remain available to custom templates. No template file is required.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in
@@ -88,42 +150,30 @@ change:
   "output": {
     "sep": "",
     "default": [
-      { "text": "{model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
-      { "map": "model.is_fallback", "cases": { "true": " 🔄" } },
-      { "map": "model.is_override", "cases": { "true": " 📌" } },
-      { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
-      { "map": "state.fast_mode", "cases": { "true": " ⚡", "false": " 🐌" } },
+      { "text": "{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+      { "map": "model.is_fallback", "cases": { "true": "🔄" } },
+      { "map": "model.is_override", "cases": { "true": "📌" } },
+      { "when": "model.reasoning", "text": "{model.reasoning|alias:reasoning}" },
+      { "map": "state.fast_mode", "cases": { "true": "⚡️", "false": "🐌" } },
       {
         "when": "context.max_tokens",
-        "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        "text": "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
       },
-      {
-        "when": "usage.has_split_tokens",
-        "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
-      },
-      { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
-      { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
-      { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+      { "when": "cost.turn_usd", "text": "\u00A0💰{cost.turn_usd|fixed:4}" },
     ],
     "surfaces": {
       "discord": [
         { "text": "-# -\n" },
-        { "text": "-# {model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+        { "text": "-# {model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
         { "map": "model.is_fallback", "cases": { "true": "🔄" } },
         { "map": "model.is_override", "cases": { "true": "📌" } },
-        { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
-        { "map": "state.fast_mode", "cases": { "true": " ⚡️", "false": " 🐌" } },
+        { "when": "model.reasoning", "text": "{model.reasoning|alias:reasoning}" },
+        { "map": "state.fast_mode", "cases": { "true": "⚡️", "false": "🐌" } },
         {
           "when": "context.max_tokens",
-          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+          "text": "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
         },
-        {
-          "when": "usage.has_split_tokens",
-          "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
-        },
-        { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
-        { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
-        { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+        { "when": "cost.turn_usd", "text": "\u00A0💰{cost.turn_usd|fixed:4}" },
       ],
     },
   },

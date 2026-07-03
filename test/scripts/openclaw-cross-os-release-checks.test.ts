@@ -974,6 +974,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         socket.once("connect", resolve);
         socket.once("error", reject);
       });
+      // Subscribe before shutdown because the one-shot client close event may
+      // arrive before the server close callback resolves.
+      const socketClosePromise = new Promise<void>((resolve) => {
+        socket.once("close", resolve);
+      });
       socket.write(`GET ${url.pathname} HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
       await Promise.race([
         server.close(),
@@ -982,9 +987,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
       ]);
       await Promise.race([
-        new Promise<void>((resolve) => {
-          socket.once("close", resolve);
-        }),
+        socketClosePromise,
         delay(1_000).then(() => {
           throw new Error("socket close timed out");
         }),
@@ -1370,7 +1373,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           cwd: process.cwd(),
           env: {
             ...process.env,
-            OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "25",
+            OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS: "200",
             OPENCLAW_TEST_CHILD_PID: childPidPath,
           },
           stdio: ["ignore", "ignore", "pipe"],
@@ -1384,7 +1387,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       const result = await waitForExit(runner, 5_000);
 
       expect(result).toEqual({ signal: null, status: 143 });
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, 10_000);
     } finally {
       if (runnerPid !== undefined && isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");

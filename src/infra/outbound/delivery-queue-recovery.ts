@@ -9,6 +9,12 @@ import type {
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  claimRecoveryEntry as claimSharedRecoveryEntry,
+  computeBackoffMs,
+  getErrnoCode,
+  releaseRecoveryEntry as releaseSharedRecoveryEntry,
+} from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -25,6 +31,8 @@ import {
   type QueuedDelivery,
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
+
+export { computeBackoffMs };
 
 export type RecoverySummary = {
   recovered: number;
@@ -61,14 +69,6 @@ export type ActiveDeliveryClaimResult<T> =
 
 const MAX_RETRIES = 5;
 
-/** Backoff delays in milliseconds indexed by retry count (1-based). */
-const BACKOFF_MS: readonly number[] = [
-  5_000, // retry 1: 5s
-  25_000, // retry 2: 25s
-  120_000, // retry 3: 2m
-  600_000, // retry 4: 10m
-];
-
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
   /chat not found/i,
@@ -97,12 +97,6 @@ function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   return resolveExpiresAtMsFromDurationMs(durationMs) ?? resolveDateTimestampMs(Date.now());
 }
 
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
-}
-
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
     recovered: 0,
@@ -112,30 +106,18 @@ function createEmptyRecoverySummary(): RecoverySummary {
   };
 }
 
-function claimRecoveryEntry(entryId: string): boolean {
-  if (entriesInProgress.has(entryId)) {
-    return false;
-  }
-  entriesInProgress.add(entryId);
-  return true;
-}
-
-function releaseRecoveryEntry(entryId: string): void {
-  entriesInProgress.delete(entryId);
-}
-
 export async function withActiveDeliveryClaim<T>(
   entryId: string,
   fn: () => Promise<T>,
 ): Promise<ActiveDeliveryClaimResult<T>> {
-  if (!claimRecoveryEntry(entryId)) {
+  if (!claimSharedRecoveryEntry(entriesInProgress, entryId)) {
     return { status: "claimed-by-other-owner" };
   }
 
   try {
     return { status: "claimed", value: await fn() };
   } finally {
-    releaseRecoveryEntry(entryId);
+    releaseSharedRecoveryEntry(entriesInProgress, entryId);
   }
 }
 
@@ -326,14 +308,6 @@ async function moveEntryToFailedWithLogging(
   }
 }
 
-/** Compute the backoff delay in ms for a given retry count. */
-export function computeBackoffMs(retryCount: number): number {
-  if (retryCount <= 0) {
-    return 0;
-  }
-  return BACKOFF_MS[Math.min(retryCount - 1, BACKOFF_MS.length - 1)] ?? BACKOFF_MS.at(-1) ?? 0;
-}
-
 export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
@@ -415,15 +389,19 @@ async function drainQueuedEntry(opts: {
         return "failed";
       }
     }
-    if (reconciliation?.status === "not_sent") {
+    const reconciliationProvedPreSendFailure =
+      reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started";
+    if (reconciliationProvedPreSendFailure) {
       opts.log.info(
         `Delivery entry ${entry.id} reconciled ${entry.recoveryState} as not sent; replaying`,
       );
     } else {
-      const errMsg =
-        reconciliation?.status === "unresolved" && reconciliation.error
-          ? `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`
-          : `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+      let errMsg = `delivery state is ${entry.recoveryState}; refusing blind replay without adapter reconciliation`;
+      if (reconciliation?.status === "not_sent") {
+        errMsg = `delivery state is ${entry.recoveryState}; refusing full replay after post-send evidence`;
+      } else if (reconciliation?.status === "unresolved" && reconciliation.error) {
+        errMsg = `delivery state is ${entry.recoveryState} and reconciliation is unresolved: ${reconciliation.error}`;
+      }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
       if (reconciliation?.status === "unresolved" && reconciliation.retryable === true) {
@@ -513,7 +491,7 @@ export async function drainPendingDeliveries(opts: {
     );
 
     for (const entry of matchingEntries) {
-      if (!claimRecoveryEntry(entry.id)) {
+      if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
         opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
         continue;
       }
@@ -582,7 +560,7 @@ export async function drainPendingDeliveries(opts: {
           );
         }
       } finally {
-        releaseRecoveryEntry(entry.id);
+        releaseSharedRecoveryEntry(entriesInProgress, entry.id);
       }
     }
   } finally {
@@ -622,7 +600,7 @@ export async function recoverPendingDeliveries(opts: {
       break;
     }
 
-    if (!claimRecoveryEntry(entry.id)) {
+    if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already being processed`);
       continue;
     }
@@ -677,7 +655,7 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
     } finally {
-      releaseRecoveryEntry(entry.id);
+      releaseSharedRecoveryEntry(entriesInProgress, entry.id);
     }
   }
 

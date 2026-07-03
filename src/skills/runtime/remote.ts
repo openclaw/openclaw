@@ -66,13 +66,16 @@ function extractErrorMessage(err: unknown): string | undefined {
   return undefined;
 }
 
-function logRemoteBinProbeFailure(
+type RemoteBinProbeLogContext = {
+  command?: string;
+  timeoutMs?: number;
+  requiredBinCount?: number;
+};
+
+function resolveRemoteBinProbeLogContext(
   nodeId: string,
-  err: unknown,
-  context?: { command?: string; timeoutMs?: number; requiredBinCount?: number },
-) {
-  const message = extractErrorMessage(err);
-  const label = describeNode(nodeId);
+  context?: RemoteBinProbeLogContext,
+): { label: string; details: string } {
   const details = [
     context?.command ? `command=${context.command}` : undefined,
     typeof context?.timeoutMs === "number" ? `timeoutMs=${context.timeoutMs}` : undefined,
@@ -83,6 +86,25 @@ function logRemoteBinProbeFailure(
   ]
     .filter(Boolean)
     .join(" ");
+  return { label: describeNode(nodeId), details };
+}
+
+function logRemoteBinProbeFailure(
+  nodeId: string,
+  err: unknown,
+  context?: RemoteBinProbeLogContext,
+  phase: "preflight" | "probe" = "probe",
+) {
+  const message = extractErrorMessage(err);
+  const { label, details } = resolveRemoteBinProbeLogContext(nodeId, context);
+  if (phase === "preflight") {
+    log.info(
+      `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
+        message ?? "unknown"
+      }`,
+    );
+    return;
+  }
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
@@ -96,30 +118,6 @@ function logRemoteBinProbeFailure(
     return;
   }
   log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
-}
-
-function logRemoteBinProbePreflightFailure(
-  nodeId: string,
-  err: unknown,
-  context?: { command?: string; timeoutMs?: number; requiredBinCount?: number },
-) {
-  const message = extractErrorMessage(err);
-  const label = describeNode(nodeId);
-  const details = [
-    context?.command ? `command=${context.command}` : undefined,
-    typeof context?.timeoutMs === "number" ? `timeoutMs=${context.timeoutMs}` : undefined,
-    typeof context?.requiredBinCount === "number"
-      ? `requiredBins=${context.requiredBinCount}`
-      : undefined,
-    `connected=${remoteNodes.get(nodeId)?.connected === true ? "yes" : "no"}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  log.info(
-    `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
-      message ?? "unknown"
-    }`,
-  );
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -392,11 +390,16 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
         return;
       }
       const cleared = clearRemoteNodeBins(params.nodeId);
-      logRemoteBinProbePreflightFailure(params.nodeId, connectivity.error.message, {
-        command: "websocket.ping",
-        timeoutMs: connectivityTimeoutMs,
-        requiredBinCount: binsList.length,
-      });
+      logRemoteBinProbeFailure(
+        params.nodeId,
+        connectivity.error.message,
+        {
+          command: "websocket.ping",
+          timeoutMs: connectivityTimeoutMs,
+          requiredBinCount: binsList.length,
+        },
+        "preflight",
+      );
       if (cleared) {
         bumpSkillsSnapshotVersion({ reason: "remote-node" });
       }
