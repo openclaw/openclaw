@@ -2072,6 +2072,76 @@ describe("sessions tools", () => {
     expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
+  it.each([
+    {
+      name: "top-level channel",
+      entry: { channel: "discord", lastChannel: "discord" },
+      expectedChannel: "discord",
+    },
+    {
+      name: "deliveryContext.channel (top-level channel is webchat)",
+      entry: { channel: "webchat", deliveryContext: { channel: "telegram", to: "group:chat" } },
+      expectedChannel: "telegram",
+    },
+    {
+      name: "lastChannel (top-level channel is empty)",
+      entry: { channel: "", lastChannel: "slack", lastTo: "channel:general" },
+      expectedChannel: "slack",
+    },
+    {
+      name: "channel in route metadata",
+      entry: { channel: "webchat", route: { channel: "discord", target: { to: "channel:dev" } } },
+      expectedChannel: "discord",
+    },
+    {
+      name: "no routable channel falls back to webchat",
+      entry: {},
+      expectedChannel: "webchat",
+    },
+  ])(
+    "sessions_send uses deliveryContextFromSession for initial agent call channel — $name",
+    async ({ entry, expectedChannel }) => {
+      const calls: Array<{ method?: string; params?: unknown }> = [];
+      const targetKey = "agent:main:worker";
+      loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+        sessionKey === targetKey ? entry : undefined,
+      );
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: unknown };
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "regression-run", status: "accepted", acceptedAt: 2000 };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({
+        agentSessionKey: "discord:group:req",
+        agentChannel: "discord",
+        config: {
+          ...TEST_CONFIG,
+          session: {
+            ...TEST_CONFIG.session,
+            agentToAgent: { maxPingPongTurns: 0 },
+          },
+        },
+      }).find((candidate) => candidate.name === "sessions_send");
+      if (!tool) {
+        throw new Error("missing sessions_send tool");
+      }
+
+      await tool.execute("regression-delivery-context-channel", {
+        sessionKey: targetKey,
+        message: "verify delivery context channel resolution",
+        timeoutSeconds: 0,
+      });
+
+      const agentCalls = calls.filter((call) => call.method === "agent");
+      expect(agentCalls).toHaveLength(1);
+      expect(agentParams(agentCalls[0] ?? {}).channel).toBe(expectedChannel);
+    },
+  );
+
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
