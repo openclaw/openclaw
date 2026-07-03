@@ -1,7 +1,6 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
-import java.util.Locale
 
 private const val RECENT_WINDOW_MS = 24 * 60 * 60 * 1000L
 
@@ -20,41 +19,26 @@ fun friendlySessionName(key: String): String {
   return result.ifBlank { key }
 }
 
-/** Mirrors iOS CommandCenterTab.isRecentChatSession for thread-picker parity. */
+/** Keeps transport/device sessions out of chat pickers while preserving channel conversations. */
 internal fun isSelectableChatSession(
   key: String,
   mainSessionKey: String,
 ): Boolean {
-  val trimmed = key.trim()
-  if (trimmed.isEmpty()) return false
+  val sessionKey = key.trim()
+  if (sessionKey.isEmpty()) return false
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
-  if (trimmed == mainKey) return false
-  val normalized = trimmed.lowercase(Locale.US)
-  val defaultBase = sessionBaseKey(mainKey)
-  if (!normalized.contains(":") && isDirectSessionBase(normalized, defaultBase)) {
+  if (sessionKey == mainKey || sessionKey == "onboarding" || sessionKey.endsWith(":onboarding")) {
     return false
   }
-  if (isHiddenInternalSession(trimmed)) return false
-  return !isAgentDeviceSession(trimmed, mainKey)
-}
 
-private fun isHiddenInternalSession(key: String): Boolean {
-  val trimmed = key.trim()
-  if (trimmed.isEmpty()) return false
-  return trimmed == "onboarding" || trimmed.endsWith(":onboarding")
-}
-
-private fun isAgentDeviceSession(
-  key: String,
-  mainSessionKey: String,
-): Boolean {
-  val parts = key.trim().split(':', ignoreCase = false)
-  if (parts.size < 3 || parts[0].lowercase(Locale.US) != "agent") return false
-  if (parts.size != 3 && parts.getOrNull(3)?.lowercase(Locale.US) != "thread") return false
-
-  val base = parts[2].trim().lowercase(Locale.US)
-  val defaultBase = sessionBaseKey(mainSessionKey)
-  return isDirectSessionBase(base, defaultBase)
+  val parts = sessionKey.lowercase().split(':')
+  val directBase =
+    when {
+      parts.size == 1 -> parts.single()
+      parts.size >= 3 && parts[0] == "agent" && (parts.size == 3 || parts[3] == "thread") -> parts[2].trim()
+      else -> return true
+    }
+  return !isDirectSessionBase(directBase, sessionBaseKey(mainKey))
 }
 
 private fun isDirectSessionBase(
@@ -63,11 +47,9 @@ private fun isDirectSessionBase(
 ): Boolean = base == defaultBase || base == "main" || base == "global" || base.startsWith("node-")
 
 private fun sessionBaseKey(key: String): String {
-  val parts = key.trim().split(':', ignoreCase = false)
-  if (parts.size < 3 || parts[0].lowercase(Locale.US) != "agent") {
-    return key.trim().lowercase(Locale.US)
-  }
-  return parts[2].trim().lowercase(Locale.US)
+  val normalized = key.trim().lowercase()
+  val parts = normalized.split(':')
+  return if (parts.size >= 3 && parts[0] == "agent") parts[2].trim() else normalized
 }
 
 /** Builds the selectable recent-session list while preserving the active session. */
@@ -132,6 +114,20 @@ fun resolveCompactSessionChoices(
       mainSessionKey = mainSessionKey,
       nowMs = nowMs,
     )
+  return compactSessionChoices(
+    choices = allChoices,
+    currentSessionKey = currentSessionKey,
+    mainSessionKey = mainSessionKey,
+    maxOptions = maxOptions,
+  )
+}
+
+internal fun compactSessionChoices(
+  choices: List<ChatSessionEntry>,
+  currentSessionKey: String,
+  mainSessionKey: String,
+  maxOptions: Int = 5,
+): List<ChatSessionEntry> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
   val pinnedRank =
@@ -142,7 +138,7 @@ fun resolveCompactSessionChoices(
       .associate { it.value to it.index }
   val unpinnedRank = pinnedRank.size
 
-  return allChoices
+  return choices
     .withIndex()
     .sortedWith(compareBy({ pinnedRank[it.value.key] ?: unpinnedRank }, { it.index }))
     .take(maxOptions)

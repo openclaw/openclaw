@@ -72,16 +72,52 @@ class SessionFiltersTest {
         ChatSessionEntry(key = "main", updatedAtMs = recent),
       )
 
-    val result = resolveSessionChoices("main", sessions, mainSessionKey = "main", nowMs = now).map { it.key }
+    val result =
+      resolveSessionChoices(
+        "agent:main:node-current",
+        sessions,
+        mainSessionKey = "main",
+        nowMs = now,
+      ).map { it.key }
 
     assertEquals(listOf("main", "agent:main:slack:channel:C1"), result)
   }
 
   @Test
   fun isSelectableChatSession_matchesIosRecentSessionFilter() {
-    assertFalse(isSelectableChatSession("agent:main:node-0b88d67b7e42", "main"))
-    assertFalse(isSelectableChatSession("agent:main:main", "main"))
-    assertFalse(isSelectableChatSession("onboarding", "main"))
-    assertTrue(isSelectableChatSession("agent:main:slack:channel:C1", "main"))
+    val hidden =
+      listOf(
+        "main" to "main",
+        "agent:main:main" to "main",
+        "agent:rust-claw:main" to "main",
+        "agent:main:node-0b88d67b7e42" to "main",
+        "agent:main:work" to "work",
+        "main" to "agent:rust-claw:work",
+        "global" to "agent:rust-claw:work",
+        "node-0b88d67b7e42" to "agent:rust-claw:work",
+        "work" to "agent:rust-claw:work",
+        "agent:main:work" to "agent:rust-claw:work",
+        "agent:main:main:thread:42" to "main",
+        "agent:support:main:thread:1234:42" to "main",
+        "agent:main:node-0b88d67b7e42:thread:42" to "main",
+        "agent:main:work:thread:42" to "work",
+        "agent:main:work:thread:42" to "agent:rust-claw:work",
+        "onboarding" to "main",
+        "agent:main:onboarding" to "main",
+      )
+    for ((key, mainKey) in hidden) {
+      assertFalse("expected hidden session: $key (main: $mainKey)", isSelectableChatSession(key, mainKey))
+    }
+
+    val selectable =
+      listOf(
+        "agent:main:signal:direct:+15555550123",
+        "agent:rust-claw:mattermost:channel:abc123",
+        "agent:rust-claw:cron:3cd2eb6f-b8a5-4db7-b74a-f6a3f7eab3d3",
+        "agent:main:slack:channel:c1:thread:123",
+      )
+    for (key in selectable) {
+      assertTrue("expected selectable session: $key", isSelectableChatSession(key, "main"))
+    }
   }
 }
