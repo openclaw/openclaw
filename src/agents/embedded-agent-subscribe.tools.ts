@@ -388,6 +388,10 @@ function resolveToolResultContentBlocks(result: object): unknown[] {
 }
 
 export function extractToolResultText(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    const trimmed = redactToolPayloadText(result).trim();
+    return trimmed ? truncateToolText(trimmed) : undefined;
+  }
   if (!result || typeof result !== "object") {
     return undefined;
   }
@@ -856,11 +860,7 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   if (fromRootStatus) {
     return fromRootStatus;
   }
-  const status = readToolResultStatus(result);
-  if (status && !isToolResultError(result)) {
-    return undefined;
-  }
-  return text ? normalizeToolErrorText(text) : undefined;
+  return text && isToolResultError(result) ? normalizeToolErrorText(text) : undefined;
 }
 
 function resolveMessageToolTarget(params: {

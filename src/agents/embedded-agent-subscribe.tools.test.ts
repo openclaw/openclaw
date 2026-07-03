@@ -25,6 +25,10 @@ describe("extractToolErrorMessage", () => {
     expect(extractToolErrorMessage({ details: { status: "ok" } })).toBeUndefined();
   });
 
+  it("does not promote successful structured output as an error message", () => {
+    expect(extractToolErrorMessage({ ok: true, value: 42 })).toBeUndefined();
+  });
+
   it("keeps error-like status values", () => {
     expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
     expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
@@ -445,6 +449,10 @@ describe("sanitizeToolArgs", () => {
 });
 
 describe("extractToolResultText", () => {
+  it("keeps primitive string tool results for visible output", () => {
+    expect(extractToolResultText("plain result")).toBe("plain result");
+  });
+
   it("serializes structured non-image tool result blocks for visible output", () => {
     const text = extractToolResultText({
       content: [
