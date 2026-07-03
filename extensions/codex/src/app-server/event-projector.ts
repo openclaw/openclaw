@@ -154,6 +154,13 @@ type ToolProgressEchoSignature = {
   rawPrefix?: string;
 };
 
+type ToolOutputTrimState = {
+  totalLength: number;
+  leadingWhitespaceLength: number;
+  trailingWhitespaceLength: number;
+  sawNonWhitespace: boolean;
+};
+
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
@@ -188,6 +195,8 @@ export class CodexAppServerEventProjector {
   private readonly toolResultOutputPrefixByItem = new Map<string, string>();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
   private readonly toolResultOutputTextOriginalLengthByItem = new Map<string, number>();
+  private readonly toolResultOutputTextNormalizedLengthByItem = new Map<string, number>();
+  private readonly toolResultOutputTextTrimStateByItem = new Map<string, ToolOutputTrimState>();
   private readonly toolResultOutputTextTruncatedItemIds = new Set<string>();
   private readonly toolMetas = new Map<
     string,
@@ -1009,13 +1018,15 @@ export class CodexAppServerEventProjector {
       this.toolResultOutputTextByItem,
       this.toolResultOutputPrefixByItem,
       this.toolResultOutputTextOriginalLengthByItem,
+      this.toolResultOutputTextNormalizedLengthByItem,
+      this.toolResultOutputTextTrimStateByItem,
       this.toolResultOutputTextTruncatedItemIds,
       itemId,
       delta,
     );
     this.rememberToolProgressEcho(itemId, {
       displayText: storedOutput.text,
-      rawLength: storedOutput.originalLength,
+      rawLength: storedOutput.normalizedLength,
       rawPrefix: storedOutput.rawPrefix,
     });
     if (!this.shouldEmitToolOutput()) {
@@ -2794,14 +2805,18 @@ function appendToolOutputDeltaText(
   outputTextByItem: Map<string, string>,
   outputPrefixByItem: Map<string, string>,
   originalLengthByItem: Map<string, number>,
+  normalizedLengthByItem: Map<string, number>,
+  trimStateByItem: Map<string, ToolOutputTrimState>,
   truncatedItemIds: Set<string>,
   itemId: string,
   delta: string,
-): { text: string; originalLength: number; rawPrefix: string } {
+): { text: string; originalLength: number; normalizedLength: number; rawPrefix: string } {
   const previousOriginalLength =
     originalLengthByItem.get(itemId) ?? outputTextByItem.get(itemId)?.length ?? 0;
   const originalLength = previousOriginalLength + delta.length;
   originalLengthByItem.set(itemId, originalLength);
+  const normalizedLength = updateToolOutputTrimState(trimStateByItem, itemId, delta);
+  normalizedLengthByItem.set(itemId, normalizedLength);
   const currentPrefix = outputPrefixByItem.get(itemId) ?? outputTextByItem.get(itemId) ?? "";
   const next = appendBoundedToolTranscriptText(currentPrefix, delta, originalLength);
   outputPrefixByItem.set(itemId, next.rawPrefix);
@@ -2809,7 +2824,39 @@ function appendToolOutputDeltaText(
   if (originalLength > TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
     truncatedItemIds.add(itemId);
   }
-  return { text: next.text, originalLength, rawPrefix: next.rawPrefix };
+  return { text: next.text, originalLength, normalizedLength, rawPrefix: next.rawPrefix };
+}
+
+function updateToolOutputTrimState(
+  trimStateByItem: Map<string, ToolOutputTrimState>,
+  itemId: string,
+  delta: string,
+): number {
+  const state = trimStateByItem.get(itemId) ?? {
+    totalLength: 0,
+    leadingWhitespaceLength: 0,
+    trailingWhitespaceLength: 0,
+    sawNonWhitespace: false,
+  };
+  state.totalLength += delta.length;
+  const firstNonWhitespace = delta.search(/\S/u);
+  if (firstNonWhitespace === -1) {
+    if (!state.sawNonWhitespace) {
+      state.leadingWhitespaceLength += delta.length;
+    }
+    state.trailingWhitespaceLength += delta.length;
+    trimStateByItem.set(itemId, state);
+    return state.sawNonWhitespace
+      ? state.totalLength - state.leadingWhitespaceLength - state.trailingWhitespaceLength
+      : 0;
+  }
+  if (!state.sawNonWhitespace) {
+    state.leadingWhitespaceLength += firstNonWhitespace;
+    state.sawNonWhitespace = true;
+  }
+  state.trailingWhitespaceLength = delta.match(/\s*$/u)?.[0].length ?? 0;
+  trimStateByItem.set(itemId, state);
+  return state.totalLength - state.leadingWhitespaceLength - state.trailingWhitespaceLength;
 }
 
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {

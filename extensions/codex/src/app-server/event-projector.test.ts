@@ -1075,6 +1075,57 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.currentAttemptAssistant).toBeUndefined();
   });
 
+  it("normalizes streamed raw echo lengths before comparing assistant echoes", async () => {
+    const projector = await createProjector();
+    const rawOutput = `${"s".repeat(12_345)}\n`;
+
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-streamed-echo-newline",
+        delta: rawOutput,
+      }),
+    );
+    const echoState = projector as unknown as {
+      toolProgressEchoesByItem: Map<string, { rawLength?: number; rawPrefix?: string }>;
+    };
+    const signature = echoState.toolProgressEchoesByItem.get("cmd-streamed-echo-newline");
+    expect(signature?.rawLength).toBe(rawOutput.trim().length);
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-streamed-full-output-newline",
+          role: "assistant",
+          content: [{ type: "output_text", text: rawOutput }],
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-streamed-echo-newline",
+          command: "python scripts/run_demo_scenario.py",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+    expect(result.currentAttemptAssistant).toBeUndefined();
+  });
+
   it("keeps final answers that only start with a streamed tool-output prefix", async () => {
     const projector = await createProjector();
     const rawOutput = "s".repeat(12_345);
