@@ -418,10 +418,14 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
   });
 
-  it("recognizes Claude 5 generation inference profiles as prompt-cache eligible", () => {
+  it("recognizes Sonnet 5 Bedrock inference profiles as prompt-cache eligible", () => {
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
     expect(supportsBedrockPromptCaching("us.anthropic.claude-sonnet-5")).toBe(true);
     expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5-20260630")).toBe(true);
+    // Scoped to Sonnet 5: other Claude 5 families have no documented Bedrock cache
+    // contract yet, so they must not be marked eligible.
+    expect(supportsBedrockPromptCaching("global.anthropic.claude-opus-5")).toBe(false);
+    expect(supportsBedrockPromptCaching("us.anthropic.claude-haiku-5")).toBe(false);
     // Older Claude 3 models without their own cache rule stay ineligible.
     expect(supportsBedrockPromptCaching("us.anthropic.claude-3-haiku-20240307-v1:0")).toBe(false);
   });

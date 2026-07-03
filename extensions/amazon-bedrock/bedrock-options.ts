@@ -41,11 +41,13 @@ export function supportsBedrockPromptCaching(modelId: string, modelName?: string
   if (candidates.some((s) => s.includes("-4-"))) {
     return true;
   }
-  // Claude 5 generation flagships (e.g. global.anthropic.claude-sonnet-5) support
-  // Anthropic prompt caching on Bedrock, but their ids carry no "-4-" generation
-  // marker, so match the family directly. The negative lookahead keeps a future
-  // "claude-sonnet-50" from matching while allowing "-5", "-5-<minor>", "-5.0".
-  if (candidates.some((s) => /claude-(?:sonnet|opus|haiku)-5(?![0-9])/.test(s))) {
+  // Claude Sonnet 5 (e.g. global.anthropic.claude-sonnet-5) supports Anthropic
+  // prompt caching on Bedrock, but its id carries no "-4-" generation marker, so
+  // match it directly. Scoped to Sonnet 5 — the only Claude 5 family with a
+  // documented Bedrock cache contract today. The negative lookahead keeps a
+  // future "claude-sonnet-50" from matching while allowing "-5", "-5-<minor>",
+  // "-5.0".
+  if (candidates.some((s) => /claude-sonnet-5(?![0-9])/.test(s))) {
     return true;
   }
   if (candidates.some((s) => s.includes("claude-fable-5"))) {
