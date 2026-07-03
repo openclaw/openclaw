@@ -34,6 +34,8 @@ scenario:
       requiredProviderMode: mock-openai
       conversationId: native-stop-target
       senderId: qa-native-operator
+      warmupPrompt: "Reply exactly: QA-NATIVE-STOP-WARMUP-OK"
+      warmupMarker: QA-NATIVE-STOP-WARMUP-OK
       delayedPrompt: "Subagent recovery worker native command target proof. Wait until stopped."
       abortReplyNeedle: Agent was aborted
       recoveryMarker: QA-NATIVE-STOP-RECOVERY-OK
@@ -53,6 +55,27 @@ flow:
           args:
             - ref: env
             - 60000
+        - resetTransport: true
+        # Gateway health intentionally precedes asynchronous provider/model warmups.
+        # Finish one real turn before timing active-run admission on a cold isolated worker.
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.senderId
+            senderName: QA Native Operator
+            text:
+              expr: config.warmupPrompt
+        - waitForOutbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            textIncludes:
+              expr: config.warmupMarker
+            timeoutMs: 15000
         - resetTransport: true
         - sendInbound:
             conversation:
