@@ -93,6 +93,11 @@ const PendingDelegateStateSchema = z
     // the session key alone, so it must ride the TaskFlow row (#1158).
     inheritedSilent: z.boolean().optional(),
     inheritedWake: z.boolean().optional(),
+    spawnRequesterSessionKey: z.string().min(1).optional(),
+    spawnRequesterChannel: z.string().min(1).optional(),
+    spawnRequesterAccountId: z.string().min(1).optional(),
+    spawnRequesterTo: z.string().min(1).optional(),
+    spawnRequesterThreadId: z.union([z.string().min(1), z.number()]).optional(),
   })
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
@@ -177,6 +182,19 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
       : {}),
     ...(delegate.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(delegate.inheritedWake ? { inheritedWake: true } : {}),
+    ...(delegate.spawnRequesterSessionKey
+      ? { spawnRequesterSessionKey: delegate.spawnRequesterSessionKey }
+      : {}),
+    ...(delegate.spawnRequesterChannel
+      ? { spawnRequesterChannel: delegate.spawnRequesterChannel }
+      : {}),
+    ...(delegate.spawnRequesterAccountId
+      ? { spawnRequesterAccountId: delegate.spawnRequesterAccountId }
+      : {}),
+    ...(delegate.spawnRequesterTo ? { spawnRequesterTo: delegate.spawnRequesterTo } : {}),
+    ...(delegate.spawnRequesterThreadId !== undefined
+      ? { spawnRequesterThreadId: delegate.spawnRequesterThreadId }
+      : {}),
   };
 }
 
@@ -433,6 +451,17 @@ function flowToDelegate(
     ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
     ...(state.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(state.inheritedWake ? { inheritedWake: true } : {}),
+    ...(state.spawnRequesterSessionKey
+      ? { spawnRequesterSessionKey: state.spawnRequesterSessionKey }
+      : {}),
+    ...(state.spawnRequesterChannel ? { spawnRequesterChannel: state.spawnRequesterChannel } : {}),
+    ...(state.spawnRequesterAccountId
+      ? { spawnRequesterAccountId: state.spawnRequesterAccountId }
+      : {}),
+    ...(state.spawnRequesterTo ? { spawnRequesterTo: state.spawnRequesterTo } : {}),
+    ...(state.spawnRequesterThreadId !== undefined
+      ? { spawnRequesterThreadId: state.spawnRequesterThreadId }
+      : {}),
     flowId: flow.flowId,
     expectedRevision: flow.revision,
   };

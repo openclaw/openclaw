@@ -1395,11 +1395,16 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
     const [enqueueSessionKey, enqueued] = enqueuePendingDelegateMock.mock.calls[0] as [
       string,
-      { task: string; delayMs?: number },
+      {
+        task: string;
+        delayMs?: number;
+        spawnRequesterSessionKey?: string;
+      },
     ];
     expect(enqueueSessionKey).toBe("agent:main:subagent:bracket");
     expect(enqueued.task).toBe("keep working");
     expect(enqueued.delayMs).toBe(30_000);
+    expect(enqueued.spawnRequesterSessionKey).toBe("agent:main:main");
 
     // It must NOT be spawned immediately via a volatile in-process path.
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();

@@ -1079,6 +1079,39 @@ describe("tool delegate dispatch contract", () => {
     );
   });
 
+  it("uses stored requester context when a child-owned delayed bracket delegate fires", async () => {
+    const sessionKey = "agent:main:subagent:delayed-bracket-owner";
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed bracket with requester context",
+      spawnRequesterSessionKey: "agent:main:main",
+      spawnRequesterChannel: "discord",
+      spawnRequesterAccountId: "acct",
+      spawnRequesterTo: "channel",
+      spawnRequesterThreadId: "thread",
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(result).toMatchObject({ dispatched: 1, rejected: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.stringContaining("delayed bracket with requester context"),
+      }),
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "acct",
+        agentTo: "channel",
+        agentThreadId: "thread",
+      },
+    );
+  });
+
   it("threads persisted traceparent into spawned continuation runs", async () => {
     const sessionKey = "session-delegate-traceparent";
     const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";

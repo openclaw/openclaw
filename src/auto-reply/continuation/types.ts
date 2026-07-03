@@ -95,6 +95,16 @@ export type PendingContinuationDelegate = {
   inheritedSilent?: boolean;
   inheritedWake?: boolean;
   /**
+   * Original requester context to use when a child-owned delayed bracket
+   * delegate eventually spawns. The queue stays child-owned for chain/cost
+   * recovery, but the spawned continuation must remain sibling/requester-scoped.
+   */
+  spawnRequesterSessionKey?: string;
+  spawnRequesterChannel?: string;
+  spawnRequesterAccountId?: string;
+  spawnRequesterTo?: string;
+  spawnRequesterThreadId?: string | number;
+  /**
    * Internal TaskFlow metadata carried from consume → dispatch so downstream
    * spawn/release failures can flip the row from succeeded → failed without
    * re-querying or guessing revision state.

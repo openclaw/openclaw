@@ -161,6 +161,7 @@ function createDeliveryDeps(params: {
     }
     return { status: params.spawnStatus ?? "accepted" };
   });
+  const markPendingDelegateSpawnAccepted = vi.fn(() => true);
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
@@ -174,8 +175,9 @@ function createDeliveryDeps(params: {
     resolveSessionAgentId: vi.fn(() => "main"),
     resolveStorePath: vi.fn(() => params.storePath),
     spawnSubagentDirect,
+    markPendingDelegateSpawnAccepted,
   };
-  return { deps, enqueueSystemEvent, log, spawnSubagentDirect };
+  return { deps, enqueueSystemEvent, log, markPendingDelegateSpawnAccepted, spawnSubagentDirect };
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -518,6 +520,43 @@ describe("post-compaction delegate dispatch extraction", () => {
     });
   });
 
+  it("carries staged TaskFlow source ids into queued post-compaction deliveries", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      pendingPostCompactionDelegates: [],
+    };
+    const { deps, enqueuePostCompactionDelegateDelivery } = createDispatchDeps({
+      staged: [
+        {
+          ...delegate("staged from taskflow"),
+          flowId: "pc-flow-source",
+          expectedRevision: 4,
+        },
+      ],
+    });
+
+    const result = await dispatchPostCompactionDelegates(
+      {
+        cfg,
+        compactionCount: 3,
+        followupRun: createFollowupRun(),
+        postCompactionDelegatesToPreserve: [],
+        sessionEntry,
+        sessionKey: "main",
+      },
+      deps,
+    );
+    await flushMicrotasks();
+
+    expect(result).toEqual({ queuedDelegates: 1, droppedDelegates: 0 });
+    expect(enqueuePostCompactionDelegateDelivery.mock.calls[0][0].delegate).toMatchObject({
+      task: "staged from taskflow",
+      flowId: "pc-flow-source",
+      expectedRevision: 4,
+    });
+  });
+
   it("preserves delegate-specific traceparent over request_compaction traceparent", async () => {
     const delegateTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     const sessionEntry: SessionEntry = {
@@ -840,6 +879,39 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: queued delegate",
         { sessionKey: "main" },
+      );
+    });
+  });
+
+  it("uses queued source flow ids for idempotent post-compaction spawns and commits accepted TaskFlow rows", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-source-flow-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const { deps, markPendingDelegateSpawnAccepted, spawnSubagentDirect } = createDeliveryDeps({
+        storePath,
+      });
+      const entry = createQueuedEntry({
+        sourceFlowId: "pc-flow-source",
+        sourceExpectedRevision: 7,
+      });
+
+      await deliverQueuedPostCompactionDelegate({ entry }, deps);
+
+      expect(spawnSubagentDirect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          continuationDelegateFlowId: "pc-flow-source",
+        }),
+        expect.objectContaining({
+          agentSessionKey: "main",
+        }),
+      );
+      expect(markPendingDelegateSpawnAccepted).toHaveBeenCalledWith(
+        {
+          flowId: "pc-flow-source",
+          expectedRevision: 7,
+          task: "queued delegate",
+        },
+        expect.stringMatching(/^agent:main:subagent:continuation-/),
       );
     });
   });

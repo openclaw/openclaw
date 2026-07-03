@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { deriveContinuationDelegateChildSessionKey } from "../../agents/subagent-continuation-ids.js";
 import {
   spawnSubagentDirect,
   type SpawnSubagentContext,
@@ -26,6 +27,7 @@ import { defaultRuntime } from "../../runtime.js";
 import {
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
+  markPendingDelegateSpawnAccepted,
   stagePostCompactionDelegate,
 } from "../continuation-delegate-store.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
@@ -58,6 +60,10 @@ export type PostCompactionDelegateDeliveryDeps = {
   resolveSessionAgentId(params: { sessionKey?: string; config?: OpenClawConfig }): string;
   resolveStorePath(store?: string, opts?: { agentId?: string; env?: NodeJS.ProcessEnv }): string;
   spawnSubagentDirect: PostCompactionDelegateSpawn;
+  markPendingDelegateSpawnAccepted(
+    delegate: { flowId?: string; expectedRevision?: number; task: string },
+    childSessionKey: string,
+  ): boolean;
 };
 
 export type PostCompactionDelegateDispatchDeps = {
@@ -125,6 +131,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   resolveSessionAgentId,
   resolveStorePath,
   spawnSubagentDirect,
+  markPendingDelegateSpawnAccepted,
 };
 
 const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchDeps = {
@@ -591,7 +598,7 @@ export async function deliverQueuedPostCompactionDelegate(
         : {}),
       ...(params.entry.fanoutMode ? { continuationFanoutMode: params.entry.fanoutMode } : {}),
       drainsContinuationDelegateQueue: true,
-      continuationDelegateFlowId: params.entry.id,
+      continuationDelegateFlowId: params.entry.sourceFlowId ?? params.entry.id,
       continuationChainState: {
         count: nextCompactionChainCount,
         startedAt: compactionChainStartedAt,
@@ -611,6 +618,19 @@ export async function deliverQueuedPostCompactionDelegate(
   );
   if (spawnResult.status !== "accepted") {
     throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
+  }
+  if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
+    const acceptedChildSessionKey =
+      spawnResult.childSessionKey ??
+      deriveContinuationDelegateChildSessionKey(agentId, params.entry.sourceFlowId);
+    deps.markPendingDelegateSpawnAccepted(
+      {
+        flowId: params.entry.sourceFlowId,
+        expectedRevision: params.entry.sourceExpectedRevision,
+        task: params.entry.task,
+      },
+      acceptedChildSessionKey,
+    );
   }
 
   deps.enqueueSystemEvent(
@@ -684,9 +704,19 @@ export async function dispatchPostCompactionDelegates(
   const allCompactionDelegates = [
     ...persistedCompactionDelegates,
     ...stagedCompactionDelegates,
-  ].map((delegate) =>
-    applyReleaseTraceparent(normalizePostCompactionDelegate(delegate), params.releaseTraceparent),
-  );
+  ].map((delegate) => {
+    const normalized = applyReleaseTraceparent(
+      normalizePostCompactionDelegate(delegate),
+      params.releaseTraceparent,
+    );
+    if (delegate.flowId) {
+      normalized.flowId = delegate.flowId;
+    }
+    if (delegate.expectedRevision !== undefined) {
+      normalized.expectedRevision = delegate.expectedRevision;
+    }
+    return normalized;
+  });
   const now = deps.now();
   const freshCompactionDelegates: SessionPostCompactionDelegate[] = [];
   let staleDroppedDelegates = 0;

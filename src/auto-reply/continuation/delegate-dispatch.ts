@@ -450,12 +450,13 @@ export async function dispatchToolDelegates(params: {
     const delegateDelayMs = delegate.delayMs ?? 0;
     const delegateDelivery: "immediate" | "timer" = delegateDelayMs > 0 ? "timer" : "immediate";
 
+    const spawnSessionKey = delegate.spawnRequesterSessionKey ?? sessionKey;
     const spawnCtx: SpawnSubagentContext = {
-      agentSessionKey: sessionKey,
-      agentChannel: ctx.agentChannel,
-      agentAccountId: ctx.agentAccountId,
-      agentTo: ctx.agentTo,
-      agentThreadId: ctx.agentThreadId,
+      agentSessionKey: spawnSessionKey,
+      agentChannel: delegate.spawnRequesterChannel ?? ctx.agentChannel,
+      agentAccountId: delegate.spawnRequesterAccountId ?? ctx.agentAccountId,
+      agentTo: delegate.spawnRequesterTo ?? ctx.agentTo,
+      agentThreadId: delegate.spawnRequesterThreadId ?? ctx.agentThreadId,
     };
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
@@ -484,7 +485,7 @@ export async function dispatchToolDelegates(params: {
       });
       const spawnTraceparent = dispatchSpan.traceparent?.() ?? outboundTraceparent;
       const childSessionKey = delegate.flowId
-        ? deriveContinuationDelegateChildSessionKeyFromParent(sessionKey, delegate.flowId)
+        ? deriveContinuationDelegateChildSessionKeyFromParent(spawnSessionKey, delegate.flowId)
         : undefined;
       if (
         childSessionKey &&

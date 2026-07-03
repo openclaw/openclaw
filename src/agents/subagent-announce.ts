@@ -1579,6 +1579,19 @@ export async function runSubagentAnnounceFlow(params: {
                     : {}),
                   ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
                   ...(chainSignal.model ? { model: chainSignal.model } : {}),
+                  spawnRequesterSessionKey: targetRequesterSessionKey,
+                  ...(targetRequesterOrigin?.channel
+                    ? { spawnRequesterChannel: targetRequesterOrigin.channel }
+                    : {}),
+                  ...(targetRequesterOrigin?.accountId
+                    ? { spawnRequesterAccountId: targetRequesterOrigin.accountId }
+                    : {}),
+                  ...(targetRequesterOrigin?.to
+                    ? { spawnRequesterTo: targetRequesterOrigin.to }
+                    : {}),
+                  ...(targetRequesterOrigin?.threadId !== undefined
+                    ? { spawnRequesterThreadId: targetRequesterOrigin.threadId }
+                    : {}),
                 });
                 if (toolDelegates.length === 0) {
                   void drainChildContinuationQueue({
