@@ -3,10 +3,11 @@
  *
  * Exposes standard A2A endpoints on the gateway:
  *   GET  /.well-known/agent.json  — Agent Card discovery
- *   POST /a2a/tasks/send          — JSON-RPC task execution
+ *   POST /a2a/tasks/send          — JSON-RPC (inbound + outbound proxy)
  *   GET  /a2a/tasks/:taskId       — Task status & history
  *
- * MVP: single-agent card, gateway-token auth, in-memory task registry.
+ * Dual-format: accepts standard tasks/send and Hermes message/send.
+ * Outbound:   params.target proxies to a remote A2A agent.
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildAgentCard } from "./src/agent-card.js";
@@ -15,7 +16,6 @@ import {
   formatResponse,
   formatJsonRpcError,
   isNotification,
-  toJson,
   JSONRPC_ERROR,
   type JsonRpcRequest,
 } from "./src/jsonrpc.js";
@@ -49,13 +49,90 @@ function readBody(req: import("node:http").IncomingMessage): Promise<string> {
   });
 }
 
+/** Extract text from params.message — standard string or Hermes parts[]. */
+function extractText(params: Record<string, unknown> | undefined): string | null {
+  if (!params?.message) return null;
+  if (typeof params.message === "string") return params.message;
+  const msg = params.message as Record<string, unknown>;
+  const parts = msg?.parts as Array<{ text?: string }> | undefined;
+  if (parts) return parts.map((p) => p.text ?? "").join("\n").trim();
+  if (typeof msg.text === "string") return msg.text;
+  return null;
+}
+
+/** Fetch remote Agent Card and return parsed JSON, or null. */
+async function fetchAgentCard(agentUrl: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(`${agentUrl}/.well-known/agent.json`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Forward a message to a remote A2A agent, auto-detecting dialect. */
+async function forwardToRemote(
+  targetUrl: string,
+  text: string,
+  authToken?: string,
+): Promise<Record<string, unknown>> {
+  const card = await fetchAgentCard(targetUrl);
+  const isHermes = Boolean(card?.protocolVersion || card?.securitySchemes);
+
+  const reqId = `a2a-${Date.now()}`;
+  let body: string;
+
+  if (isHermes) {
+    body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: reqId,
+      method: "message/send",
+      params: {
+        message: {
+          messageId: `oc-${Date.now()}`,
+          role: "user",
+          contextId: "openclaw-outbound",
+          parts: [{ text }],
+        },
+      },
+    });
+  } else {
+    body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: reqId,
+      method: "tasks/send",
+      params: { message: text },
+    });
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
+  const res = await fetch(targetUrl, {
+    method: "POST",
+    headers,
+    body,
+    signal: AbortSignal.timeout(30000),
+  });
+
+  const raw = await res.text();
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { _parseError: true, raw: raw.slice(0, 500) };
+  }
+}
+
 // ── plugin entry ───────────────────────────────────────────────────────
 
 export default definePluginEntry({
   id: "a2a",
   name: "A2A Protocol",
   description:
-    "Standard A2A protocol: agent card discovery and JSON-RPC task execution for cross-framework agent interoperability.",
+    "Standard A2A protocol: agent card discovery, dual-format JSON-RPC task execution, and outbound proxy for cross-framework agent interoperability.",
 
   register(api) {
     const pluginCfg = (api.config as Record<string, unknown> | undefined) ?? {};
@@ -66,12 +143,8 @@ export default definePluginEntry({
       return;
     }
 
-    // Determine gateway base URL.
-    // In production the gateway bind host:port is available; for MVP we
-    // construct it from the runtime or fall back to a sensible default.
     const gatewayUrl =
-      (api.config as Record<string, unknown> | undefined)?.gatewayUrl as string
-      ?? "http://localhost:18789";
+      (pluginCfg.gatewayUrl as string) ?? "http://localhost:18789";
 
     // ── Agent Card endpoint ──────────────────────────────────────────
 
@@ -81,11 +154,13 @@ export default definePluginEntry({
       match: "exact",
       async handler(_req, res) {
         try {
-          // Collect agent metadata from config.
-          const agents = ((api.config as Record<string, unknown> | undefined)
-            ?.agents as { list?: { id: string; description?: string }[] } | undefined)
-            ?.list ?? [];
-          const card = buildAgentCard({ agents, gatewayUrl });
+          const agents = (
+            api.config as Record<string, unknown> | undefined
+          )?.agents as { list?: { id: string; description?: string }[] } | undefined;
+          const card = buildAgentCard({
+            agents: agents?.list ?? [],
+            gatewayUrl,
+          });
           sendJson(res, 200, card);
         } catch (err) {
           api.logger?.warn?.("a2a: agent card failed", { error: String(err) });
@@ -102,17 +177,19 @@ export default definePluginEntry({
       auth: "plugin",
       match: "prefix",
       async handler(req, res) {
-        // Only handle /a2a/tasks/send for MVP
         const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
         const path = url.pathname;
 
         try {
           const body = await readBody(req);
 
-          if (path === "/a2a/tasks/send" && req.method === "POST") {
-            return handleTasksSend(req, res, body);
+          // tasks/send (standard) or message/send (Hermes) — same pipeline
+          if (req.method === "POST" &&
+              (path === "/a2a/tasks/send" || path === "/a2a")) {
+            return handleJsonRpc(req, res, body, gatewayUrl, api);
           }
 
+          // Task status
           if (path.startsWith("/a2a/tasks/") && req.method === "GET") {
             const taskId = path.slice("/a2a/tasks/".length);
             return handleTasksGet(res, taskId);
@@ -128,35 +205,38 @@ export default definePluginEntry({
       },
     });
 
-    api.logger?.info?.("a2a: plugin registered — /.well-known/agent.json + /a2a/tasks/*");
+    api.logger?.info?.("a2a: plugin registered — inbound + outbound proxy on /.well-known/agent.json + /a2a");
   },
 });
 
 // ── route handlers ─────────────────────────────────────────────────────
 
-async function handleTasksSend(
-  req: import("node:http").IncomingMessage,
+async function handleJsonRpc(
+  _req: import("node:http").IncomingMessage,
   res: import("node:http").ServerResponse,
   body: string,
+  gatewayUrl: string,
+  api: ReturnType<typeof definePluginEntry> extends { register(a: infer A): void } ? A : never,
 ): Promise<boolean> {
   const parsed = parseJsonRpc(body);
 
   // Batch
   if (Array.isArray(parsed)) {
     const results = await Promise.all(
-      parsed.map((r) => executeSingleRequest(r)),
+      parsed.map((r) => executeSingleRequest(r, gatewayUrl, api)),
     );
     sendJson(res, 200, results);
     return true;
   }
 
-  // Single
+  // Parse error
   if ("code" in parsed) {
     sendJson(res, 200, formatJsonRpcError(null, parsed.code, parsed.message));
     return true;
   }
 
-  const result = await executeSingleRequest(parsed);
+  // Single
+  const result = await executeSingleRequest(parsed, gatewayUrl, api);
   if (isNotification(parsed)) {
     res.writeHead(204);
     res.end();
@@ -168,12 +248,16 @@ async function handleTasksSend(
 
 async function executeSingleRequest(
   req: JsonRpcRequest,
+  gatewayUrl: string,
+  api: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  // For MVP we support tasks/send only.
   if (req.method === "tasks/send") {
-    return handleTaskSend(req);
+    return handleTaskOrMessage(req, gatewayUrl, api);
   }
-
+  // Hermes A2A dialect
+  if (req.method === "message/send") {
+    return handleTaskOrMessage(req, gatewayUrl, api);
+  }
   return formatJsonRpcError(
     req.id,
     JSONRPC_ERROR.METHOD_NOT_FOUND.code,
@@ -181,11 +265,17 @@ async function executeSingleRequest(
   );
 }
 
-async function handleTaskSend(
+async function handleTaskOrMessage(
   req: JsonRpcRequest,
+  gatewayUrl: string,
+  api: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const params = req.params as Record<string, unknown> | undefined;
-  if (!params?.message || typeof params.message !== "string") {
+  const targetUrl = params?.target as string | undefined;
+  const authToken = params?.auth as string | undefined;
+  const text = extractText(params);
+
+  if (!text) {
     return formatJsonRpcError(
       req.id,
       JSONRPC_ERROR.INVALID_PARAMS.code,
@@ -193,30 +283,50 @@ async function handleTaskSend(
     );
   }
 
+  // ── Outbound: forward to remote A2A agent ─────────────────────────
+
+  if (targetUrl) {
+    try {
+      const remoteResult = await forwardToRemote(targetUrl, text, authToken);
+      const task = createTask(`outbound:${targetUrl}`);
+      updateTaskState(task.id, "completed");
+      return formatResponse(req.id, {
+        taskId: task.id,
+        state: "completed",
+        sessionKey: task.sessionKey,
+        remote: remoteResult,
+      });
+    } catch (err) {
+      return formatJsonRpcError(
+        req.id,
+        JSONRPC_ERROR.INTERNAL_ERROR.code,
+        `Outbound call failed: ${String(err)}`,
+      );
+    }
+  }
+
+  // ── Inbound: dispatch to local OpenClaw agent ─────────────────────
+
   try {
-    // Create a session for this task.
     const { callGatewayFromCli } = await import("openclaw/plugin-sdk/gateway-runtime");
     const sessionKey = `agent:main:explicit:${Date.now()}`;
 
-    // Create session
     await callGatewayFromCli("sessions.create", {
-      url: "http://localhost:18789",
+      url: gatewayUrl,
       json: true,
     }, {
       key: sessionKey,
-      label: `A2A task: ${(params.message as string).slice(0, 50)}`,
+      label: `A2A task: ${text.slice(0, 50)}`,
     });
 
-    // Create task in registry
     const task = createTask(sessionKey);
 
-    // Send message to agent (non-blocking — agent runs async)
     callGatewayFromCli("sessions.send", {
-      url: "http://localhost:18789",
+      url: gatewayUrl,
       json: true,
     }, {
       sessionKey,
-      message: params.message as string,
+      message: text,
       deliver: false,
     }).catch(() => {
       updateTaskState(task.id, "failed");

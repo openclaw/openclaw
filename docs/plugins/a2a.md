@@ -37,7 +37,7 @@ Three endpoints mounted on your Gateway:
         config: {
           gatewayUrl: "http://your-gateway-host:18789",
           agents: {
-            // expose: ["agent-id-1", "agent-id-2"]   // optional filter; omit = all agents
+            // expose: ["agent-id-1", "agent-id-2"]   // optional filter
           },
           auth: {
             mode: "gateway_token",   // "gateway_token" | "none"
@@ -150,13 +150,59 @@ admin APIs.
 
 | Method | Status | Description |
 |---|---|---|
-| `tasks/send` | ✅ MVP | Send a text message to an agent, get a task ID back |
-| `tasks/get` | ✅ MVP | Query task state via REST endpoint |
+| `tasks/send` | ✅ | Standard A2A: send a text message, get a task ID |
+| `message/send` | ✅ | Hermes dialect alias — same pipeline, nested parts format |
+| `tasks/get` | ✅ | Query task state via REST endpoint |
 | `tasks/cancel` | 🔜 planned | Cancel a running task |
 | `tasks/pushNotification/set` | 🔜 planned | Register webhook for task state changes |
 
 Batch JSON-RPC requests are supported: send an array of requests and get an
 array of responses back.
+
+## Outbound proxy
+
+The plugin can forward requests to remote A2A agents. Pass `target` and
+optional `auth` in the request params:
+
+```bash
+# Forward to a Hermes agent (dialect auto-detected from Agent Card)
+curl -X POST http://localhost:18789/a2a/tasks/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc":"2.0","id":"1","method":"tasks/send",
+    "params":{
+      "target": "http://other-agent:9900",
+      "auth": "bearer-token-here",
+      "message": "Hello from OpenClaw"
+    }
+  }'
+```
+
+The plugin auto-detects the remote agent's dialect by fetching its
+`/.well-known/agent.json`. Hermes agents (with `protocolVersion`) receive
+`message/send`; standard A2A agents receive `tasks/send`. The remote
+response is returned in `result.remote`.
+
+You can also pre-configure remote agents in the plugin config for convenience:
+
+```json5
+{
+  plugins: {
+    entries: {
+      a2a: {
+        config: {
+          remoteAgents: {
+            "sg-architect": {
+              url: "http://127.0.0.1:9900",
+              authToken: "878570cff..."
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 ## Cross-framework example
 
@@ -175,13 +221,13 @@ Hermes (sg agent, port :9900)  ←→  OpenClaw Gateway (port :18789)
      │←──────────────────────────────────────│  { state: "completed" }
 ```
 
-## Current limits (MVP)
+## Current limits
 
 - **Text-only** — images, files, and structured data are not yet passed as A2A
   `message.parts[]`.
 - **In-memory task store** — tasks are lost on Gateway restart.
-- **No outbound A2A** — the plugin registers inbound endpoints only. Use
-  Gateway HTTP tools to call external A2A agents.
+- **Outbound via proxy only** — `params.target` forwards to remote agents, but
+  OpenClaw agents cannot natively initiate A2A calls yet.
 - **Single Agent Card** — all agents are exposed as skills under one Card.
   Multi-card (one per agent) is planned.
 - **No SSE streaming** — `tasks/get` is poll-based. SSE push and

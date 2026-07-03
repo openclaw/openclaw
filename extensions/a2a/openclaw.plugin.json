@@ -1,7 +1,7 @@
 {
   "id": "a2a",
   "name": "A2A Protocol",
-  "description": "Standard A2A protocol support: agent card discovery, JSON-RPC task execution, and cross-framework agent interoperability.",
+  "description": "Standard A2A protocol support: agent card discovery, dual-format JSON-RPC task execution (inbound + outbound proxy), and cross-framework agent interoperability.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -10,6 +10,11 @@
         "type": "boolean",
         "default": false,
         "description": "Enable the A2A protocol endpoints on the gateway."
+      },
+      "gatewayUrl": {
+        "type": "string",
+        "default": "http://localhost:18789",
+        "description": "Public URL of this gateway, used in Agent Card and outbound session calls."
       },
       "agents": {
         "type": "object",
@@ -30,9 +35,15 @@
             "type": "string",
             "enum": ["none", "gateway_token"],
             "default": "gateway_token",
-            "description": "Authentication mode for A2A endpoints."
+            "description": "Authentication mode for inbound A2A endpoints."
           }
         }
+      },
+      "remoteAgents": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Pre-configured remote A2A agents for outbound calling. Key = agent name, value = { url, authToken }. Agents can also be called ad-hoc via params.target + params.auth.",
+        "properties": {}
       }
     }
   }
