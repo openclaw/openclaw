@@ -1,5 +1,6 @@
 // Command spec tests cover skill-provided command metadata and filtering.
 import { describe, expect, it, vi } from "vitest";
+import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
@@ -49,6 +50,10 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
         filePath: `/skills/${name}/SKILL.md`,
         baseDir: `/skills/${name}`,
         source: "openclaw-workspace",
+        sourceInfo: createSyntheticSourceInfo(`/skills/${name}/SKILL.md`, {
+          source: "openclaw-workspace",
+        }),
+        disableModelInvocation: false,
       },
       frontmatter: {},
       invocation: { userInvocable: true, disableModelInvocation: false },
@@ -74,6 +79,10 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
         filePath: `/skills/${name}/SKILL.md`,
         baseDir: `/skills/${name}`,
         source: "openclaw-workspace",
+        sourceInfo: createSyntheticSourceInfo(`/skills/${name}/SKILL.md`, {
+          source: "openclaw-workspace",
+        }),
+        disableModelInvocation: false,
       },
       frontmatter: {},
       invocation: { userInvocable: true, disableModelInvocation: false },
