@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Anthropic-family tool payload compatibility wraps provider tool payload shapes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
@@ -24,10 +25,6 @@ type OpenAiFunctionToolsProjection = {
   readonly functionNames: ReadonlySet<string>;
   readonly tools: readonly Record<string, unknown>[];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function readPayloadField(record: Record<string, unknown>, field: string): PayloadFieldRead {
   try {
