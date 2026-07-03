@@ -285,6 +285,31 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
   res.end(body);
 }
 
+async function writeSseWithPreviewPause(
+  res: ServerResponse,
+  events: StreamEvent[],
+  pauseMs: number,
+) {
+  const completionIndex = events.findIndex((event) => event.type === "response.output_text.done");
+  if (completionIndex < 0) {
+    writeSse(res, events);
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  for (const event of events.slice(0, completionIndex)) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  await sleep(pauseMs);
+  for (const event of events.slice(completionIndex)) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  res.end("data: [DONE]\n\n");
+}
+
 type AnthropicStreamEvent = Record<string, unknown> & {
   type: string;
 };
@@ -3765,7 +3790,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           writeJson(res, 200, completion.response);
           return;
         }
-        writeSse(res, events);
+        if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
+          await writeSseWithPreviewPause(res, events, 1_500);
+        } else {
+          writeSse(res, events);
+        }
         return;
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
