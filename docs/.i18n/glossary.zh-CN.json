@@ -1214,5 +1214,21 @@
   {
     "source": "Docs map",
     "target": "文档地图"
+  },
+    {
+    "source": "Runware",
+    "target": "Runware"
+  },
+  {
+    "source": "runware",
+    "target": "runware"
+  },
+  {
+    "source": "Runware plugin",
+    "target": "Runware 插件"
+  },
+  {
+    "source": "Runware (OpenAI-compatible, live model catalog)",
+    "target": "Runware（OpenAI 兼容，实时模型目录）"
   }
 ]
