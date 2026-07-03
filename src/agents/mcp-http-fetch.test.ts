@@ -245,4 +245,69 @@ describe("MCP HTTP fetch helpers", () => {
     expect(error.message).toContain("bad redirect");
     expect(error.message).not.toContain("[object Response]");
   });
+
+  it("rejects body-less responses whose Content-Length exceeds the 16 MiB cap", async () => {
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () =>
+        new Response(null, {
+          status: 200,
+          headers: { "content-length": String(17 * 1024 * 1024) },
+        }),
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    await expect(fetch("https://mcp.example.com/mcp")).rejects.toThrow(
+      "exceeds 16777216 byte limit",
+    );
+  });
+
+  it("rejects body-less responses whose actual text exceeds the 16 MiB cap", async () => {
+    class OversizedTextResponse {
+      status = 200;
+      statusText = "OK";
+      headers = new Headers();
+      body = null;
+      async text() {
+        return "x".repeat(17 * 1024 * 1024);
+      }
+    }
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new OversizedTextResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    await expect(fetch("https://mcp.example.com/mcp")).rejects.toThrow(
+      "exceeds 16777216 byte limit",
+    );
+  });
+
+  it("accepts body-less responses within the 16 MiB cap", async () => {
+    class WithinLimitResponse {
+      status = 200;
+      statusText = "OK";
+      headers = new Headers({ "content-type": "application/json" });
+      body = null;
+      async text() {
+        return JSON.stringify({ ok: true });
+      }
+    }
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new WithinLimitResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+
+    const response = await fetch("https://mcp.example.com/mcp");
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toBe('{"ok":true}');
+  });
 });
