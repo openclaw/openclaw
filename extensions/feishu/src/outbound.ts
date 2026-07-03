@@ -47,6 +47,7 @@ import {
   isFeishuCardWithinEnvelope,
 } from "./presentation-card.js";
 import {
+  normalizeFeishuPostMarkdownNewlines,
   sendCardFeishu,
   sendMarkdownCardFeishu,
   sendMessageFeishu,
@@ -386,18 +387,30 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  // Normalize post-md newlines before routing so chunk/limit decisions
+  // and payload builders see the expanded length. Card mode keeps text
+  // unmodified to preserve structured card formatting.
+  const normalizedText = renderMode === "card" ? text : normalizeFeishuPostMarkdownNewlines(text);
+
+  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(normalizedText))) {
     return sendMarkdownCardFeishu({
       cfg,
       to,
-      text,
+      text: normalizedText,
       accountId,
       replyToMessageId,
       replyInThread,
     });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
+  return sendMessageFeishu({
+    cfg,
+    to,
+    text: normalizedText,
+    accountId,
+    replyToMessageId,
+    replyInThread,
+  });
 }
 
 async function sendFeishuFallbackPayload(params: {
@@ -462,7 +475,10 @@ async function sendFeishuFallbackPayload(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => chunkTextForOutbound(text, limit),
+  // Normalize post-md newlines before chunking so the chunker measures
+  // the expanded length. Without this, a raw chunk within the 4000-char
+  // limit can grow past it after the final payload builder normalizes.
+  chunker: (text, limit) => chunkTextForOutbound(normalizeFeishuPostMarkdownNewlines(text), limit),
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: {

@@ -736,7 +736,11 @@ export async function editMessageFeishu(params: {
     channel: "feishu",
   });
   const messageText = convertMarkdownTables(text!, tableMode);
-  const payload = buildFeishuPostMessagePayload({ messageText });
+  // Normalize before building the post payload so expanded text length
+  // is visible to Feishu's implicit post-content limit on patch.
+  const payload = buildFeishuPostMessagePayload({
+    messageText: normalizeFeishuPostMarkdownNewlines(messageText),
+  });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
     data: { content: payload.content },
