@@ -277,6 +277,34 @@ The export contains a manifest, a Markdown summary, config shape, sanitized conf
 
 It is meant to be shared. It keeps operational details that help debugging, such as safe OpenClaw log fields, subsystem names, status codes, durations, configured modes, ports, plugin ids, provider ids, non-secret feature settings, and redacted operational log messages. It omits or redacts chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, prompt/instruction text, hostnames, and secret values. When a LogTape-style message looks like user/chat/tool payload text, the export keeps only that a message was omitted plus its byte count.
 
+### `gateway diagnostics node-approvals`
+
+Show pending node approval requests from a running Gateway and print the matching approval command.
+
+```bash
+openclaw gateway diagnostics node-approvals
+openclaw gateway diagnostics node-approvals --url ws://127.0.0.1:18789 --token <token>
+openclaw gateway diagnostics node-approvals --json
+```
+
+<ParamField path="--url <url>" type="string">
+  Gateway WebSocket URL.
+</ParamField>
+<ParamField path="--token <token>" type="string">
+  Gateway token.
+</ParamField>
+<ParamField path="--password <password>" type="string">
+  Gateway password.
+</ParamField>
+<ParamField path="--timeout <ms>" type="number" default="3000">
+  Node diagnostics timeout.
+</ParamField>
+<ParamField path="--json" type="boolean">
+  Print pending approvals as JSON.
+</ParamField>
+
+When you pass explicit connection options, reuse the same `--url`, `--token`, or `--password` values with the printed `openclaw nodes approve <requestId>` command.
+
 ### `gateway status`
 
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional probe of connectivity/auth capability.

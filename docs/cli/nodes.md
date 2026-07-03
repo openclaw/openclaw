@@ -18,7 +18,9 @@ Related:
 
 Common options:
 
-- `--url`, `--token`, `--timeout`, `--json`
+- `--url`, `--token`, `--password`, `--timeout`, `--json`
+
+When you set `--url`, pass `--token` or `--password` explicitly if the Gateway requires auth. Reuse the same connection options with `nodes approve` or `nodes reject` when a diagnostics command prints a pending approval request id.
 
 ## Common commands
 
