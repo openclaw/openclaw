@@ -332,6 +332,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
+    expect(prompt).toContain("Larger work: use `sessions_spawn`; completion is push-based.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).not.toContain("use `sessions_yield` when waiting");
     expect(prompt).toContain(

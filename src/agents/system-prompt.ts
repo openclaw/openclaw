@@ -1092,7 +1092,7 @@ export function buildAgentSystemPrompt(params: {
         ? [
             `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
             ...(durableOrchestrationPolicy === undefined
-              ? []
+              ? ["Larger work: use `sessions_spawn`; completion is push-based."]
               : [
                   buildDurableSubagentOrchestrationGuidance({
                     policy: durableOrchestrationPolicy,
