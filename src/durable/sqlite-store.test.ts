@@ -81,6 +81,199 @@ describe("durable runtime sqlite store", () => {
     }
   });
 
+  it("upgrades a pre-durable shared state database without touching existing rows", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-upgrade-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE schema_meta (
+          key TEXT NOT NULL PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE cron_jobs (
+          job_id TEXT NOT NULL PRIMARY KEY,
+          definition_json TEXT NOT NULL,
+          enabled INTEGER NOT NULL
+        );
+      `);
+      db.prepare("INSERT INTO schema_meta (key, value) VALUES (?, ?)").run(
+        "openclaw_state_schema_version",
+        "2026.6.8",
+      );
+      db.prepare("INSERT INTO cron_jobs (job_id, definition_json, enabled) VALUES (?, ?, ?)").run(
+        "legacy-job",
+        JSON.stringify({ schedule: "*/5 * * * *", task: "legacy" }),
+        1,
+      );
+    } finally {
+      db.close();
+    }
+
+    const store = openDurableRuntimeSqliteStore({ path: dbPath });
+    try {
+      expect(store.getStats()).toMatchObject({
+        schemaVersion: DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
+      });
+      const run = store.createRun({
+        operationKind: "openclaw.chat.send",
+        idempotencyKey: "upgrade-smoke",
+        status: "succeeded",
+        recoveryState: "terminal",
+        sourceType: "chat.send",
+        sourceRef: "agent:upgrade:test",
+        now: 100,
+      });
+      store.appendEvent({
+        runtimeRunId: run.runtimeRunId,
+        eventType: "upgrade.smoke",
+        now: 100,
+      });
+    } finally {
+      store.close();
+    }
+
+    const verifyDb = new DatabaseSync(dbPath);
+    try {
+      expect(
+        verifyDb
+          .prepare("SELECT value FROM schema_meta WHERE key = ?")
+          .get("openclaw_state_schema_version"),
+      ).toEqual({ value: "2026.6.8" });
+      expect(verifyDb.prepare("SELECT job_id, enabled FROM cron_jobs").all()).toEqual([
+        { job_id: "legacy-job", enabled: 1 },
+      ]);
+      const migration = verifyDb
+        .prepare(
+          "SELECT version, metadata_json FROM durable_schema_migrations WHERE schema_name = ?",
+        )
+        .get("durable_runtime") as { version: number; metadata_json: string };
+      expect(migration.version).toBe(DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION);
+      expect(JSON.parse(migration.metadata_json)).toMatchObject({
+        kind: "fresh-install",
+        previousVersion: 0,
+      });
+      const runtimeTables = verifyDb
+        .prepare(
+          `SELECT name FROM sqlite_master
+             WHERE type = 'table'
+               AND name LIKE 'durable_runtime_%'
+             ORDER BY name`,
+        )
+        .all() as Array<{ name: string }>;
+      expect(runtimeTables.map((row) => row.name)).toEqual([...DURABLE_TABLES]);
+    } finally {
+      verifyDb.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("opens partial early durable schemas before creating indexes on added columns", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-upgrade-"));
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`
+        CREATE TABLE durable_schema_migrations (
+          schema_name TEXT NOT NULL PRIMARY KEY,
+          version INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL,
+          metadata_json TEXT
+        );
+        INSERT INTO durable_schema_migrations (schema_name, version, applied_at, metadata_json)
+          VALUES ('durable_runtime', ${DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION}, 100, '{"kind":"early-durable"}');
+        CREATE TABLE durable_runtime_runs (
+          runtime_run_id TEXT NOT NULL PRIMARY KEY,
+          operation_kind TEXT NOT NULL,
+          operation_version TEXT NOT NULL DEFAULT '1',
+          idempotency_key TEXT,
+          request_hash TEXT,
+          status TEXT NOT NULL,
+          source_type TEXT,
+          source_ref TEXT,
+          input_ref TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          completed_at INTEGER,
+          recovery_state TEXT NOT NULL DEFAULT 'runnable',
+          checkpoint_ref TEXT,
+          metadata_json TEXT
+        );
+        INSERT INTO durable_runtime_runs (
+          runtime_run_id, operation_kind, operation_version, idempotency_key, request_hash,
+          status, source_type, source_ref, input_ref, created_at, updated_at, completed_at,
+          recovery_state, checkpoint_ref, metadata_json
+        ) VALUES (
+          'run_legacy_partial', 'openclaw.agent.turn', '1', 'legacy-partial', NULL,
+          'running', 'agent', 'agent:legacy:main', NULL, 10, 10, NULL,
+          'running', NULL, '{"legacy":true}'
+        );
+      `);
+    } finally {
+      db.close();
+    }
+
+    const store = openDurableRuntimeSqliteStore({ path: dbPath });
+    try {
+      expect(store.getRun("run_legacy_partial")).toMatchObject({
+        runtimeRunId: "run_legacy_partial",
+        operationKind: "openclaw.agent.turn",
+        status: "running",
+        recoveryState: "running",
+        sourceRef: "agent:legacy:main",
+        metadata: { legacy: true },
+      });
+      expect(
+        store.updateRun({
+          runtimeRunId: "run_legacy_partial",
+          workUnitId: "wu:legacy",
+          reportRouteId: "discord:legacy-main",
+          now: 20,
+        }),
+      ).toMatchObject({
+        runtimeRunId: "run_legacy_partial",
+        workUnitId: "wu:legacy",
+        reportRouteId: "discord:legacy-main",
+      });
+      expect(store.getStats()).toMatchObject({ runs: 1, schemaVersion: 1 });
+    } finally {
+      store.close();
+    }
+
+    const verifyDb = new DatabaseSync(dbPath);
+    try {
+      const columns = verifyDb.prepare("PRAGMA table_info(durable_runtime_runs)").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          "work_unit_id",
+          "report_route_id",
+          "claimed_by",
+          "claim_expires_at",
+          "heartbeat_at",
+        ]),
+      );
+      const indexes = verifyDb
+        .prepare(
+          `SELECT name FROM sqlite_master
+             WHERE type = 'index'
+               AND name IN ('idx_durable_runtime_runs_work_unit', 'idx_durable_runtime_runs_report_route')
+             ORDER BY name`,
+        )
+        .all();
+      expect(indexes).toEqual([
+        { name: "idx_durable_runtime_runs_report_route" },
+        { name: "idx_durable_runtime_runs_work_unit" },
+      ]);
+    } finally {
+      verifyDb.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses shared state private-mode hardening when it creates the state database", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-state-mode-"));
     fs.chmodSync(stateDir, 0o755);
