@@ -277,6 +277,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
+    // A run-time compaction landed: record the outcome and clear any stale
+    // failure/skip reason so /status reflects the latest attempt.
+    next.lastCompactionAt = now;
+    next.lastCompactionOutcome = "compacted";
+    next.lastCompactionReason = undefined;
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
@@ -373,6 +378,9 @@ export async function recordCliCompactionInStore(params: {
   const next = { ...entry };
   clearCliSession(next, provider);
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
+  next.lastCompactionAt = Date.now();
+  next.lastCompactionOutcome = "compacted";
+  next.lastCompactionReason = undefined;
   next.updatedAt = Date.now();
   const newSessionId = normalizeOptionalString(params.newSessionId);
   const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);

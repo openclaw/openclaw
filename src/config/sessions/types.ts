@@ -85,6 +85,9 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
+/** Terminal outcome of a compaction attempt, persisted for `/status` visibility. */
+export type SessionCompactionOutcome = "compacted" | "failed" | "skipped";
+
 export type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
@@ -389,6 +392,16 @@ export type SessionEntry = {
   contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
+  /** Timestamp (ms) of the most recent compaction attempt with a known outcome. */
+  lastCompactionAt?: number;
+  /** Outcome of the most recent compaction attempt. */
+  lastCompactionOutcome?: SessionCompactionOutcome;
+  /**
+   * Classified reason bucket (`classifyCompactionReason`) for the last
+   * failed/skipped compaction. Buckets only — raw provider error text stays
+   * out of durable session metadata.
+   */
+  lastCompactionReason?: string;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;

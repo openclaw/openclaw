@@ -288,6 +288,13 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
+  if (incrementBy > 0) {
+    // A real compaction landed: record the outcome and clear any stale
+    // failure/skip reason so /status reflects the latest attempt.
+    updates.lastCompactionAt = now;
+    updates.lastCompactionOutcome = "compacted";
+    updates.lastCompactionReason = undefined;
+  }
   const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
   const sessionFileChanged = Boolean(
@@ -346,4 +353,45 @@ export async function incrementCompactionCount(params: {
     });
   }
   return nextCount;
+}
+
+/**
+ * Records a compaction attempt that did not compact (failed/skipped) so
+ * /status can report the last outcome after the fact. Deliberately leaves
+ * `updatedAt` untouched: a failed/skipped attempt is not session activity.
+ */
+export async function recordCompactionOutcome(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  outcome: "failed" | "skipped";
+  /** Classified reason bucket from `classifyCompactionReason`, not raw error text. */
+  reason?: string;
+  now?: number;
+}): Promise<void> {
+  const { sessionEntry, sessionStore, sessionKey, storePath, outcome, reason } = params;
+  const now = params.now ?? Date.now();
+  if (!sessionStore || !sessionKey) {
+    return;
+  }
+  const entry = sessionStore[sessionKey] ?? sessionEntry;
+  if (!entry) {
+    return;
+  }
+  const updates: Partial<SessionEntry> = {
+    lastCompactionAt: now,
+    lastCompactionOutcome: outcome,
+    lastCompactionReason: normalizeOptionalString(reason),
+  };
+  const nextEntry = { ...entry, ...updates };
+  sessionStore[sessionKey] = nextEntry;
+  if (storePath) {
+    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
+      fallbackEntry: nextEntry,
+    });
+    if (persistedEntry) {
+      sessionStore[sessionKey] = persistedEntry;
+    }
+  }
 }

@@ -129,3 +129,73 @@ describe("buildStatusMessage context window", () => {
     expect(text).not.toContain("Context: 36k/200k");
   });
 });
+
+describe("buildStatusMessage last compaction detail", () => {
+  const baseArgs = {
+    config: {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [statusTestModel("claude-haiku-4-5", "Claude Haiku 4.5", 200_000)],
+          },
+        },
+      },
+    },
+    agent: {
+      model: "anthropic/claude-haiku-4-5",
+      contextTokens: 200_000,
+    },
+    sessionKey: "agent:main:telegram:direct:1",
+    sessionScope: "per-sender" as const,
+    queue: { mode: "steer" as const, depth: 0 },
+    modelAuth: "api-key" as const,
+  };
+
+  it("renders the last failed compaction with its reason bucket", () => {
+    const text = buildStatusMessage({
+      ...baseArgs,
+      now: 10 * 60_000,
+      sessionEntry: {
+        sessionId: "compaction-detail-failed",
+        updatedAt: 0,
+        compactionCount: 3,
+        lastCompactionAt: 5 * 60_000,
+        lastCompactionOutcome: "failed",
+        lastCompactionReason: "summary_failed",
+      },
+    });
+
+    expect(text).toContain("🧹 Compactions: 3 (last: failed — summary_failed, 5m ago)");
+  });
+
+  it("renders the last successful compaction without a reason", () => {
+    const text = buildStatusMessage({
+      ...baseArgs,
+      now: 10 * 60_000,
+      sessionEntry: {
+        sessionId: "compaction-detail-ok",
+        updatedAt: 0,
+        compactionCount: 1,
+        lastCompactionAt: 9 * 60_000,
+        lastCompactionOutcome: "compacted",
+      },
+    });
+
+    expect(text).toContain("🧹 Compactions: 1 (last: compacted 1m ago)");
+  });
+
+  it("keeps the bare counter for sessions without outcome tracking", () => {
+    const text = buildStatusMessage({
+      ...baseArgs,
+      sessionEntry: {
+        sessionId: "compaction-detail-legacy",
+        updatedAt: 0,
+        compactionCount: 2,
+      },
+    });
+
+    expect(text).toContain("🧹 Compactions: 2");
+    expect(text).not.toContain("(last:");
+  });
+});

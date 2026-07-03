@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  classifyCompactionReason,
+  isCompactionSkipClassification,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -53,14 +56,9 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const classification = classifyCompactionReason(reason);
   // Manual /compact mirrors preflight semantics: already-small sessions are a
   // successful no-op, not a failed compaction.
-  return (
-    classification === "no_compactable_entries" ||
-    classification === "below_threshold" ||
-    classification === "already_compacted_recently"
-  );
+  return isCompactionSkipClassification(classifyCompactionReason(reason));
 }
 
 function formatCompactionReason(reason?: string): string | undefined {
@@ -311,6 +309,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
       newSessionFile: result.result?.sessionFile,
+    });
+  } else if (!codexNativeCompactionStarted) {
+    await runtime.recordCompactionOutcome({
+      sessionEntry: targetSessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      // Mirror compactLabel semantics: ok-but-not-compacted and known skip
+      // reasons are a successful no-op, everything else is a failure.
+      outcome: result.ok || isCompactionSkipReason(result.reason) ? "skipped" : "failed",
+      reason: classifyCompactionReason(result.reason),
     });
   }
   // Use the post-compaction token count for context summary if available

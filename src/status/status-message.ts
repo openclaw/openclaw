@@ -548,6 +548,24 @@ function resolveChannelModelNote(params: {
   return "channel override";
 }
 
+/**
+ * Renders the persisted last-compaction outcome as a suffix for the
+ * Compactions counter. Empty for sessions that predate outcome tracking.
+ */
+function formatLastCompactionDetail(entry: SessionEntry | undefined, now: number): string {
+  const at = entry?.lastCompactionAt;
+  const outcome = entry?.lastCompactionOutcome;
+  if (!outcome || typeof at !== "number" || !Number.isFinite(at)) {
+    return "";
+  }
+  const ago = formatTimeAgo(now - at);
+  if (outcome === "compacted") {
+    return ` (last: compacted ${ago})`;
+  }
+  const reason = entry?.lastCompactionReason;
+  return ` (last: ${outcome}${reason ? ` — ${reason}` : ""}, ${ago})`;
+}
+
 function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   if (!entry?.modelOverride) {
     return false;
@@ -954,7 +972,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       : formatTokens(totalTokens, contextTokens ?? null);
   const contextLine = [
     `Context: ${contextUsageLabel}`,
-    `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
+    `🧹 Compactions: ${entry?.compactionCount ?? 0}${formatLastCompactionDetail(entry, now)}`,
   ]
     .filter((line): line is string => Boolean(line))
     .join(" · ");

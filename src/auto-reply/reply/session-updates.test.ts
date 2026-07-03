@@ -117,3 +117,106 @@ describe("ensureSkillSnapshot", () => {
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });
 });
+
+const { incrementCompactionCount, recordCompactionOutcome } = await import("./session-updates.js");
+
+describe("compaction outcome tracking", () => {
+  it("marks a successful compaction and clears a stale failure reason", async () => {
+    const sessionStore = {
+      "agent:main:test": {
+        sessionId: "sess-1",
+        updatedAt: 100,
+        compactionCount: 2,
+        lastCompactionAt: 50,
+        lastCompactionOutcome: "failed" as const,
+        lastCompactionReason: "summary_failed",
+      },
+    };
+
+    const nextCount = await incrementCompactionCount({
+      sessionStore,
+      sessionKey: "agent:main:test",
+      now: 1_000,
+    });
+
+    expect(nextCount).toBe(3);
+    const entry = sessionStore["agent:main:test"];
+    expect(entry.compactionCount).toBe(3);
+    expect(entry.lastCompactionAt).toBe(1_000);
+    expect(entry.lastCompactionOutcome).toBe("compacted");
+    expect(entry.lastCompactionReason).toBeUndefined();
+  });
+
+  it("does not stamp an outcome when the increment amount is zero", async () => {
+    const sessionStore: Record<string, import("../../config/sessions/types.js").SessionEntry> = {
+      "agent:main:test": {
+        sessionId: "sess-1",
+        updatedAt: 100,
+        compactionCount: 2,
+      },
+    };
+
+    await incrementCompactionCount({
+      sessionStore,
+      sessionKey: "agent:main:test",
+      amount: 0,
+      now: 1_000,
+    });
+
+    const entry = sessionStore["agent:main:test"];
+    expect(entry.compactionCount).toBe(2);
+    expect(entry.lastCompactionAt).toBeUndefined();
+    expect(entry.lastCompactionOutcome).toBeUndefined();
+  });
+
+  it("records failed and skipped outcomes without touching updatedAt", async () => {
+    const sessionStore: Record<string, import("../../config/sessions/types.js").SessionEntry> = {
+      "agent:main:test": {
+        sessionId: "sess-1",
+        updatedAt: 100,
+        compactionCount: 1,
+      },
+    };
+
+    await recordCompactionOutcome({
+      sessionStore,
+      sessionKey: "agent:main:test",
+      outcome: "failed",
+      reason: "summary_failed",
+      now: 2_000,
+    });
+
+    let entry = sessionStore["agent:main:test"];
+    expect(entry.updatedAt).toBe(100);
+    expect(entry.compactionCount).toBe(1);
+    expect(entry.lastCompactionAt).toBe(2_000);
+    expect(entry.lastCompactionOutcome).toBe("failed");
+    expect(entry.lastCompactionReason).toBe("summary_failed");
+
+    await recordCompactionOutcome({
+      sessionStore,
+      sessionKey: "agent:main:test",
+      outcome: "skipped",
+      reason: "below_threshold",
+      now: 3_000,
+    });
+
+    entry = sessionStore["agent:main:test"];
+    expect(entry.lastCompactionAt).toBe(3_000);
+    expect(entry.lastCompactionOutcome).toBe("skipped");
+    expect(entry.lastCompactionReason).toBe("below_threshold");
+  });
+
+  it("ignores outcome records for unknown sessions", async () => {
+    const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
+
+    await recordCompactionOutcome({
+      sessionStore,
+      sessionKey: "agent:main:missing",
+      outcome: "failed",
+      reason: "timeout",
+    });
+
+    expect(Object.keys(sessionStore)).toHaveLength(0);
+  });
+});

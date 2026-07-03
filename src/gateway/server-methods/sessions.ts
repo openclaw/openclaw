@@ -40,6 +40,10 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
+  classifyCompactionReason,
+  isCompactionSkipClassification,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
@@ -2515,6 +2519,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           entryToUpdate.updatedAt = Date.now();
           entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+          entryToUpdate.lastCompactionAt = Date.now();
+          entryToUpdate.lastCompactionOutcome = "compacted";
+          delete entryToUpdate.lastCompactionReason;
           if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
             entryToUpdate.sessionId = result.result.sessionId;
           }
@@ -2534,6 +2541,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             delete entryToUpdate.totalTokens;
             delete entryToUpdate.totalTokensFresh;
           }
+        });
+      } else if (!result.ok || result.reason) {
+        // Persist failed/skipped outcomes too so /status reflects the last
+        // attempt; leave updatedAt alone — a no-op attempt is not activity.
+        // ok-without-reason (e.g. codex-native compaction still pending) is
+        // deliberately not recorded as a terminal outcome.
+        const classification = classifyCompactionReason(result.reason);
+        const outcome =
+          result.ok || isCompactionSkipClassification(classification) ? "skipped" : "failed";
+        await updateSessionStore(storePath, (store) => {
+          const entryToUpdate = store[compactTarget.primaryKey];
+          if (!entryToUpdate) {
+            return;
+          }
+          entryToUpdate.lastCompactionAt = Date.now();
+          entryToUpdate.lastCompactionOutcome = outcome;
+          entryToUpdate.lastCompactionReason = classification;
         });
       }
 

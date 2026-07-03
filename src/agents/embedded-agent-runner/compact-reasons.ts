@@ -76,6 +76,18 @@ export function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
+/**
+ * Skip-class buckets are harmless no-op outcomes (nothing worth compacting),
+ * not failures. Callers use this to keep "skipped" and "failed" reporting apart.
+ */
+export function isCompactionSkipClassification(classification: string): boolean {
+  return (
+    classification === "no_compactable_entries" ||
+    classification === "below_threshold" ||
+    classification === "already_compacted_recently"
+  );
+}
+
 /** Sanitize an unknown reason into a short log/metric-safe detail suffix. */
 export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
   const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))

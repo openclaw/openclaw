@@ -29,6 +29,11 @@ export default async function reconcileSessionStoreCompactionCountAfterSuccess(p
       }
       return {
         compactionCount: nextCount,
+        // A live-run compaction landed: record it and clear any stale
+        // failure/skip reason so /status reflects the latest attempt.
+        lastCompactionAt: now,
+        lastCompactionOutcome: "compacted",
+        lastCompactionReason: undefined,
         updatedAt: Math.max(entry.updatedAt ?? 0, now),
       };
     },

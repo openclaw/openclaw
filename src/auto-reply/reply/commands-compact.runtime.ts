@@ -12,4 +12,4 @@ export {
 } from "../../config/sessions.js";
 export { enqueueSystemEvent } from "../../infra/system-events.js";
 export { formatContextUsageShort, formatTokenCount } from "../status.js";
-export { incrementCompactionCount } from "./session-updates.js";
+export { incrementCompactionCount, recordCompactionOutcome } from "./session-updates.js";

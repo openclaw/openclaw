@@ -8,7 +8,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  classifyCompactionReason,
+  isCompactionSkipClassification,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -60,7 +63,7 @@ import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { incrementCompactionCount } from "./session-updates.js";
+import { incrementCompactionCount, recordCompactionOutcome } from "./session-updates.js";
 
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
 type UpdateSessionEntryParams = {
@@ -202,15 +205,10 @@ function resolveEffectivePromptTokens(
 }
 
 function isPreflightCompactionSkipReason(reason?: string): boolean {
-  const classification = classifyCompactionReason(reason);
-  // Preflight compaction is a guardrail, not a hard dependency. These classes
+  // Preflight compaction is a guardrail, not a hard dependency. Skip classes
   // mean the context engine found nothing useful to compact, so the reply should
   // continue instead of surfacing a generic user-facing failure.
-  return (
-    classification === "below_threshold" ||
-    classification === "no_compactable_entries" ||
-    classification === "already_compacted_recently"
-  );
+  return isCompactionSkipClassification(classifyCompactionReason(reason));
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -980,6 +978,20 @@ export async function runPreflightCompactionIfNeeded(params: {
       ownerNumbers: params.followupRun.run.ownerNumbers,
       abortSignal: params.replyOperation.abortSignal,
     });
+
+    if (!(result?.ok && result.compacted)) {
+      // Persist the outcome before branching so /status can report why the
+      // preflight compaction did not land even after the run ends.
+      const attemptReason = result?.reason ?? "not_compacted";
+      await recordCompactionOutcome({
+        sessionEntry: entry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        outcome: isPreflightCompactionSkipReason(attemptReason) ? "skipped" : "failed",
+        reason: classifyCompactionReason(attemptReason),
+      });
+    }
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";

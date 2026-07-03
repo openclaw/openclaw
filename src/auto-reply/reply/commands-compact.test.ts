@@ -14,6 +14,7 @@ vi.mock("./commands-compact.runtime.js", () => ({
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
   incrementCompactionCount: vi.fn(),
+  recordCompactionOutcome: vi.fn(),
   isEmbeddedAgentRunAbortableForCompaction: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
   resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
@@ -26,6 +27,7 @@ const {
   compactEmbeddedAgentSession,
   formatContextUsageShort,
   incrementCompactionCount,
+  recordCompactionOutcome,
   isEmbeddedAgentRunAbortableForCompaction,
   resolveSessionFilePathOptions,
   waitForEmbeddedAgentRunEnd,
@@ -278,6 +280,41 @@ describe("handleCompactCommand", () => {
     );
     expect(result?.reply?.isStatusNotice).toBe(true);
     expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordCompactionOutcome)).toHaveBeenCalledOnce();
+    expect(vi.mocked(recordCompactionOutcome).mock.calls[0]?.[0]).toMatchObject({
+      outcome: "skipped",
+      reason: "below_threshold",
+    });
+  });
+
+  it("records a failed manual compaction outcome with its reason bucket", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "summary generation failed",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Compaction failed");
+    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordCompactionOutcome)).toHaveBeenCalledOnce();
+    expect(vi.mocked(recordCompactionOutcome).mock.calls[0]?.[0]).toMatchObject({
+      outcome: "failed",
+      reason: "summary_failed",
+    });
   });
 
   it("treats already_compacted_recently manual compaction as skipped", async () => {
