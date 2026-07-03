@@ -19,7 +19,10 @@ import {
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
-const PARENT_EXIT_GRACE_MS = 60_000;
+// Minimum parent-exit grace used when no explicit update timeout is provided.
+// Matches a typical restart drain budget so default managed handoffs survive
+// normal active-task window drain periods (#99666).
+const DEFAULT_PARENT_EXIT_GRACE_MS = 300_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -687,7 +690,12 @@ export async function startManagedServiceUpdateHandoff(params: {
   };
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
-    parentExitTimeoutMs: Math.max(0, params.restartDelayMs ?? 0) + PARENT_EXIT_GRACE_MS,
+    // Use the overall update timeout as a floor for the parent-exit wait so
+    // active task drain under the old process does not cause a spurious
+    // managed-service-handoff-parent-timeout (#99666).
+    parentExitTimeoutMs:
+      Math.max(0, params.restartDelayMs ?? 0) +
+      Math.max(DEFAULT_PARENT_EXIT_GRACE_MS, params.timeoutMs ?? 0),
     cwd: handoffCwd,
     commandArgv,
     commandLabel,

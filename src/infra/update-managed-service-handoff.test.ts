@@ -730,4 +730,59 @@ describe("managed service update handoff", () => {
     await expect(pathExists(freshDir)).resolves.toBe(true);
     await expect(pathExists(unrelatedDir)).resolves.toBe(true);
   });
+
+  it("includes update timeout in parent exit wait so active task drain does not block handoff (#99666)", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-timeout-test-"));
+    tempDirs.add(tmpDir);
+
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    await startManagedServiceUpdateHandoff({
+      root: tmpDir,
+      timeoutMs: 300_000,
+      restartDelayMs: 0,
+      parentPid: process.pid,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+    });
+
+    const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
+      string,
+      unknown
+    >;
+
+    // timeoutMs=300000 -> parentExitTimeoutMs >= 300000 (not just 60000)
+    expect(helperParams.parentExitTimeoutMs).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("preserves backward-compatible parent exit grace with default timeout", async () => {
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-handoff-default-timeout-test-"),
+    );
+    tempDirs.add(tmpDir);
+
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    await startManagedServiceUpdateHandoff({
+      root: tmpDir,
+      restartDelayMs: 0,
+      parentPid: process.pid,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      env: {},
+      meta: { sessionKey: "agent:test:webchat:dm:user-123" },
+    });
+
+    const [, args] = spawnMock.mock.calls.at(-1) as unknown as [string, string[]];
+    const helperParams = JSON.parse(await fs.readFile(args[1] ?? "", "utf-8")) as Record<
+      string,
+      unknown
+    >;
+
+    // Default without timeoutMs: parentExitTimeoutMs = 300_000 (DEFAULT_PARENT_EXIT_GRACE_MS)
+    expect(helperParams.parentExitTimeoutMs).toBe(300_000);
+  });
 });
