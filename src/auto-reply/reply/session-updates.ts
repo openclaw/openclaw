@@ -389,6 +389,7 @@ export async function recordCompactionOutcome(params: {
   if (storePath) {
     const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
       fallbackEntry: nextEntry,
+      preserveActivity: true,
     });
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
