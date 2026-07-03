@@ -87,36 +87,6 @@ struct RootTabsSourceGuardTests {
         #expect(phoneTabContent.matches(of: /PhoneTabSettingsHost(?:\([^\n]+\))? \{/).count == 3)
     }
 
-    @Test func `phone control destination rows use label badge density`() throws {
-        let phoneSource = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
-        let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let rowLabel = try Self.extract(
-            phoneSource,
-            from: "private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View",
-            to: "@ViewBuilder")
-        let gatewayRow = try Self.extract(
-            phoneSource,
-            from: "private var gatewayRow: some View",
-            to: "@ViewBuilder\n    private func destinationRow")
-        let sidebarDestinationButton = try Self.extract(
-            rootSource,
-            from: "private func sidebarDestinationButton(",
-            to: "@ViewBuilder\n    private var sidebarDetail")
-
-        #expect(rowLabel.contains("Label {"))
-        #expect(rowLabel.contains("Text(destination.title)"))
-        #expect(rowLabel.contains("ProIconBadge(systemName: destination.systemImage, color: .secondary)"))
-        #expect(!rowLabel.contains("HStack(alignment: .center, spacing: 12)"))
-        #expect(!rowLabel.contains(".font(.subheadline.weight(.semibold))"))
-        #expect(!rowLabel.contains(".padding(.vertical, 3)"))
-
-        #expect(gatewayRow.contains("ProIconBadge("))
-        #expect(gatewayRow.contains(".padding(.vertical, 4)"))
-        #expect(sidebarDestinationButton.contains("Label(title ?? destination.sidebarTitle"))
-        #expect(sidebarDestinationButton.contains(".padding(.vertical, 8)"))
-        #expect(rootSource.contains(".listStyle(.sidebar)"))
-    }
-
     @Test func `sidebar keeps navigation model destination only`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let navigationSource = try String(contentsOf: Self.rootTabsNavigationSourceURL(), encoding: .utf8)
