@@ -85,6 +85,7 @@ import type {
 type LocalRunState = {
   sessionKey: string;
   agentId?: string;
+  localBackendKey: string;
   controller: AbortController;
   buffer: string;
   lastBroadcastText?: string;
@@ -382,9 +383,19 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionKey: opts.sessionKey,
       agentId: opts.agentId,
     };
+    const cfg = getRuntimeConfig();
+    const localBackendKey = resolveAgentWorkspaceDir(
+      cfg,
+      resolveSessionAgentId({
+        sessionKey: opts.sessionKey,
+        config: cfg,
+        agentId: opts.agentId,
+      }),
+    );
     const abortableSessionRun = this.hasAbortableSessionRun(runScope);
     const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
-    const queuedAfter = question || stopCommand ? undefined : this.findQueuedLocalRunPromise();
+    const queuedAfter =
+      question || stopCommand ? undefined : this.findQueuedLocalRunPromise(localBackendKey);
     if (stopCommand) {
       this.abortSessionRuns(runScope);
       return { runId };
@@ -394,6 +405,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       agentId: opts.agentId,
+      localBackendKey,
       controller,
       buffer: "",
       isBtw: Boolean(question),
@@ -788,10 +800,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
   }
 
-  private findQueuedLocalRunPromise(): QueuedSessionRun | undefined {
+  private findQueuedLocalRunPromise(localBackendKey: string): QueuedSessionRun | undefined {
     let queuedAfter: QueuedSessionRun | undefined;
     for (const [runId, run] of this.runs) {
-      if (!run.isBtw) {
+      if (!run.isBtw && run.localBackendKey === localBackendKey) {
         const promise = this.runPromises.get(runId);
         if (promise) {
           queuedAfter = { run, promise };

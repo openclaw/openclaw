@@ -114,7 +114,8 @@ vi.mock("../agents/agent-scope.js", () => ({
     agents?: { list?: Array<{ id?: string; default?: boolean }> };
   }) =>
     cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
-  resolveSessionAgentId: () => "main",
+  resolveSessionAgentId: (params?: { sessionKey?: string; agentId?: string }) =>
+    params?.agentId ?? /^agent:([^:]+):/.exec(params?.sessionKey ?? "")?.[1] ?? "main",
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -1054,7 +1055,7 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("queues different-session sends behind active local runs", async () => {
+  it("queues same-agent different-session sends behind active local runs", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
       payloads: Array<{ text: string }>;
@@ -1077,7 +1078,7 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     await backend.sendChat({
-      sessionKey: "agent:research:main",
+      sessionKey: "agent:main:research",
       message: "second",
       runId: "run-local-second",
     });
@@ -1338,7 +1339,7 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("queues selected-agent global sends behind active local runs", async () => {
+  it("does not queue selected-agent global sends for different agents", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
       payloads: Array<{ text: string }>;
@@ -1367,13 +1368,9 @@ describe("EmbeddedTuiBackend", () => {
       runId: "run-local-work-global",
     });
 
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
 
     first.resolve({ payloads: [{ text: "main done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-
     second.resolve({ payloads: [{ text: "work done" }], meta: {} });
     await flushMicrotasks();
   });
@@ -1414,13 +1411,9 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     expect(firstAbortListener).not.toHaveBeenCalled();
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
 
     first.resolve({ payloads: [{ text: "main done" }], meta: {} });
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-
     stop.resolve({ payloads: [{ text: "work stop" }], meta: {} });
     await flushMicrotasks();
   });
