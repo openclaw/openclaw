@@ -202,7 +202,6 @@ describe("talk.catalog handler", () => {
       {
         id: "google",
         label: "Google Live Voice",
-        aliases: ["gemini-live"],
         defaultModel: "gemini-live",
         resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
         isConfigured: vi.fn(
@@ -247,10 +246,9 @@ describe("talk.catalog handler", () => {
               provider: "elevenlabs",
               providers: { elevenlabs: { apiKey: "speech-key" } },
               realtime: {
-                provider: "gemini-live",
+                provider: "google",
                 providers: {
-                  google: { project: "base" },
-                  "gemini-live": { apiKey: "live-key" },
+                  google: { apiKey: "live-key", project: "base" },
                 },
                 model: "talk-model",
               },
@@ -322,7 +320,6 @@ describe("talk.catalog handler", () => {
             {
               id: "google",
               label: "Google Live Voice",
-              aliases: ["gemini-live"],
               configured: true,
               defaultModel: "gemini-live",
               modes: ["realtime"],
