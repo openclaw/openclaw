@@ -20,7 +20,7 @@ const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 async function readFirstSessionFileLine(sessionFile: string): Promise<string | undefined> {
   const handle = await fs.open(sessionFile, "r");
   try {
-    const chunks: Buffer[] = [];
+    const chunks: string[] = [];
     let totalBytes = 0;
     while (totalBytes < MAX_SESSION_HEADER_BYTES) {
       const buffer = Buffer.alloc(
@@ -30,17 +30,26 @@ async function readFirstSessionFileLine(sessionFile: string): Promise<string | u
       if (bytesRead === 0) {
         break;
       }
-      const chunk = buffer.subarray(0, bytesRead);
-      const newlineIndex = chunk.indexOf(0x0a);
-      if (newlineIndex >= 0) {
-        chunks.push(chunk.subarray(0, newlineIndex));
-        break;
+      chunks.push(buffer.toString("utf-8", 0, bytesRead));
+      const readEnd =
+        bytesRead < buffer.length || totalBytes + bytesRead >= MAX_SESSION_HEADER_BYTES;
+      const scannedText = chunks.join("");
+      const lines = scannedText.split(/\r?\n/u);
+      const hasCompleteLine = lines.length > 1;
+      const linesToScan = hasCompleteLine ? lines.slice(0, -1) : readEnd ? lines : [];
+      for (const line of linesToScan) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          return trimmed;
+        }
       }
-      chunks.push(chunk);
       totalBytes += bytesRead;
     }
-    const firstLine = Buffer.concat(chunks).toString("utf-8").trim();
-    return firstLine || undefined;
+    return chunks
+      .join("")
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
   } finally {
     await handle.close().catch(() => undefined);
   }
