@@ -13,6 +13,53 @@ import UIKit
 public typealias OpenClawPlatformImage = UIImage
 #endif
 
+public enum OpenClawChatCommandFilter: String, CaseIterable, Sendable {
+    case all = "All"
+    case commands = "Commands"
+    case skills = "Skills"
+}
+
+public struct OpenClawChatCommandChoice: Identifiable, Hashable, Sendable {
+    public enum Source: String, Sendable {
+        case command
+        case skill
+        case plugin
+        case unknown
+    }
+
+    public let id: String
+    public let name: String
+    public let textAliases: [String]
+    public let description: String
+    public let source: Source
+    public let acceptsArgs: Bool
+
+    public init(
+        id: String,
+        name: String,
+        textAliases: [String],
+        description: String,
+        source: Source,
+        acceptsArgs: Bool)
+    {
+        self.id = id
+        self.name = name
+        self.textAliases = textAliases
+        self.description = description
+        self.source = source
+        self.acceptsArgs = acceptsArgs
+    }
+
+    public var preferredInvocation: String {
+        self.textAliases.first { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("/") }
+            ?? "/\(self.name)"
+    }
+
+    public var displayInvocation: String {
+        self.preferredInvocation.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 public struct OpenClawChatUsageCost: Codable, Hashable, Sendable {
     public let input: Double?
     public let output: Double?

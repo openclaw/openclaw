@@ -119,11 +119,28 @@ private func modelChoice(id: String, name: String, provider: String = "anthropic
     OpenClawChatModelChoice(modelID: id, name: name, provider: provider, contextWindow: nil)
 }
 
+private func commandChoice(
+    name: String,
+    aliases: [String],
+    description: String = "",
+    source: OpenClawChatCommandChoice.Source = .command,
+    acceptsArgs: Bool = false) -> OpenClawChatCommandChoice
+{
+    OpenClawChatCommandChoice(
+        id: "\(source.rawValue):\(name)",
+        name: name,
+        textAliases: aliases,
+        description: description,
+        source: source,
+        acceptsArgs: acceptsArgs)
+}
+
 private func makeViewModel(
     sessionKey: String = "main",
     historyResponses: [OpenClawChatHistoryPayload],
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
+    commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
     setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -143,6 +160,7 @@ private func makeViewModel(
         historyResponses: historyResponses,
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
+        commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
         setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
@@ -349,6 +367,7 @@ private actor TestChatTransportState {
     var historyCallCount: Int = 0
     var sessionsCallCount: Int = 0
     var modelsCallCount: Int = 0
+    var commandsCallCount: Int = 0
     var healthCallCount: Int = 0
     var activeSessionKeys: [String] = []
     var createdSessionKeys: [String] = []
@@ -356,7 +375,9 @@ private actor TestChatTransportState {
     var resetSessionKeys: [String] = []
     var compactSessionKeys: [String] = []
     var sentSessionKeys: [String] = []
+    var sentMessages: [String] = []
     var sentRunIds: [String] = []
+    var commandSessionKeys: [String] = []
     var sentThinkingLevels: [String] = []
     var abortedRunIds: [String] = []
     var waitCompletionRunIds: [String] = []
@@ -369,6 +390,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
+    private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
     private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
     private let createSessionHook: (@Sendable (String, String?) async throws -> Void)?
@@ -387,6 +409,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         historyResponses: [OpenClawChatHistoryPayload],
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
+        commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
         setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -401,6 +424,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.historyResponses = historyResponses
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
+        self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
         self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
@@ -459,12 +483,13 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func sendMessage(
         sessionKey: String,
-        message _: String,
+        message: String,
         thinking: String,
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
         await self.state.sentSessionKeysAppend(sessionKey)
+        await self.state.sentMessagesAppend(message)
         await self.state.sentRunIdsAppend(idempotencyKey)
         await self.state.sentThinkingLevelsAppend(thinking)
         if let sendMessageHook {
@@ -496,6 +521,19 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             return self.modelResponses[idx]
         }
         return self.modelResponses.last ?? []
+    }
+
+    var supportsSlashCommandCatalog: Bool {
+        !self.commandResponses.isEmpty
+    }
+
+    func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice] {
+        await self.state.commandSessionKeysAppend(sessionKey)
+        let idx = await self.state.nextCommandsCallIndex()
+        if idx < self.commandResponses.count {
+            return self.commandResponses[idx]
+        }
+        return self.commandResponses.last ?? []
     }
 
     func setSessionModel(sessionKey _: String, model: String?) async throws {
@@ -550,6 +588,14 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func sentRunIds() async -> [String] {
         await self.state.sentRunIds
+    }
+
+    func sentMessages() async -> [String] {
+        await self.state.sentMessages
+    }
+
+    func commandSessionKeys() async -> [String] {
+        await self.state.commandSessionKeys
     }
 
     func lastSentSessionKey() async -> String? {
@@ -614,6 +660,11 @@ extension TestChatTransportState {
         return self.modelsCallCount
     }
 
+    fileprivate func nextCommandsCallIndex() -> Int {
+        defer { self.commandsCallCount += 1 }
+        return self.commandsCallCount
+    }
+
     fileprivate func nextHealthCallIndex() -> Int {
         defer { self.healthCallCount += 1 }
         return self.healthCallCount
@@ -625,6 +676,10 @@ extension TestChatTransportState {
 
     fileprivate func sentRunIdsAppend(_ v: String) {
         self.sentRunIds.append(v)
+    }
+
+    fileprivate func commandSessionKeysAppend(_ v: String) {
+        self.commandSessionKeys.append(v)
     }
 
     fileprivate func abortedRunIdsAppend(_ v: String) {
@@ -665,6 +720,10 @@ extension TestChatTransportState {
 
     fileprivate func sentSessionKeysAppend(_ v: String) {
         self.sentSessionKeys.append(v)
+    }
+
+    fileprivate func sentMessagesAppend(_ v: String) {
+        self.sentMessages.append(v)
     }
 }
 
@@ -2285,6 +2344,117 @@ struct ChatViewModelTests {
             await transport.compactSessionKeys() == ["main", "main"]
         }
         #expect(await MainActor.run { vm.errorText } == nil)
+    }
+
+    @Test func `slash command catalog filters commands and skills`() async throws {
+        let commands = [
+            commandChoice(
+                name: "compact",
+                aliases: ["/compact"],
+                description: "Compact the session",
+                source: .command),
+            commandChoice(
+                name: "review",
+                aliases: ["/review"],
+                description: "Review the current change",
+                source: .skill,
+                acceptsArgs: true),
+        ]
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            commandResponses: [commands])
+
+        await MainActor.run { vm.loadSlashCommandsIfNeeded() }
+        try await waitUntil("slash commands loaded") {
+            await MainActor.run { vm.hasLoadedSlashCommands }
+        }
+
+        let allMatches = await MainActor.run {
+            vm.slashCommandMatches(query: "/", filter: .all).map(\.name)
+        }
+        #expect(allMatches == ["compact", "review"])
+
+        let commandMatches = await MainActor.run {
+            vm.slashCommandMatches(query: "/co", filter: .commands).map(\.name)
+        }
+        #expect(commandMatches == ["compact"])
+
+        let skillMatches = await MainActor.run {
+            vm.slashCommandMatches(query: "/skill re", filter: .all).map(\.name)
+        }
+        #expect(skillMatches == ["review"])
+
+        await MainActor.run {
+            vm.applySlashCommandSelection(commands[1])
+        }
+        #expect(await MainActor.run { vm.input } == "/review ")
+    }
+
+    @Test func `known slash command sends through chat send`() async throws {
+        let commands = [
+            commandChoice(
+                name: "model",
+                aliases: ["/model"],
+                description: "Change model",
+                source: .command,
+                acceptsArgs: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload()],
+            commandResponses: [commands])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await sendUserMessage(vm, text: "/model gpt-5")
+        _ = try await waitForLastSentRunId(transport)
+
+        #expect(await transport.sentMessages() == ["/model gpt-5"])
+    }
+
+    @Test func `slash command catalog loads for current session`() async throws {
+        let commands = [
+            commandChoice(name: "model", aliases: ["/model"], source: .command, acceptsArgs: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:reviewer:main",
+            historyResponses: [historyPayload()],
+            commandResponses: [commands])
+
+        await MainActor.run { vm.loadSlashCommandsIfNeeded() }
+        try await waitUntil("slash commands loaded") {
+            await MainActor.run { vm.hasLoadedSlashCommands }
+        }
+
+        #expect(await transport.commandSessionKeys() == ["agent:reviewer:main"])
+    }
+
+    @Test func `unknown leading slash is sent to gateway after command catalog loads`() async throws {
+        let commands = [
+            commandChoice(name: "model", aliases: ["/model"], source: .command, acceptsArgs: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload()],
+            commandResponses: [commands])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await sendUserMessage(vm, text: "/does-not-exist")
+        _ = try await waitForLastSentRunId(transport)
+
+        #expect(await transport.sentMessages() == ["/does-not-exist"])
+    }
+
+    @Test func `double slash sends as ordinary text`() async throws {
+        let commands = [
+            commandChoice(name: "model", aliases: ["/model"], source: .command, acceptsArgs: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload()],
+            commandResponses: [commands])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await sendUserMessage(vm, text: "//does-not-trigger")
+        _ = try await waitForLastSentRunId(transport)
+
+        #expect(await transport.sentMessages() == ["//does-not-trigger"])
     }
 
     @Test func `bootstraps model selection from session and defaults`() async throws {
