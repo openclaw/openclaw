@@ -139,6 +139,76 @@ other asynchronous I/O. Contract tests should exercise both phases and both
 result variants through `ChannelMessageDurableFinalAdapter` from
 `openclaw/plugin-sdk/channel-outbound`.
 
+## Durable Inbound Receive
+
+Channels with an at-least-once inbound source (webhooks that redeliver,
+polling loops that resume after a crash, gateway restarts) should track
+accept/complete state through a `DurableInboundReceiveJournal` instead of a
+channel-local dedupe cache or spool:
+
+```ts
+import {
+  createDurableInboundReceiveJournalFromQueue,
+  replayPendingDurableInboundReceives,
+} from "openclaw/plugin-sdk/channel-outbound";
+
+const journal = createDurableInboundReceiveJournalFromQueue({
+  queue: runtime.state.openChannelIngressQueue({ stateDir: runtime.state.resolveStateDir() }),
+  retention: { pendingMaxEntries: 450, completedMaxEntries: 450 },
+});
+
+// On each inbound platform event:
+const accepted = await journal.accept(stablePlatformEventId, payload);
+if (accepted.kind !== "accepted") {
+  return; // already pending or completed — do not redeliver
+}
+try {
+  await handleEvent(accepted.record.payload);
+  await journal.complete(stablePlatformEventId);
+} catch (err) {
+  await journal.release(stablePlatformEventId, { lastError: String(err) });
+}
+
+// On reconnect/startup, replay whatever never reached a terminal state:
+await replayPendingDurableInboundReceives({
+  journal,
+  maxAttempts: 5,
+  process: async (record) => {
+    await handleEvent(record.payload);
+    await journal.complete(record.id);
+  },
+  onDeadLetter: (record) => log.warn(`dropping ${record.id} after ${record.attempts} attempts`),
+});
+```
+
+- `accept(id, payload)` is the idempotency gate: a duplicate platform delivery
+  of an id already `pending` or `completed` returns that state instead of a
+  fresh `accepted` record, so the same event is never handled twice.
+- `complete(id)` / `release(id, { lastError })` are the two terminal-vs-retry
+  outcomes for one delivery attempt; `release` bumps `attempts` and puts the
+  record back in `pending()`.
+- `fail(id, { reason, message? })` dead-letters an id: it stops appearing in
+  `pending()` and later `accept()` calls for the same id report a
+  non-`accepted` result, so a redelivered dead-lettered event is not
+  reprocessed.
+- `replayPendingDurableInboundReceives({ journal, maxAttempts, process })`
+  bounds reconnect/restart replay: every pass counts the attempt before
+  invoking `process`, so a run that stalls or crashes still converges on
+  `maxAttempts` instead of redelivering forever, and calls `fail()` once the
+  cap is reached. Use it wherever pending records are replayed after a
+  reconnect or gateway restart.
+- `createDurableInboundReceiveJournal(...)` builds the same facade directly
+  from two `PluginStateKeyedStore` instances (pending/completed) instead of a
+  `ChannelIngressQueue`, for channels that already have their own stores.
+
+Do not build a channel-local dedupe map, spool file, or bespoke retry-attempt
+counter for inbound acceptance — those duplicate this journal's `accept`/
+`release`/`fail` semantics and drift from the shared retention/dead-letter
+policy. Pair this with a persistent `createClaimableDedupe` (see
+`openclaw/plugin-sdk/persistent-dedupe`) when the channel only needs
+replay-duplicate suppression rather than full accept/complete/release
+tracking of in-flight work.
+
 ## Compatibility dispatch
 
 Assemble inbound reply dispatch through `dispatchChannelInboundReply(...)`
