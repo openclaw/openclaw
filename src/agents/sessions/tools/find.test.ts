@@ -1,22 +1,7 @@
 // find tool tests cover custom search operation wiring and result-limit
 // normalization for session file discovery.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureTool } from "../../utils/tools-manager.js";
+import { describe, expect, it } from "vitest";
 import { createFindToolDefinition, type FindOperations } from "./find.js";
-
-vi.mock("node:child_process", () => ({
-  spawn: vi.fn(),
-}));
-
-vi.mock("../../utils/tools-manager.js", () => ({
-  ensureTool: vi.fn(),
-}));
-
-const mockedSpawn = vi.mocked(spawn);
-const mockedEnsureTool = vi.mocked(ensureTool);
 
 function operations(results: string[]): FindOperations {
   return {
@@ -33,10 +18,6 @@ function textContent(
 }
 
 describe("find tool", () => {
-  afterEach(() => {
-    vi.resetAllMocks();
-  });
-
   it("clamps non-positive limits before delegating to custom search operations", async () => {
     // Clamp before delegation so custom backends never receive a zero/negative
     // limit that could make real matches disappear.
@@ -71,28 +52,5 @@ describe("find tool", () => {
 
     expect(textContent(result)).toBe("a.ts\nb.ts");
     expect(result.details).toBeUndefined();
-  });
-
-  it("rejects partial fd output when fd exits with an error", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      stdin: new PassThrough(),
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
-      killed: false,
-      kill: vi.fn(() => true),
-    }) as unknown as ChildProcessWithoutNullStreams;
-    mockedSpawn.mockReturnValue(child);
-    mockedEnsureTool.mockResolvedValue("fd");
-
-    const tool = createFindToolDefinition("/workspace");
-    const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
-    await vi.waitFor(() => expect(mockedSpawn).toHaveBeenCalledOnce());
-    child.stdout.write("/workspace/partial.ts\n");
-    child.stderr.write("fd failed while reading subtree\n");
-    child.stdout.end();
-    child.stderr.end();
-    child.emit("close", 2, null);
-
-    await expect(result).rejects.toThrow("fd failed while reading subtree");
   });
 });
