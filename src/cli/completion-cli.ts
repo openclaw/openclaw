@@ -63,6 +63,16 @@ function commandNameVariants(cmd: Command): string[] {
   return [cmd.name(), ...cmd.aliases()];
 }
 
+// Alias-typed paths must keep completing like the canonical command. Variants
+// multiply by (1 + alias count) per aliased ancestor, so nesting aliased
+// commands under each other grows emitted paths multiplicatively; today no
+// aliased command nests under another.
+function childPathVariants(parentVariants: readonly string[][], sub: Command): string[][] {
+  return parentVariants.flatMap((parents) =>
+    commandNameVariants(sub).map((name) => parents.concat(name)),
+  );
+}
+
 function collectFishPathOptionFlags(
   program: Command,
   parents: readonly string[],
@@ -455,14 +465,7 @@ function generatePowerShellCompletion(program: Command): string {
     }
 
     for (const sub of cmd.commands) {
-      // Alias-typed paths must keep completing like the canonical command; the
-      // variant count stays bounded because it grows only under aliased ancestors.
-      visit(
-        sub,
-        pathVariants.flatMap((parentPath) =>
-          commandNameVariants(sub).map((name) => parentPath.concat(name)),
-        ),
-      );
+      visit(sub, childPathVariants(pathVariants, sub));
     }
   };
 
@@ -542,12 +545,7 @@ function generateFishCompletion(program: Command): string {
     }
 
     for (const sub of cmd.commands) {
-      visit(
-        sub,
-        parentVariants.flatMap((parents) =>
-          commandNameVariants(sub).map((name) => parents.concat(name)),
-        ),
-      );
+      visit(sub, childPathVariants(parentVariants, sub));
     }
   };
 
