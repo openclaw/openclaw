@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Lazy factories for shared and leased Codex app-server clients.
  */
@@ -22,12 +23,7 @@ export type CodexAppServerClientFactory = (
   },
 ) => Promise<CodexAppServerClient>;
 
-let sharedClientModulePromise: Promise<typeof import("./shared-client.js")> | null = null;
-
-const loadSharedClientModule = async () => {
-  sharedClientModulePromise ??= import("./shared-client.js");
-  return await sharedClientModulePromise;
-};
+const loadSharedClientModule = createLazyRuntimeModule(() => import("./shared-client.js"));
 
 /** Returns a leased shared client so startup can release ownership explicitly. */
 export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFactory = (

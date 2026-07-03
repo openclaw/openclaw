@@ -22,6 +22,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
@@ -49,73 +50,42 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-let skillsModulePromise: Promise<typeof import("../skills/loading/workspace.js")> | undefined;
-let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
-let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
-let agentWorkspaceDirsModulePromise:
-  | Promise<typeof import("../agents/workspace-dirs.js")>
-  | undefined;
-let skillSourceModulePromise: Promise<typeof import("../skills/loading/source.js")> | undefined;
-let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
-let sandboxConstantsModulePromise:
-  | Promise<typeof import("../agents/sandbox/constants.js")>
-  | undefined;
-let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
-let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
-let skillScannerModulePromise: Promise<typeof import("../skills/security/scanner.js")> | undefined;
+const loadSkillsModule = createLazyRuntimeModule(() => import("../skills/loading/workspace.js"));
 
-function loadSkillsModule() {
-  skillsModulePromise ??= import("../skills/loading/workspace.js");
-  return skillsModulePromise;
-}
+const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
-function loadConfigModule() {
-  configModulePromise ??= import("../config/config.js");
-  return configModulePromise;
-}
+const loadAuditFsModule = createLazyRuntimeModule(() => import("./audit-fs.js"));
 
-function loadAuditFsModule() {
-  auditFsModulePromise ??= import("./audit-fs.js");
-  return auditFsModulePromise;
-}
+const loadAgentScopeModule = createLazyRuntimeModule(() => import("../agents/agent-scope.js"));
 
-function loadAgentScopeModule() {
-  agentScopeModulePromise ??= import("../agents/agent-scope.js");
-  return agentScopeModulePromise;
-}
+const loadAgentWorkspaceDirsModule = createLazyRuntimeModule(
+  () => import("../agents/workspace-dirs.js"),
+);
 
-function loadAgentWorkspaceDirsModule() {
-  agentWorkspaceDirsModulePromise ??= import("../agents/workspace-dirs.js");
-  return agentWorkspaceDirsModulePromise;
-}
+const loadSkillSourceModule = createLazyRuntimeModule(() => import("../skills/loading/source.js"));
 
-function loadSkillSourceModule() {
-  skillSourceModulePromise ??= import("../skills/loading/source.js");
-  return skillSourceModulePromise;
-}
+const loadSkillScannerModule = createLazyRuntimeModule(
+  () => import("../skills/security/scanner.js"),
+);
 
-function loadSkillScannerModule() {
-  skillScannerModulePromise ??= import("../skills/security/scanner.js");
-  return skillScannerModulePromise;
-}
+const loadExecDockerRaw = createLazyRuntimeNamedExport(
+  () => import("../agents/sandbox/docker.js"),
+  "execDockerRaw",
+) satisfies () => Promise<ExecDockerRawFn>;
 
-async function loadExecDockerRaw(): Promise<ExecDockerRawFn> {
-  sandboxDockerModulePromise ??= import("../agents/sandbox/docker.js");
-  const { execDockerRaw } = await sandboxDockerModulePromise;
-  return execDockerRaw;
-}
+const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
+  () => import("../agents/sandbox/constants.js"),
+  "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
+);
 
-async function loadSandboxBrowserSecurityHashEpoch(): Promise<string> {
-  sandboxConstantsModulePromise ??= import("../agents/sandbox/constants.js");
-  const { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } = await sandboxConstantsModulePromise;
-  return SANDBOX_BROWSER_SECURITY_HASH_EPOCH;
-}
+const loadAuditPluginsTrustModule = createLazyRuntimeModule(
+  () => import("./audit-plugins-trust.js"),
+);
 
 export async function collectPluginsTrustFindings(
   params: CollectPluginsTrustFindingsParams,
 ): Promise<SecurityAuditFinding[]> {
-  auditPluginsTrustModulePromise ??= import("./audit-plugins-trust.js");
-  const { collectPluginsTrustFindings: collect } = await auditPluginsTrustModulePromise;
+  const { collectPluginsTrustFindings: collect } = await loadAuditPluginsTrustModule();
   return await collect(params);
 }
 

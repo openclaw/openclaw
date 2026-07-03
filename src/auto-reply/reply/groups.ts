@@ -281,6 +281,7 @@ export function buildGroupChatContext(params: {
     lines.push(
       `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
     );
+    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
   }
   if (canUseSilentReply) {
     lines.push(
@@ -344,17 +345,12 @@ export function resolveGroupSilentReplyBehavior(params: {
 
 /** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
-  cfg: OpenClawConfig;
-  sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
-  silentToken: string;
-  silentReplyPolicy?: SilentReplyPolicy;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
-  const activationLine =
-    activation === "always"
-      ? "Activation: always-on (you receive every group message)."
-      : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  return `${activationLine} Address the specific sender noted in the message context.`;
+  if (activation === "always") {
+    return "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.";
+  }
+  return "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.";
 }

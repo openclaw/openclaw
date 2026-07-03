@@ -95,6 +95,7 @@ import {
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
@@ -279,7 +280,7 @@ export class OpenClawApp extends LitElement {
   @state() activityExpandedIds = new Set<string>();
   @state() activityAutoFollow = true;
   @state() activityAtBottom = true;
-  @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
+  @state() chatStreamSegments: ChatStreamSegment[] = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
@@ -809,9 +810,9 @@ export class OpenClawApp extends LitElement {
       }
     }
     if (this.chatSessionPickerOpen) {
-      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
-        (node) => path.includes(node),
-      );
+      const insidePicker = Array.from(
+        this.querySelectorAll(".chat-controls__session-picker, .sidebar-session-search"),
+      ).some((node) => path.includes(node));
       if (!insidePicker) {
         this.chatSessionPickerOpen = false;
         this.chatSessionPickerSurface = null;

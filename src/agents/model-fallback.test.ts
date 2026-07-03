@@ -31,7 +31,10 @@ import {
   runWithImageModelFallback,
   runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
-import { createAgentRunRestartAbortError } from "./run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "./run-termination.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -2796,6 +2799,25 @@ describe("runWithModelFallback", () => {
         run,
       }),
     ).rejects.toThrow("agent run aborted for restart");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back on direct active-run aborts without an aborted signal", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(createAgentRunDirectAbortError())
+      .mockResolvedValueOnce("fallback should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toThrow("agent run aborted");
 
     expect(run).toHaveBeenCalledTimes(1);
   });

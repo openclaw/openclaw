@@ -71,7 +71,9 @@
 	<key>NSMotionUsageDescription</key>
 	<string>OpenClaw may use motion data to support device-aware interactions and automations.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>OpenClaw needs photo library access when you choose existing photos to share with your assistant.</string>
+	<string>OpenClaw lets your assistant read photos you allow and lets you choose photos to share.</string>
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

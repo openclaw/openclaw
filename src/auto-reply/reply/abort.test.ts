@@ -1,13 +1,14 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   testing as abortTesting,
+  formatAbortReplyText,
   getAbortMemory,
   getAbortMemorySizeForTest,
   isAbortRequestText,
@@ -83,7 +84,17 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-abort-" });
+
 describe("abort detection", () => {
+  beforeAll(async () => {
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTempDirs.cleanup();
+  });
+
   async function writeSessionStore(
     storePath: string,
     sessionIdsByKey: Record<string, string>,
@@ -103,7 +114,7 @@ describe("abort detection", () => {
     sessionIdsByKey?: Record<string, string>;
     nowMs?: number;
   }) {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
+    const root = await suiteTempDirs.make("case");
     const storePath = path.join(root, "sessions.json");
     const cfg = {
       session: { store: storePath },
@@ -800,6 +811,53 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
+  });
+
+  it("does not report /stop success after the active backend freezes its outcome", async () => {
+    const sessionKey = "agent:main:telegram:direct:finalizing";
+    const sessionId = "session-finalizing";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => false,
+      isAbortable: () => false,
+    });
+    operation.setPhase("running");
+    runtimeAbortMocks.abortEmbeddedAgentRun.mockReturnValue(false);
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
+    const markSessionAbortTarget = vi.fn();
+    abortTesting.setDepsForTests({ markSessionAbortTarget });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:finalizing",
+      to: "telegram:finalizing",
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      aborted: false,
+      rejectionReason: "finalizing",
+    });
+    expect(operation.result).toBeNull();
+    expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(markSessionAbortTarget).not.toHaveBeenCalled();
+    expect(getAbortMemory(sessionKey)).toBeUndefined();
+    expect(formatAbortReplyText(undefined, result.rejectionReason)).toBe(
+      "Agent reply is already finalizing and can no longer be aborted.",
+    );
+    operation.complete();
   });
 
   it("fast-abort of an ACP target aborts the source stored session when no source reply operation is registered", async () => {

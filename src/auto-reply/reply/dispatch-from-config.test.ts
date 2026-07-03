@@ -46,7 +46,12 @@ import {
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+type AbortResult = {
+  handled: boolean;
+  aborted: boolean;
+  rejectionReason?: "finalizing";
+  stoppedSubagents?: number;
+};
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
@@ -3083,6 +3088,8 @@ describe("dispatchReplyFromConfig", () => {
     const onToolStart = vi.fn();
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -3092,6 +3099,8 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
       return { text: "done" } satisfies ReplyPayload;
     };
 
@@ -3105,12 +3114,56 @@ describe("dispatchReplyFromConfig", () => {
         onToolStart,
         onItemEvent,
         onCommandOutput,
+        onCompactionStart,
+        onCompactionEnd,
       },
     });
 
     expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onCompactionStart).toHaveBeenCalledTimes(1);
+    expect(onCompactionEnd).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not forward compaction lifecycle feedback while verbose is off by default", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "off",
+    };
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    });
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onCompactionStart?.();
+      await opts?.onCompactionEnd?.();
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onCompactionStart,
+        onCompactionEnd,
+      },
+    });
+
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionEnd).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -4262,6 +4315,39 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("suppresses tool error payloads when messages.suppressToolErrors is enabled", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "⚠️ 🛠️ sqlite3 failed", isError: true });
+      return { text: "handled" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: { defaults: { verboseDefault: "on" } },
+        messages: {
+          suppressToolErrors: true,
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onToolResult },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "handled" });
+  });
+
   it("keeps message-tool-only failed tool output compact in normal verbose mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -4909,6 +4995,30 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
+    });
+  });
+
+  it("reports when a fast abort is rejected during finalization", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: false,
+      rejectionReason: "finalizing",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Body: "/stop" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      formatAbortReplyTextResolver: (_stopped, rejectionReason) =>
+        rejectionReason === "finalizing" ? "already finalizing" : "aborted",
+    });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "already finalizing",
     });
   });
 
@@ -7967,6 +8077,46 @@ describe("dispatchReplyFromConfig", () => {
     ]);
   });
 
+  it("suppresses isCommentary payloads from final replies by default", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const replyResolver = async () =>
+      [
+        { text: "commentary...", isCommentary: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls).toHaveLength(1);
+    expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
+  });
+
+  it("delivers isCommentary final replies when the channel opts in", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
+    const replyResolver = async () =>
+      [
+        { text: "commentary...", isCommentary: true },
+        { text: "The answer is 42" },
+      ] satisfies ReplyPayload[];
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { commentaryPayloadsEnabled: true },
+      replyResolver,
+    });
+
+    const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+    expect(finalCalls.map((call) => (call[0] as ReplyPayload).text)).toEqual([
+      "commentary...",
+      "The answer is 42",
+    ]);
+  });
+
   it("does not synthesize opted-in final reasoning payloads into TTS media", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
@@ -7987,6 +8137,28 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(reasoningPayload);
+  });
+
+  it("does not synthesize opted-in final commentary payloads into TTS media", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
+    const commentaryPayload = {
+      text: "commentary...",
+      isCommentary: true,
+    } satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { commentaryPayloadsEnabled: true },
+      replyResolver: async () => commentaryPayload,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(commentaryPayload);
   });
 
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
@@ -8048,6 +8220,69 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(blockReplySentTexts).toEqual(["thinking...", "The answer is 42"]);
+    const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
+      .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
+      .filter((call) => call.kind === "block");
+    expect(blockTtsCalls.map((call) => call.payload?.text)).toEqual(["The answer is 42"]);
+  });
+
+  it("suppresses isCommentary payloads from block replies by default", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "commentary...", isCommentary: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return { text: "The answer is 42" };
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    expect(blockReplySentTexts).not.toContain("commentary...");
+    expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("delivers opted-in block commentary payloads without applying TTS", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
+    const blockReplySentTexts: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "commentary...", isCommentary: true });
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return undefined;
+    };
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        if (payload.text) {
+          blockReplySentTexts.push(payload.text);
+        }
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { commentaryPayloadsEnabled: true },
+      replyResolver,
+    });
+
+    expect(blockReplySentTexts).toEqual(["commentary...", "The answer is 42"]);
     const blockTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
       .map(([call]) => call as { kind?: unknown; payload?: ReplyPayload })
       .filter((call) => call.kind === "block");
@@ -9743,6 +9978,44 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         channelData: { openclawProgressKind: "fast-mode-auto" },
       }),
     );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses fast auto progress for room-event message-tool-only turns", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({
+      SessionKey: "test:session",
+      ChatType: "channel",
+      InboundEventKind: "room_event",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 

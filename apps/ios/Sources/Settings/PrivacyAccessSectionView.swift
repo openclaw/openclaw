@@ -1,12 +1,15 @@
 import Contacts
 import EventKit
+import Photos
 import SwiftUI
 import UIKit
 
 struct PrivacyAccessSectionView: View {
+    @Environment(GatewayConnectionController.self) private var gatewayController
     @State private var contactsStatus: CNAuthorizationStatus = CNContactStore.authorizationStatus(for: .contacts)
     @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
     @State private var remindersStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .reminder)
+    @State private var photosStatus = PhotoLibraryAccess.authorizationStatus()
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -19,6 +22,14 @@ struct PrivacyAccessSectionView: View {
                 detail: "Search and add contacts from the assistant.",
                 actionTitle: self.actionTitle(for: self.contactsStatus),
                 action: self.handleContactsAction)
+
+            self.permissionRow(
+                title: "Photos",
+                icon: "photo.on.rectangle",
+                status: self.photosStatusText,
+                detail: self.photosDetail,
+                actionTitle: self.photosActionTitle,
+                action: self.handlePhotosAction)
 
             self.permissionRow(
                 title: "Calendar (Add Events)",
@@ -67,6 +78,7 @@ struct PrivacyAccessSectionView: View {
                 Text(status)
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(self.statusColor(for: status))
+                    .accessibilityIdentifier("privacy-access-\(title)-status")
             }
             Text(detail)
                 .font(.footnote)
@@ -75,6 +87,7 @@ struct PrivacyAccessSectionView: View {
                 Button(actionTitle, action: action)
                     .font(.footnote)
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier("privacy-access-\(title)-action")
             }
         }
         .padding(.vertical, 2)
@@ -82,14 +95,14 @@ struct PrivacyAccessSectionView: View {
 
     private func statusColor(for status: String) -> Color {
         switch status {
-        case "Allowed":
-            .green
+        case "Allowed", "Limited":
+            OpenClawBrand.ok
         case "Not Set":
-            .orange
+            OpenClawBrand.warn
         case "Add-Only":
-            .yellow
+            OpenClawBrand.warn
         default:
-            .red
+            OpenClawBrand.danger
         }
     }
 
@@ -114,6 +127,54 @@ struct PrivacyAccessSectionView: View {
             "Open Settings"
         default:
             nil
+        }
+    }
+
+    private var photosStatusText: String {
+        switch self.photosStatus {
+        case .authorized:
+            "Allowed"
+        case .limited:
+            "Limited"
+        case .notDetermined:
+            "Not Set"
+        case .denied, .restricted:
+            "Not Allowed"
+        @unknown default:
+            "Unknown"
+        }
+    }
+
+    private var photosDetail: String {
+        self.photosStatus == .limited
+            ? "Read photos you select for the assistant."
+            : "Read recent photos for the assistant."
+    }
+
+    private var photosActionTitle: String? {
+        switch self.photosStatus {
+        case .notDetermined:
+            "Request Access"
+        case .limited:
+            "Manage Access"
+        case .denied, .restricted:
+            "Open Settings"
+        default:
+            nil
+        }
+    }
+
+    private func handlePhotosAction() {
+        switch self.photosStatus {
+        case .notDetermined:
+            Task {
+                let status = await PhotoLibraryAccess.requestReadWrite()
+                await MainActor.run { self.updatePhotosStatus(status) }
+            }
+        case .limited, .denied, .restricted:
+            self.openSettings()
+        default:
+            break
         }
     }
 
@@ -282,6 +343,15 @@ struct PrivacyAccessSectionView: View {
         self.contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         self.calendarStatus = EKEventStore.authorizationStatus(for: .event)
         self.remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        self.updatePhotosStatus(PhotoLibraryAccess.authorizationStatus())
+    }
+
+    private func updatePhotosStatus(_ status: PHAuthorizationStatus) {
+        let changed = self.photosStatus != status
+        self.photosStatus = status
+        if changed {
+            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
+        }
     }
 
     private func requestCalendarWriteOnly() async -> Bool {

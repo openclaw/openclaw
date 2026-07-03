@@ -15,6 +15,7 @@ import {
   createPluginRegistryIdNormalizer,
   loadPluginRegistrySnapshot,
 } from "../plugins/plugin-registry.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 
@@ -28,25 +29,24 @@ type PluginTrustPolicyDeps = {
   resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
 };
 
-let pluginTrustPolicyDepsPromise: Promise<PluginTrustPolicyDeps> | undefined;
-
 /** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
-async function loadPluginTrustPolicyDeps(): Promise<PluginTrustPolicyDeps> {
-  pluginTrustPolicyDepsPromise ??= Promise.all([
-    import("../agents/sandbox/config.js"),
-    import("../agents/sandbox/tool-policy.js"),
-    import("../agents/tool-policy-match.js"),
-    import("../agents/tool-policy.js"),
-    import("../agents/sandbox-tool-policy.js"),
-  ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
-    isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
-    pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
-    resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
-    resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
-    resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
-  }));
-  return await pluginTrustPolicyDepsPromise;
-}
+const loadPluginTrustPolicyDeps = createLazyPromise(
+  () =>
+    Promise.all([
+      import("../agents/sandbox/config.js"),
+      import("../agents/sandbox/tool-policy.js"),
+      import("../agents/tool-policy-match.js"),
+      import("../agents/tool-policy.js"),
+      import("../agents/sandbox-tool-policy.js"),
+    ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
+      isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
+      pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
+      resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
+      resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
+      resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
+    })),
+  { cacheRejections: true },
+);
 
 function readChannelCommandSetting(
   cfg: OpenClawConfig,

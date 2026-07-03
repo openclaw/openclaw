@@ -22,7 +22,7 @@ ktlint-gradle = "14.2.0"
 kotlin = "2.4.0"
 material = "1.14.0"
 okhttp = "5.3.2"
-play-services-code-scanner = "16.1.0"
+barcode-scanning = "17.3.0"
 robolectric = "4.16.1"
 serialization-json = "1.11.0"
 
@@ -32,6 +32,7 @@ androidx-benchmark-macro-junit4 = { module = "androidx.benchmark:benchmark-macro
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "androidx-camera" }
 androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "androidx-camera" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "androidx-camera" }
+androidx-camera-view = { module = "androidx.camera:camera-view", version.ref = "androidx-camera" }
 androidx-camera-video = { module = "androidx.camera:camera-video", version.ref = "androidx-camera" }
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "androidx-compose-bom" }
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
@@ -47,6 +48,7 @@ androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "a
 androidx-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "androidx-uiautomator" }
 androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "androidx-webkit" }
 bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bcprov" }
+barcode-scanning = { module = "com.google.mlkit:barcode-scanning", version.ref = "barcode-scanning" }
 commonmark = { module = "org.commonmark:commonmark", version.ref = "commonmark" }
 commonmark-ext-autolink = { module = "org.commonmark:commonmark-ext-autolink", version.ref = "commonmark" }
 commonmark-ext-gfm-strikethrough = { module = "org.commonmark:commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
@@ -63,7 +65,6 @@ kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 material = { module = "com.google.android.material:material", version.ref = "material" }
 mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
-play-services-code-scanner = { module = "com.google.android.gms:play-services-code-scanner", version.ref = "play-services-code-scanner" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 
 [plugins]

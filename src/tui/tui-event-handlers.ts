@@ -892,12 +892,14 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearStreamingWatchdog();
         setActivityStatus("finishing context");
       }
+      let forceRender = false;
       if (phase === "end") {
         postFinalizingRuns.delete(evt.runId);
         if (!canUpdateActivityStatus) {
           return;
         }
         setActivityStatus("idle");
+        forceRender = true;
       }
       if (phase === "error") {
         postFinalizingRuns.delete(evt.runId);
@@ -917,8 +919,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         } else {
           setActivityStatus("error");
         }
+        forceRender = true;
       }
-      tui.requestRender();
+      tui.requestRender(forceRender);
     }
   };
 

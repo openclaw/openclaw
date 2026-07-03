@@ -1,6 +1,9 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  isAgentRunRestartAbortReason,
+} from "../../agents/run-termination.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -19,6 +22,8 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  isStopped?: () => boolean;
+  isAbortable?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -71,6 +76,8 @@ export type ReplyOperation = {
   updateSessionId(nextSessionId: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
+  /** Reject later aborts after the backend has committed its terminal outcome. */
+  freezeAbort(): void;
   /**
    * Keep a failed operation active until complete() releases the session lane.
    * Dispatch uses this while a user-visible failure payload still needs delivery.
@@ -91,8 +98,8 @@ export type ReplyOperation = {
     timeout?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
   ): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
-  abortByUser(): void;
-  abortForRestart(): void;
+  abortByUser(): boolean;
+  abortForRestart(): boolean;
 };
 
 export type ReplyRunRegistry = {
@@ -226,6 +233,8 @@ function isReplyRunCompacting(operation: ReplyOperation): boolean {
 }
 
 const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
+const abortFrozenOperations = new WeakSet<ReplyOperation>();
+const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
 const afterClearCallbacksByOperation = new WeakMap<
   ReplyOperation,
   Set<(sessionId: string) => void>
@@ -233,6 +242,34 @@ const afterClearCallbacksByOperation = new WeakMap<
 
 function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+function isReplyOperationAbortable(operation: ReplyOperation): boolean {
+  if (operation.result || abortFrozenOperations.has(operation)) {
+    return false;
+  }
+  const backend = getAttachedBackend(operation);
+  if (!backend?.isAbortable) {
+    return true;
+  }
+  try {
+    return backend.isAbortable();
+  } catch {
+    return false;
+  }
+}
+
+export function isReplyRunAbortableForSignal(signal: AbortSignal): boolean {
+  const operation = operationsByUpstreamAbortSignal.get(signal);
+  return operation ? isReplyOperationAbortable(operation) : true;
+}
+
+function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
+  try {
+    return backend.isStopped === undefined ? backend.isStreaming() : !backend.isStopped();
+  } catch {
+    return false;
+  }
 }
 
 /** Run work after an operation no longer owns its session lane. */
@@ -401,6 +438,15 @@ export function createReplyOperation(params: {
   let stateCleared = false;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
+  const upstreamAbortSignal = params.upstreamAbortSignal;
+  let upstreamAbortHandler: (() => void) | undefined;
+  const detachUpstreamAbort = () => {
+    if (!upstreamAbortHandler) {
+      return;
+    }
+    upstreamAbortSignal?.removeEventListener("abort", upstreamAbortHandler);
+    upstreamAbortHandler = undefined;
+  };
 
   const clearState = (
     afterClearBarrier?: PromiseLike<unknown>,
@@ -410,6 +456,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
           sessionKey,
@@ -446,25 +493,12 @@ export function createReplyOperation(params: {
   ) => {
     if (opts?.abortedCode && !result) {
       result = { kind: "aborted", code: opts.abortedCode };
+      detachUpstreamAbort();
     }
     phase = "aborted";
     abortInternally(abortReason);
     getAttachedBackend(operation)?.cancel(reason);
   };
-
-  if (params.upstreamAbortSignal) {
-    if (params.upstreamAbortSignal.aborted) {
-      abortInternally(params.upstreamAbortSignal.reason);
-    } else {
-      params.upstreamAbortSignal.addEventListener(
-        "abort",
-        () => {
-          abortInternally(params.upstreamAbortSignal?.reason);
-        },
-        { once: true },
-      );
-    }
-  }
 
   const operation: ReplyOperation = {
     get key() {
@@ -546,6 +580,10 @@ export function createReplyOperation(params: {
         attachedBackendByOperation.delete(operation);
       }
     },
+    freezeAbort() {
+      abortFrozenOperations.add(operation);
+      detachUpstreamAbort();
+    },
     retainFailureUntilComplete() {
       retainFailureUntilComplete = true;
     },
@@ -568,6 +606,8 @@ export function createReplyOperation(params: {
       clearState(barrier, timeoutMs);
     },
     fail(code, cause) {
+      abortFrozenOperations.add(operation);
+      detachUpstreamAbort();
       if (!result) {
         result = { kind: "failed", code, cause };
         phase = "failed";
@@ -577,6 +617,9 @@ export function createReplyOperation(params: {
       }
     },
     abortByUser() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
       const phaseBeforeAbort = phase;
       abortWithReason("user_abort", createUserAbortError(), {
         abortedCode: "aborted_by_user",
@@ -584,8 +627,12 @@ export function createReplyOperation(params: {
       if (phaseBeforeAbort === "queued") {
         clearState();
       }
+      return true;
     },
     abortForRestart() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
       const phaseBeforeAbort = phase;
       abortWithReason("restart", createAgentRunRestartAbortError(), {
         abortedCode: "aborted_for_restart",
@@ -593,6 +640,7 @@ export function createReplyOperation(params: {
       if (phaseBeforeAbort === "queued") {
         clearState();
       }
+      return true;
     },
   };
 
@@ -601,6 +649,28 @@ export function createReplyOperation(params: {
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   registerWaitSessionId(sessionKey, currentSessionId);
   markReplyRunDiagnosticWorkStarted({ sessionKey, sessionId: currentSessionId });
+  if (upstreamAbortSignal) {
+    operationsByUpstreamAbortSignal.set(upstreamAbortSignal, operation);
+    const abortFromUpstream = () => {
+      if (result) {
+        return;
+      }
+      const restart = isAgentRunRestartAbortReason(upstreamAbortSignal.reason);
+      const phaseBeforeAbort = phase;
+      abortWithReason(restart ? "restart" : "user_abort", upstreamAbortSignal.reason, {
+        abortedCode: restart ? "aborted_for_restart" : "aborted_by_user",
+      });
+      if (phaseBeforeAbort === "queued") {
+        clearState();
+      }
+    };
+    if (upstreamAbortSignal.aborted) {
+      abortFromUpstream();
+    } else {
+      upstreamAbortHandler = abortFromUpstream;
+      upstreamAbortSignal.addEventListener("abort", upstreamAbortHandler, { once: true });
+    }
+  }
 
   return operation;
 }
@@ -635,8 +705,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     if (!operation) {
       return false;
     }
-    operation.abortByUser();
-    return true;
+    return operation.abortByUser();
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -709,6 +778,8 @@ export function isReplyRunActiveForSessionId(sessionId: string): boolean {
 
 export function isReplyRunAbortableForCompaction(sessionId: string): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  // Manual compaction uses this as a coordination gate: a finalizing run still
+  // needs to drain even when its frozen outcome rejects the abort itself.
   return Boolean(operation && operation.phase !== "queued");
 }
 
@@ -726,7 +797,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  if (!backend.isStreaming()) {
+  if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
   void backend.queueMessage(text);
@@ -738,8 +809,7 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
   if (!operation) {
     return false;
   }
-  operation.abortByUser();
-  return true;
+  return operation.abortByUser();
 }
 
 export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
@@ -817,14 +887,25 @@ export async function waitForReplyRunFollowupAdmission(
   }
 }
 
-export function abortActiveReplyRuns(opts: { mode: "all" | "compacting" }): boolean {
+export function abortActiveReplyRuns(opts: {
+  mode: "all" | "compacting";
+  onAbortError?: (sessionId: string, error: unknown) => void;
+}): boolean {
   let aborted = false;
   for (const operation of replyRunState.activeRunsByKey.values()) {
     if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
       continue;
     }
-    operation.abortForRestart();
-    aborted = true;
+    try {
+      if (operation.abortForRestart()) {
+        aborted = true;
+      }
+    } catch (error) {
+      if (operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart") {
+        aborted = true;
+      }
+      opts.onAbortError?.(operation.sessionId, error);
+    }
   }
   return aborted;
 }

@@ -34,6 +34,11 @@ import {
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import {
+  clearEmbeddedAgentRunAbortabilityForRunId,
+  isEmbeddedAgentRunAbortableForRunId,
+  retainEmbeddedAgentRunAbortabilityForRunId,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
@@ -71,8 +76,10 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   type SessionEntry,
+  type SessionFreshness,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -81,6 +88,7 @@ import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -152,6 +160,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
@@ -218,6 +227,53 @@ function logAttachmentFailure(
 function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function respondDeletedAgentSession(params: {
+  cfg: OpenClawConfig;
+  canonicalKey: string;
+  entry?: SessionEntry | null;
+  acpMetadataSessionKey?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
+    params.cfg,
+    params.canonicalKey,
+    params.entry,
+    {
+      acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey,
+    },
+  );
+  if (deletedAgentId === null) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${deletedAgentId}" no longer exists in configuration`,
+    ),
+  );
+  return true;
+}
+
+function respondDeletedAgentSessionForKey(params: {
+  sessionKey: string;
+  agentId?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    clone: false,
+  });
+  return respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+  });
 }
 
 function resolveAllowModelOverrideFromClient(
@@ -1079,6 +1135,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
+      // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;
@@ -1405,44 +1462,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId = inferredAgentId;
       }
     }
-    // Drop an exec-approval followup whose session key was rebound by /new or
-    // /reset while the approval was pending, before the handler touches the
-    // rebound session (store write, run registration, dedupe, accepted ack).
-    if (execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
-      const expectedSessionId = normalizeOptionalString(
-        request.execApprovalFollowupExpectedSessionId,
-      );
-      let currentSessionId: string | undefined;
-      try {
-        currentSessionId = normalizeOptionalString(
-          loadSessionEntry(requestedSessionKeyRaw).entry?.sessionId,
-        );
-      } catch {
-        currentSessionId = undefined;
-      }
-      if (
-        isExecApprovalFollowupSessionRebound({
-          expectedSessionId,
-          resolvedSessionId: currentSessionId,
-        })
-      ) {
-        context.logGateway.info(
-          `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
-        );
-        const droppedPayload = {
-          runId,
-          status: "ok" as const,
-          summary: "exec approval followup dropped: session was reset before the approval resolved",
-        };
-        setGatewayDedupeEntries({
-          dedupe: context.dedupe,
-          keys: agentDedupeKeys,
-          entry: { ts: Date.now(), ok: true, payload: droppedPayload },
-        });
-        respond(true, droppedPayload, undefined, { runId });
-        return;
-      }
-    }
     let requestedSessionKey =
       requestedSessionKeyRaw ??
       (!requestedSessionId
@@ -1471,6 +1490,58 @@ export const agentHandlers: GatewayRequestHandlers = {
             `invalid agent params: agent "${request.agentId}" does not match session key agent "${sessionAgentId}"`,
           ),
         );
+        return;
+      }
+    }
+    // Keep deleted-agent rejection ahead of dedupe, media offload, reset, and
+    // dispatch so agent RPC shares the chat.send / sessions.send boundary.
+    if (
+      requestedSessionKey &&
+      respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+    ) {
+      return;
+    }
+    // Drop an exec-approval followup whose session key was rebound by /new or
+    // /reset while the approval was pending, before the handler touches the
+    // rebound session (store write, run registration, dedupe, accepted ack).
+    if (execApprovalFollowupApprovalId && requestedSessionKeyRaw) {
+      const expectedSessionId = normalizeOptionalString(
+        request.execApprovalFollowupExpectedSessionId,
+      );
+      let currentSessionId: string | undefined;
+      try {
+        currentSessionId = normalizeOptionalString(
+          loadSessionEntry(requestedSessionKeyRaw).entry?.sessionId,
+        );
+      } catch {
+        currentSessionId = undefined;
+      }
+      if (
+        isExecApprovalFollowupSessionRebound({
+          expectedSessionId,
+          resolvedSessionId: currentSessionId,
+        })
+      ) {
+        emitDiagnosticEvent({
+          type: "exec.approval.followup_suppressed",
+          approvalId: execApprovalFollowupApprovalId,
+          reason: "session_rebound",
+          phase: "gateway_preflight",
+        });
+        context.logGateway.info(
+          `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
+        );
+        const droppedPayload = {
+          runId,
+          status: "ok" as const,
+          summary: "exec approval followup dropped: session was reset before the approval resolved",
+        };
+        setGatewayDedupeEntries({
+          dedupe: context.dedupe,
+          keys: agentDedupeKeys,
+          entry: { ts: Date.now(), ok: true, payload: droppedPayload },
+        });
+        respond(true, droppedPayload, undefined, { runId });
         return;
       }
     }
@@ -1789,8 +1860,20 @@ export const agentHandlers: GatewayRequestHandlers = {
           storePath,
           entry,
           canonicalKey,
+          legacyKey,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
+        if (
+          respondDeletedAgentSession({
+            cfg: cfgLocal,
+            canonicalKey,
+            entry,
+            acpMetadataSessionKey: legacyKey,
+            respond,
+          })
+        ) {
+          return;
+        }
         const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
           cfgLocal.session?.maintenance,
         );
@@ -1814,13 +1897,17 @@ export const agentHandlers: GatewayRequestHandlers = {
               agentId: canonicalSessionAgentId,
             })
           : undefined;
+        const skipImplicitExpiry =
+          resetPolicy.configured !== true && hasProviderOwnedSession(entry);
         let freshness = entry
-          ? evaluateSessionFreshness({
-              updatedAt: entry.updatedAt,
-              ...lifecycleTimestamps,
-              now,
-              policy: resetPolicy,
-            })
+          ? skipImplicitExpiry
+            ? ({ fresh: true } satisfies SessionFreshness)
+            : evaluateSessionFreshness({
+                updatedAt: entry.updatedAt,
+                ...lifecycleTimestamps,
+                now,
+                policy: resetPolicy,
+              })
           : undefined;
         const visibleRequest =
           request.bootstrapContextRunKind !== "cron" &&
@@ -2005,13 +2092,17 @@ export const agentHandlers: GatewayRequestHandlers = {
                 agentId: sessionAgent,
               })
             : undefined;
+          const freshSkipImplicitExpiry =
+            resetPolicy.configured !== true && hasProviderOwnedSession(freshEntry);
           const freshFreshness = freshEntry
-            ? evaluateSessionFreshness({
-                updatedAt: freshEntry.updatedAt,
-                ...freshLifecycleTimestamps,
-                now,
-                policy: resetPolicy,
-              })
+            ? freshSkipImplicitExpiry
+              ? ({ fresh: true } satisfies SessionFreshness)
+              : evaluateSessionFreshness({
+                  updatedAt: freshEntry.updatedAt,
+                  ...freshLifecycleTimestamps,
+                  now,
+                  policy: resetPolicy,
+                })
             : undefined;
           const freshRequestedSessionMatchesEntry = Boolean(
             requestedSessionId && freshEntry?.sessionId?.trim() === requestedSessionId,
@@ -2544,6 +2635,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        isAbortable: () => isEmbeddedAgentRunAbortableForRunId(runId),
+        onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(runId),
         controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
         lifecycleGeneration,
@@ -2558,6 +2651,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       if (activeRunAbort.registered) {
+        retainEmbeddedAgentRunAbortabilityForRunId(runId);
         if (pendingChatRun) {
           context.addChatRun(runId, {
             ...pendingChatRun,
@@ -2573,6 +2667,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           );
         }
       }
+      const cleanupActiveRunAbort = (opts?: { force?: boolean }) => {
+        activeRunAbort.cleanup(opts);
+      };
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
       // Confirmed only when the caller is the trusted in-process backend ACP
@@ -2682,6 +2779,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             await reactivateCompletedSubagentSession({
               sessionKey: resolvedSessionKey,
               runId,
+              task: message,
             });
           }
 
@@ -2821,12 +2919,15 @@ export const agentHandlers: GatewayRequestHandlers = {
                 spawnedBy: spawnedByValue,
                 sessionEntry,
               }),
+              // Plugin tools created for Gateway-owned turns must resolve the live
+              // Gateway subagent and node runtimes, not standalone placeholders.
+              allowGatewaySubagentBinding: true,
               allowModelOverride,
             },
             runId,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
-            cleanupAbortController: activeRunAbort.cleanup,
+            cleanupAbortController: cleanupActiveRunAbort,
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
@@ -2855,7 +2956,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           });
         } finally {
           if (!dispatched) {
-            activeRunAbort.cleanup({ force: true });
+            cleanupActiveRunAbort({ force: true });
           }
         }
       })();

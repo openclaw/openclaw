@@ -55,6 +55,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   stageSandboxMedia,
   type StageSandboxMediaResult,
@@ -194,7 +195,7 @@ import {
   loadOptionalServerMethodModelCatalog,
   startOptionalServerMethodModelCatalogLoad,
 } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -1320,7 +1321,7 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
   );
 }
 
-function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
+function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }
@@ -2493,10 +2494,11 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
+    const abortedRunIds = new Set(runIds);
     await persistAbortedPartials({
       context: params.context,
       sessionKey: params.persistSessionKey ?? params.sessionKey,
-      snapshots,
+      snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
     });
   }
   return res;
@@ -3042,10 +3044,11 @@ async function handleChatHistoryRequest({
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-  sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
+  sessionInfo.hasActiveRun = hasVisibleActiveSessionRun({
     context,
     requestedKey: sessionKey,
     canonicalKey,
+    sessionId: entry?.sessionId,
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId,
   });
@@ -3437,7 +3440,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.systemProvenanceReceipt ||
         suppressCommandInterpretation ||
         explicitOriginResult.value) &&
-      !canInjectSystemProvenance(client)
+      !hasGatewayAdminScope(client)
     ) {
       respond(
         false,
@@ -3691,6 +3694,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
       providerId: resolvedSessionModel.provider,
       authProviderId: resolvedSessionAuthProvider,
+      isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
       kind: "chat-send",
       lifecycleGeneration,
     });
@@ -3884,6 +3888,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         text: rawMessage,
         timestamp: now,
         idempotencyKey: `${clientRunId}:user`,
+        ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
         ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
       };
       const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
@@ -3901,10 +3906,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           : Promise.resolve({});
 
       const trimmedMessage = parsedMessage.trim();
-      const injectThinking = Boolean(
-        p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
-      );
-      const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const commandBody = parsedMessage;
       const commandSource =
         !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
       const messageForAgent = systemProvenanceReceipt

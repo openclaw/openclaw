@@ -1297,6 +1297,8 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
+    commentaryToggle: "เก็บคำอธิบายหลังคำตอบสุดท้าย",
+    commentaryLabel: "คำอธิบาย",
     autoScrollMode: "โหมดเลื่อนอัตโนมัติ",
     autoScrollAlways: "เสมอ",
     autoScrollNearBottom: "ใกล้ด้านล่าง",
@@ -1315,6 +1317,9 @@ export const th: TranslationMap = {
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
+    sidebar: {
+      allSessions: "เซสชันทั้งหมด",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1341,6 +1346,11 @@ export const th: TranslationMap = {
       retry: "ลองอีกครั้ง",
       retrySend: "ลองส่งอีกครั้ง",
       retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
+    },
+    pairingQrExpired: {
+      title: "QR การจับคู่หมดอายุ",
+      reason: "เรียกใช้ /pair qr อีกครั้งเพื่อสร้างรหัสตั้งค่าใหม่",
+      badge: "หมดอายุ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
