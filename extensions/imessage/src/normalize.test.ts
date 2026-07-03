@@ -17,10 +17,6 @@ describe("normalizeIMessageMessagingTarget", () => {
     expect(normalizeIMessageMessagingTarget("auto:ChatIdentifier:foo")).toBe("chatidentifier:foo");
   });
 
-  // Regression test for #89235: a bare 32-char hex group chat identifier in
-  // delivery.to was stripped of its non-numeric characters by normalizeE164
-  // and resolved to a bogus phone number, so cron announce delivery reported
-  // `delivered: true` while silently sending to a nonexistent recipient.
   it("treats a bare 32-char hex group chat identifier as a chat_identifier, not a phone number", () => {
     const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
     expect(normalizeIMessageMessagingTarget(hex)).toBe(`chat_identifier:${hex}`);

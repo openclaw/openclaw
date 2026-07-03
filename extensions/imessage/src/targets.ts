@@ -1,6 +1,7 @@
 // Imessage plugin module implements targets behavior.
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeBareIMessageChatIdentifier } from "./target-identifiers.js";
 import {
   type ChatSenderAllowParams,
   createAllowedChatSenderMatcher,
@@ -23,16 +24,27 @@ export type IMessageAllowTarget = ParsedChatTarget | { kind: "handle"; handle: s
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
 const CHAT_IDENTIFIER_PREFIXES = ["chat_identifier:", "chatidentifier:", "chatident:"];
-// Bare 32-char hex strings are iMessage group chat identifiers (as returned by
-// `imsg` for group chats), not phone numbers. Without an explicit `chat_identifier:`
-// prefix these were falling through to E.164 normalization, which strips the
-// non-numeric characters and silently produces a bogus phone number (#89235).
-const HEX_CHAT_IDENTIFIER_RE = /^[0-9a-f]{32}$/i;
 const SERVICE_PREFIXES: Array<{ prefix: string; service: IMessageService }> = [
   { prefix: "imessage:", service: "imessage" },
   { prefix: "sms:", service: "sms" },
   { prefix: "auto:", service: "auto" },
 ];
+
+function parseServicePrefixedBareChatIdentifier(params: {
+  trimmed: string;
+  lower: string;
+}): IMessageTarget | undefined {
+  for (const { prefix } of SERVICE_PREFIXES) {
+    if (!params.lower.startsWith(prefix)) {
+      continue;
+    }
+    const chatIdentifier = normalizeBareIMessageChatIdentifier(params.trimmed.slice(prefix.length));
+    if (chatIdentifier) {
+      return { kind: "chat_identifier", chatIdentifier };
+    }
+  }
+  return undefined;
+}
 
 export function normalizeIMessageHandle(raw: string): string {
   const trimmed = raw.trim();
@@ -73,8 +85,9 @@ export function normalizeIMessageHandle(raw: string): string {
   if (trimmed.includes("@")) {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
-  if (HEX_CHAT_IDENTIFIER_RE.test(trimmed)) {
-    return `chat_identifier:${lowered}`;
+  const bareChatIdentifier = normalizeBareIMessageChatIdentifier(trimmed);
+  if (bareChatIdentifier) {
+    return `chat_identifier:${bareChatIdentifier}`;
   }
   const normalized = normalizeE164(trimmed);
   if (normalized) {
@@ -89,6 +102,14 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
     throw new Error("iMessage target is required");
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
+
+  const servicePrefixedBareChatIdentifier = parseServicePrefixedBareChatIdentifier({
+    trimmed,
+    lower,
+  });
+  if (servicePrefixedBareChatIdentifier) {
+    return servicePrefixedBareChatIdentifier;
+  }
 
   const servicePrefixed = resolveServicePrefixedChatTarget({
     trimmed,
@@ -117,8 +138,9 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
     return chatTarget;
   }
 
-  if (HEX_CHAT_IDENTIFIER_RE.test(trimmed)) {
-    return { kind: "chat_identifier", chatIdentifier: trimmed.toLowerCase() };
+  const bareChatIdentifier = normalizeBareIMessageChatIdentifier(trimmed);
+  if (bareChatIdentifier) {
+    return { kind: "chat_identifier", chatIdentifier: bareChatIdentifier };
   }
 
   return { kind: "handle", to: trimmed, service: "auto" };
@@ -137,7 +159,7 @@ export function looksLikeIMessageExplicitTargetId(raw: string): boolean {
     CHAT_ID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
     CHAT_GUID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
     CHAT_IDENTIFIER_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
-    HEX_CHAT_IDENTIFIER_RE.test(trimmed)
+    Boolean(normalizeBareIMessageChatIdentifier(trimmed))
   );
 }
 
