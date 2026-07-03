@@ -141,11 +141,14 @@ internal fun rememberChatReaderScrollController(
 
 internal fun initialChatReaderTransition(timeline: ChatTimeline): ChatReaderTransition {
   val initialIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex
+  val followTarget = timeline.followTargetForIndex(initialIndex)
   return ChatReaderTransition(
     state =
       ChatReaderState(
         initialized = initialIndex != null,
-        followTarget = timeline.followTargetForIndex(initialIndex),
+        followTarget = followTarget,
+        hasNewerContent =
+          followTarget == ChatScrollFollowTarget.ReadAnchor && initialIndex != timeline.latestContentIndex,
         latestUserMessageId = timeline.latestUserMessageId,
         latestContentVersion = timeline.latestContentVersion,
       ),

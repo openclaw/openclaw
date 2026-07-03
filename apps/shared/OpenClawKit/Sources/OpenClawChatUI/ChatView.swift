@@ -276,7 +276,6 @@ public struct OpenClawChatView: View {
             self.restoreInitialScrollPosition()
             self.hasPerformedInitialScroll = true
             self.lastUserMessageID = self.latestVisibleUserMessageID
-            self.hasNewerContentBelow = false
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
             self.hasPerformedInitialScroll = false
@@ -582,9 +581,14 @@ public struct OpenClawChatView: View {
     private func restoreInitialScrollPosition() {
         if let latestUserMessageID = self.latestVisibleUserMessageID {
             self.followTarget = nil
+            self.hasNewerContentBelow = chatReaderHasNewerContent(
+                after: latestUserMessageID,
+                visibleIDs: self.visibleMessages.map(\.id),
+                hasTransientContent: self.hasVisibleTransientContent)
             self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor, animated: false)
         } else {
             self.followTarget = .latest
+            self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
         }
     }

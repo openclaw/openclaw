@@ -19,6 +19,7 @@ class ChatReaderScrollControllerTest {
     assertEquals(1, transition.scrollIndex)
     assertFalse(transition.animated)
     assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
+    assertTrue(transition.state.hasNewerContent)
     assertEquals("user-1", transition.state.latestUserMessageId)
   }
 
@@ -30,6 +31,7 @@ class ChatReaderScrollControllerTest {
     val transition = initial.state.onTimelineChanged(replied)
 
     assertEquals(ChatScrollFollowTarget.ReadAnchor, initial.state.followTarget)
+    assertFalse(initial.state.hasNewerContent)
     assertEquals(replied.readAnchorIndex, transition.scrollIndex)
     assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
     assertTrue(transition.state.hasNewerContent)
