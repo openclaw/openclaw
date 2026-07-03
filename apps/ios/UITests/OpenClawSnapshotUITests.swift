@@ -437,6 +437,42 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "manual-auth-retry-connected")
     }
 
+    func testPhotosLimitedAccess() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_PHOTOS_E2E"] == "1",
+            "Set OPENCLAW_IOS_PHOTOS_E2E=1 to exercise the system Photos prompt")
+        addUIInterruptionMonitor(withDescription: "Photos access") { alert in
+            for title in ["Limit Access…", "Select Photos…"] where alert.buttons[title].exists {
+                alert.buttons[title].tap()
+                return true
+            }
+            return false
+        }
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "photos-limited-access"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let privacy = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Privacy & Access").firstMatch)
+        XCTAssertTrue(privacy.waitForExistence(timeout: 8))
+        privacy.tap()
+
+        let request = try XCTUnwrap(self.app?.buttons["privacy-access-Photos-action"])
+        XCTAssertTrue(request.waitForExistence(timeout: 5))
+        request.tap()
+        self.app?.tap()
+
+        self.app?.activate()
+        XCTAssertTrue(self.app?.staticTexts["Limited"].waitForExistence(timeout: 8) == true)
+        self.attachScreenshot(named: "photos-limited-access")
+    }
+
     private func launchApp(for target: ScreenshotTarget, appearance: String? = "dark") {
         self.app?.terminate()
 
