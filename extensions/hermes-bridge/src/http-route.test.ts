@@ -99,6 +99,40 @@ describe("Hermes bridge HTTP route", () => {
     });
   });
 
+  it("executes status.health as a dry-run bridge contract probe", async () => {
+    await expect(
+      invoke({
+        token: "secret",
+        config: {
+          enabled: true,
+          sharedSecretEnv: "HERMES_TOKEN",
+          allowedTasks: ["status.health"],
+          allowedTools: [],
+        },
+        body: {
+          requestId: "health-contract",
+          taskId: "status.health",
+          intent: "bridge health",
+          dryRun: true,
+        },
+      }),
+    ).resolves.toMatchObject({
+      statusCode: 200,
+      body: {
+        ok: true,
+        requestId: "health-contract",
+        taskId: "status.health",
+        status: "succeeded",
+        output: {
+          status: "ok",
+          bridge: "hermes-bridge",
+          mode: "mock",
+          dryRun: true,
+        },
+      },
+    });
+  });
+
   it("rejects unknown or unallowlisted task IDs", async () => {
     await expect(
       invoke({
@@ -167,6 +201,34 @@ describe("Hermes bridge HTTP route", () => {
         ok: false,
         status: "blocked",
         error: { type: "real_task_unavailable" },
+      },
+    });
+  });
+
+  it("rejects dryRun=false before any route task can run live", async () => {
+    await expect(
+      invoke({
+        token: "secret",
+        config: {
+          enabled: true,
+          mode: "mock",
+          hermesMode: "mock",
+          sharedSecretEnv: "HERMES_TOKEN",
+          allowedTasks: ["status.echo"],
+          allowedTools: [],
+        },
+        body: {
+          taskId: "status.echo",
+          dryRun: false,
+          input: { message: "live disabled" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      statusCode: 404,
+      body: {
+        ok: false,
+        status: "blocked",
+        error: { type: "dry_run_required" },
       },
     });
   });

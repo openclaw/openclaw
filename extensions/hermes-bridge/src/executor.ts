@@ -49,6 +49,14 @@ export async function executeHermesBridgeTask({
       message: `Hermes bridge task is not allowlisted: ${request.taskId}`,
     });
   }
+  if (!request.dryRun) {
+    return reject({
+      request,
+      type: "dry_run_required",
+      message: "Hermes bridge requires dryRun=true unless an explicit live-send feature flag is added.",
+      status: "blocked",
+    });
+  }
   const configDeniedTools = task.requiredTools.filter(
     (tool) => !config.allowedTools.includes(tool),
   );

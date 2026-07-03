@@ -110,6 +110,26 @@ describe("executeHermesBridgeTask", () => {
     });
   });
 
+  it("rejects dryRun=false for all bridge tasks by default", async () => {
+    const result = await executeHermesBridgeTask({
+      config: resolveHermesBridgeConfig({
+        enabled: true,
+        allowedTasks: ["status.echo"],
+      }),
+      request: request({
+        taskId: "status.echo",
+        dryRun: false,
+        input: { message: "do not run live" },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "blocked",
+      error: { type: "dry_run_required" },
+    });
+  });
+
   it("accepts a dry-run OpenClaw agent team delegation without starting agents", async () => {
     const result = await executeHermesBridgeTask({
       config: resolveHermesBridgeConfig({
@@ -185,6 +205,41 @@ describe("executeHermesBridgeTask", () => {
       ok: false,
       status: "blocked",
       error: { type: "tool_not_allowed" },
+    });
+  });
+
+  it("returns only a preview for confirmed message.send dry-run requests", async () => {
+    const result = await executeHermesBridgeTask({
+      config: resolveHermesBridgeConfig({
+        enabled: true,
+        allowedTasks: ["message.send"],
+        allowedTools: ["telegram.send"],
+      }),
+      request: request({
+        taskId: "message.send",
+        requiresConfirmation: true,
+        allowedTools: ["telegram.send"],
+        dryRun: true,
+        input: {
+          channel: "telegram",
+          recipient: "@kj",
+          body: "preview only",
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: "succeeded",
+      mode: "mock",
+      output: {
+        preview: {
+          channel: "telegram",
+          recipient: "@kj",
+          body: "preview only",
+          wouldSend: false,
+        },
+      },
     });
   });
 });
