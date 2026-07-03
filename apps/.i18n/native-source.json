@@ -10157,13 +10157,13 @@
       "kind": "plist-string",
       "line": 74,
       "path": "apps/ios/Sources/Info.plist",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "surface": "apple",
-      "id": "native.apple.b6c35a14bb309193"
+      "id": "native.apple.40ed4259ec869f1b"
     },
     {
       "kind": "plist-string",
-      "line": 76,
+      "line": 78,
       "path": "apps/ios/Sources/Info.plist",
       "source": "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.",
       "surface": "apple",
@@ -10171,7 +10171,7 @@
     },
     {
       "kind": "plist-string",
-      "line": 78,
+      "line": 80,
       "path": "apps/ios/Sources/Info.plist",
       "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
       "surface": "apple",
@@ -11147,7 +11147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 14,
+      "line": 17,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
@@ -11155,7 +11155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 16,
+      "line": 19,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Contacts",
       "surface": "apple",
@@ -11163,7 +11163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 19,
+      "line": 22,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Search and add contacts from the assistant.",
       "surface": "apple",
@@ -11171,7 +11171,15 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 24,
+      "line": 27,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Photos",
+      "surface": "apple",
+      "id": "native.apple.eda8d96e40bcc36a"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 35,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (Add Events)",
       "surface": "apple",
@@ -11179,7 +11187,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 27,
+      "line": 38,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -11187,7 +11195,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 32,
+      "line": 43,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (View Events)",
       "surface": "apple",
@@ -11195,7 +11203,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 35,
+      "line": 46,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List and read calendar events.",
       "surface": "apple",
@@ -11203,7 +11211,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 40,
+      "line": 51,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Reminders",
       "surface": "apple",
@@ -11211,7 +11219,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 43,
+      "line": 54,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List, add, and complete reminders.",
       "surface": "apple",
@@ -11219,7 +11227,31 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 236,
+      "line": 136,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Limited",
+      "surface": "apple",
+      "id": "native.apple.651cc89381dd69c0"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 149,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Read photos you select for the assistant.",
+      "surface": "apple",
+      "id": "native.apple.ab998419291361da"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 149,
+      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
+      "source": "Read recent photos for the assistant.",
+      "surface": "apple",
+      "id": "native.apple.e8c07f7c48d086f9"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 296,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Allowed",
       "surface": "apple",
@@ -11227,7 +11259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 238,
+      "line": 298,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add-Only",
       "surface": "apple",
@@ -11235,7 +11267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 240,
+      "line": 300,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Not Set",
       "surface": "apple",
@@ -11243,7 +11275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 242,
+      "line": 302,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Not Allowed",
       "surface": "apple",
@@ -11251,7 +11283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 244,
+      "line": 304,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Unknown",
       "surface": "apple",
