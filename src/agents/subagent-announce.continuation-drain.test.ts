@@ -1,6 +1,7 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
+import type { SpawnSubagentResult } from "./subagent-spawn.js";
 
 // Verify subagent-announce drains the child session's continue_delegate
 // queue after the child settles, using the child's inherited chain state
@@ -68,11 +69,13 @@ const markPendingDelegateFailedMock = vi.fn();
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
-const spawnSubagentDirectMock = vi.fn(async (_params: Record<string, unknown>, _ctx: unknown) => ({
-  status: "accepted" as const,
-  childSessionKey: "agent:main:subagent:grandchild",
-  runId: "run-grandchild",
-}));
+const spawnSubagentDirectMock = vi.fn(
+  async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
+    status: "accepted",
+    childSessionKey: "agent:main:subagent:grandchild",
+    runId: "run-grandchild",
+  }),
+);
 const resolveContinuationRuntimeConfigMock = vi.fn((_cfg?: unknown) => ({
   enabled: true,
   defaultDelayMs: 15_000,
