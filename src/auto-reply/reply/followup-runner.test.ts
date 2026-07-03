@@ -4578,6 +4578,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       queued: {
         ...queued,
         summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         run: {
@@ -4604,6 +4605,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       queued: {
         ...queued,
         summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         run: {
@@ -4620,6 +4622,26 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     );
   });
 
+  it("does not treat the summary marker alone as a stranded retry", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        summaryLine: "stranded-reply-retry",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
   it("does not route retry diagnostics after message-tool delivery evidence", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
@@ -4632,6 +4654,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       queued: {
         ...queued,
         summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         run: {
@@ -4659,6 +4682,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       queued: {
         ...queued,
         summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
         run: {
@@ -4685,6 +4709,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       queued: {
         ...queued,
         summaryLine: "stranded-reply-retry",
+        strandedReplyRetry: true,
         originatingChannel: "webchat",
         originatingTo: undefined,
         run: {

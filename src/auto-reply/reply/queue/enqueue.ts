@@ -140,7 +140,7 @@ export function enqueueFollowupRun(
     },
     selectDropIndex: (items) => {
       const unprotectedIndex = items.findIndex((item) => item.protectFromQueueOverflow !== true);
-      return Math.max(unprotectedIndex, 0);
+      return unprotectedIndex;
     },
   });
   if (queue.dropPolicy === "summarize") {

@@ -503,6 +503,19 @@ function resolveOverflowSummarySourceGroup(queue: {
   return sources;
 }
 
+async function drainProtectedPriorityFollowup(
+  items: FollowupRun[],
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<boolean> {
+  const priority = items.find((item) => item.protectFromQueueOverflow === true);
+  if (!priority) {
+    return false;
+  }
+  await runFollowup(priority);
+  removeQueuedItemsByRef(items, [priority]);
+  return true;
+}
+
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
@@ -743,6 +756,9 @@ export function scheduleFollowupDrain(
         }
         if (queue.items.length === 0 && queue.droppedCount === 0) {
           break;
+        }
+        if (await drainProtectedPriorityFollowup(queue.items, effectiveRunFollowup)) {
+          continue;
         }
         if (
           queue.droppedCount > 0 &&

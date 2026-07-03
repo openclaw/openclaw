@@ -1747,6 +1747,75 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
+  it("keeps a cap-one protected priority followup instead of evicting it", () => {
+    const key = `test-priority-followup-cap-one-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    const priorityAccepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+    const normalAccepted = enqueueFollowupRun(
+      key,
+      createRun({ prompt: "normal after priority" }),
+      settings,
+    );
+
+    expect(priorityAccepted).toBe(true);
+    expect(normalAccepted).toBe(false);
+    expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
+      "priority retry",
+    ]);
+    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+  });
+
+  it("drains protected priority followups before overflow summaries", async () => {
+    const key = `test-priority-followup-before-summary-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "overflowed normal" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "priority retry" }),
+      settings,
+      "none",
+      undefined,
+      false,
+      { position: "front" },
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("priority retry");
+    expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[1]?.prompt).toContain("- overflowed normal");
+  });
+
   it("carries image payloads across collected batches", async () => {
     const key = `test-collect-images-${Date.now()}`;
     const calls: FollowupRun[] = [];

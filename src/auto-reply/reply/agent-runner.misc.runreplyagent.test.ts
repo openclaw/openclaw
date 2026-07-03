@@ -3281,6 +3281,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     inboundEventKind?: string;
     transcriptPrompt?: string;
     summaryLine?: string;
+    strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
     replyOperation?: ReturnType<typeof createReplyOperation>;
   }) {
@@ -3336,6 +3337,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     const followupRun = {
       prompt: "hello",
       summaryLine: params.summaryLine ?? "hello",
+      ...(params.strandedReplyRetry ? { strandedReplyRetry: true } : {}),
       enqueuedAt: Date.now(),
       ...(params.transcriptPrompt ? { transcriptPrompt: params.transcriptPrompt } : {}),
       run: {
@@ -3405,6 +3407,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     const messagesConfig = retryRun?.run?.config?.messages as Record<string, unknown> | undefined;
     expect(messagesConfig).toEqual({ visibleReplies: "message_tool" });
     expect(retryRun?.summaryLine).toBe("stranded-reply-retry");
+    expect(retryRun?.strandedReplyRetry).toBe(true);
     expect(retryRun?.prompt).toContain("message(action=send)");
     expect(retryRun?.prompt).toContain(finalAssistantText);
   });
@@ -3447,10 +3450,18 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   it("does not warn or enqueue retry when the message tool delivered this turn", async () => {
     await runPrivateFinalCase({
-      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
+      didDeliverSourceReplyViaMessageTool: true,
     });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("still retries when the message tool sent only to a non-source target", async () => {
+    await runPrivateFinalCase({
+      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15559998888" }],
+    });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
   });
 
   it("still retries when only an unrelated cron side effect succeeded", async () => {
@@ -3486,6 +3497,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   it("does not enqueue a second retry when a stranded-reply retry strands again", async () => {
     const { result, finalAssistantText } = await runPrivateFinalCase({
       summaryLine: "stranded-reply-retry",
+      strandedReplyRetry: true,
     });
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
@@ -3505,9 +3517,19 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     );
   });
 
+  it("does not treat user-controlled summary text as the internal retry marker", async () => {
+    await runPrivateFinalCase({
+      summaryLine: "stranded-reply-retry",
+    });
+
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+  });
+
   it("does not emit retry-failure diagnostic after internal source reply delivery", async () => {
     const { result } = await runPrivateFinalCase({
       summaryLine: "stranded-reply-retry",
+      strandedReplyRetry: true,
       messagingToolSourceReplyPayloads: [{ text: "visible recovered reply" }],
       finalAssistantText: "",
       payloadText: "",
@@ -3520,6 +3542,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   it("emits the sanitized diagnostic when a stranded-reply retry produces no source delivery", async () => {
     const { result } = await runPrivateFinalCase({
       summaryLine: "stranded-reply-retry",
+      strandedReplyRetry: true,
       finalAssistantText: "",
       payloadText: "",
     });

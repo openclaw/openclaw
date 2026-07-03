@@ -97,7 +97,6 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
-  STRANDED_REPLY_RETRY_MARKER,
 } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -108,7 +107,7 @@ type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
 function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
   return (
-    queued.summaryLine === STRANDED_REPLY_RETRY_MARKER &&
+    queued.strandedReplyRetry === true &&
     queued.currentInboundEventKind !== "room_event" &&
     queued.run.sourceReplyDeliveryMode === "message_tool_only"
   );

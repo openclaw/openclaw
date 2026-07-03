@@ -1983,25 +1983,14 @@ export async function runReplyAgent(params: {
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
-    const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
-      blockReplyPipeline,
-      directlySentBlockKeys,
-      messagingToolSentTexts: runResult.messagingToolSentTexts,
-      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-      messagingToolSentTargets: runResult.messagingToolSentTargets,
-    });
-    const committedMessagingToolSourceReplyDelivery =
+    const committedSourceReplyDelivery =
       runResult.didDeliverSourceReplyViaMessageTool === true ||
       hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
     const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
-      if (!sessionKey || !storePath || followupRun.summaryLine !== STRANDED_REPLY_RETRY_MARKER) {
+      if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
         return undefined;
       }
-      if (
-        sessionCtx.InboundEventKind === "room_event" ||
-        successfulSourceReplyDelivery ||
-        committedMessagingToolSourceReplyDelivery
-      ) {
+      if (sessionCtx.InboundEventKind === "room_event" || committedSourceReplyDelivery) {
         return undefined;
       }
       const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -2022,7 +2011,7 @@ export async function runReplyAgent(params: {
     };
     if (
       opts?.sourceReplyDeliveryMode === "message_tool_only" &&
-      committedMessagingToolSourceReplyDelivery
+      committedSourceReplyDelivery
     ) {
       await opts.onObservedReplyDelivery?.();
     }
@@ -2510,7 +2499,7 @@ export async function runReplyAgent(params: {
     // Capture only policy-visible final payloads in session store to support
     // durable delivery retries. Hidden reasoning, message-tool-only replies,
     // and sendPolicy-denied replies must not become heartbeat-replayable text.
-    const isStrandedReplyRetryRun = followupRun.summaryLine === STRANDED_REPLY_RETRY_MARKER;
+    const isStrandedReplyRetryRun = followupRun.strandedReplyRetry === true;
     if (sessionKey && storePath && (finalPayloads.length > 0 || isStrandedReplyRetryRun)) {
       const sourceReplyPolicy = resolveSourceReplyPolicy({
         cfg,
@@ -2534,7 +2523,7 @@ export async function runReplyAgent(params: {
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery,
+          successfulSourceReplyDelivery: committedSourceReplyDelivery,
           finalText: assistantFinalText,
         });
       const retryMissingSourceDelivery =
@@ -2542,7 +2531,7 @@ export async function runReplyAgent(params: {
         !isRoomEvent &&
         sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
         !sourceReplyPolicy.sendPolicyDenied &&
-        !successfulSourceReplyDelivery;
+        !committedSourceReplyDelivery;
       if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
@@ -2570,6 +2559,7 @@ export async function runReplyAgent(params: {
               ...followupRun,
               prompt: retryPrompt,
               summaryLine: STRANDED_REPLY_RETRY_MARKER,
+              strandedReplyRetry: true,
               disableCollectBatching: true,
               transcriptPrompt: undefined,
               userTurnTranscriptRecorder: undefined,
