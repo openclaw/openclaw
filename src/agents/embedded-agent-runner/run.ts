@@ -799,7 +799,7 @@ async function runEmbeddedAgentInternal(
 
   return enqueueSession(async () => {
     throwIfAborted();
-    if (params.sessionKey && params.config?.agents?.defaults?.continuation?.enabled === true) {
+    if (params.sessionKey) {
       resetContinueDelegateTurnBudget(params.sessionKey);
     }
     // Same-session reads below must see any prior deferred transcript rewrite.

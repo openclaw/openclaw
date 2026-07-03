@@ -1726,15 +1726,13 @@ export async function runSubagentAnnounceFlow(params: {
                 // it to `running`; without finishing it here the row stays
                 // `running` and restart recovery re-spawns it as duplicate
                 // continuation work (C2).
-                const acceptedChildSessionKey =
-                  spawnResult.childSessionKey ??
-                  (toolDelegate.flowId
-                    ? deriveContinuationDelegateChildSessionKeyFromParent(
-                        targetRequesterSessionKey,
-                        toolDelegate.flowId,
-                      )
-                    : undefined);
-                if (acceptedChildSessionKey) {
+                if (toolDelegate.flowId) {
+                  const acceptedChildSessionKey =
+                    spawnResult.childSessionKey ??
+                    deriveContinuationDelegateChildSessionKeyFromParent(
+                      targetRequesterSessionKey,
+                      toolDelegate.flowId,
+                    );
                   markPendingDelegateSpawnAccepted(toolDelegate, acceptedChildSessionKey);
                 }
                 defaultRuntime.log(
