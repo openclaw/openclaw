@@ -91,12 +91,6 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       channelId: params.transportId ?? "qa-channel",
       driver: params.transportId ?? "qa-channel",
       outputDir: params.repoRoot,
-      provider: {
-        alternateModel: params.alternateModel,
-        mode: params.providerMode,
-        primaryModel: params.primaryModel,
-      },
-      requestedCapabilities: ["messages.text"],
       state: lab.state,
     });
     const transport = transportFactoryResult.adapter;

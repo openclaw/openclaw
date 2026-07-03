@@ -19,7 +19,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
-import { createQaTransportUnsupportedOperationError } from "./qa-transport-contracts.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportOutboundSequence,
@@ -339,6 +338,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
   readonly #state: QaCrablineTransportState;
+  readonly sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
+  readonly waitForOutboundSequence?: (input: QaTransportOutboundSequenceMatch) => Promise<{
+    events: QaTransportOutboundEvent[];
+    final: QaBusMessage;
+  }>;
 
   constructor(params: {
     adapter: StartedOpenClawCrablineAdapter;
@@ -350,13 +354,26 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       label: `crabline local ${params.selection.channel}`,
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
-      supportsNativeCommands: params.selection.channel === "telegram",
-      supportsOutboundSequences: params.selection.channel === "telegram",
       state: params.state,
     });
     this.#adapter = params.adapter;
     this.#selection = params.selection;
     this.#state = params.state;
+    if (params.selection.channel === "telegram") {
+      this.sendNativeCommand = async (input) => {
+        const { command, ...message } = input;
+        await this.sendInbound({
+          ...message,
+          text: `/${command}`,
+          nativeCommand: { name: command },
+        });
+      };
+      this.waitForOutboundSequence = async (input) =>
+        await waitForQaTransportOutboundSequence({
+          input,
+          readEvents: () => this.#state.getOutboundEvents(),
+        });
+    }
   }
 
   createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig =>
@@ -381,47 +398,13 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
 
-  override async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
-    if (this.#selection.channel !== "telegram") {
-      throw createQaTransportUnsupportedOperationError({
-        operation: "message.send-native-command",
-        supportedOperations: this.supportedOperations,
-        transportId: this.id,
-      });
-    }
-    const { command, ...message } = input;
-    await this.sendInbound({
-      ...message,
-      text: `/${command}`,
-      nativeCommand: { name: command },
-    });
-  }
-
-  override async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
-    if (this.#selection.channel !== "telegram") {
-      throw createQaTransportUnsupportedOperationError({
-        operation: "message.wait-for-outbound-sequence",
-        supportedOperations: this.supportedOperations,
-        transportId: this.id,
-      });
-    }
-    return await waitForQaTransportOutboundSequence({
-      input,
-      readEvents: () => this.#state.getOutboundEvents(),
-    });
-  }
-
   handleAction = async (_params: {
     action: QaTransportActionName;
     args: Record<string, unknown>;
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw createQaTransportUnsupportedOperationError({
-      operation: `action.${_params.action}`,
-      supportedOperations: this.supportedOperations,
-      transportId: this.id,
-    });
+    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [

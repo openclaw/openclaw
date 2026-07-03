@@ -118,12 +118,6 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
-  it("loads transport capability requirements from execution metadata", () => {
-    expect(readQaScenarioById("channel-message-flows").execution.transport).toStrictEqual({
-      requiredCapabilities: ["messages.preview-lifecycle", "messages.text"],
-    });
-  });
-
   it("exposes bootstrap data from the YAML pack", () => {
     const catalog = readQaBootstrapScenarioCatalog();
 

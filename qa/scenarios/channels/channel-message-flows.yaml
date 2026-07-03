@@ -30,10 +30,6 @@ scenario:
   execution:
     kind: flow
     channel: telegram
-    transport:
-      requiredCapabilities:
-        - messages.preview-lifecycle
-        - messages.text
     summary: Stream a deterministic answer through QA Channel or Crabline Telegram and assert its preview lifecycle.
     config:
       requiredProviderMode: mock-openai

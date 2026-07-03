@@ -45,12 +45,6 @@ export async function runQaSelfCheckAgainstState(params: {
     channelId: params.transportId ?? "qa-channel",
     driver: params.transportId ?? "qa-channel",
     outputDir: path.dirname(resolveQaSelfCheckOutputPath(params)),
-    provider: {
-      alternateModel: "mock-openai/gpt-5.5-alt",
-      mode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-    },
-    requestedCapabilities: [],
     state: params.state,
   });
   const transport = transportFactoryResult.adapter;

@@ -60,7 +60,6 @@ import {
   type RuntimeParityResult,
 } from "./runtime-parity.js";
 import {
-  collectQaScenarioRequiredCapabilities,
   readQaBootstrapScenarioCatalog,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
@@ -116,13 +115,9 @@ type QaSuiteEnvironment = {
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
 async function createQaSuiteTransportAdapter(params: {
-  alternateModel: string;
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
-  primaryModel: string;
-  providerMode: QaProviderMode;
-  scenarios: readonly QaSeedScenarioWithSource[];
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
 }) {
@@ -131,12 +126,6 @@ async function createQaSuiteTransportAdapter(params: {
       channelId: params.channelDriverSelection?.channel ?? params.transportId,
       driver: params.channelDriverSelection ? "crabline" : params.transportId,
       outputDir: params.outputDir,
-      provider: {
-        alternateModel: params.alternateModel,
-        mode: params.providerMode,
-        primaryModel: params.primaryModel,
-      },
-      requestedCapabilities: collectQaScenarioRequiredCapabilities(params.scenarios),
       state: params.state,
     });
   } catch (error) {
@@ -712,13 +701,9 @@ async function runQaRuntimeParitySuite(params: {
       embeddedGateway: "disabled",
     }));
   const transportFactoryResult = await createQaSuiteTransportAdapter({
-    alternateModel: params.alternateModel,
     channelDriverSelection: params.channelDriverSelection,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir: params.outputDir,
-    primaryModel: params.primaryModel,
-    providerMode: params.providerMode,
-    scenarios: params.selectedScenarios,
     state: lab.state,
     transportId: params.transportId,
   });
@@ -1281,13 +1266,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         embeddedGateway: "disabled",
       }));
     const transportFactoryResult = await createQaSuiteTransportAdapter({
-      alternateModel,
       channelDriverSelection: params?.channelDriverSelection,
       cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
       outputDir,
-      primaryModel,
-      providerMode,
-      scenarios: selectedScenarios,
       state: lab.state,
       transportId,
     });
@@ -1545,13 +1526,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
   await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
   const transportFactoryResult = await createQaSuiteTransportAdapter({
-    alternateModel,
     channelDriverSelection: params?.channelDriverSelection,
     cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
-    primaryModel,
-    providerMode,
-    scenarios: selectedScenarios,
     state: lab.state,
     transportId,
   });

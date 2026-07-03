@@ -3,10 +3,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { QaProviderMode } from "./model-selection.js";
-import {
-  createQaTransportUnsupportedOperationError,
-  type QaTransportOperation,
-} from "./qa-transport-contracts.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusEvent,
@@ -103,32 +99,6 @@ export type QaTransportNativeCommandInput = Omit<
   command: string;
 };
 
-export type QaTransportCapabilities = {
-  sendInboundMessage: QaTransportState["addInboundMessage"];
-  injectOutboundMessage: QaTransportState["addOutboundMessage"];
-  waitForOutboundMessage: (input: QaBusWaitForInput) => Promise<unknown>;
-  getNormalizedMessageState: () => QaBusStateSnapshot;
-  resetNormalizedMessageState: () => Promise<void>;
-  readNormalizedMessage: QaTransportState["readMessage"];
-  executeGenericAction: (params: {
-    action: QaTransportActionName;
-    args: Record<string, unknown>;
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => Promise<unknown>;
-  waitForReady: (params: {
-    gateway: QaTransportGatewayClient;
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }) => Promise<void>;
-  waitForCondition: <T>(
-    check: () => T | Promise<T | null | undefined> | null | undefined,
-    timeoutMs?: number,
-    intervalMs?: number,
-  ) => Promise<T>;
-  assertNoFailureReplies: (options?: QaTransportFailureAssertionOptions) => void;
-};
-
 export async function waitForQaTransportCondition<T>(
   check: () => T | Promise<T | null | undefined> | null | undefined,
   timeoutMs = 15_000,
@@ -210,17 +180,20 @@ export type QaTransportAdapter = {
   accountId: string;
   requiredPluginIds: readonly string[];
   supportedActions: readonly QaTransportActionName[];
-  supportedOperations: readonly QaTransportOperation[];
   state: QaTransportState;
-  capabilities: QaTransportCapabilities;
   reset: () => Promise<void>;
   sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
-  sendNativeCommand: (input: QaTransportNativeCommandInput) => Promise<void>;
+  sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
   waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
   waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
-  waitForOutboundSequence: (
+  waitForOutboundSequence?: (
     input: QaTransportOutboundSequenceMatch,
   ) => Promise<QaTransportOutboundSequence>;
+  waitForCondition: <T>(
+    check: () => T | Promise<T | null | undefined> | null | undefined,
+    timeoutMs?: number,
+    intervalMs?: number,
+  ) => Promise<T>;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
   waitReady: (params: {
     gateway: QaTransportGatewayClient;
@@ -250,9 +223,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   readonly accountId: string;
   readonly requiredPluginIds: readonly string[];
   readonly supportedActions: readonly QaTransportActionName[];
-  readonly supportedOperations: readonly QaTransportOperation[];
   readonly state: QaTransportState;
-  readonly capabilities: QaTransportCapabilities;
+  readonly waitForCondition: QaTransportAdapter["waitForCondition"];
 
   protected constructor(params: {
     id: string;
@@ -260,8 +232,6 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     accountId: string;
     requiredPluginIds: readonly string[];
     supportedActions?: readonly QaTransportActionName[];
-    supportsNativeCommands?: boolean;
-    supportsOutboundSequences?: boolean;
     state: QaTransportState;
   }) {
     this.id = params.id;
@@ -269,40 +239,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     this.accountId = params.accountId;
     this.requiredPluginIds = params.requiredPluginIds;
     this.supportedActions = params.supportedActions ?? [];
-    const actionOperations = this.supportedActions.map(
-      (action): QaTransportOperation => `action.${action}`,
-    );
-    this.supportedOperations = (
-      [
-        "message.send-inbound",
-        "message.wait-for-none",
-        "message.wait-for-outbound",
-        "state.read",
-        "state.reset",
-        ...(params.supportsNativeCommands ? (["message.send-native-command"] as const) : []),
-        ...(params.supportsOutboundSequences
-          ? (["message.wait-for-outbound-sequence"] as const)
-          : []),
-        ...actionOperations,
-      ] satisfies QaTransportOperation[]
-    ).toSorted();
     this.state = params.state;
-    this.capabilities = {
-      sendInboundMessage: this.state.addInboundMessage.bind(this.state),
-      injectOutboundMessage: this.state.addOutboundMessage.bind(this.state),
-      waitForOutboundMessage: this.state.waitFor.bind(this.state),
-      getNormalizedMessageState: this.state.getSnapshot.bind(this.state),
-      resetNormalizedMessageState: async () => {
-        await this.state.reset();
-      },
-      readNormalizedMessage: this.state.readMessage.bind(this.state),
-      executeGenericAction: (paramsValue) => this.handleAction(paramsValue),
-      waitForReady: (paramsLocal) => this.waitReady(paramsLocal),
-      waitForCondition: createFailureAwareTransportWaitForCondition(this.state),
-      assertNoFailureReplies: (options) => {
-        assertNoFailureReplies(this.state, options);
-      },
-    };
+    this.waitForCondition = createFailureAwareTransportWaitForCondition(this.state);
   }
 
   abstract createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
@@ -331,14 +269,6 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
 
   async sendInbound(input: QaBusInboundMessageInput) {
     return await this.state.addInboundMessage(input);
-  }
-
-  async sendNativeCommand(_input: QaTransportNativeCommandInput): Promise<void> {
-    throw createQaTransportUnsupportedOperationError({
-      operation: "message.send-native-command",
-      supportedOperations: this.supportedOperations,
-      transportId: this.id,
-    });
   }
 
   async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {
@@ -377,20 +307,6 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
         return !input.textIncludes || message.text.includes(input.textIncludes);
       });
     }, input.timeoutMs);
-  }
-
-  async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
-    if (!this.supportedOperations.includes("message.wait-for-outbound-sequence")) {
-      throw createQaTransportUnsupportedOperationError({
-        operation: "message.wait-for-outbound-sequence",
-        supportedOperations: this.supportedOperations,
-        transportId: this.id,
-      });
-    }
-    return await waitForQaTransportOutboundSequence({
-      input,
-      readEvents: () => this.state.getSnapshot().events,
-    });
   }
 
   private outboundSince(sinceIndex = 0) {

@@ -71,7 +71,8 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.sendNativeCommand({
+        expect(transport.sendNativeCommand).toBeTypeOf("function");
+        await transport.sendNativeCommand?.({
           command: "stop",
           conversation: { id: "alice", kind: "direct" },
           senderId: "alice",
@@ -218,8 +219,9 @@ describe("crabline transport", () => {
           text: "final marker",
         });
 
+        expect(transport.waitForOutboundSequence).toBeTypeOf("function");
         await expect(
-          transport.waitForOutboundSequence({
+          transport.waitForOutboundSequence!({
             conversationId: "-1001234567890",
             finalSettleMs: 0,
             finalTextIncludes: "final marker",
@@ -248,17 +250,8 @@ describe("crabline transport", () => {
       try {
         expect(transport.id).toBe("crabline");
         expect(transport.requiredPluginIds).toEqual(["slack"]);
-        expect(transport.supportedOperations).not.toContain("message.wait-for-outbound-sequence");
-        await expect(
-          transport.waitForOutboundSequence({
-            finalTextIncludes: "final marker",
-          }),
-        ).rejects.toMatchObject({
-          normalized: {
-            code: "unsupported_operation",
-            operation: "message.wait-for-outbound-sequence",
-          },
-        });
+        expect(transport.sendNativeCommand).toBeUndefined();
+        expect(transport.waitForOutboundSequence).toBeUndefined();
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
             slack: {

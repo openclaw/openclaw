@@ -4,10 +4,6 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
-import {
-  qaTransportCapabilitySchema,
-  type QaTransportCapability,
-} from "./qa-transport-contracts.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
@@ -70,17 +66,12 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
-const qaScenarioTransportExecutionSchema = z.object({
-  requiredCapabilities: z.array(qaTransportCapabilitySchema).min(1),
-});
-
 const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
   suiteIsolation: z.literal("isolated").optional(),
   isolationReason: z.string().trim().min(1).optional(),
-  transport: qaScenarioTransportExecutionSchema.optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 
@@ -88,7 +79,6 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
   path: qaScenarioRepoRefSchema,
-  transport: qaScenarioTransportExecutionSchema.optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 
@@ -516,16 +506,6 @@ export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
   return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
-}
-
-export function collectQaScenarioRequiredCapabilities(
-  scenarios: readonly QaSeedScenarioWithSource[],
-): QaTransportCapability[] {
-  return [
-    ...new Set(
-      scenarios.flatMap((scenario) => scenario.execution.transport?.requiredCapabilities ?? []),
-    ),
-  ].toSorted();
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {
