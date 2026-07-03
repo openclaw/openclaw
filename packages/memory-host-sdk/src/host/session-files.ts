@@ -356,7 +356,7 @@ export function loadSessionTranscriptClassificationForAgent(
 
 function classifySessionTranscriptFromSessionStore(absPath: string): {
   generatedByDreamingNarrative: boolean;
-  generatedByCronRun: boolean;
+  generatedByCronRun: boolean | undefined;
 } {
   const sessionsDir = path.dirname(absPath);
   const normalizedAbsPath = normalizeComparablePath(absPath);
@@ -366,6 +366,9 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
       ? normalizeComparablePath(path.join(sessionsDir, `${primarySessionId}.jsonl`))
       : null;
   const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+  const hasAnyClassificationData =
+    classification.cronRunTranscriptPaths.size > 0 ||
+    classification.dreamingNarrativeTranscriptPaths.size > 0;
   const hasClassifiedPath = (paths: ReadonlySet<string>) =>
     paths.has(normalizedAbsPath) ||
     (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
@@ -373,7 +376,11 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
     generatedByDreamingNarrative: hasClassifiedPath(
       classification.dreamingNarrativeTranscriptPaths,
     ),
-    generatedByCronRun: hasClassifiedPath(classification.cronRunTranscriptPaths),
+    // Return undefined when the session store has no data at all so callers
+    // can distinguish "unknown" from "checked and confirmed to be absent".
+    generatedByCronRun: hasAnyClassificationData
+      ? hasClassifiedPath(classification.cronRunTranscriptPaths)
+      : undefined,
   };
 }
 
@@ -842,19 +849,20 @@ export async function buildSessionEntry(
       }
       // Text-pattern cron classification is a fallback only.  It must not
       // override the session-store's explicit decision, and it must not
-      // fire on mid-transcript human [cron:] text after prior content.
+      // fire on mid-transcript human [cron:] text.
       //
       // Guard breakdown:
-      //   !generatedByCronRun — session-store didn't already classify
+      //   !generatedByCronRun — not already classified
       //   allowArchiveContentCronClassification — .reset/.deleted only
       //   collected.length === 0 — first message only (mid-transcript fix)
-      //   sessionStoreClassification?.generatedByCronRun !== false —
-      //     session-store explicitly says "not cron" → don't override
+      //   sessionStoreClassification?.generatedByCronRun === undefined —
+      //     only fallback when session-store has no data.  When the session
+      //     store was loaded and explicitly says "not cron" (false), trust it.
       if (
         !generatedByCronRun &&
         allowArchiveContentCronClassification &&
         collected.length === 0 &&
-        sessionStoreClassification?.generatedByCronRun !== false &&
+        sessionStoreClassification?.generatedByCronRun === undefined &&
         isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
       ) {
         generatedByCronRun = true;

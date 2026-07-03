@@ -942,4 +942,63 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toContain("Acme");
     expect(entry.content).toContain("budget is 5000");
   });
+
+  it("first-turn [cron:] is NOT wiped when session-store has data but path is not cron", async () => {
+    // Session-store has real data (non-cron entry), so classifySessionTranscriptFromSessionStore
+    // returns generatedByCronRun: false (not undefined).  First-turn [cron:] text must NOT
+    // override that explicit decision — the text fallback must be skipped.
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:ordinary-session": {
+          sessionFile: "ordinary.jsonl",
+          sessionId: "ordinary",
+        },
+      }),
+    );
+    const filePath = path.join(sessionsDir, "ordinary.jsonl.reset.2026-04-05T12-00-00.000Z");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "[cron:daily-digest] why did my digest job fail?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "The digest job failed: API token expired." },
+      }),
+    ];
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+
+    // Content must survive — session-store says this is not a cron run
+    expect(entry.content).toContain("API token expired");
+    expect(entry.generatedByCronRun).toBeFalsy();
+  });
+
+  it("keeps cron-run archive opaque when session-store has no entries", async () => {
+    // No sessions.json — classifySessionTranscriptFromSessionStore returns
+    // generatedByCronRun: undefined.  Text fallback must still work for
+    // the first-turn [cron:] case.
+    const filePath = path.join(tmpDir, "cron-run-no-store.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "[cron:job-1] Run internal sync." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Internal cron output." },
+      }),
+    ];
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+
+    expect(entry.content).toBe("");
+    expect(entry.lineMap).toStrictEqual([]);
+    expect(entry.generatedByCronRun).toBe(true);
+  });
 });
