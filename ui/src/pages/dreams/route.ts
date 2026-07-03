@@ -2,6 +2,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { t } from "../../i18n/index.ts";
+import { loadConfig, openConfigFile } from "../../lib/config/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -10,7 +11,6 @@ import {
   resolveSessionAgentFilterOptions,
 } from "../../lib/sessions/session-options.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadConfig, openConfigFile } from "../config/data.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,

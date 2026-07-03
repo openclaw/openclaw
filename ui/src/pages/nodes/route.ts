@@ -2,13 +2,13 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   loadConfig,
   removeConfigFormValue,
   saveConfig,
   updateConfigFormValue,
-} from "../config/data.ts";
+} from "../../lib/config/index.ts";
+import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadNodes } from "./data.ts";
 import {
   approveDevicePairing,

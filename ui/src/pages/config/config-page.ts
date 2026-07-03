@@ -5,6 +5,17 @@ import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import {
+  applyConfig,
+  loadConfig,
+  openConfigFile,
+  resetConfigPendingChanges,
+  saveConfig,
+  stageConfigPreset,
+  updateConfigFormValue,
+  updateConfigRawValue,
+  updateMcpServerEnabled,
+} from "../../lib/config/index.ts";
 import { requestSessionPatch, type SessionPatch } from "../../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
@@ -16,20 +27,9 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";
 import { renderMcp } from "../../ui/views/mcp.ts";
-import {
-  applyConfig,
-  loadConfig,
-  openConfigFile,
-  resetConfigPendingChanges,
-  runUpdate,
-  saveConfig,
-  stageConfigPreset,
-  updateConfigFormValue,
-  updateConfigRawValue,
-  updateMcpServerEnabled,
-} from "./data.ts";
 import { getPresetById } from "./presets.ts";
 import { renderQuickSettings, type QuickSettingsChannel } from "./quick.ts";
+import { runUpdate } from "./update.ts";
 import { renderConfig, type ConfigProps } from "./view.ts";
 
 export type ConfigPageId =

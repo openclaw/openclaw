@@ -2,6 +2,13 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import {
+  ensureAgentConfigEntry,
+  findAgentConfigEntryIndex,
+  loadConfig,
+  removeConfigFormValue,
+  updateConfigFormValue,
+} from "../../lib/config/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -11,8 +18,6 @@ import {
   resolveModelPrimary,
 } from "../../ui/views/agents-utils.ts";
 import { loadChannels } from "../channels/data.ts";
-import { loadConfig, removeConfigFormValue, updateConfigFormValue } from "../config/data.ts";
-import { ensureAgentConfigEntry, findAgentConfigEntryIndex } from "../config/data.ts";
 import { runCronJob } from "../cron/data.ts";
 import {
   buildToolsEffectiveRequestKey,

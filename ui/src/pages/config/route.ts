@@ -1,9 +1,9 @@
 import { definePage } from "@openclaw/uirouter";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { loadConfig, loadConfigSchema } from "../../lib/config/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import type { ConfigPageId } from "./config-page.ts";
-import { loadConfig, loadConfigSchema } from "./data.ts";
 
 type ConfigLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type ConfigRenderContext = RouteRenderContext;

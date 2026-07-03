@@ -2,8 +2,8 @@ import { definePage } from "@openclaw/uirouter";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { updateConfigFormValue } from "../../lib/config/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { updateConfigFormValue } from "../config/data.ts";
 import { loadChannels, loadChannelsPage } from "./data.ts";
 
 type ChannelsLoadContext = { host: SettingsHost };

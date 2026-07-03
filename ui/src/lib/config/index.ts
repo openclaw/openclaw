@@ -1,16 +1,15 @@
-// Control UI controller manages config gateway state.
+// Control UI runtime config capability and shared config-domain mutations.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
-import type { JsonSchema } from "../../components/config-form.shared.ts";
+import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import {
   cloneConfigObject,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
-} from "../../lib/config-form-utils.ts";
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { coerceFormValues } from "./form-coerce.ts";
+} from "../config-form-utils.ts";
 
 export type ConfigState = {
   client: GatewayBrowserClient | null;
@@ -23,7 +22,6 @@ export type ConfigState = {
   configIssues: unknown[];
   configSaving: boolean;
   configApplying: boolean;
-  updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
   configDraftBaseHash?: string | null;
   configSchema: unknown;
@@ -37,52 +35,131 @@ export type ConfigState = {
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
-  pendingUpdateExpectedVersion: string | null;
-  pendingUpdateHandoff: boolean;
-  updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
   chatError?: string | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
-const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
+const requestVersionsByState = new WeakMap<ConfigState, { config: number; schema: number }>();
+
+type RuntimeConfigGatewaySnapshot = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  sessionKey: string;
+};
+
+type RuntimeConfigGateway = {
+  readonly snapshot: RuntimeConfigGatewaySnapshot;
+  subscribe: (listener: (snapshot: RuntimeConfigGatewaySnapshot) => void) => () => void;
+};
+
+export type RuntimeConfigCapability = {
+  readonly state: ConfigState;
+  refresh: (options?: LoadConfigOptions) => Promise<void>;
+  refreshSchema: () => Promise<void>;
+  subscribe: (listener: (state: ConfigState) => void) => () => void;
+  dispose: () => void;
+};
 
 export type LoadConfigOptions = {
   discardPendingChanges?: boolean;
 };
 
+function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>): ConfigState {
+  return {
+    client: snapshot?.client ?? null,
+    connected: snapshot?.connected ?? false,
+    applySessionKey: snapshot?.sessionKey ?? "main",
+    configLoading: false,
+    configRaw: "{\n}\n",
+    configRawOriginal: "",
+    configValid: null,
+    configIssues: [],
+    configSaving: false,
+    configApplying: false,
+    configSnapshot: null,
+    configDraftBaseHash: null,
+    configSchema: null,
+    configSchemaVersion: null,
+    configSchemaLoading: false,
+    configUiHints: {},
+    configForm: null,
+    configFormOriginal: null,
+    configFormDirty: false,
+    configFormMode: "form",
+    configSearchQuery: "",
+    configActiveSection: null,
+    configActiveSubsection: null,
+    lastError: null,
+  };
+}
+
+function nextRequestVersion(state: ConfigState, key: "config" | "schema"): number {
+  const current = requestVersionsByState.get(state) ?? { config: 0, schema: 0 };
+  const next = { ...current, [key]: current[key] + 1 };
+  requestVersionsByState.set(state, next);
+  return next[key];
+}
+
+function isCurrentRequest(
+  state: ConfigState,
+  key: "config" | "schema",
+  version: number,
+  client: GatewayBrowserClient,
+): boolean {
+  return state.client === client && requestVersionsByState.get(state)?.[key] === version;
+}
+
 export async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
+  const version = nextRequestVersion(state, "config");
   state.configLoading = true;
   state.lastError = null;
   state.chatError = null;
   try {
-    const res = await state.client.request<ConfigSnapshot>("config.get", {});
+    const res = await client.request<ConfigSnapshot>("config.get", {});
+    if (!isCurrentRequest(state, "config", version, client)) {
+      return;
+    }
     applyConfigSnapshot(state, res, options);
   } catch (err) {
-    state.lastError = String(err);
+    if (isCurrentRequest(state, "config", version, client)) {
+      state.lastError = String(err);
+    }
   } finally {
-    state.configLoading = false;
+    if (isCurrentRequest(state, "config", version, client)) {
+      state.configLoading = false;
+    }
   }
 }
 
 export async function loadConfigSchema(state: ConfigState) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
   if (state.configSchemaLoading) {
     return;
   }
+  const version = nextRequestVersion(state, "schema");
   state.configSchemaLoading = true;
   try {
-    const res = await state.client.request<ConfigSchemaResponse>("config.schema", {});
+    const res = await client.request<ConfigSchemaResponse>("config.schema", {});
+    if (!isCurrentRequest(state, "schema", version, client)) {
+      return;
+    }
     applyConfigSchema(state, res);
   } catch (err) {
-    state.lastError = String(err);
+    if (isCurrentRequest(state, "schema", version, client)) {
+      state.lastError = String(err);
+    }
   } finally {
-    state.configSchemaLoading = false;
+    if (isCurrentRequest(state, "schema", version, client)) {
+      state.configSchemaLoading = false;
+    }
   }
 }
 
@@ -158,6 +235,146 @@ function asJsonSchema(value: unknown): JsonSchema | null {
   return value as JsonSchema;
 }
 
+function coerceNumberString(value: string, integer: boolean): number | undefined | string {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  if (integer && !Number.isInteger(parsed)) {
+    return value;
+  }
+  return parsed;
+}
+
+function coerceBooleanString(value: string): boolean | string {
+  const trimmed = value.trim();
+  if (trimmed === "true") {
+    return true;
+  }
+  if (trimmed === "false") {
+    return false;
+  }
+  return value;
+}
+
+export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (schema.allOf && schema.allOf.length > 0) {
+    let next: unknown = value;
+    for (const segment of schema.allOf) {
+      next = coerceFormValues(next, segment);
+    }
+    return next;
+  }
+
+  const type = schemaType(schema);
+  if (schema.anyOf || schema.oneOf) {
+    const variants = (schema.anyOf ?? schema.oneOf ?? []).filter(
+      (variant) =>
+        !(
+          variant.type === "null" ||
+          (Array.isArray(variant.type) && variant.type.includes("null"))
+        ),
+    );
+
+    if (variants.length === 1) {
+      return coerceFormValues(value, variants[0]);
+    }
+    if (typeof value === "string") {
+      for (const variant of variants) {
+        const variantType = schemaType(variant);
+        if (variantType === "number" || variantType === "integer") {
+          const coerced = coerceNumberString(value, variantType === "integer");
+          if (coerced === undefined || typeof coerced === "number") {
+            return coerced;
+          }
+        }
+        if (variantType === "boolean") {
+          const coerced = coerceBooleanString(value);
+          if (typeof coerced === "boolean") {
+            return coerced;
+          }
+        }
+      }
+    }
+    for (const variant of variants) {
+      const variantType = schemaType(variant);
+      if (variantType === "object" && typeof value === "object" && !Array.isArray(value)) {
+        return coerceFormValues(value, variant);
+      }
+      if (variantType === "array" && Array.isArray(value)) {
+        return coerceFormValues(value, variant);
+      }
+    }
+    return value;
+  }
+
+  if (type === "number" || type === "integer") {
+    if (typeof value === "string") {
+      const coerced = coerceNumberString(value, type === "integer");
+      if (coerced === undefined || typeof coerced === "number") {
+        return coerced;
+      }
+    }
+    return value;
+  }
+  if (type === "boolean") {
+    if (typeof value === "string") {
+      const coerced = coerceBooleanString(value);
+      if (typeof coerced === "boolean") {
+        return coerced;
+      }
+    }
+    return value;
+  }
+  if (type === "string") {
+    return typeof value === "string" && value.length === 0 && schema.minLength ? undefined : value;
+  }
+  if (type === "object") {
+    if (typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
+    const props = schema.properties ?? {};
+    const additional =
+      schema.additionalProperties && typeof schema.additionalProperties === "object"
+        ? schema.additionalProperties
+        : null;
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      const propSchema = props[key] ?? additional;
+      const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
+      if (coerced !== undefined) {
+        result[key] = coerced;
+      }
+    }
+    return result;
+  }
+  if (type === "array") {
+    if (!Array.isArray(value)) {
+      return value;
+    }
+    if (Array.isArray(schema.items)) {
+      return value.map((item, index) => {
+        const itemSchema = index < schema.items.length ? schema.items[index] : undefined;
+        return itemSchema ? coerceFormValues(item, itemSchema) : item;
+      });
+    }
+    return schema.items
+      ? value
+          .map((item) => coerceFormValues(item, schema.items as JsonSchema))
+          .filter((item) => item !== undefined)
+      : value;
+  }
+  return value;
+}
+
 /**
  * Serialize the form state for submission to `config.set` / `config.apply`.
  *
@@ -184,51 +401,6 @@ function serializeFormForSubmit(state: ConfigState): string {
 
 type ConfigSubmitMethod = "config.set" | "config.apply";
 type ConfigSubmitBusyKey = "configSaving" | "configApplying";
-
-function resolveUpdateStatusBanner(params: {
-  status?: string;
-  reason?: string;
-  handoff?: { command?: string; message?: string };
-}): {
-  tone: "danger" | "warn" | "info";
-  text: string;
-} {
-  const status = (params.status ?? "error").trim() || "error";
-  const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const tone = status === "skipped" ? "warn" : "danger";
-  const handoffCommand = params.handoff?.command?.trim();
-  const handoffMessage = params.handoff?.message?.trim();
-  const handoffUnavailableGuidance = handoffCommand
-    ? `Run \`${handoffCommand}\` from a shell outside the Gateway process.`
-    : (handoffMessage ??
-      "OpenClaw could not find a safe supervisor handoff. Run `openclaw update` from a shell outside the Gateway process.");
-  const guidance =
-    {
-      dirty: "Commit or stash changes, then retry.",
-      "no-upstream": "Set an upstream branch, then retry.",
-      "not-git-install":
-        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
-      "not-openclaw-root":
-        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
-      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
-      "build-failed": "Build failed. Fix the build error and retry.",
-      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
-      "global-install-failed":
-        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
-      "restart-disabled":
-        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry — or run `openclaw update` from the CLI.",
-      "restart-unavailable":
-        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
-      "managed-service-handoff-unavailable": handoffUnavailableGuidance,
-      "restart-unhealthy":
-        "The replacement process never became healthy. The previous process stayed up so you can recover.",
-      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
-    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
-  return {
-    tone,
-    text: `Update ${status}: ${reason}. ${guidance}`,
-  };
-}
 
 async function submitConfigChange(
   state: ConfigState,
@@ -282,54 +454,6 @@ export async function applyConfig(state: ConfigState): Promise<boolean> {
   return submitConfigChange(state, "config.apply", "configApplying", {
     sessionKey: state.applySessionKey,
   });
-}
-
-export async function runUpdate(state: ConfigState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  state.updateRunning = true;
-  state.lastError = null;
-  state.chatError = null;
-  state.updateStatusBanner = null;
-  try {
-    const res = await state.client.request<{
-      ok?: boolean;
-      result?: { status?: string; reason?: string; after?: { version?: string | null } };
-      handoff?: { status?: string; command?: string; message?: string };
-    }>("update.run", {
-      sessionKey: state.applySessionKey,
-    });
-    const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
-    const handoffStarted =
-      res.ok === true &&
-      status === "skipped" &&
-      res.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
-      res.handoff?.status === "started";
-    if (handoffStarted) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
-      state.pendingUpdateHandoff = true;
-      return;
-    }
-    if (status === "ok" && res.ok === true) {
-      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
-      state.pendingUpdateHandoff = false;
-      return;
-    }
-    state.pendingUpdateExpectedVersion = null;
-    state.pendingUpdateHandoff = false;
-    state.updateStatusBanner = resolveUpdateStatusBanner({
-      status,
-      reason: res.result?.reason,
-      handoff: res.handoff,
-    });
-  } catch (err) {
-    state.lastError = String(err);
-    state.pendingUpdateExpectedVersion = null;
-    state.pendingUpdateHandoff = false;
-  } finally {
-    state.updateRunning = false;
-  }
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
@@ -584,4 +708,59 @@ export async function openConfigFile(state: ConfigState): Promise<void> {
     }
     state.lastError = String(err);
   }
+}
+
+export function createRuntimeConfigCapability(
+  gateway: RuntimeConfigGateway,
+): RuntimeConfigCapability {
+  const state = createInitialConfigState(gateway.snapshot);
+  const listeners = new Set<(state: ConfigState) => void>();
+  let disposed = false;
+
+  const publish = () => {
+    if (disposed) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener(state);
+    }
+  };
+  const run = async <T>(task: () => Promise<T>): Promise<T> => {
+    try {
+      return await task();
+    } finally {
+      publish();
+    }
+  };
+  const stopGateway = gateway.subscribe((snapshot) => {
+    const clientChanged = state.client !== snapshot.client;
+    state.client = snapshot.client;
+    state.connected = snapshot.connected;
+    state.applySessionKey = snapshot.sessionKey;
+    if (clientChanged) {
+      requestVersionsByState.delete(state);
+      state.configLoading = false;
+      state.configSchemaLoading = false;
+    }
+    publish();
+  });
+
+  return {
+    get state() {
+      return state;
+    },
+    refresh: (options) => run(() => loadConfig(state, options)),
+    refreshSchema: () => run(() => loadConfigSchema(state)),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    dispose() {
+      disposed = true;
+      stopGateway();
+      listeners.clear();
+      requestVersionsByState.delete(state);
+      autoAllowlistedPluginIdsByState.delete(state);
+    },
+  };
 }

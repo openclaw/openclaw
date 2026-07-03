@@ -13,6 +13,8 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession,
   resetToolsEffectiveState,
 } from "../../lib/agents/tools-effective.ts";
+import { loadConfig, saveConfig, stageDefaultAgentConfigEntry } from "../../lib/config/index.ts";
+import type { ConfigState } from "../../lib/config/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -20,8 +22,6 @@ import {
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import { loadChannels } from "../channels/data.ts";
-import { loadConfig, saveConfig, stageDefaultAgentConfigEntry } from "../config/data.ts";
-import type { ConfigState } from "../config/data.ts";
 import { loadAgentFiles } from "./files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./identity.ts";
 import { loadAgentSkills } from "./skills.ts";

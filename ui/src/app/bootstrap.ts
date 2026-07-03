@@ -17,6 +17,7 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability, resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
@@ -440,6 +441,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
   });
   const sessions = createSessionCapability(gateway);
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
@@ -519,6 +521,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     agentIdentity,
     agentSelection,
     config,
+    runtimeConfig,
     sessions,
     overlays,
     navigation,
@@ -547,6 +550,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       router.stop();
       gateway.stop();
       sessions.dispose();
+      runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();
       skillWorkshopRevision.clear();

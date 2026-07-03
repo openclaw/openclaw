@@ -26,7 +26,7 @@ import { t } from "../i18n/index.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
 import { refreshSlashCommands } from "../pages/chat/chat-commands.ts";
-import { runUpdate } from "../pages/config/data.ts";
+import { runUpdate } from "../pages/config/update.ts";
 import { resolveDashboardHeaderContext } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 

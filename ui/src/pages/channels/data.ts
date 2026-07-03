@@ -1,11 +1,11 @@
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 // Channels page data owns the shared channel status request and effects.
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { loadConfig, loadConfigSchema } from "../../lib/config/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { loadConfig, loadConfigSchema } from "../config/data.ts";
 import type { ChannelsState } from "./data.types.ts";
 
 export type { ChannelsState };
