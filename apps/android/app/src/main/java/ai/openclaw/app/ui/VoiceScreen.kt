@@ -4,7 +4,7 @@ import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.VoiceCaptureMode
-import ai.openclaw.app.description
+import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.isReady
 import ai.openclaw.app.requiresSetup
 import ai.openclaw.app.ui.design.ClawPanel
@@ -679,7 +679,7 @@ private fun VoiceHero(
         subtitle =
           when {
             talkModeEnabled -> "Conversation is live"
-            gatewayReady -> talkSetupReadiness.realtimeTalk.description()
+            gatewayReady -> gatewayTalkSetupDescription(talkSetupReadiness.realtimeTalk)
             else -> "Connect gateway to start"
           },
         icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.RecordVoiceOver,
@@ -691,7 +691,7 @@ private fun VoiceHero(
         subtitle =
           when {
             micEnabled -> "Listening for one turn"
-            gatewayReady -> talkSetupReadiness.dictation.description()
+            gatewayReady -> gatewayTalkSetupDescription(talkSetupReadiness.dictation)
             else -> "Connect gateway to start"
           },
         icon = if (micEnabled) Icons.Default.MicOff else Icons.Default.TextFields,
@@ -858,8 +858,8 @@ private fun voiceSetupSummary(
 ): String {
   if (!gatewayStatus.isVoiceGatewayReady()) return gatewayStatus.voiceGatewayLabel()
   return listOf(
-    "Talk: ${readiness.realtimeTalk.description()}",
-    "Dictation: ${readiness.dictation.description()}",
+    "Talk: ${gatewayTalkSetupDescription(readiness.realtimeTalk)}",
+    "Dictation: ${gatewayTalkSetupDescription(readiness.dictation)}",
   ).joinToString(" · ")
 }
 

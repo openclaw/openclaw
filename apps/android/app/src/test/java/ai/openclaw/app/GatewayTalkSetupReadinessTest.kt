@@ -165,7 +165,7 @@ class GatewayTalkSetupReadinessTest {
       )
 
     val realtime = readiness.realtimeTalk as GatewayTalkSetupState.NeedsSetup
-    assertEquals("Choose a supported Realtime Talk provider on the Gateway", realtime.reason)
+    assertEquals("Choose a supported Realtime Talk provider on the Gateway", gatewayTalkSetupDescription(realtime))
     assertTrue(readiness.realtimeTalk.requiresSetup)
   }
 

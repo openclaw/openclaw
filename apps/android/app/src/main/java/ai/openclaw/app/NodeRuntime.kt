@@ -2342,7 +2342,7 @@ class NodeRuntime(
         val response = operatorSession.request("talk.catalog", "{}")
         parseGatewayTalkSetupReadiness(json.parseToJsonElement(response).asObjectOrNull())
       } catch (_: Throwable) {
-        GatewayTalkSetupReadiness.unverified("Could not load Gateway talk catalog")
+        GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
       }
   }
 

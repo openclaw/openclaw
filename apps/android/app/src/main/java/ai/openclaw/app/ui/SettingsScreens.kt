@@ -16,13 +16,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.description
+import ai.openclaw.app.gatewayTalkSetupDescription
+import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.isReady
 import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
-import ai.openclaw.app.statusText
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -456,9 +456,9 @@ private fun VoiceSetupReadinessRow(
 ) {
   VoiceSetupActionRow(
     title = title,
-    subtitle = state.description(),
+    subtitle = gatewayTalkSetupDescription(state),
     icon = icon,
-    statusText = state.statusText(),
+    statusText = gatewayTalkSetupStatusText(state),
     ready = state.isReady,
   )
 }

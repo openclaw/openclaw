@@ -2,6 +2,118 @@
   "version": 1,
   "entries": [
     {
+      "kind": "conditional-branch",
+      "line": 101,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Ready",
+      "surface": "android",
+      "id": "native.android.805d35da3b3c9d18"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 102,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Needs setup",
+      "surface": "android",
+      "id": "native.android.44c06b96c01cb062"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 103,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Unverified",
+      "surface": "android",
+      "id": "native.android.1bd3499b4cf8c3f2"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 108,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "${state.provider.label} via Gateway relay",
+      "surface": "android",
+      "id": "native.android.66f091d1fc047eff"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 115,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Gateway talk catalog not loaded",
+      "surface": "android",
+      "id": "native.android.859f7fec2019b314"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 116,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Could not load Gateway talk catalog",
+      "surface": "android",
+      "id": "native.android.ecb051798c98537f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 117,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "surface": "android",
+      "id": "native.android.95b5551fcb519c1f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 118,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "surface": "android",
+      "id": "native.android.328d435e93e9a2b2"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 119,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "surface": "android",
+      "id": "native.android.b3ee0bd7fd90a9e7"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 120,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "surface": "android",
+      "id": "native.android.04086b6aed3c2ce5"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 121,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "surface": "android",
+      "id": "native.android.27f61e5f9b33b6f9"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 122,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "surface": "android",
+      "id": "native.android.e4fe3a325a6d6299"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 124,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "surface": "android",
+      "id": "native.android.7e6b01f6e7c9bc92"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 126,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/GatewayTalkSetupReadiness.kt",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "surface": "android",
+      "id": "native.android.39bdbc9a546c7f1d"
+    },
+    {
       "kind": "ui-named-argument",
       "line": 203,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
@@ -4954,14 +5066,6 @@
       "id": "native.android.01ac388cd8ae0732"
     },
     {
-      "kind": "ui-state-text",
-      "line": 130,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
-      "source": "Off",
-      "surface": "android",
-      "id": "native.android.ae8e946c1bb1f3bc"
-    },
-    {
       "kind": "conditional-branch",
       "line": 340,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
@@ -4979,7 +5083,31 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1614,
+      "line": 700,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+      "source": "Off",
+      "surface": "android",
+      "id": "native.android.8d8230088f3baa2a"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 701,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "surface": "android",
+      "id": "native.android.d6b7f86564ac3147"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 702,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "surface": "android",
+      "id": "native.android.eb6ac739ad55e63a"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1611,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Aborted",
       "surface": "android",
@@ -4987,7 +5115,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1614,
+      "line": 1611,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
       "source": "Chat error",
       "surface": "android",
