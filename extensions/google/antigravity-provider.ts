@@ -11,7 +11,7 @@ async function runAntigravityOAuthSetup(ctx: ProviderAuthContext) {
       "OpenClaw will use the signed-in Google Antigravity app session.",
       "It will not run the deprecated Gemini CLI OAuth client.",
       "If Antigravity is not signed in yet, run `antigravity`, sign in there, then return here.",
-      "OpenClaw records the Antigravity OAuth session setup surface only until a non-GUI Antigravity runtime API is proven.",
+      "OpenClaw records the Antigravity setup surface, but does not claim a runnable non-GUI Antigravity backend until that runtime bridge is proven.",
     ].join("\n"),
     "Google Antigravity OAuth",
   );
@@ -30,7 +30,7 @@ async function runAntigravityOAuthSetup(ctx: ProviderAuthContext) {
     profiles: [],
     notes: [
       "Uses Antigravity-owned OAuth/session state. No OpenClaw-owned Google OAuth callback is started.",
-      "If execution fails, open Antigravity and sign in with Google before retrying.",
+      "No runnable Antigravity CLI/backend credential is created by this setup until a non-GUI Antigravity runtime bridge is proven.",
     ],
   };
 }
