@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
-import type { CodexAppServerClient } from "./client.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
@@ -653,7 +653,12 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {
     const fake = createFakeCodexClient();
-    fake.request.mockRejectedValueOnce(new Error("thread not found: thread-1"));
+    fake.request.mockRejectedValueOnce(
+      new CodexAppServerRpcError(
+        { code: -32600, message: "thread not found: thread-1" },
+        "thread/compact/start",
+      ),
+    );
     setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding({
       authProfileId: "openai:work",
@@ -680,6 +685,22 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.reason).toBe("thread not found: thread-1");
     expect(result.failure?.reason).toBe("stale_thread_binding");
     expect(result.result).toBeUndefined();
+  });
+
+  it("does not recover stale thread bindings from plain prose errors", async () => {
+    const fake = createFakeCodexClient();
+    fake.request.mockRejectedValueOnce(new Error("thread not found: thread-1"));
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await startCompaction(sessionFile, { currentTokenCount: 456 }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("thread not found: thread-1");
+    expect(result.failure).toBeUndefined();
   });
 
   it("does not impose an OpenClaw timeout after Codex accepts native compaction", async () => {

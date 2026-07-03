@@ -10,6 +10,7 @@ import {
   defaultLeasedCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
+import { CodexAppServerRpcError } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
@@ -23,6 +24,7 @@ import {
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
+const CODEX_APP_SERVER_INVALID_REQUEST_ERROR_CODE = -32600;
 type CodexAppServerCompactOptions = {
   pluginConfig?: unknown;
   clientFactory?: CodexAppServerClientFactory;
@@ -431,7 +433,17 @@ function isSameNativeCompactionBinding(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
-  return formatCompactionError(error).toLowerCase().includes("thread not found");
+  return (
+    error instanceof CodexAppServerRpcError &&
+    error.code === CODEX_APP_SERVER_INVALID_REQUEST_ERROR_CODE &&
+    isCodexThreadNotFoundMessage(error.message)
+  );
+}
+
+function isCodexThreadNotFoundMessage(message: string): boolean {
+  // Codex 0.142/HEAD maps missing compact threads to JSON-RPC -32600 with
+  // `thread not found: ...`; there is no dedicated missing-thread code yet.
+  return message.toLowerCase().includes("thread not found");
 }
 
 function formatCompactionError(error: unknown): string {

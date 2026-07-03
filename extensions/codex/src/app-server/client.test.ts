@@ -8,6 +8,7 @@ import {
   CodexAppServerClient,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
+  isUnsupportedCodexAppServerVersionError,
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
@@ -257,6 +258,24 @@ describe("CodexAppServerClient", () => {
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.124.9`,
     );
     expect(harness.writes).toHaveLength(1);
+  });
+
+  it("classifies unsupported app-server versions by typed error", async () => {
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: "openclaw/0.124.9 (macOS; test)" },
+    });
+    const error = await initializing.catch((caught: unknown) => caught);
+
+    expect(isUnsupportedCodexAppServerVersionError(error)).toBe(true);
+    expect(
+      isUnsupportedCodexAppServerVersionError(
+        new Error(
+          `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.124.9.`,
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("blocks same-version Codex app-server prereleases below the stable floor", async () => {

@@ -5,6 +5,7 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import { CodexAppServerVersionError } from "./errors.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -627,12 +628,12 @@ function timeoutServerRequestResponse(
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
   if (!detectedVersion) {
-    throw new Error(
+    throw new CodexAppServerVersionError(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
   if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
-    throw new Error(
+    throw new CodexAppServerVersionError(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
@@ -640,12 +641,7 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
 }
 
 export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.startsWith(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
-    )
-  );
+  return error instanceof CodexAppServerVersionError;
 }
 
 function buildCodexAppServerRuntimeIdentity(

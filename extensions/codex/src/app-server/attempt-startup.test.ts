@@ -91,6 +91,7 @@ function startThreadWithHarness(
     harness?: ClientHarness;
     paths?: AttemptPaths;
     skipStartSpy?: boolean;
+    spawnedBy?: EmbeddedRunAttemptParams["spawnedBy"];
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
@@ -128,7 +129,7 @@ function startThreadWithHarness(
     startupTimeoutMs,
     signal,
     onStartupTimeout: vi.fn(),
-    spawnedBy: undefined,
+    spawnedBy: overrides?.spawnedBy,
   });
 
   return { harness, run };
@@ -179,7 +180,7 @@ describe("startCodexAttemptThread", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const root of tempRoots) {
-      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
     tempRoots.clear();
   });
@@ -242,7 +243,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(5_000);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -253,7 +254,7 @@ describe("startCodexAttemptThread", () => {
     const error = await runError;
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
-      timeout: 2_000,
+      timeout: HARNESS_REQUEST_TIMEOUT_MS,
     });
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("codex app-server startup timed out");
@@ -290,7 +291,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(5_000);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,
@@ -304,7 +305,7 @@ describe("startCodexAttemptThread", () => {
     expect((error as Error).message).toBe("codex app-server startup timed out");
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
-      timeout: 2_000,
+      timeout: HARNESS_REQUEST_TIMEOUT_MS,
     });
     expect(
       readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
@@ -390,5 +391,39 @@ describe("startCodexAttemptThread", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("plugin/list timed out");
     expect(harness.process.stdin.destroyed).toBe(true);
+  });
+
+  it("keeps a spawned helper shared app-server after a plain startup RPC timeout", async () => {
+    const perRpcTimeoutPluginConfig = {
+      ...pluginConfig,
+      appServer: { command: "codex", requestTimeoutMs: 100 },
+      computerUse: { enabled: true, marketplaceDiscoveryTimeoutMs: 1 },
+    } satisfies CodexPluginConfig;
+    const paths = createAttemptPaths();
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      pluginConfig: perRpcTimeoutPluginConfig,
+      paths,
+      spawnedBy: "agent:main:session-parent",
+    });
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: perRpcTimeoutPluginConfig,
+    });
+    const retainedLease = getLeasedSharedCodexAppServerClient({
+      startOptions: appServer.start,
+      agentDir: paths.agentDir,
+    });
+    await answerInitialize(harness);
+    await expect(retainedLease).resolves.toBe(harness.client);
+    await waitForRequest(harness, "plugin/list");
+
+    const error = await run.then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("plugin/list timed out");
+    expect(harness.process.stdin.destroyed).toBe(false);
+    expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
   });
 });

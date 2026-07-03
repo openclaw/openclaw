@@ -5299,7 +5299,7 @@ describe("runCodexAppServerAttempt", () => {
         ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("write EPIPE");
+            throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
           }
           return {};
         }),
