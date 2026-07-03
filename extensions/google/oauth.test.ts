@@ -938,31 +938,27 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.filter(({ url }) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
   });
 
-  it("bounds token exchange error bodies without using response.text()", async () => {
-    const { response, text } = responseTextBodyWithTextTrap("x".repeat(32 * 1024), 500);
+  it.each([
+    [
+      "exchange",
+      "x",
+      async () =>
+        (await import("./oauth.token.js")).exchangeCodeForTokens("oauth-code", "pkce-verifier"),
+    ],
+    [
+      "refresh",
+      "y",
+      async () =>
+        (await import("./oauth.token.js")).refreshTokensForGeminiCli({ refresh: "refresh-token" }),
+    ],
+  ])("bounds token %s error bodies without using response.text()", async (_flow, fill, request) => {
+    const { response, text } = responseTextBodyWithTextTrap(fill.repeat(32 * 1024), 500);
     installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
 
-    const { exchangeCodeForTokens } = await import("./oauth.token.js");
-    const error = await exchangeCodeForTokens("oauth-code", "pkce-verifier").catch(
-      (err: unknown) => err,
-    );
+    const error = await request().catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(`Token exchange failed: ${"x".repeat(8 * 1024)}`);
-    expect(text).not.toHaveBeenCalled();
-  });
-
-  it("bounds token refresh error bodies without using response.text()", async () => {
-    const { response, text } = responseTextBodyWithTextTrap("y".repeat(32 * 1024), 500);
-    installGeminiOAuthFetchMock(() => undefined, { tokenResponse: () => response });
-
-    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
-    const error = await refreshTokensForGeminiCli({ refresh: "refresh-token" }).catch(
-      (err: unknown) => err,
-    );
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(`Token exchange failed: ${"y".repeat(8 * 1024)}`);
+    expect((error as Error).message).toBe(`Token exchange failed: ${fill.repeat(8 * 1024)}`);
     expect(text).not.toHaveBeenCalled();
   });
 
