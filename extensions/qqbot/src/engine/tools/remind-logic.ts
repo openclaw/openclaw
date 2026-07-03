@@ -1,5 +1,6 @@
 // Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 /**
  * QQBot reminder tool core logic.
@@ -24,6 +25,8 @@ export interface RemindParams {
   name?: string;
   jobId?: string;
 }
+
+const QQBOT_DEFAULT_REMINDER_TIMEZONE = "Asia/Shanghai";
 
 /**
  * Context supplied by the bridge layer so the engine can remain free of
@@ -68,7 +71,7 @@ export const RemindSchema = {
     action: {
       type: "string",
       description:
-        "Action type. add=create a reminder, list=show reminders, remove=delete a reminder.",
+        "Action type. add=create a reminder only after explicit user request, list=show reminders, remove=delete a reminder by confirmed job ID.",
       enum: ["add", "list", "remove"],
     },
     content: {
@@ -90,11 +93,12 @@ export const RemindSchema = {
         '1. Relative time, for example "5m", "1h", "1h30m", or "2d"\n' +
         '2. Cron expression, for example "0 8 * * *" or "0 9 * * 1-5"\n' +
         "Values containing spaces are treated as cron expressions; everything else is treated as a one-shot relative delay.\n" +
-        "Required when action=add.",
+        "Required when action=add. Ask for clarification before scheduling if the time is ambiguous.",
     },
     timezone: {
       type: "string",
-      description: 'Timezone used for cron reminders. Defaults to "Asia/Shanghai".',
+      description:
+        "Optional IANA timezone used for cron reminders. Include it when the user provides or confirms a timezone; if omitted, QQBot preserves its existing default timezone.",
     },
     name: {
       type: "string",
@@ -171,7 +175,7 @@ export function isCronExpression(timeStr: string): boolean {
  */
 export function generateJobName(content: string): string {
   const trimmed = content.trim();
-  const short = trimmed.length > 20 ? `${trimmed.slice(0, 20)}…` : trimmed;
+  const short = trimmed.length > 20 ? `${truncateUtf16Safe(trimmed, 20)}…` : trimmed;
   return `Reminder: ${short}`;
 }
 
@@ -215,7 +219,7 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
 function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
-  const tz = params.timezone || "Asia/Shanghai";
+  const tz = params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE;
   return {
     action: "add" as const,
     job: {
@@ -307,7 +311,7 @@ export function prepareRemindCronAction(
       ok: true,
       action: "add",
       cronAction: buildCronJob(params, resolvedTo, resolvedAccountId),
-      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || "Asia/Shanghai"})`,
+      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE})`,
     };
   }
 

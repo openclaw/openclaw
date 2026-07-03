@@ -3598,6 +3598,54 @@ describe("deliverOutboundPayloads", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
+  it("does not reuse a previous payload message id for a suppressed text send", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "first" }, { text: "second" }],
+    });
+
+    expect(results).toStrictEqual([{ channel: "matrix", messageId: "mx-1" }]);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        content: "first",
+        success: true,
+        messageId: "mx-1",
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        content: "second",
+        success: false,
+      }),
+      expect.objectContaining({ channelId: "matrix" }),
+    );
+    expect(hookMocks.runner.runMessageSent.mock.calls[1]?.[0]).not.toHaveProperty("messageId");
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });

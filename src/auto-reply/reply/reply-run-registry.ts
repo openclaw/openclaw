@@ -19,6 +19,7 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  isStopped?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -56,9 +57,18 @@ export type ReplyOperation = {
   readonly routeThreadId?: string | number;
   readonly abortSignal: AbortSignal;
   readonly resetTriggered: boolean;
+  /**
+   * True when this operation was admitted to recover a terminal session (a
+   * leftover failed/timeout/killed run). Concurrent visible turns reading the
+   * same terminal store snapshot must NOT force-clear such an operation: it is a
+   * sibling recovery already in flight, not the proven stale leftover.
+   */
+  readonly terminalRecovery: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
+  /** Mark this operation as an in-flight terminal-session recovery. */
+  markTerminalRecovery(): void;
   updateSessionId(nextSessionId: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
@@ -226,6 +236,14 @@ function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | und
   return attachedBackendByOperation.get(operation);
 }
 
+function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
+  try {
+    return backend.isStopped === undefined ? backend.isStreaming() : !backend.isStopped();
+  } catch {
+    return false;
+  }
+}
+
 /** Run work after an operation no longer owns its session lane. */
 export function runAfterReplyOperationClear(
   operation: ReplyOperation,
@@ -391,6 +409,7 @@ export function createReplyOperation(params: {
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let retainFailureUntilComplete = false;
+  let terminalRecovery = false;
 
   const clearState = (
     afterClearBarrier?: PromiseLike<unknown>,
@@ -472,6 +491,9 @@ export function createReplyOperation(params: {
     get resetTriggered() {
       return params.resetTriggered;
     },
+    get terminalRecovery() {
+      return terminalRecovery;
+    },
     get phase() {
       return phase;
     },
@@ -483,6 +505,9 @@ export function createReplyOperation(params: {
         return;
       }
       phase = next;
+    },
+    markTerminalRecovery() {
+      terminalRecovery = true;
     },
     updateSessionId(nextSessionId) {
       if (result) {
@@ -710,7 +735,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  if (!backend.isStreaming()) {
+  if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
   void backend.queueMessage(text);

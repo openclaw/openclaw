@@ -527,7 +527,7 @@ function buildMessagingSection(params: {
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     telegramRuntime
       ? telegramRichTextEnabled
-        ? '- Telegram rich text is available. Use Bot API 10.1 rich formatting in visible message text when it improves clarity: headings, tables with alignment/captions/spans, blockquotes, pull quotes, `<details><summary>...</summary>...</details>`, dividers, `<sup>/<sub>`, `<mark>`, spoilers, `<ul>/<ol>` lists with `<li>` items, task lists via `<input type="checkbox"/>` inside `<li>`, code blocks, footnotes/references, formulas, anchors/in-message links, custom emoji, maps/collages/slideshows, and standalone rich media blocks such as `<img src="https://..."/>`. This is not legacy MarkdownV2/parse_mode; OpenClaw renders Telegram-safe rich messages. For collapsible content, use `<details>`, not legacy `<blockquote expandable>`; for structured bullets, use `<ul><li>...</li></ul>`, not literal bullet characters. Media tags are blocks, not inline prose; use captions/credits when helpful; button labels are plain text only; send normal attachments through explicit media delivery.'
+        ? '- Telegram rich text is available. Use Bot API 10.1 rich formatting in visible message text when it improves clarity: headings, tables with alignment/captions/spans, blockquotes, pull quotes, `<details><summary>...</summary>...</details>`, dividers, `<sup>/<sub>`, `<mark>`, spoilers, `<ul>/<ol>` lists with `<li>` items, task lists via `<input type="checkbox"/>` inside `<li>`, code blocks, footnotes/references, formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`), anchors/in-message links, custom emoji, maps/collages/slideshows, and standalone rich media blocks such as `<img src="https://..."/>`. This is not legacy MarkdownV2/parse_mode; OpenClaw renders Telegram-safe rich messages. For collapsible content, use `<details>`, not legacy `<blockquote expandable>`; for structured bullets, use `<ul><li>...</li></ul>`, not literal bullet characters. Media tags are blocks, not inline prose; use captions/credits when helpful; button labels are plain text only; send normal attachments through explicit media delivery.'
         : "- Telegram rich messages are disabled for this bot/account. Do not claim Bot API 10.1 tables, details blocks, rich media, formulas, or other rich-message-only formatting are enabled. Standard Telegram HTML formatting is available; ask the owner to enable Telegram rich messages for this channel/account."
       : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
@@ -1013,13 +1013,10 @@ export function buildAgentSystemPrompt(params: {
     nativeCommandGuidanceLines,
     providerSectionOverrides,
     providerStablePrefix,
-    ownerLine,
     reasoningHint,
     reasoningLevel,
     userTimezone,
     runtimeChannel,
-    runtimeCapabilities,
-    inlineButtonsEnabled,
     threadBoundAcpSpawnEnabled,
     sourceMessageToolOnly,
     silentReplyPromptMode,
@@ -1109,11 +1106,6 @@ export function buildAgentSystemPrompt(params: {
           "Routine low-risk calls: no narration.",
           "Narrate only for complex, sensitive/destructive, or explicitly requested steps.",
           "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
-          buildExecApprovalPromptGuidance({
-            runtimeChannel: params.runtimeInfo?.channel,
-            inlineButtonsEnabled,
-            runtimeCapabilities,
-          }),
           "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
           "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
           "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
@@ -1234,7 +1226,6 @@ export function buildAgentSystemPrompt(params: {
             .join("\n")
         : "",
       params.sandboxInfo?.enabled ? "" : "",
-      ...buildUserIdentitySection(ownerLine, isMinimal),
       ...buildTimeSection({
         userTimezone,
       }),
@@ -1291,6 +1282,18 @@ export function buildAgentSystemPrompt(params: {
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
+    // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
+    // A tool_call_style override owns the complete section and suppresses default guidance.
+    ...(providerSectionOverrides.tool_call_style
+      ? []
+      : [
+          buildExecApprovalPromptGuidance({
+            runtimeChannel: params.runtimeInfo?.channel,
+            inlineButtonsEnabled,
+            runtimeCapabilities,
+          }),
+        ]),
+    ...buildUserIdentitySection(ownerLine, isMinimal),
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,

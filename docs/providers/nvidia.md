@@ -99,7 +99,7 @@ visible answer instead of exposing reasoning text.
 | Model ref                                  | Name                         | Context   | Max output | Notes                             |
 | ------------------------------------------ | ---------------------------- | --------- | ---------- | --------------------------------- |
 | `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,000,000 | 16,384     | Default                           |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144   | 8,192      | Featured fallback                 |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 1,048,576 | 8,192      | Featured fallback                 |
 | `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144   | 8,192      | Featured fallback                 |
 | `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608   | 8,192      | Featured fallback                 |
 | `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752   | 8,192      | Featured fallback                 |

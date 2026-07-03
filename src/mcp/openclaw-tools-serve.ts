@@ -11,8 +11,26 @@ import { createCronTool } from "../agents/tools/cron-tool.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
-export function resolveOpenClawToolsForMcp(): AnyAgentTool[] {
-  return [createCronTool({ creatorToolAllowlist: [{ name: "cron" }] })];
+export const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
+
+export function resolveOpenClawToolsMcpAgentSessionKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return env[OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV]?.trim() || undefined;
+}
+
+export function resolveOpenClawToolsForMcp(
+  params: {
+    agentSessionKey?: string;
+  } = {},
+): AnyAgentTool[] {
+  const agentSessionKey = (
+    params.agentSessionKey ?? resolveOpenClawToolsMcpAgentSessionKey()
+  )?.trim();
+  if (!agentSessionKey) {
+    throw new Error(`${OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV} is required`);
+  }
+  return [createCronTool({ agentSessionKey, creatorToolAllowlist: [{ name: "cron" }] })];
 }
 
 function createOpenClawToolsMcpServer(
