@@ -1883,7 +1883,11 @@ importers:
 
   packages/memory-host-sdk: {}
 
-  packages/model-catalog-core: {}
+  packages/model-catalog-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/net-policy:
     dependencies:
