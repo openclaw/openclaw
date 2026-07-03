@@ -134,46 +134,6 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
-  it("adds heap headroom for plugin-sdk dts on Windows", () => {
-    const step = getBuildAllStep("build:plugin-sdk:dts");
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-
-    try {
-      const result = resolveBuildAllStep(step, {
-        platform: "win32",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        npmExecPath,
-        env: { FOO: "bar" },
-      });
-
-      expect(result).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: [npmExecPath, "build:plugin-sdk:dts"],
-        options: {
-          stdio: "inherit",
-          env: {
-            FOO: "bar",
-            NODE_OPTIONS: "--max-old-space-size=8192",
-          },
-          shell: false,
-          windowsVerbatimArguments: undefined,
-        },
-      });
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
-    const step = getBuildAllStep("build:plugin-sdk:dts");
-
-    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
-    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
-    expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
-  });
-
   it("keeps export-html build output aligned with runtime template lookup", () => {
     const step = getBuildAllStep("copy-export-html-templates");
 
@@ -237,7 +197,6 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
-      "build:plugin-sdk:dts",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
       "plugins:assets:copy",
@@ -251,7 +210,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("skips bundled tsdown declarations for runtime-only profiles", () => {
-    for (const profile of ["ciArtifacts", "gatewayWatch", "qaRuntime", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -266,6 +225,17 @@ describe("resolveBuildAllSteps", () => {
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       });
     }
+  });
+
+  it("keeps canonical declarations enabled for package artifact builds", () => {
+    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+    if (!tsdown) {
+      throw new Error("Missing ciArtifacts tsdown step");
+    }
+
+    expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).not.toHaveProperty(
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD",
+    );
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
@@ -410,24 +380,28 @@ describe("resolveBuildAllSteps", () => {
 
   it("caches plugin-sdk entry declarations without restoring compiled JS", () => {
     const step = getBuildAllStep("write-plugin-sdk-entry-dts");
-    expect(step.cache?.env).toEqual(["OPENCLAW_BUILD_PRIVATE_QA"]);
+    expect(step.env).toEqual({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" });
+    expect(step.cache?.env).toEqual([
+      "OPENCLAW_BUILD_PRIVATE_QA",
+      "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
+    ]);
     expect(step.cache?.inputs).toEqual(
       expect.arrayContaining([
         "scripts/write-plugin-sdk-entry-dts.ts",
         "scripts/lib/plugin-sdk-entrypoints.json",
-        "src/plugin-sdk",
-        "packages/model-catalog-core/src",
       ]),
     );
+    expect(step.cache?.inputs).not.toContain("src/plugin-sdk");
     expect(step.cache?.outputs).toEqual(
       expect.arrayContaining([
-        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
         "dist/plugin-sdk/webhook-path.js",
         "dist/plugin-sdk/.boundary-entry-shims.stamp",
         "packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts",
       ]),
     );
-    expect(step.cache?.outputs).not.toContain("dist/plugin-sdk");
+    expect(step.cache?.outputs).not.toContainEqual(
+      expect.objectContaining({ path: "dist/plugin-sdk" }),
+    );
     expect(step.cache?.restore).toBe("always");
   });
 

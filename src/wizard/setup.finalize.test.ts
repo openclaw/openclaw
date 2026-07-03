@@ -33,6 +33,7 @@ const buildGatewayInstallPlan = vi.hoisted(() =>
     programArguments: [],
     workingDirectory: "/tmp",
     environment: {},
+    environmentValueSources: {},
   })),
 );
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
@@ -85,6 +86,15 @@ const startGatewayServer = vi.hoisted(() =>
     close: vi.fn(async () => {}),
   })),
 );
+const inspectWindowsGatewayFirewall = vi.hoisted(() =>
+  vi.fn<() => Promise<unknown>>(async () => ({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
+  })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -98,6 +108,16 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   })),
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
+}));
+
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall,
+  formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
+    params.bind === "lan"
+      ? [
+          "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
+        ]
+      : [],
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
@@ -378,6 +398,14 @@ describe("finalizeSetupWizard", () => {
     isContainerEnvironment.mockReturnValue(false);
     startGatewayServer.mockReset();
     startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
+    inspectWindowsGatewayFirewall.mockReset();
+    inspectWindowsGatewayFirewall.mockResolvedValue({
+      applies: false,
+      severity: "info",
+      code: "windows_firewall_not_applicable",
+      message: "Windows LAN firewall diagnostics do not apply.",
+      details: [],
+    });
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -503,6 +531,38 @@ describe("finalizeSetupWizard", () => {
     );
     expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
     expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
+  });
+
+  it("shows static Windows Firewall guidance for LAN Control UI links without inspection", async () => {
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({
+      nextConfig: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      prompter,
+    });
+
+    await finalizeSetupWizard({
+      ...args,
+      opts: {
+        ...args.opts,
+        skipHealth: false,
+        skipUi: false,
+      },
+      settings: {
+        ...args.settings,
+        bind: "lan",
+      },
+    });
+
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    expectNoteContains(
+      prompter,
+      "Windows firewall: if another device cannot connect to the LAN URL",
+      "Control UI",
+    );
   });
 
   it("bounds the bootstrap hatch TUI run timeout", async () => {
@@ -739,6 +799,16 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
     const runtime = createRuntime();
+    buildGatewayInstallPlan.mockResolvedValueOnce({
+      programArguments: [],
+      workingDirectory: "/tmp",
+      environment: {
+        DISCORD_BOT_TOKEN: "discord-test-token",
+      },
+      environmentValueSources: {
+        DISCORD_BOT_TOKEN: "file",
+      },
+    });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -778,7 +848,13 @@ describe("finalizeSetupWizard", () => {
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
-    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+    expect(gatewayServiceInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentValueSources: {
+          DISCORD_BOT_TOKEN: "file",
+        },
+      }),
+    );
   });
 
   it("suppresses token-bearing onboarding output when requested", async () => {

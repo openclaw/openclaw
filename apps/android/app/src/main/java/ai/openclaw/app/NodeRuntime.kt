@@ -13,6 +13,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.NodeEventSendOutcome
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
@@ -59,6 +60,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -78,6 +80,140 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+
+private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
+
+internal data class PendingNotificationNodeEvent(
+  val event: String,
+  val payloadJson: String?,
+)
+
+private data class QueuedNotificationNodeEvent(
+  val generation: Long,
+  val event: PendingNotificationNodeEvent,
+)
+
+internal class NotificationNodeEventOutbox(
+  private val capacity: Int = MAX_PENDING_NOTIFICATION_EVENTS,
+  private val isAuthorized: (PendingNotificationNodeEvent) -> Boolean = { true },
+  private val isConnected: () -> Boolean = { true },
+  private val deliveryIntervalMs: () -> Long = { 0L },
+  private val nowEpochMs: () -> Long = System::currentTimeMillis,
+  private val sleep: suspend (Long) -> Unit = { delay(it) },
+  private val invalidateConnection: () -> Unit = {},
+  private val send: suspend (PendingNotificationNodeEvent) -> NodeEventSendOutcome,
+) {
+  private val stateLock = Any()
+  private val generation = AtomicLong()
+  private val lastDeliveryAtMs = AtomicLong(-1L)
+  private val pending = ArrayDeque<QueuedNotificationNodeEvent>(capacity)
+  private val wakeDelivery = Channel<Unit>(Channel.CONFLATED)
+  private var inFlight: QueuedNotificationNodeEvent? = null
+
+  init {
+    require(capacity > 0) { "capacity must be positive" }
+  }
+
+  fun enqueue(event: PendingNotificationNodeEvent) {
+    synchronized(stateLock) {
+      if (pending.size == capacity) pending.removeFirst()
+      pending.addLast(QueuedNotificationNodeEvent(generation = generation.get(), event = event))
+    }
+    wakeDelivery.trySend(Unit)
+  }
+
+  fun clear() {
+    synchronized(stateLock) {
+      clearLocked()
+    }
+    wakeDelivery.trySend(Unit)
+  }
+
+  fun <T> updatePolicy(update: () -> T): T {
+    val result =
+      synchronized(stateLock) {
+        // Admission checks share this lock, so the new policy is visible before the next generation.
+        update().also { clearLocked() }
+      }
+    wakeDelivery.trySend(Unit)
+    return result
+  }
+
+  fun onConnected() {
+    wakeDelivery.trySend(Unit)
+  }
+
+  suspend fun deliver() {
+    while (true) {
+      wakeDelivery.receive()
+      while (true) {
+        val queued = synchronized(stateLock) { pending.firstOrNull() } ?: break
+        if (queued.generation != generation.get() || !isAuthorized(queued.event)) {
+          synchronized(stateLock) {
+            if (pending.firstOrNull() === queued) pending.removeFirst()
+          }
+          continue
+        }
+        if (!isConnected()) break
+        if (!awaitDeliverySlot(queued)) continue
+        val admitted =
+          synchronized(stateLock) {
+            if (
+              pending.firstOrNull() !== queued ||
+              queued.generation != generation.get() ||
+              !isAuthorized(queued.event) ||
+              !isConnected()
+            ) {
+              false
+            } else {
+              pending.removeFirst()
+              inFlight = queued
+              true
+            }
+          }
+        if (!admitted) continue
+
+        val outcome = send(queued.event)
+        synchronized(stateLock) {
+          if (inFlight === queued) inFlight = null
+          if (queued.generation == generation.get() && isAuthorized(queued.event)) {
+            when (outcome) {
+              NodeEventSendOutcome.COMPLETED -> lastDeliveryAtMs.set(nowEpochMs())
+              NodeEventSendOutcome.DISCONNECTED -> {
+                // This outcome is rejected before send, so it is safe to retain for reconnect.
+                if (pending.size == capacity) pending.removeLast()
+                pending.addFirst(queued)
+              }
+              // Ambiguous failures may have reached the gateway: do not retry, but charge their rate slot.
+              NodeEventSendOutcome.FAILED -> lastDeliveryAtMs.set(nowEpochMs())
+            }
+          }
+        }
+        if (outcome == NodeEventSendOutcome.DISCONNECTED) break
+      }
+    }
+  }
+
+  private suspend fun awaitDeliverySlot(queued: QueuedNotificationNodeEvent): Boolean {
+    while (queued.generation == generation.get() && isAuthorized(queued.event)) {
+      val lastDelivery = lastDeliveryAtMs.get()
+      if (lastDelivery < 0L) return true
+      val waitMs = lastDelivery + deliveryIntervalMs().coerceAtLeast(0L) - nowEpochMs()
+      if (waitMs <= 0L) return true
+      // Short slices make policy/gateway invalidation responsive without charging stale quota.
+      sleep(minOf(waitMs, 250L))
+    }
+    return false
+  }
+
+  private fun clearLocked() {
+    // Only an admitted RPC needs transport invalidation; queued payloads have no socket side effect.
+    if (inFlight?.generation == generation.get()) invalidateConnection()
+    generation.incrementAndGet()
+    lastDeliveryAtMs.set(-1L)
+    pending.clear()
+  }
+}
 
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
@@ -104,6 +240,48 @@ data class GatewayConnectionProblem(
           !pauseReconnect ||
           recommendedNextStep == "wait_then_retry"
       )
+}
+
+data class GatewayConnectionDisplay(
+  val isConnected: Boolean,
+  val statusText: String,
+  val problem: GatewayConnectionProblem?,
+)
+
+private fun gatewayProblemAfterDisconnect(
+  problem: GatewayConnectionProblem?,
+  statusText: String,
+): GatewayConnectionProblem? =
+  // Automatic bootstrap pairing retries need their approval guidance until success or a different failure.
+  problem?.takeIf { statusText == "Reconnecting…" && it.canAutoRetry }
+
+internal fun gatewayConnectionDisplay(
+  operatorConnected: Boolean,
+  nodeConnected: Boolean,
+  operatorStatusText: String,
+  nodeStatusText: String,
+  operatorProblem: GatewayConnectionProblem?,
+  nodeProblem: GatewayConnectionProblem?,
+): GatewayConnectionDisplay {
+  val operator = operatorStatusText.trim()
+  val node = nodeStatusText.trim()
+  return when {
+    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, "Connected", null)
+    operatorConnected -> GatewayConnectionDisplay(true, "Connected (node offline)", nodeProblem)
+    nodeConnected ->
+      GatewayConnectionDisplay(
+        isConnected = false,
+        statusText =
+          if (operator.isNotEmpty() && operator != "Offline") {
+            "Connected (operator: $operator)"
+          } else {
+            "Connected (operator offline)"
+          },
+        problem = operatorProblem,
+      )
+    operator.isNotBlank() && operator != "Offline" -> GatewayConnectionDisplay(false, operator, operatorProblem)
+    else -> GatewayConnectionDisplay(false, node, nodeProblem)
+  }
 }
 
 class NodeRuntime(
@@ -313,6 +491,8 @@ class NodeRuntime(
   private val _nodeCapabilityApprovalState = MutableStateFlow(GatewayNodeApprovalState.Loading)
   val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> = _nodeCapabilityApprovalState.asStateFlow()
 
+  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, "Offline", null))
+  val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
   private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
@@ -445,6 +625,9 @@ class NodeRuntime(
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
+  private var operatorConnectionProblem: GatewayConnectionProblem? = null
+  private var nodeConnectionProblem: GatewayConnectionProblem? = null
+  private val gatewayStatusLock = Any()
 
   private val operatorSession =
     GatewaySession(
@@ -452,16 +635,17 @@ class NodeRuntime(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = { hello ->
-        _gatewayConnectionProblem.value = null
-        operatorConnected = true
-        operatorStatusText = "Connected"
         _serverName.value = hello.serverName
         _remoteAddress.value = hello.remoteAddress
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        updateStatus()
+        updateStatus {
+          operatorConnectionProblem = null
+          operatorConnected = true
+          operatorStatusText = "Connected"
+        }
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
           subscribeOperatorSessionEvents()
@@ -473,9 +657,7 @@ class NodeRuntime(
         }
       },
       onDisconnected = { message ->
-        operatorConnected = false
         invalidateNodeCapabilityApprovalState()
-        operatorStatusText = message
         _serverName.value = null
         _remoteAddress.value = null
         _gatewayVersion.value = null
@@ -505,10 +687,18 @@ class NodeRuntime(
         _healthLogsSummary.value = GatewayHealthLogsSummary()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
-        updateStatus()
+        updateStatus {
+          operatorConnected = false
+          operatorStatusText = message
+          operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
+        }
         micCapture.onGatewayConnectionChanged(false)
       },
-      onConnectFailure = ::handleGatewayConnectFailure,
+      onConnectFailure = { error, pauseReconnect ->
+        updateStatus {
+          operatorConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+      },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
@@ -528,14 +718,16 @@ class NodeRuntime(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = {
-        _gatewayConnectionProblem.value = null
-        _nodeConnected.value = true
-        nodeStatusText = "Connected"
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
-        updateStatus()
+        updateStatus {
+          nodeConnectionProblem = null
+          _nodeConnected.value = true
+          nodeStatusText = "Connected"
+        }
+        notificationOutbox.onConnected()
         showLocalCanvasOnConnect()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
@@ -547,17 +739,23 @@ class NodeRuntime(
         }
       },
       onDisconnected = { message ->
-        _nodeConnected.value = false
         invalidateNodeCapabilityApprovalState()
-        nodeStatusText = message
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
-        updateStatus()
+        updateStatus {
+          _nodeConnected.value = false
+          nodeStatusText = message
+          nodeConnectionProblem = gatewayProblemAfterDisconnect(nodeConnectionProblem, message)
+        }
         showLocalCanvasOnDisconnect()
       },
-      onConnectFailure = ::handleGatewayConnectFailure,
+      onConnectFailure = { error, pauseReconnect ->
+        updateStatus {
+          nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+      },
       onEvent = { _, _ -> },
       onInvoke = { req ->
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
@@ -567,11 +765,49 @@ class NodeRuntime(
       },
     )
 
+  private val notificationOutbox: NotificationNodeEventOutbox by lazy {
+    NotificationNodeEventOutbox(
+      isAuthorized = ::isNotificationEventStillAuthorized,
+      isConnected = nodeSession::isReady,
+      deliveryIntervalMs = ::notificationDeliveryIntervalMs,
+      invalidateConnection = nodeSession::reconnect,
+      send = { pending ->
+        nodeSession.sendNodeEventWithOutcome(event = pending.event, payloadJson = pending.payloadJson)
+      },
+    )
+  }
+
+  private fun notificationDeliveryIntervalMs(): Long {
+    val maxEvents =
+      prefs.notificationForwardingMaxEventsPerMinute.value
+        .coerceAtLeast(1)
+        .toLong()
+    return (60_000L + maxEvents - 1L) / maxEvents
+  }
+
+  private fun isNotificationEventStillAuthorized(event: PendingNotificationNodeEvent): Boolean {
+    if (event.event != "notifications.changed") return false
+    if (!DeviceNotificationListenerService.isAccessEnabled(appContext)) return false
+    val payload =
+      runCatching { event.payloadJson?.let(json::parseToJsonElement).asObjectOrNull() }
+        .getOrNull()
+        ?: return false
+    val packageName = payload["packageName"].asStringOrNull()?.trim().orEmpty()
+    if (packageName.isEmpty()) return false
+    val policy = prefs.getNotificationForwardingPolicy(appPackageName = appContext.packageName)
+    val eventSessionKey = payload["sessionKey"].asStringOrNull()?.trim()?.ifEmpty { null }
+    return policy.enabled &&
+      policy.sessionKey == eventSessionKey &&
+      policy.allowsPackage(packageName) &&
+      !policy.isWithinQuietHours(nowEpochMs = System.currentTimeMillis())
+  }
+
   init {
+    scope.launch { notificationOutbox.deliver() }
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
-      scope.launch {
-        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
-      }
+      notificationOutbox.enqueue(
+        PendingNotificationNodeEvent(event = event, payloadJson = payloadJson),
+      )
     }
   }
 
@@ -591,7 +827,7 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        isConnected = { _isConnected.value },
+        isConnected = { gatewayConnectionDisplay.value.isConnected },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
       ).also { speaker ->
@@ -702,7 +938,7 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      isConnected = { _isConnected.value },
+      isConnected = { gatewayConnectionDisplay.value.isConnected },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -736,45 +972,56 @@ class NodeRuntime(
     updateHomeCanvasState()
   }
 
-  private fun updateStatus() {
-    _isConnected.value = operatorConnected
-    val operator = operatorStatusText.trim()
-    val node = nodeStatusText.trim()
-    _statusText.value =
-      when {
-        operatorConnected && _nodeConnected.value -> "Connected"
-        operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
-        !operatorConnected && _nodeConnected.value ->
-          if (operator.isNotEmpty() && operator != "Offline") {
-            "Connected (operator: $operator)"
-          } else {
-            "Connected (operator offline)"
-          }
-        operator.isNotBlank() && operator != "Offline" -> operator
-        else -> node
-      }
+  private fun updateStatus(update: () -> Unit = {}) {
+    synchronized(gatewayStatusLock) {
+      update()
+      // Select and publish text plus diagnostics atomically; operator and node callbacks run concurrently.
+      val display =
+        gatewayConnectionDisplay(
+          operatorConnected = operatorConnected,
+          nodeConnected = _nodeConnected.value,
+          operatorStatusText = operatorStatusText,
+          nodeStatusText = nodeStatusText,
+          operatorProblem = operatorConnectionProblem,
+          nodeProblem = nodeConnectionProblem,
+        )
+      _gatewayConnectionDisplay.value = display
+      _isConnected.value = display.isConnected
+      _statusText.value = display.statusText
+      _gatewayConnectionProblem.value = display.problem
+    }
     updateHomeCanvasState()
   }
 
-  private fun handleGatewayConnectFailure(
+  private fun setStandaloneGatewayStatus(statusText: String) {
+    synchronized(gatewayStatusLock) {
+      val display = GatewayConnectionDisplay(operatorConnected, statusText, null)
+      _gatewayConnectionDisplay.value = display
+      _isConnected.value = display.isConnected
+      _statusText.value = display.statusText
+      _gatewayConnectionProblem.value = display.problem
+    }
+    updateHomeCanvasState()
+  }
+
+  private fun gatewayConnectionProblem(
     error: GatewaySession.ErrorShape,
     pauseReconnect: Boolean,
-  ) {
+  ): GatewayConnectionProblem {
     val details = error.details
-    _gatewayConnectionProblem.value =
-      GatewayConnectionProblem(
-        code = details?.code ?: error.code,
-        message = error.message,
-        reason = details?.reason,
-        requestId = details?.requestId,
-        recommendedNextStep = details?.recommendedNextStep,
-        pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
-        retryable = details?.retryable == true,
-        clientMinProtocol = details?.clientMinProtocol,
-        clientMaxProtocol = details?.clientMaxProtocol,
-        expectedProtocol = details?.expectedProtocol,
-        minimumProbeProtocol = details?.minimumProbeProtocol,
-      )
+    return GatewayConnectionProblem(
+      code = details?.code ?: error.code,
+      message = error.message,
+      reason = details?.reason,
+      requestId = details?.requestId,
+      recommendedNextStep = details?.recommendedNextStep,
+      pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
+      retryable = details?.retryable == true,
+      clientMinProtocol = details?.clientMinProtocol,
+      clientMaxProtocol = details?.clientMaxProtocol,
+      expectedProtocol = details?.expectedProtocol,
+      minimumProbeProtocol = details?.minimumProbeProtocol,
+    )
   }
 
   private fun resolveMainSessionKey(): String {
@@ -1130,7 +1377,7 @@ class NodeRuntime(
 
   private fun autoConnectIfNeeded() {
     if (didAutoConnect) return
-    if (_isConnected.value) return
+    if (gatewayConnectionDisplay.value.isConnected) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
@@ -1139,7 +1386,7 @@ class NodeRuntime(
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
-    if (_isConnected.value) return
+    if (gatewayConnectionDisplay.value.isConnected) return
     if (_pendingGatewayTrust.value != null) return
     if (connectedEndpoint != null) {
       refreshGatewayConnection()
@@ -1195,29 +1442,60 @@ class NodeRuntime(
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
-    prefs.setNotificationForwardingEnabled(value)
+    if (prefs.notificationForwardingEnabled.value == value) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingEnabled(value) }
   }
 
   fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
-    prefs.setNotificationForwardingMode(mode)
+    if (prefs.notificationForwardingMode.value == mode) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingMode(mode) }
   }
 
   fun setNotificationForwardingPackages(packages: List<String>) {
-    prefs.setNotificationForwardingPackages(packages)
+    val normalized = packages.map(String::trim).filter(String::isNotEmpty).toSet()
+    if (prefs.notificationForwardingPackages.value == normalized) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingPackages(normalized.toList()) }
   }
 
   fun setNotificationForwardingQuietHours(
     enabled: Boolean,
     start: String,
     end: String,
-  ): Boolean = prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  ): Boolean {
+    if (!enabled) {
+      if (!prefs.notificationForwardingQuietHoursEnabled.value) return true
+      return notificationOutbox.updatePolicy {
+        prefs.setNotificationForwardingQuietHours(enabled = false, start = start, end = end)
+      }
+    }
+    val normalizedStart = normalizeLocalHourMinute(start) ?: return false
+    val normalizedEnd = normalizeLocalHourMinute(end) ?: return false
+    val unchanged =
+      prefs.notificationForwardingQuietHoursEnabled.value &&
+        prefs.notificationForwardingQuietStart.value == normalizedStart &&
+        prefs.notificationForwardingQuietEnd.value == normalizedEnd
+    if (unchanged) return true
+    return notificationOutbox.updatePolicy {
+      prefs.setNotificationForwardingQuietHours(
+        enabled = true,
+        start = normalizedStart,
+        end = normalizedEnd,
+      )
+    }
+  }
 
   fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+    val normalized = value.coerceAtLeast(1)
+    if (prefs.notificationForwardingMaxEventsPerMinute.value == normalized) return
+    notificationOutbox.updatePolicy {
+      prefs.setNotificationForwardingMaxEventsPerMinute(normalized)
+    }
   }
 
   fun setNotificationForwardingSessionKey(value: String?) {
-    prefs.setNotificationForwardingSessionKey(value)
+    val normalized = value?.trim()?.takeIf(String::isNotEmpty)
+    if (prefs.notificationForwardingSessionKey.value == normalized) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
   }
 
   fun setVoiceScreenActive(active: Boolean) {
@@ -1242,9 +1520,15 @@ class NodeRuntime(
   }
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
-    runPreparedTalkPttCommand {
-      val payload = talkMode.beginPushToTalk()
-      GatewaySession.InvokeResult.ok(payload.toJson())
+    runTalkPttCommand {
+      if (!_isForeground.value) {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = false)
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      }
+      runPreparedTalkPttCommand {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = true)
+        GatewaySession.InvokeResult.ok(payload.toJson())
+      }
     }
 
   private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
@@ -1288,6 +1572,9 @@ class NodeRuntime(
     }
 
   private suspend fun prepareTalkCapture() {
+    if (!_isForeground.value) {
+      throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
     if (!hasRecordAudioPermission()) {
       throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
     }
@@ -1344,7 +1631,7 @@ class NodeRuntime(
     if (!BuildConfig.DEBUG) {
       throw IllegalStateException("voice e2e is debug-only")
     }
-    if (!_isConnected.value) {
+    if (!gatewayConnectionDisplay.value.isConnected) {
       throw IllegalStateException("gateway not connected")
     }
     if (!hasRecordAudioPermission()) {
@@ -1529,12 +1816,14 @@ class NodeRuntime(
     if (endpoint == null) {
       resolvePreferredGatewayEndpoint()?.let(::connect)
         ?: run {
-          _statusText.value = "Failed: no saved gateway endpoint"
+          setStandaloneGatewayStatus("Failed: no saved gateway endpoint")
         }
       return
     }
-    operatorStatusText = "Connecting…"
-    updateStatus()
+    updateStatus {
+      operatorStatusText = "Connecting…"
+      operatorConnectionProblem = null
+    }
     connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
   }
 
@@ -1556,10 +1845,12 @@ class NodeRuntime(
         storedOperatorToken = loadStoredRoleDeviceToken("operator"),
       )
     if (operatorAuth == null) {
-      operatorConnected = false
-      operatorStatusText = "Offline"
+      updateStatus {
+        operatorConnected = false
+        operatorStatusText = "Offline"
+        operatorConnectionProblem = null
+      }
       operatorSession.disconnect()
-      updateStatus()
     } else {
       operatorSession.connect(
         endpoint,
@@ -1590,6 +1881,8 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    // A user-selected connect target must never inherit notification content from another gateway.
+    notificationOutbox.clear()
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
@@ -1598,14 +1891,14 @@ class NodeRuntime(
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-      _statusText.value = "Verify gateway TLS fingerprint…"
+      setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
             if (expectedFingerprint == null) {
-              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+              setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(tlsProbe.failure))
             } else {
               connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
             }
@@ -1642,11 +1935,13 @@ class NodeRuntime(
     connectAttemptId: Long,
   ) {
     if (!isCurrentConnectAttempt(connectAttemptId)) return
-    _gatewayConnectionProblem.value = null
     connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
-    updateStatus()
+    updateStatus {
+      operatorConnectionProblem = null
+      nodeConnectionProblem = null
+      operatorStatusText = "Connecting…"
+      nodeStatusText = "Connecting…"
+    }
     connectWithAuth(endpoint = endpoint, auth = auth)
   }
 
@@ -1678,7 +1973,7 @@ class NodeRuntime(
 
   fun declineGatewayTrustPrompt() {
     _pendingGatewayTrust.value = null
-    _statusText.value = "Offline"
+    setStandaloneGatewayStatus("Offline")
   }
 
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
@@ -1701,7 +1996,7 @@ class NodeRuntime(
     val host = manualHost.value.trim()
     val port = manualPort.value
     if (host.isEmpty() || port <= 0 || port > 65535) {
-      _statusText.value = "Failed: invalid manual host/port"
+      setStandaloneGatewayStatus("Failed: invalid manual host/port")
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
@@ -1724,8 +2019,10 @@ class NodeRuntime(
         auth = auth,
         storedOperatorToken = loadStoredRoleDeviceToken("operator"),
       ) ?: return
-    operatorStatusText = "Connecting…"
-    updateStatus()
+    updateStatus {
+      operatorStatusText = "Connecting…"
+      operatorConnectionProblem = null
+    }
     operatorSession.connect(
       endpoint,
       operatorAuth.token,
@@ -1737,11 +2034,15 @@ class NodeRuntime(
   }
 
   fun disconnect() {
+    notificationOutbox.clear()
     connectAttemptSeq.incrementAndGet()
     stopActiveVoiceSession()
     connectedEndpoint = null
     activeGatewayAuth = null
-    _gatewayConnectionProblem.value = null
+    updateStatus {
+      operatorConnectionProblem = null
+      nodeConnectionProblem = null
+    }
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
@@ -1945,7 +2246,7 @@ class NodeRuntime(
   }
 
   private suspend fun refreshBrandingFromGateway() {
-    if (!_isConnected.value) return
+    if (!gatewayConnectionDisplay.value.isConnected) return
     try {
       val res = operatorSession.request("config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
@@ -2917,9 +3218,10 @@ class NodeRuntime(
   }
 
   private fun resolveHomeCanvasGatewayState(): HomeCanvasGatewayState {
-    val lower = _statusText.value.trim().lowercase()
+    val display = gatewayConnectionDisplay.value
+    val lower = display.statusText.trim().lowercase()
     return when {
-      _isConnected.value -> HomeCanvasGatewayState.Connected
+      display.isConnected -> HomeCanvasGatewayState.Connected
       lower.contains("connecting") || lower.contains("reconnecting") -> HomeCanvasGatewayState.Connecting
       lower.contains("error") || lower.contains("failed") -> HomeCanvasGatewayState.Error
       else -> HomeCanvasGatewayState.Offline

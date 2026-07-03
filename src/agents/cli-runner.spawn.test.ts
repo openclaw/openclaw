@@ -82,6 +82,23 @@ afterEach(() => {
   replyRunTesting.resetReplyRunRegistry();
 });
 
+const CLAUDE_OK_JSONL = `${JSON.stringify({ type: "result", result: "ok" })}\n`;
+
+function mockSuccessfulClaudeJsonlRun() {
+  supervisorSpawnMock.mockResolvedValueOnce(
+    createManagedRun({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 50,
+      stdout: CLAUDE_OK_JSONL,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    }),
+  );
+}
+
 function buildPreparedCliRunContext(params: {
   provider: "claude-cli" | "codex-cli" | "google-gemini-cli";
   model: string;
@@ -330,7 +347,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -418,7 +435,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -457,7 +474,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -476,7 +493,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("passes --session-id for new Claude sessions", async () => {
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
 
     await executePreparedCliRun(
       buildPreparedCliRunContext({
@@ -499,7 +516,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("does not pass a Claude session id for side-question runs", async () => {
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--max-turns", "1"]);
 
     await executePreparedCliRun(
@@ -523,7 +540,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("applies backend-owned per-run args before spawning", async () => {
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--effort", "high"]);
 
     await executePreparedCliRun(
@@ -609,7 +626,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -669,7 +686,7 @@ describe("runCliAgent spawn path", () => {
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: "ok",
+        stdout: CLAUDE_OK_JSONL,
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -1178,7 +1195,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("defers prepared backend cleanup to the Claude live session lifecycle", async () => {
+  it("keeps non-capture live prepared backend cleanup with the whole-run owner", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {
       write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
@@ -1225,11 +1242,13 @@ describe("runCliAgent spawn path", () => {
     const result = await executePreparedCliRun(context);
 
     expect(result.text).toBe("ok");
-    expect(context.preparedBackend.cleanup).toBeUndefined();
+    expect(context.preparedBackend.cleanup).toBe(preparedBackendCleanup);
     expect(preparedBackendCleanup).not.toHaveBeenCalled();
 
     resetClaudeLiveSessionsForTest();
-    await vi.waitFor(() => expect(preparedBackendCleanup).toHaveBeenCalledOnce());
+    expect(preparedBackendCleanup).not.toHaveBeenCalled();
+    await context.preparedBackend.cleanup?.();
+    expect(preparedBackendCleanup).toHaveBeenCalledOnce();
   });
 
   it("keeps captured live prepared backend cleanup with the whole-run owner", async () => {
@@ -3003,6 +3022,162 @@ ${JSON.stringify({
     );
   });
 
+  it("marks Claude live stderr context overflows as retryable", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stdin = {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({ type: "system", subtype: "init", session_id: "live-overflow" }) + "\n",
+        );
+        cb?.();
+        resolveExit?.({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "Prompt is too long",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-overflow-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => exited),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-overflow",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+        status: 413,
+      },
+    );
+  });
+
+  it("marks quiet Claude live exit-zero turns as retryable empty responses", async () => {
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        cb?.();
+        resolveExit?.({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-empty-run",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin,
+      wait: vi.fn(() => exited),
+      cancel: vi.fn(),
+    }));
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-empty",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        reason: "empty_response",
+        code: "cli_unknown_empty_failure",
+      },
+    );
+  });
+
+  it("preserves Claude live stderr classification on exit-zero failures", async () => {
+    let resolveExit: ((exit: RunExit) => void) | undefined;
+    const exited = new Promise<RunExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const stdin = {
+      write: vi.fn((_dataValue: string, cb?: (err?: Error | null) => void) => {
+        cb?.();
+        resolveExit?.({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "Prompt is too long",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-exit-zero-overflow-run",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin,
+      wait: vi.fn(() => exited),
+      cancel: vi.fn(),
+    }));
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-exit-zero-overflow",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        reason: "context_overflow",
+        code: "cli_context_overflow",
+      },
+    );
+  });
+
   it("fails when Claude exits before a live turn starts", async () => {
     supervisorSpawnMock.mockImplementationOnce(async () => ({
       runId: "live-run",
@@ -3137,6 +3312,77 @@ ${JSON.stringify({
 
     expect(second.text).toBe("second-ok");
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails Claude live turns without unhandled rejection when stdin write is stuck", async () => {
+    vi.useFakeTimers();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+    const cancel = vi.fn();
+    let pendingWriteCallback: ((err?: Error | null) => void) | undefined;
+    const stdin = {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        pendingWriteCallback = cb;
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async () => ({
+      runId: "live-run-stuck-stdin",
+      pid: 2345,
+      startedAtMs: Date.now(),
+      stdin,
+      wait: vi.fn(() => new Promise(() => {})),
+      cancel: vi.fn((reason: string) => {
+        cancel(reason);
+        pendingWriteCallback?.(new Error("stdin closed"));
+      }),
+    }));
+
+    try {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-stuck-stdin",
+        timeoutMs: 10_000,
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      });
+      const run = runClaudeLiveSessionTurn({
+        context,
+        args: context.preparedBackend.backend.args ?? [],
+        env: {},
+        prompt: "stuck write",
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+      const runExpectation = expectRejectsWithFields(run, {
+        name: "FailoverError",
+        message: "CLI produced no output for 1s and was terminated.",
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await runExpectation;
+      await Promise.resolve();
+      expect(unhandledRejections).toEqual([]);
+      expect(cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(stdin.write).toHaveBeenCalledOnce();
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   it("restarts Claude live sessions when selected skills change", async () => {
@@ -3588,7 +3834,7 @@ ${JSON.stringify({
     vi.stubEnv("OTEL_EXPORTER_OTLP_PROTOCOL", "none");
     vi.stubEnv("OTEL_SDK_DISABLED", "true");
     vi.stubEnv("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
-    mockSuccessfulCliRun();
+    mockSuccessfulClaudeJsonlRun();
 
     await executePreparedCliRun(
       buildPreparedCliRunContext({

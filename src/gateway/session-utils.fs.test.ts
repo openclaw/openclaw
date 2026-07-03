@@ -1788,7 +1788,7 @@ describe("readSessionMessages", () => {
       })),
     ).toEqual([
       { role: "user", text: "hello" },
-      { role: "assistant", text: "hi" },
+      { role: "assistant", text: [{ type: "text", text: "hi" }] },
       { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
     ]);
     expect(JSON.stringify(out)).not.toContain("[hitl:block] hello");

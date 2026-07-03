@@ -1245,6 +1245,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## cli/attach.md
+
+- Route: /cli/attach
+- Headings: none
+
 ## cli/backup.md
 
 - Route: /cli/backup
@@ -5659,6 +5664,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Renderer contract
   - H2: Core render flow
   - H2: Degradation rules
+  - H3: Button value fallback visibility
   - H2: Provider mapping
   - H2: Presentation vs InteractiveReply
   - H2: Delivery pin

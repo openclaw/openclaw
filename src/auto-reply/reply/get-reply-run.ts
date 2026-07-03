@@ -607,12 +607,8 @@ export async function runPreparedReply(
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
-        cfg,
-        sessionCtx: promptSessionCtx,
         sessionEntry,
         defaultActivation,
-        silentToken: SILENT_REPLY_TOKEN,
-        silentReplyPolicy: silentReplySettings.policy,
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
@@ -738,7 +734,6 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
-    { sourceReplyDeliveryMode },
   );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =

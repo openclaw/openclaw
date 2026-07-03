@@ -40,6 +40,18 @@ async function runLoadedScenarioFlow(
     },
     sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
       state.addInboundMessage(input),
+    sendNativeCommand: async (
+      input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
+        command: string;
+      },
+    ) => {
+      const { command, ...message } = input;
+      state.addInboundMessage({
+        ...message,
+        text: `/${command}`,
+        nativeCommand: { name: command },
+      });
+    },
     waitForNoOutbound: async () => undefined,
     waitForOutbound: async (input: {
       conversation?: { id: string; kind: string };

@@ -1732,6 +1732,57 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("marks spooled replay pairing store read failures retryable without apology spam", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
+    sendMessageSpy.mockClear();
+    const onUpdateId = vi.fn();
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 700,
+        onUpdateId,
+      },
+    });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const update = {
+      update_id: 701,
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        message_id: 9,
+        date: 1736380800,
+        from: { id: 123456789, username: "testuser" },
+      },
+    };
+    const ctx = {
+      update,
+      message: update.message,
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await expect(
+      withTelegramSpooledReplayUpdate(update, async () => {
+        await runTelegramMiddlewareChain({
+          ctx,
+          finalHandler: async () => {
+            await handler(ctx);
+          },
+        });
+      }),
+    ).rejects.toMatchObject({
+      name: TelegramSpooledReplayProcessingError.name,
+      cause: expect.objectContaining({ name: "TelegramPairingStoreReadError" }),
+    });
+
+    expect(onUpdateId).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps the same private chat usable after a transient pairing store read failure", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },

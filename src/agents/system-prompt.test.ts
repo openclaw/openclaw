@@ -1104,7 +1104,7 @@ describe("buildAgentSystemPrompt", () => {
       );
       expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
       expect(prompt).toContain(
-        "Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output",
+        "Group/channel etiquette: message-tool-only delivery does not require visible output",
       );
       expect(prompt).toContain("The target defaults to the current source channel");
       expect(prompt).toContain("do not repeat that visible content in your final answer");
@@ -1130,6 +1130,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).toContain(
+      "Group/channel etiquette: message-tool-only delivery does not require visible output",
+    );
     expect(prompt).not.toContain("The target defaults to the current source channel");
   });
 
@@ -1150,7 +1153,7 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("keeps Discord group etiquette scoped to group message-tool-only delivery", () => {
+  it("keeps group/channel etiquette scoped to message-tool-only delivery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1160,10 +1163,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).not.toContain("Discord group/thread etiquette");
+    expect(prompt).not.toContain("Group/channel etiquette");
   });
 
-  it("omits Discord group etiquette for direct message-tool-only delivery", () => {
+  it("omits group/channel etiquette for direct message-tool-only delivery", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1175,7 +1178,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
-    expect(prompt).not.toContain("Discord group/thread etiquette");
+    expect(prompt).not.toContain("Group/channel etiquette");
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
@@ -1316,7 +1319,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt.match(/Custom runtime context/g)).toHaveLength(1);
-    expect(prompt.match(/## Group Chat Context/g)).toHaveLength(1);
+    expect(prompt.match(/## Conversation Context/g)).toHaveLength(1);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {
@@ -1412,7 +1415,7 @@ describe("buildAgentSystemPrompt", () => {
     const projectContextPos = prompt.indexOf("# Project Context");
     const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     const messagingPos = prompt.lastIndexOf("## Messaging");
-    const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
+    const conversationContextPos = prompt.lastIndexOf("## Conversation Context");
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
     // These sections vary with approval UI capabilities and owner identity, so
@@ -1423,7 +1426,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(projectContextPos).toBeGreaterThan(-1);
     expect(boundaryPos).toBeGreaterThan(projectContextPos);
     expect(messagingPos).toBeGreaterThan(boundaryPos);
-    expect(groupChatPos).toBeGreaterThan(boundaryPos);
+    expect(conversationContextPos).toBeGreaterThan(boundaryPos);
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
     expect(approvalPos).toBeGreaterThan(boundaryPos);

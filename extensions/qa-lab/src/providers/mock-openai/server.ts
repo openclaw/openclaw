@@ -3612,6 +3612,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
   };
   let lastRequest: MockOpenAiRequestSnapshot | null = null;
   const requests: MockOpenAiRequestSnapshot[] = [];
+  const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
+  let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
   const server = createServer((req, res) => {
     void (async () => {
@@ -3640,6 +3642,10 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "GET" && url.pathname === "/debug/requests") {
         writeJson(res, 200, requests);
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
+        writeJson(res, 200, [...inflightRequests.values()]);
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/image-generations") {
@@ -3708,13 +3714,22 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
-        const events = await buildResponsesPayload(body, scenarioState);
+        const prompt = extractLastUserText(input);
+        const allInputText = extractAllRequestTexts(input, body);
+        const inflightRequestId = nextInflightRequestId++;
+        inflightRequests.set(inflightRequestId, { prompt, allInputText });
+        let events: StreamEvent[];
+        try {
+          events = await buildResponsesPayload(body, scenarioState);
+        } finally {
+          inflightRequests.delete(inflightRequestId);
+        }
         const resolvedModel = typeof body.model === "string" ? body.model : "";
         lastRequest = {
           raw,
           body,
-          prompt: extractLastUserText(input),
-          allInputText: extractAllRequestTexts(input, body),
+          prompt,
+          allInputText,
           instructions: extractInstructionsText(body) || undefined,
           toolOutput: extractToolOutput(input),
           model: resolvedModel,
