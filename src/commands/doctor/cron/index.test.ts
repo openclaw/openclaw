@@ -472,6 +472,7 @@ describe("maybeRepairLegacyCronStore", () => {
       expectNoteContaining("1 cron job has failed 3+ runs in a row", "Cron");
       expectNoteContaining("re-fires it on error backoff", "Cron");
       expectNoteContaining("resets on the next successful run", "Cron");
+      expectNoteContaining("interrupted by a gateway restart", "Cron");
       expectNoteContaining("openclaw cron show <id>", "Cron");
 
       // Observer-only: no repair prompt and the failure counters stay untouched.

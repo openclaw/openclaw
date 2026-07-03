@@ -89,9 +89,11 @@ function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
 const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
 // Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`
-// resets to 0 on the next successful run, so a lasting value means every recent
-// run failed; failure alerts are opt-in, so by default nothing else surfaces the
-// streak. Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted
+// resets to 0 on the next successful run and also increments for runs interrupted
+// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops.ts`),
+// so a streak can mean task failures, interrupted runs, or a mix — the note says so.
+// Failure alerts are opt-in, so by default nothing else surfaces the streak.
+// Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted
 // one-shot jobs with their error state retained), so they are excluded.
 function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): number {
   return jobs.filter((job) => {
@@ -451,7 +453,7 @@ export async function maybeRepairLegacyCronStore(params: {
     note(
       [
         `${pluralize(chronicFailureCount, "cron job")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
-        `- The count resets on the next successful run; a lasting streak usually means the job's prompt, session target, or provider needs attention. Failure alerts are opt-in, so this may be the only notice.`,
+        `- The count resets on the next successful run and also counts runs interrupted by a gateway restart, so a lasting streak means repeated task failures, repeatedly interrupted runs, or a mix. Failure alerts are opt-in, so this may be the only notice.`,
         `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
       ].join("\n"),
       "Cron",
