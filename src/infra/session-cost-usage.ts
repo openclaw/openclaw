@@ -1657,6 +1657,12 @@ async function refreshCostUsageCacheForPath(params?: {
     await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
+    // When the pricing model changes, cached entries were computed under an
+    // old fingerprint and must be rescanned.  Clear them so stale detection
+    // rebuilds them instead of preserving stale cost data.
+    if (cache.pricingFingerprint !== undefined && cache.pricingFingerprint !== pricingFingerprint) {
+      cache.files = {};
+    }
     cache.pricingFingerprint = pricingFingerprint;
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
