@@ -25,6 +25,7 @@ import { openLocalFile } from "./media-source.js";
 import {
   resolveOutboundMediaLocalRoots,
   resolveWorkspacePathCandidates,
+  resolveWorkspaceScopedLocalRoots,
 } from "./outbound-media-path.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
@@ -218,7 +219,10 @@ function validateStructuredPayloadLocalPath(
     normalizePath(payloadPath),
     ctx.mediaAccess?.workspaceDir,
   );
-  const localRoots = resolveOutboundMediaLocalRoots(ctx);
+  const localRoots = resolveWorkspaceScopedLocalRoots(
+    resolveOutboundMediaLocalRoots(ctx),
+    ctx.mediaAccess?.workspaceDir,
+  );
   const allowMissingHostRead = Boolean(resolveStructuredPayloadReadFile(ctx));
   for (const candidatePath of candidatePaths) {
     const allowedPath = resolveTrustedOutboundMediaPath(candidatePath, {

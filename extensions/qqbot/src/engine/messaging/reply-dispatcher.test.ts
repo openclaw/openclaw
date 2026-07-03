@@ -105,7 +105,7 @@ describe("handleStructuredPayload", () => {
     expect(resolveLocalPathFromRootsSyncMock).toHaveBeenCalledWith(
       expect.objectContaining({
         filePath: "/tmp/agent-workspace/attachments/report.pdf",
-        roots: ["/workspace/attachments"],
+        roots: ["/tmp/agent-workspace/attachments"],
       }),
     );
     expect(sendMediaMock).toHaveBeenCalledWith(
