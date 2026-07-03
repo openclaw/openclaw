@@ -8691,7 +8691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 651,
+      "line": 678,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -8699,7 +8699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 651,
+      "line": 678,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -8707,7 +8707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 716,
+      "line": 743,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -8715,7 +8715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 716,
+      "line": 743,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -8723,7 +8723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 771,
+      "line": 798,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -8731,7 +8731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 771,
+      "line": 798,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -8739,7 +8739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 776,
+      "line": 803,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -8747,7 +8747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 776,
+      "line": 803,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -8755,7 +8755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 778,
+      "line": 805,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -8763,7 +8763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 778,
+      "line": 805,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -8771,7 +8771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 803,
+      "line": 830,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "\\(diagnosticsIssueCount)",
       "surface": "apple",
@@ -8779,7 +8779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 814,
+      "line": 841,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location off",
       "surface": "apple",
@@ -8787,7 +8787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 816,
+      "line": 843,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using",
       "surface": "apple",
@@ -8795,7 +8795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 818,
+      "line": 845,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Off",
       "surface": "apple",
@@ -8803,7 +8803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 820,
+      "line": 847,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Always",
       "surface": "apple",
@@ -8811,7 +8811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 822,
+      "line": 849,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always",
       "surface": "apple",
@@ -8819,7 +8819,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 824,
+      "line": 851,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective While Using",
       "surface": "apple",
@@ -8827,7 +8827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 826,
+      "line": 853,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective Off",
       "surface": "apple",
@@ -8835,7 +8835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 854,
+      "line": 881,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Checking iOS notification permission.",
       "surface": "apple",
@@ -8843,7 +8843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 856,
+      "line": 883,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw can show approval prompts and event alerts when the app is not active.",
       "surface": "apple",
@@ -8851,7 +8851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 858,
+      "line": 885,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Notifications have been denied. Enable them in iOS Settings.",
       "surface": "apple",
@@ -8859,7 +8859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 860,
+      "line": 887,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Enable notifications to receive approval prompts and event alerts outside the app.",
       "surface": "apple",
@@ -8867,7 +8867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 862,
+      "line": 889,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw cannot determine the current notification permission state.",
       "surface": "apple",
@@ -10635,7 +10635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 42,
+      "line": 58,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Off",
       "surface": "apple",
@@ -10643,7 +10643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 44,
+      "line": 60,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "While Using",
       "surface": "apple",
@@ -10651,7 +10651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 46,
+      "line": 62,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always",
       "surface": "apple",
@@ -10659,7 +10659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 58,
+      "line": 74,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
       "surface": "apple",
@@ -10667,7 +10667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 60,
+      "line": 76,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
       "surface": "apple",
@@ -10675,7 +10675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 62,
+      "line": 78,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
       "surface": "apple",
@@ -10683,7 +10683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 64,
+      "line": 80,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled.",
       "surface": "apple",
@@ -10691,7 +10691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 66,
+      "line": 82,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location Services are off in iOS Settings.",
       "surface": "apple",
@@ -10699,7 +10699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 70,
+      "line": 86,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed. Precise Location is on.",
       "surface": "apple",
@@ -10707,7 +10707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 74,
+      "line": 90,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed. Precise Location is off.",
       "surface": "apple",
@@ -10715,7 +10715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 94,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed.",
       "surface": "apple",
@@ -10723,7 +10723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 80,
+      "line": 96,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed. Precise Location is on.",
       "surface": "apple",
@@ -10731,7 +10731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 82,
+      "line": 98,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed. Precise Location is off.",
       "surface": "apple",
@@ -10739,7 +10739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 84,
+      "line": 100,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed.",
       "surface": "apple",
@@ -10747,7 +10747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 86,
+      "line": 102,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is on.",
       "surface": "apple",
@@ -10755,7 +10755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 88,
+      "line": 104,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is off.",
       "surface": "apple",
@@ -10763,7 +10763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 90,
+      "line": 106,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app.",
       "surface": "apple",
@@ -10771,7 +10771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 92,
+      "line": 108,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location permission is denied in iOS Settings.",
       "surface": "apple",
@@ -10779,7 +10779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 94,
+      "line": 110,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location permission is restricted on this device.",
       "surface": "apple",
@@ -10787,7 +10787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 96,
+      "line": 112,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Choose a location mode to request iOS permission.",
       "surface": "apple",
@@ -10795,7 +10795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 98,
+      "line": 114,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "OpenClaw cannot determine the current iOS location permission.",
       "surface": "apple",
