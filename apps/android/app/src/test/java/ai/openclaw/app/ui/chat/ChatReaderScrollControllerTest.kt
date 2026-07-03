@@ -201,6 +201,68 @@ class ChatReaderScrollControllerTest {
   }
 
   @Test
+  fun restoredReaderRebindsRegeneratedMessageIds() {
+    val before =
+      timeline(
+        user("user-before", text = "original prompt", timestampMs = 1000L, idempotencyKey = "run-1:user"),
+        assistant("assistant-before", text = "same reply"),
+      )
+    val savedState =
+      ChatReaderState(
+        initialized = true,
+        followTarget = ChatScrollFollowTarget.LatestContent,
+        latestUserMessageId = before.latestUserMessageId,
+        latestUserMessageVersion = before.latestUserMessageVersion,
+        latestContentVersion = before.latestContentVersion,
+      )
+    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(savedState) }
+    val restored = requireNotNull(ChatReaderStateSaver.restore(requireNotNull(saved)))
+    val after =
+      timeline(
+        user("user-after", text = "rewritten prompt", timestampMs = 2000L, idempotencyKey = "run-1:user"),
+        assistant("assistant-after", text = "same reply"),
+      )
+
+    val transition = restored.onTimelineChanged(after)
+
+    assertEquals(ChatScrollFollowTarget.LatestContent, transition.state.followTarget)
+    assertEquals(after.latestContentIndex, transition.scrollIndex)
+    assertEquals("user-after", transition.state.latestUserMessageId)
+    assertEquals(after.latestUserMessageVersion, transition.state.latestUserMessageVersion)
+  }
+
+  @Test
+  fun restoredReaderRecognizesRegeneratedPromptBeforeNewerUserTurn() {
+    val before =
+      timeline(
+        user("user-before", text = "original prompt", timestampMs = 1000L, idempotencyKey = "run-1:user"),
+        assistant("assistant-before", text = "original reply"),
+      )
+    val restored =
+      ChatReaderState(
+        initialized = true,
+        followTarget = ChatScrollFollowTarget.LatestContent,
+        latestUserMessageId = before.latestUserMessageId,
+        latestUserMessageVersion = before.latestUserMessageVersion,
+        latestContentVersion = before.latestContentVersion,
+      )
+    val after =
+      timeline(
+        user("user-restored", text = "original prompt", timestampMs = 2000L, idempotencyKey = "run-1:user"),
+        assistant("assistant-restored", text = "original reply"),
+        user("user-new", text = "new prompt", timestampMs = 3000L, idempotencyKey = "run-2:user"),
+      )
+
+    val transition = restored.onTimelineChanged(after)
+
+    assertEquals(ChatScrollFollowTarget.ReadAnchor, transition.state.followTarget)
+    assertEquals(after.readAnchorIndex, transition.scrollIndex)
+    assertTrue(transition.animated)
+    assertEquals("user-new", transition.state.latestUserMessageId)
+    assertEquals(after.latestUserMessageVersion, transition.state.latestUserMessageVersion)
+  }
+
+  @Test
   fun restoredReaderTreatsCurrentTimelineAsBaseline() {
     val timeline = timeline(user("user-1"), assistant("assistant-1"))
     val restored =
@@ -238,17 +300,29 @@ class ChatReaderScrollControllerTest {
       streamingAssistantText = stream,
     )
 
-  private fun user(id: String) = message(id, "user")
+  private fun user(
+    id: String,
+    text: String = id,
+    timestampMs: Long? = null,
+    idempotencyKey: String? = null,
+  ) = message(id, "user", text, timestampMs, idempotencyKey)
 
-  private fun assistant(id: String) = message(id, "assistant")
+  private fun assistant(
+    id: String,
+    text: String = id,
+  ) = message(id, "assistant", text, timestampMs = null, idempotencyKey = null)
 
   private fun message(
     id: String,
     role: String,
+    text: String,
+    timestampMs: Long?,
+    idempotencyKey: String?,
   ) = ChatMessage(
     id = id,
     role = role,
-    content = listOf(ChatMessageContent(type = "text", text = id)),
-    timestampMs = null,
+    content = listOf(ChatMessageContent(type = "text", text = text)),
+    timestampMs = timestampMs,
+    idempotencyKey = idempotencyKey,
   )
 }

@@ -27,6 +27,7 @@ internal data class ChatReaderState(
   val followTarget: ChatScrollFollowTarget? = null,
   val hasNewerContent: Boolean = false,
   val latestUserMessageId: String? = null,
+  val latestUserMessageVersion: String? = null,
   val latestContentVersion: String? = null,
 )
 
@@ -39,6 +40,8 @@ internal val ChatReaderStateSaver =
         state.hasNewerContent,
         state.latestUserMessageId != null,
         state.latestUserMessageId.orEmpty(),
+        state.latestUserMessageVersion != null,
+        state.latestUserMessageVersion.orEmpty(),
         state.latestContentVersion != null,
         state.latestContentVersion.orEmpty(),
       )
@@ -50,7 +53,8 @@ internal val ChatReaderStateSaver =
           (saved[1] as String).takeIf(String::isNotEmpty)?.let(ChatScrollFollowTarget::valueOf),
         hasNewerContent = saved[2] as Boolean,
         latestUserMessageId = (saved[4] as String).takeIf { saved[3] as Boolean },
-        latestContentVersion = (saved[6] as String).takeIf { saved[5] as Boolean },
+        latestUserMessageVersion = (saved[6] as String).takeIf { saved[5] as Boolean },
+        latestContentVersion = (saved[8] as String).takeIf { saved[7] as Boolean },
       )
     },
   )
@@ -150,6 +154,7 @@ internal fun initialChatReaderTransition(timeline: ChatTimeline): ChatReaderTran
         hasNewerContent =
           followTarget == ChatScrollFollowTarget.ReadAnchor && initialIndex != timeline.latestContentIndex,
         latestUserMessageId = timeline.latestUserMessageId,
+        latestUserMessageVersion = timeline.latestUserMessageVersion,
         latestContentVersion = timeline.latestContentVersion,
       ),
     scrollIndex = initialIndex,
@@ -166,7 +171,13 @@ internal fun ChatReaderState.onTimelineChanged(
   if (timeline.latestContentVersion == latestContentVersion) {
     return ChatReaderTransition(state = this)
   }
-  val previousUserStillPresent = latestUserMessageId?.let(timeline::containsMessage) ?: true
+  val previousUserStillPresent =
+    if (latestUserMessageVersion == null) {
+      latestUserMessageId == null
+    } else {
+      latestUserMessageId?.let(timeline::containsMessage) == true ||
+        timeline.containsUserMessageVersion(latestUserMessageVersion)
+    }
   if (!previousUserStillPresent) {
     return ChatReaderTransition(
       state =
@@ -174,12 +185,13 @@ internal fun ChatReaderState.onTimelineChanged(
           followTarget = null,
           hasNewerContent = false,
           latestUserMessageId = timeline.latestUserMessageId,
+          latestUserMessageVersion = timeline.latestUserMessageVersion,
           latestContentVersion = timeline.latestContentVersion,
         ),
     )
   }
   val hasNewUserTurn =
-    timeline.latestUserMessageId != null && timeline.latestUserMessageId != latestUserMessageId
+    timeline.latestUserMessageVersion != null && timeline.latestUserMessageVersion != latestUserMessageVersion
   if (hasNewUserTurn) {
     return ChatReaderTransition(
       state =
@@ -187,6 +199,7 @@ internal fun ChatReaderState.onTimelineChanged(
           followTarget = ChatScrollFollowTarget.ReadAnchor,
           hasNewerContent = false,
           latestUserMessageId = timeline.latestUserMessageId,
+          latestUserMessageVersion = timeline.latestUserMessageVersion,
           latestContentVersion = timeline.latestContentVersion,
         ),
       scrollIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex,
@@ -201,6 +214,7 @@ internal fun ChatReaderState.onTimelineChanged(
         copy(
           hasNewerContent = true,
           latestUserMessageId = timeline.latestUserMessageId,
+          latestUserMessageVersion = timeline.latestUserMessageVersion,
           latestContentVersion = timeline.latestContentVersion,
         ),
     )
@@ -212,6 +226,7 @@ internal fun ChatReaderState.onTimelineChanged(
       copy(
         hasNewerContent = target == ChatScrollFollowTarget.ReadAnchor && targetIndex != timeline.latestContentIndex,
         latestUserMessageId = timeline.latestUserMessageId,
+        latestUserMessageVersion = timeline.latestUserMessageVersion,
         latestContentVersion = timeline.latestContentVersion,
       ),
     scrollIndex = targetIndex,

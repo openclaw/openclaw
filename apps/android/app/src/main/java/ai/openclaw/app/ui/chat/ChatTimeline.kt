@@ -24,6 +24,7 @@ internal data class ChatTimeline(
   val readAnchorIndex: Int?,
   val latestContentIndex: Int?,
   val latestUserMessageId: String?,
+  val latestUserMessageVersion: String?,
   val latestContentVersion: String,
 )
 
@@ -47,6 +48,7 @@ internal fun buildChatTimeline(
       readAnchorIndex = null,
       latestContentIndex = null,
       latestUserMessageId = null,
+      latestUserMessageVersion = null,
       latestContentVersion = "",
     )
   }
@@ -71,9 +73,40 @@ internal fun buildChatTimeline(
     readAnchorIndex = readAnchorIndex,
     latestContentIndex = latestContentIndex,
     latestUserMessageId = latestUserMessage?.id,
+    latestUserMessageVersion = latestUserMessage?.let(::stableMessageVersion),
     latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream),
   )
 }
+
+private fun stableMessageVersion(message: ChatMessage): String {
+  val role = message.role.trim().lowercase()
+  val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isNotEmpty()) return "$role:idempotency:$idempotencyKey"
+
+  return buildString {
+    append(role)
+    append(':')
+    append(message.timestampMs ?: "")
+    message.content.forEach { content ->
+      append(':')
+      append(content.type)
+      append('=')
+      append(content.text?.hashCode() ?: 0)
+      append(',')
+      append(content.mimeType.orEmpty())
+      append(',')
+      append(content.fileName.orEmpty())
+      append(',')
+      append(content.base64?.length ?: 0)
+    }
+  }
+}
+
+internal fun ChatTimeline.containsUserMessageVersion(version: String): Boolean =
+  items.any { item ->
+    val message = (item as? ChatTimelineItem.Message)?.message ?: return@any false
+    message.role.trim().equals("user", ignoreCase = true) && stableMessageVersion(message) == version
+  }
 
 // Reader restoration only needs to detect changes at the live edge. Avoid hashing
 // the full transcript whenever a streamed response updates.
