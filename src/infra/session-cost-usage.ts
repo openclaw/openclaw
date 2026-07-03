@@ -147,7 +147,7 @@ type UsageCostCacheFile = {
   pricingFingerprint?: string;
   /** True when fingerprint was lifted from entries during normalization
    *  and the cache should be rewritten in the new shape.  Not serialized. */
-  _migrated?: boolean;
+  migratedFromOldShape?: boolean;
   files: Record<string, UsageCostCacheFileEntry>;
 };
 
@@ -368,7 +368,7 @@ function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
     updatedAt: asFiniteNumber(record.updatedAt) ?? 0,
     pricingFingerprint,
     files,
-    _migrated: migrated || false,
+    migratedFromOldShape: migrated || false,
   };
 }
 
@@ -1692,9 +1692,9 @@ async function refreshCostUsageCacheForPath(params?: {
     const livePaths = new Set(files.map((file) => file.filePath));
     // When an old-shape cache is loaded and fingerprint was extracted from
     // entries, force a rewrite so the new shape is persisted to disk (#99511).
-    let cacheMutated = cache._migrated === true;
+    let cacheMutated = cache.migratedFromOldShape === true;
     if (cacheMutated) {
-      cache._migrated = undefined;
+      cache.migratedFromOldShape = undefined;
     }
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
