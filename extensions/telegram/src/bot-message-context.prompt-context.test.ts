@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  getSessionEntry,
+  readAmbientTranscriptWatermark,
+  resolveAmbientTranscriptWatermarkKey,
+  updateAmbientTranscriptWatermark,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 
@@ -19,6 +29,20 @@ const telegramChatWindowContext: TelegramPromptContextEntry = {
     ],
   },
 };
+
+const tempDirs: string[] = [];
+
+function createTempSessionStorePath(): string {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-watermark-"));
+  tempDirs.push(tempDir);
+  return path.join(tempDir, "sessions.json");
+}
+
+afterEach(() => {
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
 describe("buildTelegramMessageContext prompt context", () => {
   it("omits Telegram chat-window context for existing unthreaded private DM sessions", async () => {
@@ -180,6 +204,7 @@ describe("buildTelegramMessageContext prompt context", () => {
         readAmbientTranscriptWatermark: ({ key }) =>
           key === '["telegram","default","-1001234567890",""]'
             ? {
+                sessionId: "session-current",
                 messageId: "11",
                 timestampMs: 1_700_000_001_000,
                 updatedAt: 1_700_000_003_000,
@@ -237,6 +262,7 @@ describe("buildTelegramMessageContext prompt context", () => {
       ]),
       sessionRuntime: {
         readAmbientTranscriptWatermark: () => ({
+          sessionId: "session-current",
           messageId: "11",
           timestampMs: 1_700_000_001_000,
           updatedAt: 1_700_000_003_000,
@@ -286,6 +312,7 @@ describe("buildTelegramMessageContext prompt context", () => {
         readAmbientTranscriptWatermark: ({ key }) =>
           key === '["telegram","default","-1001234567890",""]'
             ? {
+                sessionId: "session-current",
                 messageId: "11",
                 timestampMs: 1_700_000_001_000,
                 updatedAt: 1_700_000_003_000,
@@ -305,5 +332,95 @@ describe("buildTelegramMessageContext prompt context", () => {
     });
     expect(ctx.ctxPayload.InboundHistory).toBeUndefined();
     expect(ctx.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+  });
+
+  it("backfills Telegram group history when the ambient watermark belongs to a reset session", async () => {
+    const storePath = createTempSessionStorePath();
+    const sessionKey = "agent:main:telegram:group:-1001234567890";
+    const key = resolveAmbientTranscriptWatermarkKey({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "before-reset", updatedAt: 1_700_000_000_000 },
+    });
+    await updateAmbientTranscriptWatermark({
+      storePath,
+      sessionKey,
+      key,
+      messageId: "11",
+      timestampMs: 1_700_000_001_000,
+    });
+    const persistedEntry = getSessionEntry({ storePath, sessionKey });
+    if (!persistedEntry) {
+      throw new Error("Expected persisted session entry");
+    }
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        ...persistedEntry,
+        sessionId: "after-reset",
+        updatedAt: 1_700_000_002_000,
+      },
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 13,
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum" },
+        from: { id: 1234, first_name: "Pat" },
+        text: "@bot what happened?",
+        entities: [{ type: "mention", offset: 0, length: 4 }],
+      },
+      historyLimit: 10,
+      groupHistories: new Map([
+        [
+          "-1001234567890",
+          [
+            {
+              messageId: "10",
+              sender: "Sam",
+              timestamp: 1_700_000_000_000,
+              body: "persisted ambient one",
+            },
+            {
+              messageId: "11",
+              sender: "Lee",
+              timestamp: 1_700_000_001_000,
+              body: "persisted ambient two",
+            },
+            {
+              messageId: "12",
+              sender: "Mira",
+              timestamp: 1_700_000_002_000,
+              body: "unpersisted gap",
+            },
+          ],
+        ],
+      ]),
+      sessionRuntime: {
+        readAmbientTranscriptWatermark,
+        resolveAmbientTranscriptWatermarkKey,
+        resolveStorePath: () => storePath,
+      },
+    });
+
+    expect(ctx?.ctxPayload.UntrustedStructuredContext).toEqual([
+      expect.objectContaining({
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({ message_id: "10", body: "persisted ambient one" }),
+            expect.objectContaining({ message_id: "11", body: "persisted ambient two" }),
+            expect.objectContaining({ message_id: "12", body: "unpersisted gap" }),
+          ],
+        }),
+      }),
+    ]);
   });
 });

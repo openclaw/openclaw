@@ -1340,6 +1340,9 @@ export const ko: TranslationMap = {
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
     switchedSession: "{session}(으)로 전환됨",
+    sidebar: {
+      allSessions: "모든 세션",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

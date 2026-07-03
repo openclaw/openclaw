@@ -339,15 +339,18 @@ describe("context notice", () => {
     expect(lowUsage.warning).toBe(false);
     expect(lowUsage.compactRecommended).toBe(false);
     render(renderContextNotice(lowUsageSession, 200_000), container);
-    const lowNotice = container.querySelector<HTMLElement>(".context-notice--usage");
+    const lowNotice = container.querySelector<HTMLElement>(".context-ring");
     expect(lowNotice).toBeInstanceOf(HTMLElement);
-    expect([...lowNotice!.classList]).toEqual(["context-notice", "context-notice--usage"]);
-    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-      "23% context used 46k / 200k",
+    expect([...lowNotice!.classList]).toEqual(["context-ring"]);
+    expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
+    expect(lowNotice!.getAttribute("title")).toBe("Session context usage: 46k / 200k (23%)");
+    const lowFill = lowNotice!.querySelector(".context-ring__fill");
+    expect(lowFill?.tagName.toLowerCase()).toBe("circle");
+    // 23% of the 40.84 circumference stays hidden via dashoffset.
+    expect(Number.parseFloat(lowFill?.getAttribute("stroke-dashoffset") ?? "")).toBeCloseTo(
+      40.84 * 0.77,
+      1,
     );
-    expect(lowNotice!.querySelector(".context-notice__detail")?.textContent).toBe("46k / 200k");
-    expect(container.querySelectorAll(".context-notice__meter")).toHaveLength(1);
-    expect(container.querySelector(".context-notice__icon")).toBeNull();
 
     const session: GatewaySessionRow = {
       key: "main",
@@ -360,26 +363,17 @@ describe("context notice", () => {
     render(renderContextNotice(session, 200_000), container);
 
     expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
-    const notice = container.querySelector<HTMLElement>(".context-notice");
+    const notice = container.querySelector<HTMLElement>(".context-ring");
     expect(notice).toBeInstanceOf(HTMLElement);
-    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95% context used 190k / 200k");
-    expect(notice!.querySelector(".context-notice__detail")?.textContent).toBe("190k / 200k");
-    expect([...notice!.classList]).toEqual(["context-notice", "context-notice--warning"]);
+    expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95%");
+    expect([...notice!.classList]).toEqual(["context-ring", "context-ring--warning"]);
     expect(notice!.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
     expect(notice!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
     expect(notice!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
 
-    const icon = container.querySelector<SVGElement>(".context-notice__icon");
-    expect(icon).toBeInstanceOf(SVGElement);
-    expect(icon!.tagName.toLowerCase()).toBe("svg");
-    expect([...icon!.classList]).toEqual(["context-notice__icon"]);
-    expect(icon!.getAttribute("width")).toBe("16");
-    expect(icon!.getAttribute("height")).toBe("16");
-    expect(icon!.querySelectorAll("path")).toHaveLength(1);
-
     const onCompact = vi.fn();
     render(renderContextNotice(session, 200_000, { onCompact }), container);
-    const compactButton = getButton(container, ".context-notice__action");
+    const compactButton = getButton(container, ".context-ring__action");
     expect(compactButton.textContent?.trim()).toBe("Compact");
     compactButton.click();
     expect(onCompact).toHaveBeenCalledTimes(1);

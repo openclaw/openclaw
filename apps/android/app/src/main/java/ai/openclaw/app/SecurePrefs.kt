@@ -41,6 +41,7 @@ class SecurePrefs(
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
+    private const val cameraEnabledKey = "camera.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
     private const val appearanceThemeModeKey = "appearance.themeMode"
   }
@@ -51,6 +52,7 @@ class SecurePrefs(
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
+  private val hadPlainPrefsBeforeInit = plainPrefs.all.isNotEmpty()
 
   // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
   private val masterKey by lazy {
@@ -68,7 +70,7 @@ class SecurePrefs(
     MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
-  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
+  private val _cameraEnabled = MutableStateFlow(loadCameraEnabled())
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
   private val _locationMode = MutableStateFlow(loadLocationMode())
@@ -199,7 +201,7 @@ class SecurePrefs(
   }
 
   fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("camera.enabled", value) }
+    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
     _cameraEnabled.value = value
   }
 
@@ -570,6 +572,15 @@ class SecurePrefs(
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved
+  }
+
+  private fun loadCameraEnabled(): Boolean {
+    if (plainPrefs.contains(cameraEnabledKey)) {
+      return plainPrefs.getBoolean(cameraEnabledKey, false)
+    }
+    val migratedValue = hadPlainPrefsBeforeInit
+    plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
+    return migratedValue
   }
 
   private fun loadWakeWords(): List<String> {
