@@ -312,6 +312,28 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(psCall?.[2]).toEqual({ timeout: 2000, encoding: "utf8" });
     });
 
+    it("skips malformed lsof pid tokens with trailing garbage", () => {
+      const stalePid = process.pid + 102;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command === "ps") {
+          return {
+            error: null,
+            status: 0,
+            stdout: "node /opt/openclaw/dist/entry.js gateway\n",
+            stderr: "",
+          };
+        }
+        return {
+          error: null,
+          status: 0,
+          stdout: ["p111abc", "cnode", `p${stalePid}`, "cnode", ""].join("\n"),
+          stderr: "",
+        };
+      });
+
+      expect(findGatewayPidsOnPortSync(18789)).toEqual([stalePid]);
+    });
+
     it("excludes ancestor pids so a sidecar cannot kill its parent gateway — regression for #68451", () => {
       // Regression: openclaw-weixin sidecar (child of the gateway) invoked
       // cleanStaleGatewayProcessesSync during init. lsof reported the parent

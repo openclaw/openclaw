@@ -218,8 +218,8 @@ function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> 
   for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
     if (line.startsWith("p")) {
       flush();
-      const parsed = Number.parseInt(line.slice(1), 10);
-      currentPid = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+      const parsed = parseStrictPositiveInteger(line.slice(1));
+      currentPid = parsed ?? undefined;
       currentCmd = undefined;
     } else if (line.startsWith("c")) {
       currentCmd = line.slice(1);
