@@ -2589,11 +2589,27 @@ export async function dispatchReplyFromConfig(
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
-        await mirrorTranscriptAfterDispatcherDelivery({
+        // Fire-and-forget: the transcript mirror waits for the dispatcher to go
+        // idle, but awaiting it here blocks the reply operation's completion — and
+        // idle cannot arrive until this op clears when a follow-up is queued
+        // (queueDepth>=2). That is a completion<->dispatcher-idle deadlock: the op
+        // stays phase=running and surfaces as stalled_agent_run (recovery=none)
+        // until the stuck-session abort. Running the mirror in the background lets
+        // the op complete immediately — the queued follow-up proceeds, the
+        // dispatcher goes idle, and the (detached) mirror then records the
+        // transcript. Mirroring is post-delivery bookkeeping; it does not need to
+        // gate completion.
+        void mirrorTranscriptAfterDispatcherDelivery({
           dispatcher,
           before: finalOutcomeBefore,
           metadata: deliveredTranscriptMirror,
           cfg,
+        }).catch((error: unknown) => {
+          logVerbose(
+            `dispatch-from-config: background transcript mirror failed: ${formatErrorMessage(
+              error,
+            )}`,
+          );
         });
       }
       return {
