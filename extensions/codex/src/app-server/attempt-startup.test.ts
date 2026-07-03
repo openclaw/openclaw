@@ -257,7 +257,7 @@ describe("startCodexAttemptThread", () => {
       timeout: 2_000,
     });
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(new CodexAppServerStartupTimeoutError().message);
+    expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(harness.stdinDestroyed).toBe(true);
   });
 
@@ -279,7 +279,7 @@ describe("startCodexAttemptThread", () => {
       paths,
       skipStartSpy: true,
     });
-    const rejected = expect(run).rejects.toThrow(CodexAppServerStartupTimeoutError);
+    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
     const threadStart = await waitForThreadStart(retained);
 
     await rejected;
@@ -302,7 +302,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(new CodexAppServerStartupTimeoutError().message);
+    expect((error as Error).message).toBe("codex app-server startup timed out");
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
       timeout: 2_000,
@@ -338,7 +338,7 @@ describe("startCodexAttemptThread", () => {
           }
         },
     });
-    const rejected = expect(run).rejects.toThrow(CodexAppServerStartupTimeoutError);
+    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
 
     await rejected;
     await factoryDone;
@@ -367,7 +367,7 @@ describe("startCodexAttemptThread", () => {
 
     const error = await runError;
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe(new CodexAppServerStartupAbortedError().message);
+    expect((error as Error).message).toBe("codex app-server startup aborted");
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 

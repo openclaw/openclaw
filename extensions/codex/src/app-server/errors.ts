@@ -4,13 +4,15 @@
  * These replace ad-hoc Error.message prose matching (which is fragile under
  * rewording) with `instanceof` checks so the type system can verify that
  * control-flow branching remains correct.
+ *
+ * `this.name` is intentionally NOT overridden so that `error.toString()`
+ * stays compatible with existing message-based assertions and logging.
  */
 
 /** Thrown when the running Codex version is below the minimum required. */
 export class CodexAppServerVersionError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "CodexAppServerVersionError";
   }
 }
 
@@ -18,7 +20,6 @@ export class CodexAppServerVersionError extends Error {
 export class CodexAppServerStartupTimeoutError extends Error {
   constructor() {
     super("codex app-server startup timed out");
-    this.name = "CodexAppServerStartupTimeoutError";
   }
 }
 
@@ -26,6 +27,5 @@ export class CodexAppServerStartupTimeoutError extends Error {
 export class CodexAppServerStartupAbortedError extends Error {
   constructor() {
     super("codex app-server startup aborted");
-    this.name = "CodexAppServerStartupAbortedError";
   }
 }
