@@ -13,15 +13,27 @@ export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonL
 /** Returns whether Control UI origin config is already explicit enough for non-loopback binds. */
 export function hasConfiguredControlUiAllowedOrigins(params: {
   allowedOrigins: unknown;
+  allowedOriginPatterns?: unknown;
   dangerouslyAllowHostHeaderOriginFallback: unknown;
 }): boolean {
   if (params.dangerouslyAllowHostHeaderOriginFallback === true) {
     return true;
   }
-  return (
+  if (
     Array.isArray(params.allowedOrigins) &&
     params.allowedOrigins.some((origin) => typeof origin === "string" && origin.trim().length > 0)
-  );
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(params.allowedOriginPatterns) &&
+    params.allowedOriginPatterns.some(
+      (pattern) => typeof pattern === "string" && pattern.trim().length > 0,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** Resolves the gateway port used when constructing default Control UI origins. */
@@ -89,6 +101,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   if (
     hasConfiguredControlUiAllowedOrigins({
       allowedOrigins: config.gateway?.controlUi?.allowedOrigins,
+      allowedOriginPatterns: config.gateway?.controlUi?.allowedOriginPatterns,
       dangerouslyAllowHostHeaderOriginFallback:
         config.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback,
     })

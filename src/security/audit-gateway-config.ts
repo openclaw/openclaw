@@ -46,6 +46,9 @@ export function collectGatewayConfigFindings(
   const controlUiAllowedOrigins = normalizeStringEntries(
     cfg.gateway?.controlUi?.allowedOrigins ?? [],
   );
+  const controlUiAllowedOriginPatterns = normalizeStringEntries(
+    cfg.gateway?.controlUi?.allowedOriginPatterns ?? [],
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
@@ -167,17 +170,19 @@ export function collectGatewayConfigFindings(
     bind !== "loopback" &&
     controlUiEnabled &&
     controlUiAllowedOrigins.length === 0 &&
+    controlUiAllowedOriginPatterns.length === 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     findings.push({
       checkId: "gateway.control_ui.allowed_origins_required",
       severity: "critical",
-      title: "Non-loopback Control UI missing explicit allowed origins",
+      title: "Non-loopback Control UI missing explicit allowed origins or patterns",
       detail:
-        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
-        "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
+        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins and allowedOriginPatterns are both empty. " +
+        "Strict origin policy requires explicit allowed origins or patterns for non-loopback deployments.",
       remediation:
-        "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
+        "Set gateway.controlUi.allowedOriginPatterns (for dynamic loopback ports, e.g. http://127.0.0.1:*) " +
+        "or gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
         "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
     });
   }

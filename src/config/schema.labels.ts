@@ -360,6 +360,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.allowExternalEmbedUrls": "Allow External Control UI Embed URLs",
   "gateway.controlUi.chatMessageMaxWidth": "Control UI Chat Message Max Width",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
+  "gateway.controlUi.allowedOriginPatterns": "Control UI Allowed Origin Patterns",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "Dangerously Allow Host-Header Origin Fallback",
   "gateway.controlUi.allowInsecureAuth": "Insecure Control UI Auth Toggle",
