@@ -28,6 +28,12 @@ import type { ResolvedTheme, ThemeMode, ThemeName } from "../app/theme.ts";
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../lib/chat/tool-display.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "../lib/skills/index.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
@@ -48,12 +54,6 @@ import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
-import type {
-  ClawHubSearchResult,
-  ClawHubSkillSecurityVerdict,
-  ClawHubSkillDetail,
-  SkillMessage,
-} from "../pages/skills/data.ts";
 import type { SessionLogEntry } from "../pages/usage/view.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";

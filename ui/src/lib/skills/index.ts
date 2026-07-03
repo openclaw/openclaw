@@ -1,15 +1,15 @@
-// Control UI page data owns skills gateway state.
+// Shared skill Gateway operations and state helpers.
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
 } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   SkillClawHubLink,
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type ClawHubSearchResult = {
   score: number;
@@ -85,8 +85,6 @@ export type SkillsState = {
   skillsBusyKey: string | null;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
-  skillsDetailKey: string | null;
-  skillsDetailTab: "overview" | "card";
   clawhubSearchQuery: string;
   clawhubSearchResults: ClawHubSearchResult[] | null;
   clawhubSearchLoading: boolean;
@@ -178,9 +176,21 @@ function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string 
   return skill ? skillCardCacheKey(skill) : undefined;
 }
 
-function skillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { agentId?: string } {
+export function skillsAgentParams(agentId: string | null | undefined): { agentId?: string } {
+  const normalized = agentId?.trim();
+  return normalized ? { agentId: normalized } : {};
+}
+
+function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { agentId?: string } {
   const agentId = state.skillsAgentId?.trim();
   return agentId ? { agentId } : {};
+}
+
+export async function loadSkillStatusReport(
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+): Promise<SkillStatusReport | undefined> {
+  return client.request<SkillStatusReport | undefined>("skills.status", skillsAgentParams(agentId));
 }
 
 type SkillsAgentScope = {
@@ -247,8 +257,6 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   state.skillsBusyKey = null;
   state.skillEdits = {};
   state.skillMessages = {};
-  state.skillsDetailKey = null;
-  state.skillsDetailTab = "overview";
   state.clawhubInstallSlug = null;
   state.clawhubInstallMessage = null;
   state.clawhubVerdicts = {};
@@ -281,14 +289,10 @@ export async function loadSkills(state: SkillsState, options?: { clearMessages?:
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  const requestParams = skillsAgentParams(state);
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await state.client.request<SkillStatusReport | undefined>(
-      "skills.status",
-      requestParams,
-    );
+    const res = await loadSkillStatusReport(state.client, state.skillsAgentId);
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }
@@ -348,7 +352,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  const requestParams = { ...skillsAgentParams(state), skillKey };
+  const requestParams = { ...stateSkillsAgentParams(state), skillKey };
   state.skillCardLoadingKey = skillKey;
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
   state.skillCardErrors = nextErrors;
@@ -395,7 +399,7 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
     const response = await client.request<{
       schema: "openclaw.skills.security-verdicts.v1";
       items: ClawHubSkillSecurityVerdict[];
-    }>("skills.securityVerdicts", skillsAgentParams(state));
+    }>("skills.securityVerdicts", stateSkillsAgentParams(state));
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }
@@ -509,7 +513,7 @@ export async function installSkill(
 ) {
   await runSkillMutation(state, skillKey, async (client) => {
     const result = await client.request<{ message?: string }>("skills.install", {
-      ...skillsAgentParams(state),
+      ...stateSkillsAgentParams(state),
       name,
       installId,
       dangerouslyForceUnsafeInstall,
@@ -604,7 +608,7 @@ export async function installFromClawHub(
     const result = await state.client.request<{ message?: string; warning?: string }>(
       "skills.install",
       {
-        ...skillsAgentParams(state),
+        ...stateSkillsAgentParams(state),
         source: "clawhub",
         slug,
         ...(version ? { version } : {}),

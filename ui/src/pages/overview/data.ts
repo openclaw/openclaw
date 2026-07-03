@@ -5,6 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { loadChannels } from "../../lib/channels/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatusState } from "../../lib/model-auth.ts";
+import { loadSkills } from "../../lib/skills/index.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -13,7 +14,6 @@ import {
 import { loadCronJobsPage, loadCronStatus } from "../cron/data.ts";
 import { loadDebug } from "../debug/data.ts";
 import { loadPresence } from "../instances/data.ts";
-import { loadSkills } from "../skills/data.ts";
 import { loadUsage } from "../usage/data.ts";
 
 export async function loadOverview(

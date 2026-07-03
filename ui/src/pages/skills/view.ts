@@ -14,15 +14,15 @@ import {
   isSkillAvailable,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+import {
+  clawhubVerdictKey,
+  type ClawHubSkillSecurityVerdict,
+  type ClawHubSearchResult,
+  type ClawHubSkillDetail,
+  type SkillMessageMap,
+} from "../../lib/skills/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { resolveSafeExternalUrl } from "../../ui/open-external-url.ts";
-import type {
-  ClawHubSkillSecurityVerdict,
-  ClawHubSearchResult,
-  ClawHubSkillDetail,
-  SkillMessageMap,
-} from "./data.ts";
-import { clawhubVerdictKey } from "./data.ts";
 
 function safeExternalHref(raw?: string): string | null {
   if (!raw) {

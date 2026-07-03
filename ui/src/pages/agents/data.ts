@@ -6,6 +6,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
+import { loadAgentsList } from "../../lib/agents/index.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective as loadToolsEffectiveShared,
@@ -111,7 +112,7 @@ export async function loadAgents(state: AgentsState) {
   state.agentsLoading = true;
   state.agentsError = null;
   try {
-    const res = await state.client.request<AgentsListResult>("agents.list", {});
+    const res = await loadAgentsList(state.client);
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;

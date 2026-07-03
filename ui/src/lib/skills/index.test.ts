@@ -13,7 +13,7 @@ import {
   setSkillsAgentId,
   updateSkillEnabled,
   type SkillsState,
-} from "./data.ts";
+} from "./index.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
@@ -32,8 +32,6 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillsBusyKey: null,
     skillEdits: {},
     skillMessages: {},
-    skillsDetailKey: null,
-    skillsDetailTab: "overview",
     clawhubSearchQuery: "github",
     clawhubSearchResults: [
       {

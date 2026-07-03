@@ -6,7 +6,6 @@
 // import { page as logsPage } from "./pages/logs/route.ts";
 // import { page as nodesPage } from "./pages/nodes/route.ts";
 // import { page as overviewPage } from "./pages/overview/route.ts";
-// import { page as skillsPage } from "./pages/skills/route.ts";
 // import { page as usagePage } from "./pages/usage/route.ts";
 // import { page as workboardPage } from "./pages/workboard/route.ts";
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
@@ -17,6 +16,7 @@ import type { ApplicationContext } from "./app/context.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
+import { page as skillsPage } from "./pages/skills/route.ts";
 
 export type AppRouteModule = {
   render: (data: unknown) => unknown;
@@ -35,7 +35,7 @@ export type AppRoute = PageDefinition<
   unknown
 >;
 
-export const APP_ROUTE_TREE = [chatPage, channelsPage, skillWorkshopPage] as const;
+export const APP_ROUTE_TREE = [chatPage, channelsPage, skillWorkshopPage, skillsPage] as const;
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
 export const APP_ROUTE_IDS = APP_ROUTE_TREE.map((route) => route.id) as readonly RouteId[];
 

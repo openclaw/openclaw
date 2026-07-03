@@ -1,4 +1,5 @@
 import type { SkillStatusReport } from "../../api/types.ts";
+import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 // Control UI controller manages agent skills gateway state.
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
@@ -21,7 +22,7 @@ export async function loadAgentSkills(state: AgentSkillsState, agentId: string) 
   state.agentSkillsLoading = true;
   state.agentSkillsError = null;
   try {
-    const res = await state.client.request("skills.status", { agentId });
+    const res = await loadSkillStatusReport(state.client, agentId);
     if (res) {
       state.agentSkillsReport = res as SkillStatusReport;
       state.agentSkillsAgentId = agentId;

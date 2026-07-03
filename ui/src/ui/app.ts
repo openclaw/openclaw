@@ -44,6 +44,12 @@ import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "../lib/skills/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import {
@@ -107,12 +113,6 @@ import {
   saveSkillWorkshopMode,
   saveSkillWorkshopUseCurrentChatForRevisions,
 } from "../pages/skill-workshop/storage.ts";
-import type {
-  ClawHubSearchResult,
-  ClawHubSkillSecurityVerdict,
-  ClawHubSkillDetail,
-  SkillMessage,
-} from "../pages/skills/data.ts";
 import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
