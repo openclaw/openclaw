@@ -1060,7 +1060,7 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
-  it("skips DeepSeek V4 reasoning_content on OpenRouter tool-call replay turns", async () => {
+  it("uses OpenRouter reasoning for DeepSeek V4 replay turns", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(
@@ -1100,8 +1100,9 @@ describe("openrouter provider hooks", () => {
       {},
     );
 
-    expect(capturedPayload?.thinking).toEqual({ type: "enabled" });
-    expect(capturedPayload?.reasoning_effort).toBe("xhigh");
+    expect(capturedPayload?.reasoning).toEqual({ effort: "xhigh" });
+    expect(capturedPayload).not.toHaveProperty("thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
     expect(capturedPayload?.messages).toEqual([
       { role: "user", content: "read file" },
       {
@@ -1114,14 +1115,14 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
-  it("keeps OpenRouter DeepSeek V4 reasoning_effort within OpenRouter values", async () => {
+  it("clamps OpenRouter DeepSeek V4 reasoning.effort to supported OpenRouter values", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
       (
         ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
       ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
-        const payload = { messages: [] };
+        const payload = { reasoning: { effort: "high" }, messages: [] };
         void args[2]?.onPayload?.(payload, args[0]);
         payloads.push(payload);
         return { async *[Symbol.asyncIterator]() {} } as never;
@@ -1148,14 +1149,60 @@ describe("openrouter provider hooks", () => {
       );
     }
 
-    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual([
-      "minimal",
-      "low",
-      "medium",
+    expect(payloads.map((payload) => (payload.reasoning as { effort?: unknown }).effort)).toEqual([
+      "high",
+      "high",
+      "high",
       "high",
       "xhigh",
       "xhigh",
     ]);
+    for (const payload of payloads) {
+      expect(payload).not.toHaveProperty("thinking");
+      expect(payload).not.toHaveProperty("reasoning_effort");
+    }
+  });
+
+  it("strips disabled OpenRouter DeepSeek V4 reasoning replay fields", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
+      ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
+        const payload = {
+          reasoning: { effort: "high" },
+          messages: [{ role: "assistant", content: "done", reasoning_content: "" }],
+        };
+        void args[2]?.onPayload?.(payload, args[0]);
+        capturedPayload = payload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/deepseek/deepseek-v4-pro",
+      streamFn: baseStreamFn,
+      thinkingLevel: "off",
+    } as never);
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/deepseek/deepseek-v4-pro",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(capturedPayload).not.toHaveProperty("reasoning");
+    expect(capturedPayload).not.toHaveProperty("thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload?.messages).toEqual([{ role: "assistant", content: "done" }]);
+    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
   it("recognizes full OpenRouter DeepSeek V4 refs but skips custom proxy routes", async () => {

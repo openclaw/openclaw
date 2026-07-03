@@ -1,8 +1,12 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.gatewayTalkSetupDescription
+import ai.openclaw.app.isReady
+import ai.openclaw.app.requiresSetup
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -102,6 +106,7 @@ fun VoiceScreen(
   val talkModeSpeaking by viewModel.talkModeSpeaking.collectAsState()
   val talkModeStatusText by viewModel.talkModeStatusText.collectAsState()
   val talkModeConversation by viewModel.talkModeConversation.collectAsState()
+  val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
 
   var pendingAction by remember { mutableStateOf<VoiceAction?>(null) }
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
@@ -109,9 +114,20 @@ fun VoiceScreen(
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       hasMicPermission = granted
       if (granted) {
+        // Gateway readiness can change while the system permission dialog is open.
         when (pendingAction) {
-          VoiceAction.Talk -> viewModel.setTalkModeEnabled(true)
-          VoiceAction.Dictation -> viewModel.setMicEnabled(true)
+          VoiceAction.Talk ->
+            if (talkSetupReadiness.realtimeTalk.requiresSetup) {
+              onOpenVoiceSettings()
+            } else {
+              viewModel.setTalkModeEnabled(true)
+            }
+          VoiceAction.Dictation ->
+            if (talkSetupReadiness.dictation.requiresSetup) {
+              onOpenVoiceSettings()
+            } else {
+              viewModel.setMicEnabled(true)
+            }
           null -> Unit
         }
       }
@@ -200,6 +216,7 @@ fun VoiceScreen(
       micLiveTranscript = micLiveTranscript,
       gatewayReady = gatewayReady,
       voiceAttentionStatus = voiceAttentionStatus,
+      talkSetupReadiness = talkSetupReadiness,
       onStartTalk = {
         runVoiceAction(
           action = VoiceAction.Talk,
@@ -224,12 +241,13 @@ fun VoiceScreen(
         )
       },
       onConnectGateway = onOpenGatewaySettings,
+      onOpenVoiceSettings = onOpenVoiceSettings,
     )
 
     if (!hasMicPermission) {
       VoicePermissionPanel(
         onRequestPermission = {
-          pendingAction = VoiceAction.Talk
+          pendingAction = null
           requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
         },
       )
@@ -599,10 +617,14 @@ private fun VoiceHero(
   micLiveTranscript: String?,
   gatewayReady: Boolean,
   voiceAttentionStatus: String?,
+  talkSetupReadiness: GatewayTalkSetupReadiness,
   onStartTalk: () -> Unit,
   onStartDictation: () -> Unit,
   onConnectGateway: () -> Unit,
+  onOpenVoiceSettings: () -> Unit,
 ) {
+  val talkNeedsSetup = gatewayReady && talkSetupReadiness.realtimeTalk.requiresSetup
+  val dictationNeedsSetup = gatewayReady && talkSetupReadiness.dictation.requiresSetup
   Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(9.dp)) {
     VoiceOrb(
       active = micEnabled || talkModeEnabled,
@@ -657,11 +679,11 @@ private fun VoiceHero(
         subtitle =
           when {
             talkModeEnabled -> "Conversation is live"
-            gatewayReady -> "Natural conversation in real time"
+            gatewayReady -> gatewayTalkSetupDescription(talkSetupReadiness.realtimeTalk)
             else -> "Connect gateway to start"
           },
         icon = if (talkModeEnabled) Icons.Default.PhoneDisabled else Icons.Default.RecordVoiceOver,
-        onClick = onStartTalk,
+        onClick = if (talkNeedsSetup) onOpenVoiceSettings else onStartTalk,
         enabled = gatewayReady || talkModeEnabled,
       )
       VoiceModeRow(
@@ -669,31 +691,42 @@ private fun VoiceHero(
         subtitle =
           when {
             micEnabled -> "Listening for one turn"
-            gatewayReady -> "Convert speech to text"
+            gatewayReady -> gatewayTalkSetupDescription(talkSetupReadiness.dictation)
             else -> "Connect gateway to start"
           },
         icon = if (micEnabled) Icons.Default.MicOff else Icons.Default.TextFields,
-        onClick = onStartDictation,
+        onClick = if (dictationNeedsSetup) onOpenVoiceSettings else onStartDictation,
         enabled = gatewayReady || micEnabled,
       )
     }
 
-    VoiceProviderCard(gatewayStatus = gatewayStatus, voiceAttentionStatus = voiceAttentionStatus)
+    VoiceProviderCard(
+      gatewayStatus = gatewayStatus,
+      voiceAttentionStatus = voiceAttentionStatus,
+      talkSetupReadiness = talkSetupReadiness,
+    )
 
     VoicePrimaryAction(
       text =
         when {
           talkModeEnabled -> "End Talk"
+          talkNeedsSetup -> "Set Up Talk"
           gatewayReady -> "Start Talk"
           else -> "Connect Gateway"
         },
       icon =
         when {
           talkModeEnabled -> Icons.Default.PhoneDisabled
+          talkNeedsSetup -> Icons.Default.Settings
           gatewayReady -> Icons.Default.Phone
           else -> Icons.Default.Cloud
         },
-      onClick = if (gatewayReady || talkModeEnabled) onStartTalk else onConnectGateway,
+      onClick =
+        when {
+          talkModeEnabled || (gatewayReady && !talkNeedsSetup) -> onStartTalk
+          talkNeedsSetup -> onOpenVoiceSettings
+          else -> onConnectGateway
+        },
     )
   }
 }
@@ -743,8 +776,17 @@ private fun VoiceModeRow(
 private fun VoiceProviderCard(
   gatewayStatus: String,
   voiceAttentionStatus: String?,
+  talkSetupReadiness: GatewayTalkSetupReadiness,
 ) {
-  val ready = voiceAttentionStatus == null && gatewayStatus.isVoiceGatewayReady()
+  val ready =
+    voiceAttentionStatus == null &&
+      gatewayStatus.isVoiceGatewayReady() &&
+      talkSetupReadiness.realtimeTalk.isReady &&
+      talkSetupReadiness.dictation.isReady
+  val needsSetup =
+    voiceAttentionStatus == null &&
+      gatewayStatus.isVoiceGatewayReady() &&
+      (talkSetupReadiness.realtimeTalk.requiresSetup || talkSetupReadiness.dictation.requiresSetup)
   Surface(
     modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
@@ -769,13 +811,12 @@ private fun VoiceProviderCard(
         }
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = "Provider", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = "Voice setup", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
         Text(
-          text = voiceAttentionStatus ?: gatewayStatus.voiceGatewayLabel(),
+          text = voiceAttentionStatus ?: voiceSetupSummary(gatewayStatus, talkSetupReadiness),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+          maxLines = 2,
         )
       }
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -787,6 +828,7 @@ private fun VoiceProviderCard(
               .background(
                 when {
                   ready -> ClawTheme.colors.success
+                  needsSetup -> ClawTheme.colors.warning
                   voiceAttentionStatus != null -> ClawTheme.colors.warning
                   else -> ClawTheme.colors.textSubtle
                 },
@@ -796,7 +838,9 @@ private fun VoiceProviderCard(
           text =
             when {
               ready -> "Ready"
+              needsSetup -> "Setup"
               voiceAttentionStatus != null -> "Attention"
+              gatewayStatus.isVoiceGatewayReady() -> "Unverified"
               else -> "Offline"
             },
           style = ClawTheme.type.caption,
@@ -806,6 +850,17 @@ private fun VoiceProviderCard(
       }
     }
   }
+}
+
+private fun voiceSetupSummary(
+  gatewayStatus: String,
+  readiness: GatewayTalkSetupReadiness,
+): String {
+  if (!gatewayStatus.isVoiceGatewayReady()) return gatewayStatus.voiceGatewayLabel()
+  return listOf(
+    "Talk: ${gatewayTalkSetupDescription(readiness.realtimeTalk)}",
+    "Dictation: ${gatewayTalkSetupDescription(readiness.dictation)}",
+  ).joinToString(" · ")
 }
 
 @Composable

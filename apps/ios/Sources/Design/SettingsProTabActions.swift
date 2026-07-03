@@ -80,6 +80,9 @@ extension SettingsProTab {
                     detail: self.appModel.voiceWake.statusText,
                     value: self.voiceWakeEnabled ? "on" : "off",
                     color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("diagnostics-voice-wake-status")
+                    .accessibilityValue(self.appModel.voiceWake.statusText)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -171,6 +174,14 @@ extension SettingsProTab {
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    func syncAfterOnboardingReset() {
+        self.connectingGatewayID = nil
+        self.setupStatusText = nil
+        self.stagedGatewaySetupLink = nil
+        self.pendingManualAuthOverride = nil
+        self.syncSettingsState()
     }
 
     func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
@@ -347,37 +358,6 @@ extension SettingsProTab {
         self.onboardingRequestID += 1
     }
 
-    func retryGatewayConnectionFromProblem() async {
-        if self.manualGatewayEnabled || self.connectingGatewayID == "manual" {
-            await self.connectManual()
-        } else {
-            await self.gatewayController.connectLastKnown()
-        }
-    }
-
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
-        GatewayProblemPrimaryAction.title(
-            for: problem,
-            retryTitle: "Retry connection",
-            resetTitle: "Reset onboarding")
-    }
-
-    func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
-        if problem.suggestsOnboardingReset {
-            self.resetOnboarding()
-            return
-        }
-        if problem.canTrustRotatedCertificate {
-            _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
-            return
-        }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
-            return
-        }
-        guard problem.retryable else { return }
-        await self.retryGatewayConnectionFromProblem()
-    }
-
     func handleLocationModeChange(_ newValue: String) {
         guard !self.isChangingLocationMode else { return }
         guard newValue != self.previousLocationModeRaw else { return }
@@ -504,6 +484,7 @@ extension SettingsProTab {
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
+        case .licenses: "Licenses"
         case .about: "About"
         }
     }

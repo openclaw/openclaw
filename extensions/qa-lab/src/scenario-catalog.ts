@@ -159,7 +159,15 @@ const qaFlowTransportActionSchema = z.union([
     saveAs: z.string().trim().min(1).optional(),
   }),
   z.object({
+    sendNativeCommand: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
     waitForOutbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutboundSequence: z.unknown(),
     saveAs: z.string().trim().min(1).optional(),
   }),
   z.object({

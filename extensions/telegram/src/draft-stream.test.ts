@@ -277,6 +277,26 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
   });
 
+  it("converts <br> joins to newlines before parse_mode=HTML transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      // Progress drafts join rendered lines with <br>; Bot API parse_mode=HTML
+      // has no <br> tag, so sending it verbatim 400s every multi-line edit and
+      // drops the preview to the unformatted plain fallback.
+      renderText: (text) => ({
+        text: `<b>Shelling</b><br>🧠 <i>${text}</i>`,
+        parseMode: "HTML",
+      }),
+    });
+
+    stream.update("Thinking");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n🧠 <i>Thinking</i>", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("returns existing preview id when materializing message transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {
@@ -292,19 +312,181 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
   });
 
+  it("finalizeToPreview edits the live window message in place without deleting", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
+
+    stream.update("🛠️ Exec: pnpm test");
+    await stream.flush();
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBe(17);
+    // The window message is EDITED into the bar, never deleted (no focus-jump).
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "🛠️ 1 tool call · ⏱️ 1s");
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizeToPreview materializes a still-pending window before editing", async () => {
+    // A throttled preview may not have been sent yet when the collapse runs;
+    // finalizeToPreview must send it first so there is a message to edit into
+    // the bar, rather than returning undefined and forcing a delete + repost.
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      throttleMs: 10_000,
+    });
+
+    stream.update("🛠️ Exec: pnpm test");
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBe(17);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizeToPreview returns undefined when no window ever rendered", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
+
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBeUndefined();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("finalizeToPreview returns undefined when the in-place collapse edit does not apply", async () => {
+    // Red-team F2: a flood-wait (429) on the collapse edit makes the underlying
+    // send return false without applying. finalizeToPreview must report that as
+    // "not collapsed in place" (undefined) so the dispatch falls back to posting
+    // a durable bar — otherwise it assumes success, clears state, posts no bar,
+    // and the tall window is left on screen.
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValueOnce(
+      Object.assign(
+        new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 5)"),
+        { error_code: 429, parameters: { retry_after: 5 } },
+      ),
+    );
+    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
+
+    stream.update("🛠️ Exec: pnpm test");
+    await stream.flush();
+    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
+
+    expect(messageId).toBeUndefined();
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+    // The live window is NOT deleted (the caller posts the bar below it instead).
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
+
   it("deletes message preview on clear after finalization", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello again");
+      await stream.stop();
+      await stream.clear();
+
+      expectPreviewSend(api, "Hello", { message_thread_id: 42 });
+      expectPreviewEdit(api, "Hello again");
+      // The delete is deferred until the preview has been on screen for the
+      // dwell window; advance past it to trigger the detached cleanup.
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rotateToNewMessageDeferringDelete posts the new message before deleting the old", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.sendMessage
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockResolvedValueOnce({ message_id: 42 });
+      const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
+
+      stream.update("🛠️ Exec");
+      await stream.flush();
+      // Reposition: rewind for a new message; the old one's delete is deferred.
+      const superseded = stream.rotateToNewMessageDeferringDelete();
+      expect(superseded).toBe(17);
+
+      // The NEW message is sent first...
+      stream.update("Answer below");
+      await stream.flush();
+      expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Answer below", {
+        message_thread_id: 42,
+      });
+      // ...and the superseded message is NOT deleted immediately (deferred so
+      // the new message lands first — no scroll-jump).
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      // Only the superseded (old) message is deleted; the new one stays.
+      expect(api.deleteMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rotateToNewMessageDeferringDelete is a no-op with no live message", () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
-    stream.update("Hello");
-    await stream.flush();
-    stream.update("Hello again");
-    await stream.stop();
-    await stream.clear();
+    expect(stream.rotateToNewMessageDeferringDelete()).toBeUndefined();
+    expect(api.deleteMessage).not.toHaveBeenCalled();
+  });
 
-    expectPreviewSend(api, "Hello", { message_thread_id: 42 });
-    expectPreviewEdit(api, "Hello again");
-    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+  it("deletes a reposition-superseded first send instead of retaining an orphaned bubble", async () => {
+    // Red-team F5: rotateToNewMessageDeferringDelete rewinds while a FIRST send is
+    // still in flight (no message id yet). The late-landing message is a stale
+    // preview to delete — NOT a durable content chunk to retain (that is
+    // forceNewMessage's contract). Previously it fired onSupersededPreview
+    // {retain:true}, which the dispatch handler kept, leaving a ghost bubble.
+    vi.useFakeTimers();
+    try {
+      let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
+      const firstSend = new Promise<{ message_id: number }>((resolve) => {
+        resolveFirstSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
+      const onSupersededPreview = vi.fn();
+      const stream = createDraftStream(api, { onSupersededPreview });
+
+      stream.update("Message A partial");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      // Reposition while the first send is still in flight, then stream on.
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Message B partial");
+
+      resolveFirstSend?.({ message_id: 17 });
+      await vi.advanceTimersByTimeAsync(0);
+      await stream.flush();
+
+      // The raced first send is NOT retained as a durable chunk...
+      expect(onSupersededPreview).not.toHaveBeenCalled();
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      // ...it is deleted deferred, so no orphaned stale bubble is left behind.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      // The replacement message still streams normally.
+      expectNthPreviewSend(api, 2, "Message B partial");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates new message after forceNewMessage is called", async () => {
@@ -331,20 +513,50 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("creates new message after cleanup and forceNewMessage", async () => {
-    const { api, stream } = createForceNewMessageHarness();
+    vi.useFakeTimers();
+    try {
+      const { api, stream } = createForceNewMessageHarness();
 
-    stream.update("Stale preview");
-    await stream.flush();
+      stream.update("Stale preview");
+      await stream.flush();
 
-    await stream.clear();
-    expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+      await stream.clear();
+      // Delete is deferred past the dwell window; advance to trigger it.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
 
-    stream.forceNewMessage();
-    stream.update("Next preview");
-    await stream.flush();
+      stream.forceNewMessage();
+      stream.update("Next preview");
+      await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expectNthPreviewSend(api, 2, "Next preview");
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expectNthPreviewSend(api, 2, "Next preview");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the streaming preview on screen for the dwell window before deleting", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api);
+
+      stream.update("Working");
+      await stream.flush();
+      // Fast turn: the preview has only been visible ~1s when the turn tears down.
+      await vi.advanceTimersByTimeAsync(1_000);
+      await stream.clear();
+
+      // Delete is deferred, not synchronous, and does not fire before the 4s dwell.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      // At the dwell boundary (~4s after first appearing) the detached delete runs.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends first update immediately after forceNewMessage within throttle window", async () => {
