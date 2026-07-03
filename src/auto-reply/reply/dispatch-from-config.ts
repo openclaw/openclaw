@@ -1542,7 +1542,9 @@ export async function dispatchReplyFromConfig(
   };
   const getDispatchAbortSignal = () => {
     const operationSignal = dispatchReplyOperation?.abortSignal;
-    const upstreamSignal = params.replyOptions?.abortSignal;
+    // The operation mirrors upstream aborts until the backend commits its
+    // terminal outcome, then keeps delivery alive after freezeAbort().
+    const upstreamSignal = operationSignal ? undefined : params.replyOptions?.abortSignal;
     if (
       cachedDispatchAbortSignal &&
       cachedDispatchAbortSignal.operationSignal === operationSignal &&
@@ -1550,7 +1552,7 @@ export async function dispatchReplyFromConfig(
     ) {
       return cachedDispatchAbortSignal.signal;
     }
-    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    const signal = operationSignal ?? upstreamSignal;
     cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
     return signal;
   };
@@ -1588,6 +1590,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchReplyOperation) {
       return;
     }
+    dispatchReplyOperation.freezeAbort();
     if (!dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }

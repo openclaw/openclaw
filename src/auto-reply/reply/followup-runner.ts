@@ -1228,6 +1228,7 @@ export function createFollowupRunner(params: {
                 timeoutMs: run.timeoutMs,
                 runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                 runId,
+                isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                 abortSignal: runAbortSignal,
                 deferTerminalLifecycle: true,
                 onExecutionStarted: (info) => {
@@ -1301,6 +1302,15 @@ export function createFollowupRunner(params: {
           settledLifecycleTerminal?.emit("end", runResult);
           throw runAbortSignal.reason;
         }
+        if (
+          replyOperation.result?.kind === "aborted" &&
+          replyOperation.result.code === "aborted_by_user"
+        ) {
+          settledLifecycleTerminal?.emit("end", runResult);
+          await drainProgressDeliveries();
+          return;
+        }
+        replyOperation.freezeAbort();
         const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
           if (settledLifecycleTerminal) {
             settledLifecycleTerminal.emit("error", error, extraData);
@@ -1353,7 +1363,20 @@ export function createFollowupRunner(params: {
           });
         }
       } catch (err) {
+        if (
+          replyOperation.result?.kind === "aborted" &&
+          replyOperation.result.code === "aborted_by_user"
+        ) {
+          pendingLifecycleTerminal?.backstop.emit("error", err);
+          pendingLifecycleTerminal = undefined;
+          if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+            clearAgentRunContext(runId, lifecycleGeneration);
+          }
+          await drainProgressDeliveries();
+          return;
+        }
         const message = formatErrorMessage(err);
+        replyOperation.freezeAbort();
         replyOperation.fail("run_failed", err);
         pendingLifecycleTerminal?.backstop.emit("error", err);
         pendingLifecycleTerminal = undefined;

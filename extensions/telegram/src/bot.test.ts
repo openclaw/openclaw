@@ -2107,6 +2107,7 @@ describe("createTelegramBot", () => {
       () => "telegram:default:42",
     );
     telegramBotDepsForTest.readAmbientTranscriptWatermark = vi.fn(() => ({
+      sessionId: "session-current",
       messageId: "502",
       timestampMs: 1_736_380_860_000,
       updatedAt: 1_736_380_900_000,

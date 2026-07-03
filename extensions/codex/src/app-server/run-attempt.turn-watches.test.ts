@@ -88,6 +88,33 @@ function completedAssistant(id: string, text?: string): CodexServerNotification 
   });
 }
 
+function finalizationHookNotification(
+  method: "hook/started" | "hook/completed",
+  status: "running" | "completed" | "blocked" | "stopped",
+  eventName: "stop" | "subagentStop" = "stop",
+  runId = "stop-hook-1",
+): CodexServerNotification {
+  return {
+    method,
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      run: {
+        id: runId,
+        eventName,
+        handlerType: "command",
+        executionMode: "sync",
+        scope: "turn",
+        source: "project",
+        sourcePath: "/workspace/.codex/hooks.json",
+        status,
+        statusMessage: null,
+        entries: status === "blocked" ? [{ kind: "feedback", text: "Revise the answer." }] : [],
+      },
+    },
+  };
+}
+
 function startedCommand(id: string, command: string): CodexServerNotification {
   return itemNotification("item/started", {
     id,
@@ -149,6 +176,8 @@ describe("createCodexAttemptTurnWatchController", () => {
       getActiveAppServerTurnRequests: () => 0,
       getActiveTurnItemCount: () => 0,
       getActiveCompletionBlockerItemCount: () => 0,
+      getActiveFinalizationHookCount: () => 0,
+      canReleaseAssistantCompletionIdle: () => true,
       turnCompletionIdleTimeoutMs: 500,
       turnAssistantCompletionIdleTimeoutMs: 500,
       turnAttemptIdleTimeoutMs: 200,
@@ -4025,6 +4054,688 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
   });
 
+  it.each(["stop", "subagentStop"] as const)(
+    "waits for an active %s hook before recovering a completed assistant",
+    async (eventName) => {
+      const harness = createStartedThreadHarness();
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      params.timeoutMs = 200;
+
+      const run = runCodexAppServerAttempt(params, {
+        turnAssistantCompletionIdleTimeoutMs: 10,
+        turnTerminalIdleTimeoutMs: 500,
+      });
+      await harness.waitForMethod("turn/start");
+      await harness.notify(completedAssistant("msg-final-1", "Done."));
+      await harness.notify(finalizationHookNotification("hook/started", "running", eventName));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 25);
+      });
+
+      expect(harness.requests).not.toContainEqual(
+        expect.objectContaining({ method: "turn/interrupt" }),
+      );
+
+      await harness.notify(finalizationHookNotification("hook/completed", "completed", eventName));
+      const result = await run;
+
+      expect(result).toMatchObject({
+        aborted: false,
+        timedOut: false,
+        promptError: null,
+        assistantTexts: ["Done."],
+      });
+      expect(harness.requests).toContainEqual(
+        expect.objectContaining({ method: "turn/interrupt" }),
+      );
+    },
+  );
+
+  it("keeps recovery suspended when a finalization hook queues behind an assistant", async () => {
+    let releaseProjection!: () => void;
+    let markProjectionStarted!: () => void;
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    const projectionStarted = new Promise<void>((resolve) => {
+      markProjectionStarted = resolve;
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async () => {
+      markProjectionStarted();
+      await projectionGate;
+      throw new Error("expected projection gate");
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    const pendingProjection = harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ig_raw_1",
+          type: "image_generation_call",
+          status: "generating",
+          result: tinyPngBase64,
+        },
+      },
+    });
+    await projectionStarted;
+    const pendingAssistant = harness.notify(completedAssistant("msg-final-1", "Done."));
+    const pendingHook = harness.notify(finalizationHookNotification("hook/started", "running"));
+    releaseProjection();
+    await Promise.all([pendingProjection, pendingAssistant, pendingHook]);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    await harness.notify(finalizationHookNotification("hook/completed", "completed"));
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
+    });
+  });
+
+  it("rearms recovery after queued assistant projection outlives the receive-time watch", async () => {
+    let releaseProjection!: () => void;
+    let markProjectionStarted!: () => void;
+    const projectionGate = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    const projectionStarted = new Promise<void>((resolve) => {
+      markProjectionStarted = resolve;
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async () => {
+      markProjectionStarted();
+      await projectionGate;
+      throw new Error("expected projection gate");
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    const pendingProjection = harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ig_raw_1",
+          type: "image_generation_call",
+          status: "generating",
+          result: tinyPngBase64,
+        },
+      },
+    });
+    await projectionStarted;
+    const pendingAssistant = harness.notify(completedAssistant("msg-final-1", "Done."));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 15);
+    });
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    releaseProjection();
+    await Promise.all([pendingProjection, pendingAssistant]);
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
+    });
+    expect(harness.requests).toContainEqual(expect.objectContaining({ method: "turn/interrupt" }));
+  });
+
+  it("does not rearm recovery for an assistant superseded during finalization", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", "Stale answer."));
+    await harness.notify(finalizationHookNotification("hook/started", "running"));
+    await harness.notify(completedCommand("cmd-later-1", "echo later"));
+    await harness.notify(finalizationHookNotification("hook/completed", "completed"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    harness.close();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: "codex app-server client closed before turn completed",
+      assistantTexts: ["Stale answer."],
+      codexAppServerFailure: {
+        replaySafe: false,
+        replayBlockedReason: "potential_side_effect",
+      },
+    });
+  });
+
+  it("does not recover a delayed raw echo after later work starts", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", "Stale answer."));
+    await harness.notify(startedCommand("cmd-later-1", "echo later"));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Stale answer." }],
+        },
+      },
+    });
+    await harness.notify(completedCommand("cmd-later-1", "echo later"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    harness.close();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: "codex app-server client closed before turn completed",
+      assistantTexts: ["Stale answer."],
+      codexAppServerFailure: {
+        replaySafe: false,
+        replayBlockedReason: "potential_side_effect",
+      },
+    });
+  });
+
+  it("does not revive a superseded assistant from an unpaired raw echo", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", "Stale answer."));
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-partial-2",
+        delta: "Newer partial answer.",
+      },
+    });
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-final-1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Stale answer." }],
+        },
+      },
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    harness.close();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: "codex app-server client closed before turn completed",
+      assistantTexts: ["Newer partial answer."],
+      codexAppServerFailure: {
+        replaySafe: false,
+        replayBlockedReason: "assistant_output",
+      },
+    });
+  });
+
+  it("treats a differently identified raw assistant as newer output", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", "Earlier answer."));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-final-2",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Newer raw answer." }],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Newer raw answer."],
+    });
+  });
+
+  it("treats an id-less raw assistant after later completed work as newer output", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-pre-tool", "I will check."));
+    await harness.notify(startedCommand("cmd-later-1", "echo checked"));
+    await harness.notify(completedCommand("cmd-later-1", "echo checked"));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Checked successfully." }],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Checked successfully."],
+    });
+  });
+
+  it("keeps recovery valid through raw output for an earlier active item", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ig_1",
+          type: "imageGeneration",
+          status: "inProgress",
+        },
+      },
+    });
+    await harness.notify(completedAssistant("msg-final-1", "Done."));
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ig_1",
+          type: "imageGeneration",
+          status: "completed",
+        },
+      },
+    });
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ig_1",
+          type: "image_generation_call",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done."],
+    });
+  });
+
+  it("does not rearm recovery after a newer assistant starts streaming", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", "Stale answer."));
+    await harness.notify(finalizationHookNotification("hook/started", "running"));
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-partial-2",
+        delta: "Newer partial answer.",
+      },
+    });
+    await harness.notify(finalizationHookNotification("hook/completed", "completed"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+
+    expect(settled).toBe(false);
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    harness.close();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: "codex app-server client closed before turn completed",
+      assistantTexts: ["Newer partial answer."],
+      codexAppServerFailure: {
+        replaySafe: false,
+        replayBlockedReason: "assistant_output",
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "blocked then stopped",
+      completions: [
+        { runId: "stop-hook-blocked", status: "blocked" as const },
+        { runId: "stop-hook-stopped", status: "stopped" as const },
+      ],
+    },
+    {
+      name: "stopped then blocked",
+      completions: [
+        { runId: "stop-hook-stopped", status: "stopped" as const },
+        { runId: "stop-hook-blocked", status: "blocked" as const },
+      ],
+    },
+  ])("honors a stopped finalization override when hooks complete $name", async (scenario) => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", "Accepted answer."));
+    await harness.notify(
+      finalizationHookNotification("hook/started", "running", "stop", "stop-hook-blocked"),
+    );
+    await harness.notify(
+      finalizationHookNotification("hook/started", "running", "stop", "stop-hook-stopped"),
+    );
+    for (const completion of scenario.completions) {
+      await harness.notify(
+        finalizationHookNotification("hook/completed", completion.status, "stop", completion.runId),
+      );
+    }
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Accepted answer."],
+    });
+  });
+
+  it("recovers an accepted raw-only assistant after finalization hooks", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-final-1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Accepted raw answer." }],
+        },
+      },
+    });
+    await harness.notify(finalizationHookNotification("hook/started", "running"));
+    await harness.notify(finalizationHookNotification("hook/completed", "completed"));
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Accepted raw answer."],
+    });
+  });
+
+  it("recovers a revised raw-only assistant after finalization rejection", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-final-1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Rejected raw answer." }],
+        },
+      },
+    });
+    await harness.notify(finalizationHookNotification("hook/started", "running"));
+    await harness.notify(finalizationHookNotification("hook/completed", "blocked"));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "raw-final-2",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Revised raw answer." }],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Revised raw answer."],
+    });
+  });
+
+  it("does not recover an assistant rejected by a Stop hook", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 10,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(completedAssistant("msg-final-1", " "));
+    await harness.notify(finalizationHookNotification("hook/started", "running"));
+    await harness.notify(finalizationHookNotification("hook/completed", "blocked"));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Rejected answer." }],
+        },
+      },
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
+
+    await harness.notify(completedAssistant("msg-final-2", "Revised answer."));
+    const result = await run;
+
+    expect(result).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Revised answer."],
+    });
+  });
+
   it("keeps upstream cancellation aborted when it races with timeout recovery", async () => {
     let releaseProjection!: () => void;
     let markProjectionStarted!: () => void;
@@ -4068,7 +4779,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await projectionStarted;
-    await harness.waitForMethod("turn/interrupt");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 15);
+    });
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
 
     abortController.abort("user_cancelled");
     releaseProjection();
@@ -4122,10 +4838,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     });
     await projectionStarted;
-    await harness.waitForMethod("turn/interrupt");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 15);
     });
+    expect(harness.requests).not.toContainEqual(
+      expect.objectContaining({ method: "turn/interrupt" }),
+    );
     const pendingAbort = harness.notify({
       method: "rawResponseItem/completed",
       params: {

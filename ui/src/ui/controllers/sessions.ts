@@ -14,8 +14,10 @@ import {
   resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "../session-key.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import type {
   FastMode,
   GatewaySessionRow,
@@ -76,6 +78,13 @@ export type LoadSessionsOverrides = {
   configuredAgentsOnly?: boolean;
   append?: boolean;
   publishChatRunStatus?: boolean;
+  // Background sidebar hydration (chat startup): skips the shared loading
+  // flag so New Session stays enabled, skips chat-run reconciliation so a
+  // stale row snapshot racing a send cannot clear the live stream, and
+  // carries the selected session's row over when the fetched page omits it.
+  // The filtered Sessions view must NOT set this; there a filtered or deleted
+  // row is expected to disappear from the list.
+  backgroundHydrate?: boolean;
 };
 
 type CreateSessionParams = {
@@ -1079,13 +1088,23 @@ export async function loadSessions(state: SessionsState, overrides?: LoadSession
   }
   const client = state.client;
   control.loading = true;
-  control.ownsStateLoading = true;
-  state.sessionsLoading = true;
+  // Background hydrates keep the shared loading flag untouched; it disables
+  // New Session and drives list spinners, which must not react to them.
+  if (overrides?.backgroundHydrate !== true) {
+    control.ownsStateLoading = true;
+    state.sessionsLoading = true;
+  }
   state.sessionsError = null;
   let currentOverrides: LoadSessionsOverrides | undefined = overrides;
   try {
     for (;;) {
       control.pending = null;
+      // A foreground request queued behind a background hydrate still owns the
+      // shared loading flag while it runs inside this loop.
+      if (currentOverrides?.backgroundHydrate !== true && !control.ownsStateLoading) {
+        control.ownsStateLoading = true;
+        state.sessionsLoading = true;
+      }
       await loadSessionsOnce(state, client, currentOverrides);
       const pending = takePendingSessionsLoad(control);
       if (!pending || !state.client || !state.connected) {
@@ -1153,12 +1172,54 @@ async function loadSessionsOnce(
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       const projected = projectSessionsResultForAvailability(res, { showArchived });
-      state.sessionsResult =
+      let nextResult =
         overrides?.append === true && offset > 0 && state.sessionsResult
           ? appendSessionsResult(state.sessionsResult, projected)
           : projected;
+      // Sidebar boot hydration must not drop the selected session's row: chat
+      // metadata (context ring, model overrides) and the sidebar's
+      // way-back-to-chat row read from sessionsResult, and a capped or
+      // recency-filtered page can exclude an old open session. Read the row
+      // from live state at commit time (not the request-start snapshot): a
+      // concurrent chat.history response may have installed it mid-flight.
+      // Exact key equivalence carries unconditionally; the looser global
+      // alias only carries when the previous result was scoped to the
+      // selected session's agent, so an agent switch cannot smuggle another
+      // agent's canonical "global" row into the new scope.
+      const currentKey =
+        overrides?.backgroundHydrate === true
+          ? normalizeOptionalString(state.sessionKey)
+          : undefined;
+      const currentAgentId = currentKey
+        ? normalizeAgentId(
+            parseAgentSessionKey(currentKey)?.agentId ?? resolveUiSelectedGlobalAgentId(state),
+          )
+        : null;
+      const previousResultAgentId = state.sessionsResultAgentId
+        ? normalizeAgentId(state.sessionsResultAgentId)
+        : null;
+      const previousRowsLive = state.sessionsResult?.sessions ?? [];
+      const previousCurrentRow = currentKey
+        ? (previousRowsLive.find((row) => areUiSessionKeysEquivalent(row.key, currentKey)) ??
+          (previousResultAgentId !== null && previousResultAgentId === currentAgentId
+            ? previousRowsLive.find((row) =>
+                uiSessionRowMatchesSelectedChat(state, row.key, currentKey),
+              )
+            : undefined))
+        : undefined;
+      if (
+        currentKey &&
+        previousCurrentRow &&
+        !nextResult.sessions.some((row) =>
+          uiSessionRowMatchesSelectedChat(state, row.key, currentKey),
+        )
+      ) {
+        const sessions = [...nextResult.sessions, previousCurrentRow];
+        nextResult = { ...nextResult, count: sessions.length, sessions };
+      }
+      state.sessionsResult = nextResult;
       state.sessionsResultAgentId = resultAgentId;
-      if (hasCurrentChatSession(state)) {
+      if (hasCurrentChatSession(state) && overrides?.backgroundHydrate !== true) {
         reconcileChatRunFromCurrentSessionRow(state, {
           publishRunStatus: overrides?.publishChatRunStatus !== false,
         });
