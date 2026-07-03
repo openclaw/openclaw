@@ -849,4 +849,44 @@ describe("createDiscordMessageHandler queue behavior", () => {
     expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
   });
+
+  it("drops mapped Message object missing message.id without blocking subsequent messages", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+    const handler = createHandlerWithDefaultPreflight();
+
+    // Mapped Message object where message property exists but id is missing.
+    // The gateway mapper always produces a Message object for MESSAGE_CREATE events,
+    // so the realistic malformed case is a mapped object with no id, not a missing message.
+    const missingIdData = {
+      channel_id: "ch-1",
+      author: { id: "user-1" },
+      message: {
+        author: { id: "user-1", bot: false },
+        content: "hello",
+        channel_id: "ch-1",
+      },
+    };
+
+    await expect(handler(missingIdData as never, {} as never)).resolves.toBeUndefined();
+    await flushQueueWork();
+
+    // Missing message.id should not reach preflight or processing
+    expect(preflightDiscordMessageMock).not.toHaveBeenCalled();
+    expect(processDiscordMessageMock).not.toHaveBeenCalled();
+
+    // Valid message after the malformed one should process normally
+    await expect(
+      handler(createMessageData("m-after") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+  });
 });
