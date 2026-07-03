@@ -1340,6 +1340,17 @@ describe("handleTelegramAction", () => {
   // MCP message tool uses threadName but handler reads name.
   // See: https://github.com/openclaw/openclaw/pull/99505
   describe("threadName alias for forum topic name", () => {
+    const readMockCall = (
+      calls: ReadonlyArray<ReadonlyArray<unknown>>,
+      argIndex: number,
+    ): unknown => {
+      const args = calls[0];
+      if (!Array.isArray(args)) {
+        throw new Error("Expected mock call args to be an array");
+      }
+      return args[argIndex];
+    };
+
     it("accepts threadName for createForumTopic", async () => {
       createForumTopicTelegram.mockResolvedValueOnce({
         topicId: 100,
@@ -1353,8 +1364,8 @@ describe("handleTelegramAction", () => {
         cfg,
       );
 
-      const callArgs = createForumTopicTelegram.mock.calls[0];
-      expect(callArgs[1]).toBe("Topic");
+      const name = readMockCall(createForumTopicTelegram.mock.calls, 1);
+      expect(name).toBe("Topic");
     });
 
     it("accepts threadName for editForumTopic", async () => {
@@ -1371,8 +1382,9 @@ describe("handleTelegramAction", () => {
         cfg,
       );
 
-      const callArgs = editForumTopicTelegram.mock.calls[0];
-      const opts = callArgs[2];
+      const opts = readMockCall(editForumTopicTelegram.mock.calls, 2) as {
+        name?: string;
+      };
       expect(opts.name).toBe("New");
     });
 
@@ -1389,8 +1401,8 @@ describe("handleTelegramAction", () => {
         cfg,
       );
 
-      const callArgs = createForumTopicTelegram.mock.calls[0];
-      expect(callArgs[1]).toBe("Primary");
+      const name = readMockCall(createForumTopicTelegram.mock.calls, 1);
+      expect(name).toBe("Primary");
     });
 
     it("prefers name over threadName when both are provided (editForumTopic)", async () => {
@@ -1413,8 +1425,9 @@ describe("handleTelegramAction", () => {
         cfg,
       );
 
-      const callArgs = editForumTopicTelegram.mock.calls[0];
-      const opts = callArgs[2];
+      const opts = readMockCall(editForumTopicTelegram.mock.calls, 2) as {
+        name?: string;
+      };
       expect(opts.name).toBe("Primary");
     });
 
@@ -1437,6 +1450,7 @@ describe("handleTelegramAction", () => {
         ok: true,
         chatId: "-100123",
         messageThreadId: 42,
+        name: "",
       });
       const cfg = telegramConfig({ actions: { editForumTopic: true } });
 
@@ -1445,8 +1459,9 @@ describe("handleTelegramAction", () => {
         cfg,
       );
 
-      const callArgs = editForumTopicTelegram.mock.calls[0];
-      const opts = callArgs[2];
+      const opts = readMockCall(editForumTopicTelegram.mock.calls, 2) as {
+        name?: string;
+      };
       expect(opts.name).toBeUndefined();
     });
   });
