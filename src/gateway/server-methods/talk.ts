@@ -83,7 +83,9 @@ function resolveCatalogActiveProvider(
   configuredProvider: string | undefined,
   resolveAutomaticProvider: () => string,
 ): string | undefined {
-  if (configuredProvider) return configuredProvider;
+  if (configuredProvider) {
+    return configuredProvider;
+  }
   // Provider priority belongs to the runtime resolver; catalog consumers must not infer it from row order.
   try {
     return resolveAutomaticProvider();
