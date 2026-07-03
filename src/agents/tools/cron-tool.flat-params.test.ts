@@ -239,6 +239,57 @@ describe("cron tool flat-params", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
+  it("keeps a kindless patch schedule command classified as stray shell input", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    // Drift guard: a schedule carrying command but no explicit kind must stay
+    // in the stray command/cwd rejection path. If canonicalization ever infers
+    // kind "on-exit" from schedule.command again, this surfaces as the on-exit
+    // error instead and this test fails.
+    await expect(
+      tool.execute("call-nested-patch-schedule-command", {
+        action: "update",
+        jobId: "job-patch-schedule-command",
+        patch: { schedule: { command: "make" } },
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("routes explicit on-exit intent and stray command fields to distinct rejections", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    // The two rejection paths must not collapse into each other: explicit
+    // on-exit intent gets the on-exit error, loose shell fields get the
+    // command/cwd error.
+    const onExitError = await tool
+      .execute("call-distinct-onexit", {
+        action: "add",
+        job: { name: "explicit on-exit", schedule: { kind: "on-exit", command: "make" } },
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => String(error),
+      );
+    const strayError = await tool
+      .execute("call-distinct-stray", {
+        action: "add",
+        name: "stray command",
+        command: "make",
+        message: "done",
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => String(error),
+      );
+
+    expect(onExitError).toContain("cron on-exit schedules cannot be created or edited");
+    expect(onExitError).not.toContain("command/cwd");
+    expect(strayError).toContain("cron command/cwd fields cannot be set");
+    expect(strayError).not.toContain("on-exit schedules");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
   it("passes local cron wall-clock expression and timezone through add", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
