@@ -4,7 +4,7 @@ scenario:
   id: openai-compatible-chat-tools
   surface: runtime
   coverage:
-    primary:
+    secondary:
       - gateway.openai-compatible-apis
       - runtime.hosted-tool-use
   objective: Verify the OpenAI-compatible chat-completions client and Docker lane preserve strict tool-call API behavior.

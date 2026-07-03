@@ -11,10 +11,21 @@ import {
   buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
   findMissingLiveTransportStandardScenarios,
+  loadLegacyLiveScenarioOwners,
   selectLiveTransportScenarios,
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
+  it("loads every legacy live scenario id exactly once", async () => {
+    const owners = await loadLegacyLiveScenarioOwners();
+
+    expect(owners.length).toBeGreaterThan(0);
+    expect(new Set(owners.map((owner) => owner.id)).size).toBe(owners.length);
+    expect(new Set(owners.map((owner) => owner.transportId))).toEqual(
+      new Set(["discord", "slack", "telegram", "whatsapp"]),
+    );
+  });
+
   it("uses the public live transport scenario SDK seam", () => {
     const source = fs.readFileSync(
       fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),

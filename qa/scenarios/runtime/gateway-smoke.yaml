@@ -4,9 +4,8 @@ scenario:
   id: gateway-smoke
   surface: runtime
   coverage:
-    primary:
-      - gateway.websocket-transport
     secondary:
+      - gateway.websocket-transport
       - gateway.health-apis
       - gateway.hello-ok-snapshot
   objective: Exercise gateway health and WebSocket smoke assertions through QA Lab evidence.

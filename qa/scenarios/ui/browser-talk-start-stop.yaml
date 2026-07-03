@@ -5,7 +5,7 @@ scenario:
   surface: browser-control-ui-and-webchat
   category: browser-control-ui-and-webchat.browser-realtime-talk
   coverage:
-    primary:
+    secondary:
       - ui.browser-talk-start-stop
   objective: Link deterministic browser realtime Talk transport start/stop coverage to UI maturity accounting.
   successCriteria:

@@ -4,9 +4,8 @@ scenario:
   id: openai-web-search-minimal
   surface: model-provider
   coverage:
-    primary:
-      - runtime.reasoning-and-cache-controls
     secondary:
+      - runtime.reasoning-and-cache-controls
       - web-search.openai-native-web-search
       - tools.web-search
   objective: Verify the OpenAI web_search minimal-reasoning E2E client distinguishes successful grounded turns from provider schema rejection.

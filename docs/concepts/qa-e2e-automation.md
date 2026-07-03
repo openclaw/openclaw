@@ -923,6 +923,27 @@ At the architecture level, the split is:
 - The transport adapter owns gateway config, readiness, inbound and outbound observation, transport actions, and normalized transport state.
 - YAML scenario files under `qa/scenarios/` define the test run; `qa-lab` provides the reusable runtime surface that executes them.
 
+### Scenario ownership
+
+Every scenario ID has exactly one owner. `qa coverage` validates the canonical
+YAML flow, script, Vitest, and Playwright scenarios together with the remaining
+Discord, Slack, Telegram, and WhatsApp live catalogs, and fails when an ID is
+declared more than once.
+
+Coverage intent is separate from scenario ownership. Put the coverage IDs
+proved by a real product boundary under `coverage.primary`. Put helper,
+in-memory, parser, or assertion coverage under `coverage.secondary`; it remains
+supporting evidence but does not satisfy a required primary scorecard boundary.
+
+A legacy live catalog can be deleted only when all of its IDs have YAML owners,
+the shared host runs those YAML scenarios through the transport adapter with
+equivalent evidence, and `qa coverage` reports no duplicate or legacy-owned
+IDs. An internal compatibility wrapper can be deleted when no YAML scenario,
+workflow, or runtime caller uses it and focused tests cover the canonical path.
+Keep operator commands such as `openclaw qa telegram`, `openclaw qa discord`,
+`openclaw qa slack`, and `openclaw qa whatsapp`; they remain aliases mounted on
+the shared `openclaw qa` host while their scenario ownership moves to YAML.
+
 ### Adding a channel
 
 Adding a channel to the YAML QA system requires the channel implementation plus

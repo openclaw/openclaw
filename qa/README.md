@@ -14,6 +14,10 @@ Key workflow:
 - `qa suite` is the executable frontier subset / regression loop.
 - `qa manual` is the scoped personality and style probe after the executable subset is green.
 - `qa coverage` prints the scenario coverage inventory from scenario YAML.
+- `qa coverage` also rejects scenario IDs duplicated by legacy live catalogs;
+  each ID must have exactly one owner.
+- `coverage.primary` requires product-boundary evidence. Helper-only proof
+  belongs under `coverage.secondary` until a primary executable replaces it.
 
 Operator workflows:
 
