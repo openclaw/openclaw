@@ -223,6 +223,45 @@ describe("cli session history", () => {
     });
   });
 
+  it("hides OpenClaw CLI reseed wrappers from imported Claude user history", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          type: "user",
+          uuid: "reseed-user",
+          timestamp: "2026-03-26T16:29:54.800Z",
+          message: {
+            role: "user",
+            content: [
+              "Continue this conversation using the OpenClaw transcript below as prior session history.",
+              "Treat it as authoritative context for this fresh CLI session.",
+              "",
+              "<conversation_history>",
+              "User: earlier private question",
+              "Assistant: earlier private answer",
+              "</conversation_history>",
+              "",
+              "<next_user_message>",
+              "show today's plan",
+              "</next_user_message>",
+            ].join("\n"),
+          },
+        }),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(messages).toHaveLength(1);
+      expectFields(messages[0], {
+        role: "user",
+        content: "show today's plan",
+      });
+      expect(String(messages[0]?.content)).not.toContain("conversation_history");
+      expect(String(messages[0]?.content)).not.toContain("earlier private question");
+    });
+  });
+
   it("deduplicates imported messages against similar local transcript entries", () => {
     const localMessages = [
       {

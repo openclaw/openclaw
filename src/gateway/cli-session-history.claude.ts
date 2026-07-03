@@ -102,12 +102,26 @@ function cloneJsonValue<T>(value: T): T {
   return structuredClone(value);
 }
 
+function unwrapOpenClawCliReseedPrompt(content: string): string | undefined {
+  if (
+    !content.startsWith(
+      "Continue this conversation using the OpenClaw transcript below as prior session history.",
+    )
+  ) {
+    return undefined;
+  }
+
+  const match = content.match(/<next_user_message>\n?([\s\S]*?)\n?<\/next_user_message>\s*$/);
+  return normalizeOptionalString(match?.[1]);
+}
+
 function normalizeClaudeCliContent(
   content: string | unknown[],
   toolNameRegistry: ToolNameRegistry,
 ): string | unknown[] {
   if (!Array.isArray(content)) {
-    return cloneJsonValue(content);
+    const unwrappedReseedPrompt = unwrapOpenClawCliReseedPrompt(content);
+    return unwrappedReseedPrompt ?? cloneJsonValue(content);
   }
 
   const normalized: ToolContentBlock[] = [];
