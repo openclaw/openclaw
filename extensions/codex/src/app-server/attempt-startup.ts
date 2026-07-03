@@ -495,10 +495,11 @@ function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
 }
 
 function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
-  return (
-    shouldClearSharedClientAfterStartupAbandon(error) ||
-    (error instanceof Error && error.message.endsWith(" timed out"))
-  );
+  return shouldClearSharedClientAfterStartupAbandon(error);
+}
+
+function isErrnoException(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && typeof (error as Record<string, unknown>).code === "string";
 }
 
 function shouldClearSharedClientAfterStartupFailure(params: {
