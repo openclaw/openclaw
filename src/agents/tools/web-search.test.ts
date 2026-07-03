@@ -1,6 +1,8 @@
 // Web search tests cover model-facing schema limits, provider-specific time
 // filters, unsupported filter errors, and scoped provider config merging.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   MAX_SEARCH_COUNT,
   buildUnsupportedSearchFilterResponse,
@@ -219,5 +221,227 @@ describe("web_search scoped config merge", () => {
     expect(Object.keys(merged ?? {})).toEqual(["enabled", "provider"]);
 
     expect(Object.getOwnPropertyDescriptor(merged, "perplexity")?.enumerable).toBe(false);
+  });
+});
+
+describe("web_search tool schema reflects the active provider", () => {
+  // unit-fast shares globals across files; always restore an empty registry.
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  function registerProviderWithSchema(parameters: Record<string, unknown>): void {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "custom-search",
+      pluginName: "Custom Search",
+      source: "test",
+      provider: {
+        id: "custom",
+        label: "Custom Search",
+        hint: "Custom provider",
+        envVars: [],
+        placeholder: "custom-...",
+        signupUrl: "https://example.com",
+        autoDetectOrder: 1,
+        credentialPath: "tools.web.search.custom.apiKey",
+        getCredentialValue: () => "configured",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "custom tool",
+          parameters,
+          execute: async () => ({ ok: true }),
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+  }
+
+  it("advertises the selected provider's own parameter schema", () => {
+    registerProviderWithSchema({
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: { type: "string" },
+        custom_knob: { type: "string", description: "provider-specific knob" },
+      },
+    });
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "custom" } } } },
+    });
+    const parameters = tool?.parameters as { properties?: Record<string, unknown> } | undefined;
+    const properties = parameters?.properties;
+
+    // Provider-owned schema is surfaced verbatim; core no longer hardcodes it.
+    expect(properties?.custom_knob).toBeDefined();
+  });
+
+  it("falls back to the back-compat superset when no provider is active", () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "custom" } } } },
+    });
+    const parameters = tool?.parameters as { properties?: Record<string, unknown> } | undefined;
+    const properties = parameters?.properties;
+
+    // Fallback keeps every historically shipped parameter (Brave/Perplexity
+    // knobs included) so nothing is lost when no provider is active; unknown
+    // provider-specific knobs still do not leak in.
+    expect(properties?.country).toBeDefined();
+    expect(properties?.search_lang).toBeDefined();
+    expect(properties?.custom_knob).toBeUndefined();
+  });
+
+  it("does not advertise a backup provider's schema for an explicitly selected unavailable provider", () => {
+    // runWebSearch throws (no fallback) when an explicitly configured provider
+    // is unavailable, so the schema must not leak a different provider's
+    // parameters. It falls back to the superset instead.
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      {
+        pluginId: "unavailable-search",
+        pluginName: "Unavailable Search",
+        source: "test",
+        provider: {
+          id: "unavailable",
+          label: "Unavailable Search",
+          hint: "Unavailable provider",
+          envVars: [],
+          placeholder: "unavailable-...",
+          signupUrl: "https://example.com",
+          autoDetectOrder: 1,
+          credentialPath: "tools.web.search.unavailable.apiKey",
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: () => null,
+        },
+      },
+      {
+        pluginId: "backup-search",
+        pluginName: "Backup Search",
+        source: "test",
+        provider: {
+          id: "backup",
+          label: "Backup Search",
+          hint: "Backup provider",
+          envVars: [],
+          placeholder: "backup-...",
+          signupUrl: "https://example.com",
+          autoDetectOrder: 2,
+          credentialPath: "tools.web.search.backup.apiKey",
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: () => ({
+            description: "backup tool",
+            parameters: {
+              type: "object",
+              required: ["query"],
+              properties: {
+                query: { type: "string" },
+                backup_knob: { type: "string" },
+              },
+            },
+            execute: async () => ({ ok: true }),
+          }),
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { provider: "unavailable" } } } },
+    });
+    const parameters = tool?.parameters as { properties?: Record<string, unknown> } | undefined;
+    const properties = parameters?.properties;
+
+    // Explicit selection never falls back to another provider: no backup_knob.
+    expect(properties?.backup_knob).toBeUndefined();
+    // Superset fallback is advertised instead so the model keeps usable filters.
+    expect(properties?.country).toBeDefined();
+    expect(properties?.search_lang).toBeDefined();
+  });
+
+  function makeProviderEntry(opts: {
+    id: string;
+    autoDetectOrder: number;
+    signal: boolean;
+    schema: Record<string, unknown> | null;
+  }) {
+    return {
+      pluginId: `${opts.id}-search`,
+      pluginName: `${opts.id} Search`,
+      source: "test",
+      provider: {
+        id: opts.id,
+        label: `${opts.id} Search`,
+        hint: `${opts.id} provider`,
+        requiresCredential: opts.signal ? undefined : false,
+        envVars: [],
+        placeholder: `${opts.id}-...`,
+        signupUrl: "https://example.com",
+        autoDetectOrder: opts.autoDetectOrder,
+        credentialPath: `tools.web.search.${opts.id}.apiKey`,
+        getConfiguredCredentialValue: () => (opts.signal ? "configured-key" : undefined),
+        getCredentialValue: () => (opts.signal ? "configured-key" : undefined),
+        setCredentialValue: () => {},
+        createTool: () =>
+          opts.schema === null
+            ? null
+            : {
+                description: `${opts.id} tool`,
+                parameters: opts.schema,
+                execute: async () => ({ ok: true }),
+              },
+      },
+    } as never;
+  }
+
+  const backupSchema = {
+    type: "object",
+    required: ["query"],
+    properties: { query: { type: "string" }, backup_knob: { type: "string" } },
+  };
+
+  it("does not advertise an unconfigured backup provider's schema during auto-detect", () => {
+    // Auto-detect only falls through to providers execution would try
+    // (hasImplicitProviderSelectionSignal). The preferred provider has a
+    // credential signal but is unavailable; the backup has no signal, so its
+    // schema must not be advertised.
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      makeProviderEntry({ id: "preferred", autoDetectOrder: 1, signal: true, schema: null }),
+      makeProviderEntry({ id: "backup", autoDetectOrder: 2, signal: false, schema: backupSchema }),
+    );
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { enabled: true } } } },
+    });
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.backup_knob).toBeUndefined();
+    expect(properties?.country).toBeDefined();
+  });
+
+  it("advertises a configured backup provider's schema during auto-detect fallback", () => {
+    // A backup provider that execution would try (has a credential signal) is
+    // advertised when the preferred provider is unavailable.
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      makeProviderEntry({ id: "preferred", autoDetectOrder: 1, signal: true, schema: null }),
+      makeProviderEntry({ id: "backup", autoDetectOrder: 2, signal: true, schema: backupSchema }),
+    );
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { enabled: true } } } },
+    });
+    const properties = (tool?.parameters as { properties?: Record<string, unknown> } | undefined)
+      ?.properties;
+
+    expect(properties?.backup_knob).toBeDefined();
   });
 });
