@@ -11227,7 +11227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 136,
+      "line": 137,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Limited",
       "surface": "apple",
@@ -11235,7 +11235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 149,
+      "line": 150,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
@@ -11243,7 +11243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 149,
+      "line": 150,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
@@ -11251,7 +11251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 296,
+      "line": 297,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Allowed",
       "surface": "apple",
@@ -11259,7 +11259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 298,
+      "line": 299,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add-Only",
       "surface": "apple",
@@ -11267,7 +11267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 300,
+      "line": 301,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Not Set",
       "surface": "apple",
@@ -11275,7 +11275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 303,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Not Allowed",
       "surface": "apple",
@@ -11283,7 +11283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 304,
+      "line": 305,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Unknown",
       "surface": "apple",
