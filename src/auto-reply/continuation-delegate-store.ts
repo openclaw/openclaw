@@ -95,8 +95,11 @@ export function consumeStagedPostCompactionDelegates(
     }
     if (d.flowId) {
       // Runtime-only claim handle so callers can finalize exactly this row after
-      // a durable handoff (#1144). Stripped by normalizePostCompactionDelegate.
+      // a durable handoff or terminal rejection (#1144).
       delegate.flowId = d.flowId;
+    }
+    if (d.expectedRevision !== undefined) {
+      delegate.expectedRevision = d.expectedRevision;
     }
     return delegate;
   });

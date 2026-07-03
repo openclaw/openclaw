@@ -2121,6 +2121,45 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(stillRecoverable[0]?.delegate).toMatchObject({ task: "rehydrate that fails" });
   });
 
+  it("finalizes accepted post-compaction rows, fails forbidden rows, and keeps transient errors recoverable", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 3,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:pc-spawn-statuses";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const acceptedFlowId = stageAndClaimRunning(sessionKey, "accepted post-compaction row");
+    const forbiddenFlowId = stageAndClaimRunning(sessionKey, "forbidden post-compaction row");
+    const transientFlowId = stageAndClaimRunning(sessionKey, "transient post-compaction row");
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({ status: "accepted" })
+      .mockResolvedValueOnce({ status: "forbidden", error: "max children reached" })
+      .mockResolvedValueOnce({ status: "error", error: "gateway unavailable" });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 1, dispatched: 1, failed: 2 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(3);
+    expect(mockFlows.get(acceptedFlowId)).toMatchObject({ status: "succeeded" });
+    expect(mockFlows.get(forbiddenFlowId)).toMatchObject({ status: "failed" });
+    expect(mockFlows.get(transientFlowId)).toMatchObject({ status: "running" });
+    expect(
+      listRecoverableStagedPostCompactionDelegates().map(({ delegate }) => delegate.flowId),
+    ).toEqual([transientFlowId]);
+  });
+
   it("finalizes accepted rows, fails deterministic rejections, and keeps transient failures recoverable", async () => {
     setRuntimeConfigSnapshot({
       agents: {

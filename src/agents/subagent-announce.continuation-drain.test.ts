@@ -1786,6 +1786,76 @@ describe("subagent-announce continuation drain (F7)", () => {
     );
   });
 
+  it("does not reserve a current-chain hop when an immediate bracket delegate is rejected (#1159)", async () => {
+    resolveContinuationRuntimeConfigMock.mockImplementation((_cfg?: unknown) => ({
+      enabled: true,
+      defaultDelayMs: 15_000,
+      minDelayMs: 5_000,
+      maxDelayMs: 300_000,
+      maxChainLength: 2,
+      costCapTokens: 500_000,
+      maxDelegatesPerTurn: 5,
+      contextPressureThreshold: undefined,
+    }));
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:mixed-rejected-bracket": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 7_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    const toolDelegate = {
+      task: "tool-row delegate still fits after bracket rejection",
+      flowId: "flow-tool-after-bracket-reject",
+      expectedRevision: 2,
+    };
+    consumePendingDelegatesMock.mockReturnValue([toolDelegate]);
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({ status: "forbidden", error: "max children reached" })
+      .mockResolvedValueOnce({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:tool-after-bracket-reject",
+        runId: "run-tool-after-bracket-reject",
+      });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:mixed-rejected-bracket",
+      childRunId: "run-mixed-rejected-bracket",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: rejected bracket delegate]]",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    const [bracketSpawn, toolSpawn] = spawnSubagentDirectMock.mock.calls.map(([params]) => params);
+    expect(bracketSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
+    expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
+    expect(toolSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
+    expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-after-bracket-reject");
+    expect(markPendingDelegateFailedMock).not.toHaveBeenCalledWith(
+      toolDelegate,
+      expect.stringContaining("chain length"),
+      "Delegate rejected",
+    );
+  });
+
   it("does not reserve a current-chain hop for a post-compaction bracket delegate before tool delegates drain (#1159)", async () => {
     resolveContinuationRuntimeConfigMock.mockImplementation((_cfg?: unknown) => ({
       enabled: true,
@@ -1900,5 +1970,159 @@ describe("subagent-announce continuation drain (F7)", () => {
       currentChainCount: 2,
       accumulatedChainTokens: 7_000,
     });
+  });
+
+  it("arms a delayed bracket hedge from accepted tool hops only when a sibling tool is rejected (#1159)", async () => {
+    const childEntry = {
+      sessionId: "session-child",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: 1_700_000_000_000,
+      continuationChainTokens: 7_000,
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:delayed-bracket-one-reject": childEntry,
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    const acceptedTool = {
+      task: "accepted tool-row delegate",
+      flowId: "flow-tool-accepted-before-delay",
+      expectedRevision: 2,
+    };
+    const rejectedTool = {
+      task: "rejected tool-row delegate",
+      flowId: "flow-tool-rejected-before-delay",
+      expectedRevision: 3,
+    };
+    consumePendingDelegatesMock.mockReturnValue([acceptedTool, rejectedTool]);
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({
+        status: "accepted",
+        childSessionKey: "agent:main:subagent:accepted-tool-before-delay",
+        runId: "run-accepted-tool-before-delay",
+      })
+      .mockResolvedValueOnce({ status: "forbidden", error: "max children reached" });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:delayed-bracket-one-reject",
+      childRunId: "run-delayed-bracket-one-reject",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: delayed bracket +30s]]",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
+      loadFreshChainState?: () => { currentChainCount: number; accumulatedChainTokens: number };
+    };
+    expect(call.chainState).toMatchObject({
+      currentChainCount: 2,
+      accumulatedChainTokens: 7_000,
+    });
+    expect(call.loadFreshChainState?.()).toMatchObject({
+      currentChainCount: 2,
+      accumulatedChainTokens: 7_000,
+    });
+    expect(childEntry.continuationChainCount).toBe(2);
+    expect(markPendingDelegateFailedMock).toHaveBeenCalledWith(
+      rejectedTool,
+      expect.stringContaining("forbidden"),
+      "Delegate rejected",
+    );
+  });
+
+  it("does not add tool hops to a delayed bracket hedge when all sibling tools are rejected (#1159)", async () => {
+    const childEntry = {
+      sessionId: "session-child",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: 1_700_000_000_000,
+      continuationChainTokens: 7_000,
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:delayed-bracket-all-rejected": childEntry,
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+    const firstRejectedTool = {
+      task: "first rejected tool-row delegate",
+      flowId: "flow-tool-first-rejected-before-delay",
+      expectedRevision: 2,
+    };
+    const secondRejectedTool = {
+      task: "second rejected tool-row delegate",
+      flowId: "flow-tool-second-rejected-before-delay",
+      expectedRevision: 3,
+    };
+    consumePendingDelegatesMock.mockReturnValue([firstRejectedTool, secondRejectedTool]);
+    spawnSubagentDirectMock
+      .mockResolvedValueOnce({ status: "forbidden", error: "max children reached" })
+      .mockResolvedValueOnce({ status: "forbidden", error: "max children reached" });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:delayed-bracket-all-rejected",
+      childRunId: "run-delayed-bracket-all-rejected",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: delayed bracket +30s]]",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    const spawnTasks = spawnSubagentDirectMock.mock.calls.map(
+      ([params]) => (params as { task: string }).task,
+    );
+    expect(spawnTasks).toEqual([
+      expect.stringContaining("[continuation:chain-hop:2]"),
+      expect.stringContaining("[continuation:chain-hop:2]"),
+    ]);
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const call = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
+      loadFreshChainState?: () => { currentChainCount: number; accumulatedChainTokens: number };
+    };
+    expect(call.chainState).toMatchObject({
+      currentChainCount: 1,
+      accumulatedChainTokens: 7_000,
+    });
+    expect(call.loadFreshChainState?.()).toMatchObject({
+      currentChainCount: 1,
+      accumulatedChainTokens: 7_000,
+    });
+    expect(childEntry.continuationChainCount).toBe(1);
+    expect(markPendingDelegateFailedMock).toHaveBeenCalledWith(
+      firstRejectedTool,
+      expect.stringContaining("forbidden"),
+      "Delegate rejected",
+    );
+    expect(markPendingDelegateFailedMock).toHaveBeenCalledWith(
+      secondRejectedTool,
+      expect.stringContaining("forbidden"),
+      "Delegate rejected",
+    );
   });
 });

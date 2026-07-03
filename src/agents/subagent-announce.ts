@@ -1455,7 +1455,7 @@ export async function runSubagentAnnounceFlow(params: {
               );
             }
           } else {
-            const doChainSpawn = async () => {
+            const doChainSpawn = async (): Promise<boolean> => {
               try {
                 const rejectedByTargetingPolicy =
                   await rejectCrossSessionTargetingForSubagentDispatch({
@@ -1475,7 +1475,7 @@ export async function runSubagentAnnounceFlow(params: {
                     task: chainTask,
                   });
                 if (rejectedByTargetingPolicy) {
-                  return;
+                  return false;
                 }
                 const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
                 const { spawnSubagentDirect } = await loadSubagentSpawnRuntime();
@@ -1509,16 +1509,18 @@ export async function runSubagentAnnounceFlow(params: {
                   defaultRuntime.log(
                     `[subagent-chain-hop] Spawned chain delegate (${nextChainHop}/${maxChainLength}) from ${params.childSessionKey}: ${chainTask.slice(0, 80)}`,
                   );
-                } else {
-                  const reasonText = spawnResult.error ?? "no reason given";
-                  defaultRuntime.log(
-                    `[subagent-chain-hop] Spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${reasonText}: ${chainTask.slice(0, 80)}`,
-                  );
+                  return true;
                 }
+                const reasonText = spawnResult.error ?? "no reason given";
+                defaultRuntime.log(
+                  `[subagent-chain-hop] Spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${reasonText}: ${chainTask.slice(0, 80)}`,
+                );
+                return false;
               } catch (err) {
                 defaultRuntime.log(
                   `[subagent-chain-hop] Spawn failed from ${params.childSessionKey}: ${String(err)}`,
                 );
+                return false;
               }
             };
 
@@ -1538,12 +1540,7 @@ export async function runSubagentAnnounceFlow(params: {
                 defaultRuntime.log(
                   `[subagent-chain-hop] Child chain-cost persist failed for ${params.childSessionKey}; spawning the delayed bracket delegate immediately (no durable delay) to avoid stale-cost restart recovery`,
                 );
-                bracketDelegateReservedCurrentHop = true;
-                doChainSpawn().catch((err: unknown) => {
-                  defaultRuntime.log(
-                    `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
-                  );
-                });
+                bracketDelegateReservedCurrentHop = await doChainSpawn();
               } else {
                 const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, chainDelayMs));
                 // #1144: route the delayed bracket delegate through the durable
@@ -1599,13 +1596,10 @@ export async function runSubagentAnnounceFlow(params: {
                 }
               }
             } else {
-              // Fire-and-forget — don't block the announce flow
-              bracketDelegateReservedCurrentHop = true;
-              doChainSpawn().catch((err: unknown) => {
-                defaultRuntime.log(
-                  `[subagent-chain-hop] Unhandled bracket delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
-                );
-              });
+              // Same-turn tool drains need the real bracket acceptance before
+              // they can charge this hop; rejected/failed bracket spawns do not
+              // consume the child's chain budget.
+              bracketDelegateReservedCurrentHop = await doChainSpawn();
             }
           }
         }
@@ -1669,7 +1663,7 @@ export async function runSubagentAnnounceFlow(params: {
           const toolWake =
             delegateMode === "silent-wake" || (parentWasSilent && params.wakeOnReturn === true);
           const childDepth = getSubagentDepthFromSessionStore(params.childSessionKey);
-          const doToolChainSpawn = async () => {
+          const doToolChainSpawn = async (): Promise<boolean> => {
             try {
               const rejectedByTargetingPolicy =
                 await rejectCrossSessionTargetingForSubagentDispatch({
@@ -1694,7 +1688,7 @@ export async function runSubagentAnnounceFlow(params: {
                   "Tool delegate rejected: cross-session targeting is disabled by policy.",
                   "Delegate rejected",
                 );
-                return;
+                return false;
               }
               const { spawnSubagentDirect } = await loadSubagentSpawnRuntime();
               const spawnResult = await spawnSubagentDirect(
@@ -1746,36 +1740,33 @@ export async function runSubagentAnnounceFlow(params: {
                 defaultRuntime.log(
                   `[subagent-chain-hop] Tool delegate (${nextToolHop}/${toolMaxChainLength}) from ${params.childSessionKey}: ${toolDelegate.task.slice(0, 80)}`,
                 );
-              } else {
-                const toolReasonText = spawnResult.error ?? "delegation was not accepted.";
-                markPendingDelegateFailed(
-                  toolDelegate,
-                  `Tool delegate spawn ${spawnResult.status}: ${toolReasonText}`,
-                  spawnResult.status === "forbidden"
-                    ? "Delegate rejected"
-                    : "Delegate spawn failed",
-                );
-                defaultRuntime.log(
-                  `[subagent-chain-hop] Tool delegate spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${toolReasonText}`,
-                );
+                return true;
               }
+              const toolReasonText = spawnResult.error ?? "delegation was not accepted.";
+              markPendingDelegateFailed(
+                toolDelegate,
+                `Tool delegate spawn ${spawnResult.status}: ${toolReasonText}`,
+                spawnResult.status === "forbidden" ? "Delegate rejected" : "Delegate spawn failed",
+              );
+              defaultRuntime.log(
+                `[subagent-chain-hop] Tool delegate spawn rejected (${spawnResult.status}) from ${params.childSessionKey} reason=${toolReasonText}`,
+              );
+              return false;
             } catch (err) {
               markPendingDelegateFailed(toolDelegate, `Tool delegate spawn failed: ${String(err)}`);
               defaultRuntime.log(
                 `[subagent-chain-hop] Tool delegate spawn failed from ${params.childSessionKey}: ${String(err)}`,
               );
+              return false;
             }
           };
 
           // consumePendingDelegates only returns delegates after createdAt + delayMs has matured;
           // delayMs here is audit metadata, not another timer to charge against the task.
-          doToolChainSpawn().catch((err: unknown) => {
-            defaultRuntime.log(
-              `[subagent-chain-hop] Unhandled tool delegate spawn error from ${params.childSessionKey}: ${String(err)}`,
-            );
-          });
-
-          toolHopBase = nextToolHop;
+          const toolSpawnAccepted = await doToolChainSpawn();
+          if (toolSpawnAccepted) {
+            toolHopBase = nextToolHop;
+          }
           toolDelegateIdx += 1;
         }
         if (deferInitialChildToolDrain) {

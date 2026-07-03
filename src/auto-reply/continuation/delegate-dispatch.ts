@@ -738,10 +738,11 @@ export async function dispatchStagedPostCompactionDelegates(
     model?: string;
     /**
      * Optional TaskFlow claim handle. Carried through so a caller (startup
-     * recovery) can finalize ONLY the rows whose spawn was accepted, leaving a
-     * failed row `running` and recoverable rather than terminalized (#1158).
+     * recovery) can finalize ONLY the rows whose spawn was accepted, terminalize
+     * deterministic rejections, and leave transient failures recoverable (#1158).
      */
     flowId?: string;
+    expectedRevision?: number;
   }>,
   sessionKey: string,
   spawnCtx: PostCompactionSpawnContext,
@@ -939,7 +940,14 @@ export async function dispatchStagedPostCompactionDelegates(
         `[continuation] Post-compaction delegate spawn ${spawnResult.status}: ${spawnResult.error ?? "delegation was not accepted."}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         { sessionKey, trusted: true },
       );
-      noteTransientFailure(delegate);
+      if (spawnResult.status === "forbidden") {
+        markTerminalRejected(
+          delegate,
+          `Post-compaction delegate spawn forbidden: ${spawnResult.error ?? "delegation was not accepted."}.`,
+        );
+      } else {
+        noteTransientFailure(delegate);
+      }
     } catch (err) {
       postCompactionLog.warn(
         `[continuation:post-compaction-spawn-failed] error=${err instanceof Error ? err.message : String(err)} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
@@ -979,9 +987,10 @@ export async function dispatchStagedPostCompactionDelegates(
  * it dispatches only the crash-orphaned `running` rows (never queued
  * awaiting-seam rows, which are staged for a compaction that has not happened),
  * finalizes ONLY the rows whose spawn was accepted, terminalizes deterministic
- * policy/cap rejections as failed, and leaves transient spawn failures `running`
- * so they stay recoverable on the next restart — no silent drop, no premature
- * terminalize. At-least-once on the crash seam is intentional.
+ * policy/cap/forbidden rejections as failed, and leaves transient spawn
+ * failures `running` so they stay recoverable on the next restart — no silent
+ * drop, no premature terminalize. At-least-once on the crash seam is
+ * intentional.
  *
  * Honors the continuation deny-gate: when continuation is disabled, recovery is
  * a no-op (rows stay recoverable for when it is re-enabled), matching
@@ -1055,10 +1064,11 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     dispatched += result.dispatched;
     failed += result.failed;
     // Finalize ONLY the rows whose spawn was accepted. Deterministic policy/cap
-    // rejections were failed by dispatchStagedPostCompactionDelegates; transient
-    // spawn failures keep `running` status and unchanged updatedAt (at/before
-    // this boot cutoff), so the next restart recovers them again — never a
-    // silent drop or premature finish.
+    // rejections (including spawn-forbidden) were failed by
+    // dispatchStagedPostCompactionDelegates; transient spawn failures keep
+    // `running` status and unchanged updatedAt (at/before this boot cutoff), so
+    // the next restart recovers them again — never a silent drop or premature
+    // finish.
     if (result.dispatchedFlowIds.length > 0) {
       await updateSessionStore(storePath, (store) => {
         const sessionEntry = store[sessionKey] ?? {};

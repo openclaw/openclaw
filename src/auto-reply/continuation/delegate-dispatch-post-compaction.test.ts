@@ -435,11 +435,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
 
     expect(result.failed).toBe(1);
     expect(result.dispatched).toBe(0);
-    expect(mockState.warnLog).toHaveBeenCalledOnce();
-    expect(mockState.warnLog.mock.calls[0][0]).toContain(
-      "[continuation:post-compaction-spawn-rejected]",
+    expect(mockState.warnLog).toHaveBeenCalledWith(
+      expect.stringContaining("[continuation:post-compaction-spawn-rejected]"),
     );
-    expect(mockState.warnLog.mock.calls[0][0]).toContain("status=forbidden");
+    expect(mockState.warnLog).toHaveBeenCalledWith(expect.stringContaining("status=forbidden"));
     expect(mockState.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(mockState.enqueueSystemEvent.mock.calls[0][0]).toContain(
       "Post-compaction delegate spawn forbidden",

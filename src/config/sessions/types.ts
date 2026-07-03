@@ -218,11 +218,11 @@ export type SessionPostCompactionDelegate = {
   model?: string;
   /**
    * Runtime-only TaskFlow claim handle for a delegate just released by
-   * consumeStagedPostCompactionDelegates. Used to finalize exactly the claimed
-   * row after a durable handoff; never persisted (stripped by
-   * normalizePostCompactionDelegate).
+   * consumeStagedPostCompactionDelegates. Used to finalize or fail exactly the
+   * claimed row after a durable handoff; never persisted in session entries.
    */
   flowId?: string;
+  expectedRevision?: number;
 };
 
 export type RestartRecoveryRun = {
