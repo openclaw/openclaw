@@ -1657,6 +1657,7 @@ async function refreshCostUsageCacheForPath(params?: {
     await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
+    cache.pricingFingerprint = pricingFingerprint;
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
     });
