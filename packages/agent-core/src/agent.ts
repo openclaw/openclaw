@@ -59,6 +59,14 @@ const DEFAULT_MODEL = {
   maxTokens: 0,
 } satisfies Model;
 
+function isMidTurnPrecheckSignal(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "MidTurnPrecheckSignal" &&
+    error.message === "Context overflow: prompt too large for the model (mid-turn precheck)."
+  );
+}
+
 type MutableAgentState = Omit<
   AgentState,
   "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"
@@ -526,6 +534,9 @@ export class Agent {
     try {
       await executor(abortController.signal);
     } catch (error) {
+      if (isMidTurnPrecheckSignal(error)) {
+        throw error;
+      }
       await this.handleRunFailure(error, abortController.signal.aborted);
     } finally {
       this.finishRun();
