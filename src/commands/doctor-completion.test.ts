@@ -25,7 +25,13 @@ const noopPrompter: DoctorPrompter = {
   select: async (_params, fallback) => fallback,
   shouldRepair: true,
   shouldForce: false,
-  repairMode: "fix" as const,
+  repairMode: {
+    shouldRepair: true,
+    shouldForce: false,
+    nonInteractive: false,
+    canPrompt: true,
+    updateInProgress: false,
+  },
 };
 
 afterEach(async () => {
