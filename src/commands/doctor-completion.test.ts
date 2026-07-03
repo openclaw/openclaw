@@ -2,10 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
+  doctorShellCompletion,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
@@ -16,6 +18,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   originalEnv.restore();
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -100,5 +103,43 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([]);
+  });
+});
+
+describe("doctorShellCompletion", () => {
+  it("handles read-only shell profile gracefully when installing completion", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-home-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-state-"));
+    tempDirs.push(homeDir, stateDir);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const bashrcPath = path.join(homeDir, ".bashrc");
+    await fs.writeFile(
+      bashrcPath,
+      '# test bashrc\n[ -f "/tmp/nonexistent" ] && source <(openclaw completion bash)\n',
+      "utf-8",
+    );
+    await fs.chmod(bashrcPath, 0o444);
+
+    const cacheDir = path.join(stateDir, "completions");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(path.join(cacheDir, "openclaw.bash"), "# completion cache\n", "utf-8");
+
+    const noteSpy = vi.spyOn(noteModule, "note");
+
+    await expect(
+      doctorShellCompletion({} as never, {
+        confirm: async () => true,
+      }),
+    ).resolves.not.toThrow();
+
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Shell completion not upgraded"),
+      "Shell completion",
+    );
+
+    await fs.chmod(bashrcPath, 0o644);
   });
 });

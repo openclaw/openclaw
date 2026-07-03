@@ -195,8 +195,16 @@ export async function doctorShellCompletion(
       }
     }
 
-    await installCompletion(status.shell, true, cliName);
-    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    try {
+      await installCompletion(status.shell, true, cliName);
+      note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      note(
+        `Shell completion not upgraded: ${message} — run \`${cliName} completion install\` against a writable shell profile.`,
+        "Shell completion",
+      );
+    }
     return;
   }
 
@@ -237,8 +245,16 @@ export async function doctorShellCompletion(
         return;
       }
 
-      await installCompletion(status.shell, true, cliName);
-      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      try {
+        await installCompletion(status.shell, true, cliName);
+        note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        note(
+          `Shell completion not installed: ${message} — run \`${cliName} completion install\` against a writable shell profile.`,
+          "Shell completion",
+        );
+      }
     }
   }
 }
