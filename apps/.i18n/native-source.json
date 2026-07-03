@@ -2843,7 +2843,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1200,
+      "line": 1196,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Open ${license.title}",
       "surface": "android",
@@ -2851,7 +2851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1235,
+      "line": 1231,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Check",
       "surface": "android",
@@ -2859,7 +2859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1268,
+      "line": 1264,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Back",
       "surface": "android",
@@ -2867,7 +2867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1341,
+      "line": 1337,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Sending",
       "surface": "android",
@@ -2875,7 +2875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1350,
+      "line": 1346,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Allow Once",
       "surface": "android",
@@ -2883,7 +2883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1350,
+      "line": 1346,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Allowing",
       "surface": "android",
@@ -2891,7 +2891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1358,
+      "line": 1354,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Always",
       "surface": "android",
@@ -2899,7 +2899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1358,
+      "line": 1354,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Saving",
       "surface": "android",
@@ -2907,7 +2907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1366,
+      "line": 1362,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Deny",
       "surface": "android",
@@ -2915,7 +2915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1366,
+      "line": 1362,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Denying",
       "surface": "android",
@@ -2923,7 +2923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1391,
+      "line": 1387,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Review",
       "surface": "android",
@@ -2931,7 +2931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1416,
+      "line": 1412,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Issue",
       "surface": "android",
@@ -2939,7 +2939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1447,
+      "line": 1443,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Default assistant",
       "surface": "android",
@@ -2947,7 +2947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1449,
+      "line": 1445,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Default",
       "surface": "android",
@@ -2955,7 +2955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1505,
+      "line": 1501,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Needs attention",
       "surface": "android",
@@ -2963,7 +2963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1508,
+      "line": 1504,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Waiting ${minutes}m",
       "surface": "android",
@@ -2971,7 +2971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1508,
+      "line": 1504,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Waiting for review",
       "surface": "android",
@@ -2979,7 +2979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1536,
+      "line": 1532,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "surface": "android",
@@ -2987,7 +2987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1543,
+      "line": 1539,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No limits reported",
       "surface": "android",
@@ -2995,7 +2995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1564,
+      "line": 1560,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Off",
       "surface": "android",
