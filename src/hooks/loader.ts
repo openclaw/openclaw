@@ -274,6 +274,15 @@ export async function loadInternalHooks(
         continue;
       }
 
+      // Same advisory typo check as directory-discovered hooks above.
+      if (!isKnownInternalHookEventKey(handlerConfig.event)) {
+        log.warn(
+          `Legacy hook handler ${safeLogValue(rawModule)} subscribes to event ` +
+            `${safeLogValue(handlerConfig.event)} not emitted by OpenClaw core — ` +
+            `likely a typo; unless a plugin emits it, the hook never fires. ` +
+            `Known events: https://docs.openclaw.ai/automation/hooks`,
+        );
+      }
       registerInternalHook(handlerConfig.event, handler);
       loadedHookRegistrations.push({ event: handlerConfig.event, handler });
       log.debug(

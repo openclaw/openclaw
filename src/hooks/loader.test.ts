@@ -279,6 +279,18 @@ describe("loader", () => {
       expect(event.messages).toEqual(["typo-hook"]);
     });
 
+    it("registers legacy handler events with unknown keys anyway (advisory)", async () => {
+      const handlerPath = await writeHandlerModule("legacy-typo-handler.js");
+
+      const cfg = createEnabledHooksConfig([
+        { event: "command:nwe", module: path.basename(handlerPath) },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(1);
+      expect(getRegisteredEventKeys()).toContain("command:nwe");
+    });
+
     it("should load multiple handlers", async () => {
       // Create test handler modules
       const handler1Path = await writeHandlerModule("handler1.js");
