@@ -1,5 +1,5 @@
 // Implements the embedded backend used by local TUI sessions.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import {
@@ -198,6 +198,11 @@ function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
     return undefined;
   }
   return String(Math.max(0, Math.ceil(timeoutMs / 1000)));
+}
+
+function resolveEmbeddedLocalLane(localBackendKey: string): string {
+  const digest = createHash("sha256").update(localBackendKey).digest("hex").slice(0, 16);
+  return `embedded-local:${digest}`;
 }
 
 function resolveDeltaPayload(text: string, previousText: string | undefined) {
@@ -1146,6 +1151,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
+      const localBackendLane = activeRun
+        ? resolveEmbeddedLocalLane(activeRun.localBackendKey)
+        : undefined;
       const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
       const result = await agentCommandFromIngress(
         {
@@ -1159,6 +1167,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),
           thinking: params.thinking,
           deliver: params.deliver,
+          ...(localBackendLane ? { lane: localBackendLane } : {}),
           channel: INTERNAL_MESSAGE_CHANNEL,
           runContext: {
             messageChannel: INTERNAL_MESSAGE_CHANNEL,

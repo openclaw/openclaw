@@ -1369,6 +1369,11 @@ describe("EmbeddedTuiBackend", () => {
     });
 
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+    const firstIngressOpts = agentCommandFromIngressMock.mock.calls[0]?.[0] as { lane?: string };
+    const secondIngressOpts = agentCommandFromIngressMock.mock.calls[1]?.[0] as { lane?: string };
+    expect(firstIngressOpts.lane).toMatch(/^embedded-local:/u);
+    expect(secondIngressOpts.lane).toMatch(/^embedded-local:/u);
+    expect(secondIngressOpts.lane).not.toBe(firstIngressOpts.lane);
 
     first.resolve({ payloads: [{ text: "main done" }], meta: {} });
     second.resolve({ payloads: [{ text: "work done" }], meta: {} });
