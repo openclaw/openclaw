@@ -216,7 +216,7 @@ async function main() {
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-pro-preview",
         profileId: oauthProfileId,
-        credential: store.profiles[oauthProfileId]!,
+        credential: store.profiles[oauthProfileId],
         store,
       },
     });
@@ -355,7 +355,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

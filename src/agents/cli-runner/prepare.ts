@@ -503,7 +503,6 @@ export async function prepareCliRunContext(
           })
         ) {
           effectiveAuthProfileId = resolvedAuthCredential.profileId;
-          authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
           authCredential = resolvedAuthCredential;
         }
       }
@@ -653,12 +652,12 @@ export async function prepareCliRunContext(
       authCredential,
     });
     preparedExecution = await backendResolved.prepareExecution?.(
-      (forwardAuthCredential
+      forwardAuthCredential
         ? {
             ...prepareExecutionContext,
             authCredential,
           }
-        : prepareExecutionContext) as typeof prepareExecutionContext,
+        : prepareExecutionContext,
     );
   } catch (err) {
     try {
