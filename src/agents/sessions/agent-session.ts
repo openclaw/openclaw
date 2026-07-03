@@ -55,6 +55,7 @@ import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
+import { resolveCompactionTime } from "./compaction-time.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import {
   type ContextUsage,
@@ -2036,10 +2037,16 @@ export class AgentSession {
     // Skip compaction checks if this assistant message is older than the latest
     // compaction boundary. This prevents a stale pre-compaction usage/error
     // from retriggering compaction on the first prompt after compaction.
+    //
+    // When the compaction entry timestamp is unparseable the boundary is
+    // treated as unreliable and the guard is skipped so compaction is checked
+    // normally.  This is a deliberate fallback: a missing guard may trigger
+    // one extra compaction cycle, but a stuck guard would silently suppress
+    // compaction forever.
     const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+    const compactionTime = resolveCompactionTime(compactionEntry);
     const assistantIsFromBeforeCompaction =
-      compactionEntry !== null &&
-      assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+      compactionTime !== undefined && assistantMessage.timestamp <= compactionTime;
     if (assistantIsFromBeforeCompaction) {
       return false;
     }
@@ -2083,10 +2090,11 @@ export class AgentSession {
       // have stale usage reflecting the old (larger) context and would falsely
       // trigger compaction right after one just finished.
       const usageMsg = messages[estimate.lastUsageIndex];
+      const usageCompactionTime = resolveCompactionTime(compactionEntry);
       if (
-        compactionEntry &&
+        usageCompactionTime !== undefined &&
         usageMsg.role === "assistant" &&
-        usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
+        usageMsg.timestamp <= usageCompactionTime
       ) {
         return false;
       }
