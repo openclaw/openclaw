@@ -75,6 +75,33 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
     }
 
+    /// Bridges `window.confirm()` calls in the embedded Control UI to a native
+    /// `NSAlert` confirmation dialog; without this handler, delete operations
+    /// silently fail because WebKit cannot show the confirmation prompt.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
+    {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        if let window = self.window {
+            alert.beginSheetModal(for: window) { response in
+                completionHandler(response == .alertFirstButtonReturn)
+            }
+            return
+        }
+
+        // Fallback to modal dialog if no window is available
+        let response = alert.runModal()
+        completionHandler(response == .alertFirstButtonReturn)
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
