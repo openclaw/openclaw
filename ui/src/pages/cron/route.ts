@@ -3,6 +3,7 @@ import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { currentConfigObject } from "../../lib/config/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
@@ -64,8 +65,7 @@ function renderCronPage(
   module: CronModule,
   navigate: RouteRenderContext["navigate"],
 ) {
-  const configValue =
-    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const configValue = currentConfigObject(state);
   const agentSuggestions = sortLocaleStrings(
     new Set([
       ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),

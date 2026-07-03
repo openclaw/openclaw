@@ -58,6 +58,7 @@ export type RuntimeConfigCapability = {
   refresh: (options?: LoadConfigOptions) => Promise<void>;
   refreshSchema: () => Promise<void>;
   patchForm: (path: Array<string | number>, value: unknown) => void;
+  removeFormValue: (path: Array<string | number>) => void;
   setRaw: (value: string) => void;
   resetDraft: () => void;
   stagePreset: (patch: Record<string, unknown>) => void;
@@ -65,12 +66,32 @@ export type RuntimeConfigCapability = {
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
   setMcpServerEnabled: (name: string, enabled: boolean) => void;
+  ensureAgentEntry: (agentId: string) => number;
+  stageDefaultAgent: (agentId: string) => boolean;
+  patch: (options: ConfigPatchOptions) => Promise<boolean>;
+  lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: ConfigState) => void) => () => void;
   dispose: () => void;
 };
 
 export type LoadConfigOptions = {
   discardPendingChanges?: boolean;
+};
+
+export type ConfigPatchOptions = {
+  raw: string | Record<string, unknown>;
+  note: string;
+};
+
+type ConfigGatewayClient = {
+  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+};
+
+type ConfigGatewayState = Pick<
+  ConfigState,
+  "connected" | "applySessionKey" | "configSnapshot" | "lastError" | "chatError"
+> & {
+  client: ConfigGatewayClient | null;
 };
 
 function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>): ConfigState {
@@ -192,6 +213,12 @@ function resolveEditableSnapshotConfig(
     asConfigRecord(snapshot?.resolved) ??
     asConfigRecord(snapshot?.config)
   );
+}
+
+export function currentConfigObject(
+  state: Pick<ConfigState, "configForm" | "configSnapshot">,
+): Record<string, unknown> | null {
+  return state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
 }
 
 export function applyConfigSnapshot(
@@ -461,6 +488,46 @@ export async function applyConfig(state: ConfigState): Promise<boolean> {
   return submitConfigChange(state, "config.apply", "configApplying", {
     sessionKey: state.applySessionKey,
   });
+}
+
+export async function patchConfig(
+  state: ConfigGatewayState,
+  options: ConfigPatchOptions,
+): Promise<boolean> {
+  const client = state.client;
+  if (!client || !state.connected) {
+    return false;
+  }
+  const baseHash = state.configSnapshot?.hash;
+  if (!baseHash) {
+    state.lastError = "Config hash missing; refresh and retry.";
+    return false;
+  }
+  state.lastError = null;
+  state.chatError = null;
+  try {
+    await client.request("config.patch", {
+      baseHash,
+      raw: typeof options.raw === "string" ? options.raw : JSON.stringify(options.raw),
+      sessionKey: state.applySessionKey,
+      note: options.note,
+    });
+    return true;
+  } catch (err) {
+    state.lastError = String(err);
+    return false;
+  }
+}
+
+export async function lookupConfigSchemaPath(
+  state: { client: ConfigGatewayClient | null; connected: boolean },
+  path: string,
+): Promise<unknown> {
+  const client = state.client;
+  if (!client || !state.connected) {
+    return null;
+  }
+  return client.request("config.schema.lookup", { path });
 }
 
 function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
@@ -763,6 +830,7 @@ export function createRuntimeConfigCapability(
     refresh: (options) => run(() => loadConfig(state, options)),
     refreshSchema: () => run(() => loadConfigSchema(state)),
     patchForm: (path, value) => mutate(() => updateConfigFormValue(state, path, value)),
+    removeFormValue: (path) => mutate(() => removeConfigFormValue(state, path)),
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
     resetDraft: () => mutate(() => resetConfigPendingChanges(state)),
     stagePreset: (patch) => mutate(() => stageConfigPreset(state, patch)),
@@ -771,6 +839,18 @@ export function createRuntimeConfigCapability(
     openFile: () => run(() => openConfigFile(state)),
     setMcpServerEnabled: (name, enabled) =>
       mutate(() => updateMcpServerEnabled(state, name, enabled)),
+    ensureAgentEntry: (agentId) => {
+      const index = ensureAgentConfigEntry(state, agentId);
+      publish();
+      return index;
+    },
+    stageDefaultAgent: (agentId) => {
+      const changed = stageDefaultAgentConfigEntry(state, agentId);
+      publish();
+      return changed;
+    },
+    patch: (options) => run(() => patchConfig(state, options)),
+    lookupSchemaPath: (path) => run(() => lookupConfigSchemaPath(state, path)),
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

@@ -5,6 +5,7 @@ import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import {
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
+  currentConfigObject,
   loadConfig,
   removeConfigFormValue,
   updateConfigFormValue,
@@ -55,8 +56,7 @@ export const page = definePage({
     import("./view.ts").then((module) => ({
       header: true,
       render: ({ state }: AgentsRenderContext) => {
-        const currentConfig = () =>
-          state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+        const currentConfig = () => currentConfigObject(state);
         const selectedAgentId = () =>
           state.agentsSelectedId ??
           state.agentsList?.defaultId ??

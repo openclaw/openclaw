@@ -1,4 +1,5 @@
 import type { ConfigSnapshot } from "../../api/types.ts";
+import { lookupConfigSchemaPath, patchConfig } from "../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 // Control UI controller manages dreaming gateway state.
@@ -1064,33 +1065,21 @@ async function writeDreamingPatch(
   state: DreamingState,
   patch: Record<string, unknown>,
 ): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return false;
-  }
   if (state.dreamingModeSaving) {
-    return false;
-  }
-  const baseHash = state.configSnapshot?.hash;
-  if (!baseHash) {
-    state.dreamingStatusError = "Config hash missing; refresh and retry.";
     return false;
   }
 
   state.dreamingModeSaving = true;
   state.dreamingStatusError = null;
   try {
-    await state.client.request("config.patch", {
-      baseHash,
-      raw: JSON.stringify(patch),
-      sessionKey: state.applySessionKey,
+    const updated = await patchConfig(state, {
+      raw: patch,
       note: "Dreaming settings updated from the Dreaming tab.",
     });
-    return true;
-  } catch (err) {
-    const message = String(err);
-    state.dreamingStatusError = message;
-    state.lastError = message;
-    return false;
+    if (!updated) {
+      state.dreamingStatusError = state.lastError ?? "Could not update dreaming settings.";
+    }
+    return updated;
   } finally {
     state.dreamingModeSaving = false;
   }
@@ -1122,9 +1111,7 @@ async function ensureDreamingPathSupported(
     return true;
   }
   try {
-    const lookup = await state.client.request("config.schema.lookup", {
-      path: `plugins.entries.${pluginId}.config`,
-    });
+    const lookup = await lookupConfigSchemaPath(state, `plugins.entries.${pluginId}.config`);
     if (lookupIncludesDreamingProperty(lookup)) {
       return true;
     }

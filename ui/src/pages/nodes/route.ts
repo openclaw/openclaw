@@ -3,6 +3,7 @@ import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import {
+  currentConfigObject,
   loadConfig,
   removeConfigFormValue,
   saveConfig,
@@ -57,8 +58,7 @@ export const page = definePage({
           devicesLoading: state.devicesLoading,
           devicesError: state.devicesError,
           devicesList: state.devicesList,
-          configForm:
-            state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null),
+          configForm: currentConfigObject(state),
           configLoading: state.configLoading,
           configSaving: state.configSaving,
           configDirty: state.configFormDirty,

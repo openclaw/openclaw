@@ -2,7 +2,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { t } from "../../i18n/index.ts";
-import { loadConfig, openConfigFile } from "../../lib/config/index.ts";
+import { currentConfigObject, loadConfig, openConfigFile } from "../../lib/config/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -105,8 +105,7 @@ function openWikiPage(state: AppViewState, lookup: string) {
 
 function renderDreamsPage(state: AppViewState) {
   const requestUpdate = (state as AppViewState & { requestUpdate?: () => void }).requestUpdate;
-  const configValue =
-    state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const configValue = currentConfigObject(state);
   const dreamingOn =
     state.dreamingStatus?.enabled ?? resolveConfiguredDreaming(configValue).enabled;
   const selectedAgentId =
