@@ -2849,6 +2849,80 @@ export async function runCodexAppServerAttempt(
     turnWatches.clearAllTimers();
     resolveCompletion?.();
   });
+  let abortListener: (() => void) | undefined;
+  let turnAttemptCleanupFinished = false;
+  const cleanupTurnAttempt = async () => {
+    if (turnAttemptCleanupFinished) {
+      return;
+    }
+    turnAttemptCleanupFinished = true;
+    if (params.isFinalFallbackAttempt !== false) {
+      await maybeEmitFastModeAutoResetBestEffort();
+    }
+    codexModelCallDiagnostics.emitError(
+      "codex app-server run completed without model-call terminal event",
+    );
+    emitLifecycleTerminal({
+      phase: "error",
+      error: "codex app-server run completed without lifecycle terminal event",
+    });
+    if (trajectoryRecorder && !trajectoryEndRecorded) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status:
+          timedOut || (runAbortController.signal.aborted && !clientClosedAbort)
+            ? "interrupted"
+            : "cleanup",
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        timedOut,
+        aborted: runAbortController.signal.aborted && !clientClosedAbort,
+      });
+    }
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
+    if (!timedOut && !runAbortController.signal.aborted) {
+      await steeringQueueRef.current?.flushPending();
+    }
+    if (!timedOut) {
+      await unsubscribeCodexThreadBestEffort(client, {
+        threadId: thread.threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      });
+    }
+    userInputBridgeRef.current?.cancelPending();
+    turnWatches.clearAllTimers();
+    notificationCleanup();
+    requestCleanup();
+    closeCleanup?.();
+    await releaseSharedClientLeaseAndRetireOneShotClient();
+    if (nativeHookRelay) {
+      if (shouldDelayNativeHookRelayUnregister) {
+        // Codex hook subprocesses can outlive a completed app-server turn by a
+        // few seconds. Keep the relay available briefly so late
+        // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
+        scheduleCodexNativeHookRelayUnregister({
+          relay: nativeHookRelay,
+          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+        });
+      } else {
+        nativeHookRelay.unregister();
+      }
+    }
+    await releaseSandboxExecEnvironment();
+    if (abortListener) {
+      runAbortController.signal.removeEventListener("abort", abortListener);
+    }
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    steeringQueueRef.current?.cancel();
+    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+  };
   emitLifecycleStart();
   const activeProjector = projectorRef.current;
   if (!activeProjector) {
@@ -2892,46 +2966,46 @@ export async function runCodexAppServerAttempt(
     cancel: () => runAbortController.abort("cancelled"),
     abort: () => runAbortController.abort("aborted"),
   };
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
-  void mirrorPromptAtTurnStartBestEffort({
-    params,
-    agentId: sessionAgentId,
-    notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
-    cwd: effectiveCwd,
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-  });
-
-  const abortListener = () => {
-    const shouldRetireClient = timedOut;
-    if (shouldRetireClient) {
-      void (async () => {
-        // Timed-out native turns cannot be safely resumed on the same thread.
-        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
-        await retireCodexAppServerClientAfterTimedOutTurn(client, {
-          threadId: thread.threadId,
-          turnId: activeTurnId,
-          reason: String(runAbortController.signal.reason ?? "timeout"),
-        });
-      })().finally(() => {
-        resolveCompletion?.();
-      });
-      return;
-    }
-    interruptCodexTurnBestEffort(client, {
+  try {
+    setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+    void mirrorPromptAtTurnStartBestEffort({
+      params,
+      agentId: sessionAgentId,
+      notifyUserMessagePersisted,
+      sessionKey: sandboxSessionKey,
+      cwd: effectiveCwd,
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
-    resolveCompletion?.();
-  };
-  runAbortController.signal.addEventListener("abort", abortListener, { once: true });
-  if (runAbortController.signal.aborted) {
-    abortListener();
-  }
 
-  try {
+    abortListener = () => {
+      const shouldRetireClient = timedOut;
+      if (shouldRetireClient) {
+        void (async () => {
+          // Timed-out native turns cannot be safely resumed on the same thread.
+          await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+          await retireCodexAppServerClientAfterTimedOutTurn(client, {
+            threadId: thread.threadId,
+            turnId: activeTurnId,
+            reason: String(runAbortController.signal.reason ?? "timeout"),
+          });
+        })().finally(() => {
+          resolveCompletion?.();
+        });
+        return;
+      }
+      interruptCodexTurnBestEffort(client, {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+      });
+      resolveCompletion?.();
+    };
+    runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+    if (runAbortController.signal.aborted) {
+      abortListener();
+    }
+
     await completion;
     // Timeout completion can win while a received notification is still being
     // projected, for example while persisting raw image-generation media. Wait
@@ -3219,70 +3293,7 @@ export async function runCodexAppServerAttempt(
       systemPromptReport,
     };
   } finally {
-    if (params.isFinalFallbackAttempt !== false) {
-      await maybeEmitFastModeAutoResetBestEffort();
-    }
-    codexModelCallDiagnostics.emitError(
-      "codex app-server run completed without model-call terminal event",
-    );
-    emitLifecycleTerminal({
-      phase: "error",
-      error: "codex app-server run completed without lifecycle terminal event",
-    });
-    if (trajectoryRecorder && !trajectoryEndRecorded) {
-      trajectoryRecorder.recordEvent("session.ended", {
-        status:
-          timedOut || (runAbortController.signal.aborted && !clientClosedAbort)
-            ? "interrupted"
-            : "cleanup",
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        timedOut,
-        aborted: runAbortController.signal.aborted && !clientClosedAbort,
-      });
-    }
-    await runAgentCleanupStep({
-      runId: params.runId,
-      sessionId: params.sessionId,
-      step: "codex-trajectory-flush",
-      log: embeddedAgentLog,
-      cleanup: async () => {
-        await trajectoryRecorder?.flush();
-      },
-    });
-    if (!timedOut && !runAbortController.signal.aborted) {
-      await steeringQueueRef.current?.flushPending();
-    }
-    if (!timedOut) {
-      await unsubscribeCodexThreadBestEffort(client, {
-        threadId: thread.threadId,
-        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-      });
-    }
-    userInputBridgeRef.current?.cancelPending();
-    turnWatches.clearAllTimers();
-    notificationCleanup();
-    requestCleanup();
-    closeCleanup?.();
-    await releaseSharedClientLeaseAndRetireOneShotClient();
-    if (nativeHookRelay) {
-      if (shouldDelayNativeHookRelayUnregister) {
-        // Codex hook subprocesses can outlive a completed app-server turn by a
-        // few seconds. Keep the relay available briefly so late
-        // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
-        scheduleCodexNativeHookRelayUnregister({
-          relay: nativeHookRelay,
-          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-        });
-      } else {
-        nativeHookRelay.unregister();
-      }
-    }
-    await releaseSandboxExecEnvironment();
-    runAbortController.signal.removeEventListener("abort", abortListener);
-    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    steeringQueueRef.current?.cancel();
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    await cleanupTurnAttempt();
   }
 }
 
