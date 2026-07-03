@@ -23,6 +23,11 @@ function createCompletionProgram(): Command {
 
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
+
+  // Add aliases to test alias-aware completion generation
+  gateway.aliases(["gw"]);
+  const gatewayStatus = gateway.commands.find((c) => c.name() === "status")!;
+  gatewayStatus.aliases(["st"]);
   program
     .command("agent")
     .description("Agent commands")
@@ -39,11 +44,17 @@ describe("completion-cli", () => {
     const script = getCompletionScript("zsh", createCompletionProgram());
 
     expect(script).toContain("_openclaw_gateway()");
-    expect(script).toContain("(status) _openclaw_gateway_status ;;");
+    expect(script).toContain("(status|st) _openclaw_gateway_status ;;");
     expect(script).toContain("(restart) _openclaw_gateway_restart ;;");
     expect(script).toContain("--force[Force the action]");
     expect(script).toContain("\\`models status --json\\`");
     expect(script).toContain("\\$OPENCLAW_STATE_DIR");
+
+    // Alias entries appear in subcommand list
+    expect(script).toContain("'gw[Gateway commands]'");
+    expect(script).toContain("'st[Show gateway status]'");
+    // Dispatch patterns include alias alternatives
+    expect(script).toContain("(gateway|gw)");
   });
 
   it("escapes zsh option descriptions for double-quoted arguments specs", () => {
@@ -118,8 +129,11 @@ describe("completion-cli", () => {
     expect(script).toContain("if ($commandPath -eq 'gateway') {");
     expect(script).toContain("if ($commandPath -eq 'gateway status') {");
     expect(script).not.toContain("if ($commandPath -eq 'openclaw gateway') {");
-    expect(script).toContain("$completions = @('status','restart','--force','--token')");
+    expect(script).toContain("$completions = @('status','st','restart','--force','--token')");
     expect(script).not.toContain("'-t,'");
+    // Alias path entries
+    expect(script).toContain("if ($commandPath -eq 'gw') {");
+    expect(script).toContain("if ($commandPath -eq 'gw status') {");
   });
 
   it("generates valid PowerShell root arrays when commands or options are empty", () => {
@@ -150,6 +164,14 @@ describe("completion-cli", () => {
     );
     expect(script).toContain("__openclaw_command_path_matches gateway -- -t --token");
     expect(script).toContain("if contains -- $flag $value_options");
+
+    // Alias entries appear in completions
+    expect(script).toContain(
+      'complete -c openclaw -n "__fish_use_subcommand" -a "gw" -d \'Gateway commands\'',
+    );
+    expect(script).toContain(
+      'complete -c openclaw -n "__openclaw_command_path_matches gateway -- -t --token" -a "st" -d \'Show gateway status\'',
+    );
   });
 
   it("scopes fish value-taking option skips to the active command path", () => {
@@ -168,5 +190,15 @@ describe("completion-cli", () => {
 
     expect(script).toContain("--token");
     expect(script).not.toContain("-t,");
+
+    // Alias appears in root opts and case label
+    expect(script).toContain("gateway|gw)");
+  });
+
+  it("generates Bash completions with alias names in opts list", () => {
+    const script = getCompletionScript("bash", createCompletionProgram());
+
+    expect(script).toContain("gw");
+    expect(script).toContain("st");
   });
 });
