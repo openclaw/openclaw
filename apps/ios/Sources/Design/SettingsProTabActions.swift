@@ -484,6 +484,7 @@ extension SettingsProTab {
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
+        case .licenses: "Licenses"
         case .about: "About"
         }
     }
