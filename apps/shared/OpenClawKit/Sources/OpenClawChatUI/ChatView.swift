@@ -414,7 +414,7 @@ public struct OpenClawChatView: View {
             self.moveScrollPosition(to: self.scrollerBottomID)
         } label: {
             Label("Jump to latest", systemImage: "arrow.down")
-                .font(.callout.weight(.semibold))
+                .font(OpenClawChatTypography.body(size: 16, weight: .semibold, relativeTo: .callout))
                 .padding(.horizontal, 13)
                 .padding(.vertical, 8)
         }
