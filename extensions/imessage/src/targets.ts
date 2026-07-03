@@ -23,6 +23,11 @@ export type IMessageAllowTarget = ParsedChatTarget | { kind: "handle"; handle: s
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];
 const CHAT_IDENTIFIER_PREFIXES = ["chat_identifier:", "chatidentifier:", "chatident:"];
+// Bare 32-char hex strings are iMessage group chat identifiers (as returned by
+// `imsg` for group chats), not phone numbers. Without an explicit `chat_identifier:`
+// prefix these were falling through to E.164 normalization, which strips the
+// non-numeric characters and silently produces a bogus phone number (#89235).
+const HEX_CHAT_IDENTIFIER_RE = /^[0-9a-f]{32}$/i;
 const SERVICE_PREFIXES: Array<{ prefix: string; service: IMessageService }> = [
   { prefix: "imessage:", service: "imessage" },
   { prefix: "sms:", service: "sms" },
@@ -68,6 +73,9 @@ export function normalizeIMessageHandle(raw: string): string {
   if (trimmed.includes("@")) {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
+  if (HEX_CHAT_IDENTIFIER_RE.test(trimmed)) {
+    return `chat_identifier:${lowered}`;
+  }
   const normalized = normalizeE164(trimmed);
   if (normalized) {
     return normalized;
@@ -109,6 +117,10 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
     return chatTarget;
   }
 
+  if (HEX_CHAT_IDENTIFIER_RE.test(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed.toLowerCase() };
+  }
+
   return { kind: "handle", to: trimmed, service: "auto" };
 }
 
@@ -124,7 +136,8 @@ export function looksLikeIMessageExplicitTargetId(raw: string): boolean {
   return (
     CHAT_ID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
     CHAT_GUID_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
-    CHAT_IDENTIFIER_PREFIXES.some((prefix) => lower.startsWith(prefix))
+    CHAT_IDENTIFIER_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
+    HEX_CHAT_IDENTIFIER_RE.test(trimmed)
   );
 }
 

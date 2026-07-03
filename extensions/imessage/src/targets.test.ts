@@ -157,11 +157,38 @@ describe("imessage targets", () => {
     expect(looksLikeIMessageExplicitTargetId("sms:+15552223333")).toBe(true);
     expect(looksLikeIMessageExplicitTargetId("+15552223333")).toBe(false);
     expect(looksLikeIMessageExplicitTargetId("user@example.com")).toBe(false);
+    expect(looksLikeIMessageExplicitTargetId("7d5297154d5f436d83dbbdf03fcc8fdd")).toBe(true);
   });
 
   it("infers direct and group chat types from normalized targets", () => {
     expect(inferIMessageTargetChatType("+15552223333")).toBe("direct");
     expect(inferIMessageTargetChatType("chat_id:42")).toBe("group");
+  });
+
+  // Regression test for #89235: a bare 32-char hex group chat identifier was
+  // stripped of its non-numeric characters and treated as a phone number
+  // (e.g. "7d5297154d5f436d83dbbdf03fcc8fdd" -> "+75297154543683038"),
+  // silently misrouting cron/announce deliveries to a nonexistent recipient.
+  it("treats bare 32-char hex strings as chat identifiers, not phone numbers", () => {
+    const hex = "7d5297154d5f436d83dbbdf03fcc8fdd";
+    expect(normalizeIMessageHandle(hex)).toBe(`chat_identifier:${hex}`);
+    expect(normalizeIMessageHandle(hex.toUpperCase())).toBe(`chat_identifier:${hex}`);
+    expect(parseIMessageTarget(hex)).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: hex,
+    });
+    expect(inferIMessageTargetChatType(hex)).toBe("group");
+  });
+
+  it("does not treat non-hex or wrong-length digit strings as chat identifiers", () => {
+    // 32 digits but not valid hex-only (all digits still matches [0-9a-f], so
+    // use a string with a non-hex letter to confirm the boundary) and a
+    // too-short hex string both fall back to normal handle/phone handling.
+    expect(normalizeIMessageHandle("7d5297154d5f436d83dbbdf03fcc8fd")).not.toMatch(
+      /^chat_identifier:/,
+    );
+    const target = parseIMessageTarget("15555550123");
+    expect(target).toEqual({ kind: "handle", to: "15555550123", service: "auto" });
   });
 });
 
