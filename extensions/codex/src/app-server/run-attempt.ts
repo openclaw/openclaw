@@ -123,6 +123,7 @@ import {
 } from "./auth-bridge.js";
 import {
   CodexAppServerRpcError,
+  compareCodexAppServerVersions,
   isCodexAppServerApprovalRequest,
   type CodexAppServerClient,
 } from "./client.js";
@@ -280,6 +281,7 @@ import {
   refreshCodexUsageLimitPromptError,
 } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+import { MIN_CODEX_ADDITIONAL_CONTEXT_APP_SERVER_VERSION } from "./version.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
@@ -301,6 +303,49 @@ function shouldKeepCodexSharedAbortOpen(params: {
 }
 
 const ensuredCodexWorkspaceDirs = new Set<string>();
+
+function contextEngineRequiresReferenceContext(
+  contextEngine: EmbeddedRunAttemptParams["contextEngine"] | undefined,
+): boolean {
+  return (
+    contextEngine?.info.hostRequirements?.["agent-run"]?.requiredCapabilities.includes(
+      "reference-context",
+    ) ?? false
+  );
+}
+
+function hasCodexAdditionalContext(additionalContext: CodexAdditionalContextMap | undefined) {
+  return Boolean(additionalContext && Object.keys(additionalContext).length > 0);
+}
+
+function assertCodexReferenceContextSupportedForTurn(params: {
+  client: CodexAppServerClient;
+  contextEngine: EmbeddedRunAttemptParams["contextEngine"] | undefined;
+  additionalContext: CodexAdditionalContextMap | undefined;
+}): void {
+  if (
+    !contextEngineRequiresReferenceContext(params.contextEngine) &&
+    !hasCodexAdditionalContext(params.additionalContext)
+  ) {
+    return;
+  }
+
+  const serverVersion = params.client.getServerVersion();
+  if (
+    serverVersion &&
+    compareCodexAppServerVersions(
+      serverVersion,
+      MIN_CODEX_ADDITIONAL_CONTEXT_APP_SERVER_VERSION,
+    ) >= 0
+  ) {
+    return;
+  }
+
+  throw new Error(
+    `Codex app-server ${MIN_CODEX_ADDITIONAL_CONTEXT_APP_SERVER_VERSION} or newer is required for context-engine reference-context additionalContext` +
+      (serverVersion ? `, but detected ${serverVersion}.` : "."),
+  );
+}
 
 function withCodexAppServerFastModeServiceTier(
   appServer: CodexAppServerRuntimeOptions,
@@ -2744,6 +2789,11 @@ export async function runCodexAppServerAttempt(
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
     const activeTurnRoute = await ensureCurrentThreadRoute();
+    assertCodexReferenceContextSupportedForTurn({
+      client,
+      contextEngine: activeContextEngine,
+      additionalContext: codexAdditionalContext,
+    });
     const turnAppServer = withCodexAppServerFastModeServiceTier(pluginAppServer, params);
     pluginAppServer = turnAppServer;
     const turnStartParams = buildTurnStartParams(params, {

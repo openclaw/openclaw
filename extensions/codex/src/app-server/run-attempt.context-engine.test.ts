@@ -198,22 +198,23 @@ function turnStartResult(turnId = "turn-1", status = "inProgress") {
 }
 
 function getMockServerVersion() {
-  return "0.132.0";
+  return "0.142.4";
 }
 
-function getMockRuntimeIdentity() {
-  return { serverVersion: getMockServerVersion() };
+function getMockRuntimeIdentity(serverVersion = getMockServerVersion()) {
+  return { serverVersion };
 }
 
-function mockClientRuntimeMethods() {
+function mockClientRuntimeMethods(serverVersion = getMockServerVersion()) {
   return {
-    getRuntimeIdentity: getMockRuntimeIdentity,
-    getServerVersion: getMockServerVersion,
+    getRuntimeIdentity: () => getMockRuntimeIdentity(serverVersion),
+    getServerVersion: () => serverVersion,
   };
 }
 
 function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
+  options: { serverVersion?: string } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
   const notificationHandlers = new Set<
@@ -242,7 +243,7 @@ function createStartedThreadHarness(
   setCodexAppServerClientFactoryForTest(
     async () =>
       ({
-        ...mockClientRuntimeMethods(),
+        ...mockClientRuntimeMethods(options.serverVersion),
         request,
         addNotificationHandler: (
           handler: (notification: CodexServerNotification) => Promise<void> | void,
@@ -512,6 +513,46 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     await harness.completeTurn();
     await run;
+  });
+
+  it("fails closed before turn/start when referenceContext requires unsupported additionalContext", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const contextEngine = createContextEngine({
+      info: {
+        id: "lossless-claw",
+        name: "Lossless Claw",
+        ownsCompaction: true,
+        hostRequirements: {
+          "agent-run": {
+            requiredCapabilities: ["assemble-before-prompt", "reference-context"],
+          },
+        },
+      },
+      assemble: vi.fn(async ({ messages }) => ({
+        messages,
+        estimatedTokens: 42,
+        referenceContext: [
+          {
+            id: "summary-1",
+            kind: "summary",
+            trust: "untrusted",
+            content: "Historical reference summary from lossless-claw.",
+          },
+        ],
+      })),
+    });
+    const harness = createStartedThreadHarness(async () => undefined, {
+      serverVersion: "0.142.3",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex app-server 0.142.4 or newer is required for context-engine reference-context additionalContext, but detected 0.142.3.",
+    );
+    expect(harness.requests.map((entry) => entry.method)).toContain("thread/start");
+    expect(harness.requests.map((entry) => entry.method)).not.toContain("turn/start");
   });
 
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
