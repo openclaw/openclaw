@@ -63,7 +63,6 @@ export const uk: TranslationMap = {
     docs: "Документація",
     theme: "Тема",
     colorMode: "Колірний режим",
-    colorModeOption: "Колірний режим: {mode}",
     resources: "Ресурси",
     search: "Пошук",
     save: "Зберегти",
@@ -1334,6 +1333,8 @@ export const uk: TranslationMap = {
     settings: "Налаштування чату",
     thinkingToggle: "Перемкнути показ мислення/роботи асистента",
     toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
+    commentaryToggle: "Зберігати коментар після остаточної відповіді",
+    commentaryLabel: "Коментар",
     autoScrollMode: "Режим автопрокручування",
     autoScrollAlways: "Завжди",
     autoScrollNearBottom: "Біля низу",
@@ -1352,6 +1353,9 @@ export const uk: TranslationMap = {
     updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
+    sidebar: {
+      allSessions: "All sessions",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1378,6 +1382,11 @@ export const uk: TranslationMap = {
       retry: "Повторити",
       retrySend: "Повторити надсилання",
       retryQueuedMessage: "Повторити повідомлення в черзі",
+    },
+    pairingQrExpired: {
+      title: "QR-код для пар'ювання застарів",
+      reason: "Виконайте /pair qr знову, щоб згенерувати новий код налаштування.",
+      badge: "Застарів",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1445,6 +1454,7 @@ export const uk: TranslationMap = {
     jaJP: "日本語 (японська)",
     ko: "한국어 (корейська)",
     fr: "Français (французька)",
+    hi: "हिन्दी (гінді)",
     ar: "العربية (арабська)",
     it: "Italiano (італійська)",
     tr: "Türkçe (турецька)",
@@ -1455,6 +1465,7 @@ export const uk: TranslationMap = {
     vi: "Tiếng Việt (вʼєтнамська)",
     nl: "Nederlands (нідерландська)",
     fa: "فارسی (перська)",
+    ru: "Русский (російська)",
   },
   cron: {
     quickCreate: {

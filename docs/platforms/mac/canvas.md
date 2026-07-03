@@ -114,7 +114,18 @@ Example (in JS):
 window.location.href = "openclaw://agent?message=Review%20this%20design";
 ```
 
-The app prompts for confirmation unless a valid key is provided.
+Supported query parameters:
+
+- `message`: prefilled agent prompt.
+- `sessionKey`: stable session identifier.
+- `thinking`: optional thinking profile.
+- `deliver`, `to`, or `channel`: delivery target.
+- `timeoutSeconds`: optional run timeout.
+- `key`: app-generated safety token for trusted local callers.
+
+The app prompts for confirmation unless a valid key is provided. Unkeyed links
+show the message and URL before approval, and ignore delivery routing fields;
+keyed links use the normal Gateway run path.
 
 ## Security notes
 

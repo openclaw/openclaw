@@ -295,6 +295,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunCommit`
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
+- `wizard.securityAcknowledgedAt`
 
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 

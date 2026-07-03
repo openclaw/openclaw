@@ -19,6 +19,7 @@ import {
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  filterLiveShortTermRecallEntries,
   isShortTermMemoryPath,
   loadShortTermPromotionDreamingStats,
   recordGroundedShortTermCandidates,
@@ -109,6 +110,7 @@ describe("short-term promotion", () => {
         claimHash?: unknown;
         firstRecalledAt?: unknown;
         lastRecalledAt?: unknown;
+        dailyCount?: unknown;
         recallCount?: unknown;
         snippet?: unknown;
         totalScore?: unknown;
@@ -168,6 +170,42 @@ describe("short-term promotion", () => {
       });
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
       expect(Object.keys(store.entries).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("deduplicates source-file checks within a recall batch", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Deduplicated source check note.",
+      ]);
+      const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
+      const entry = {
+        key: "duplicate-source",
+        path: relativePath,
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: "Deduplicated source check note.",
+        recallCount: 1,
+        dailyCount: 1,
+        groundedCount: 0,
+        totalScore: 0.9,
+        maxScore: 0.9,
+        firstRecalledAt: "2026-04-03T00:00:00.000Z",
+        lastRecalledAt: "2026-04-03T00:00:00.000Z",
+        queryHashes: ["query"],
+        recallDays: ["2026-04-03"],
+        conceptTags: [],
+      };
+      const statSpy = vi.spyOn(fs, "stat");
+
+      const live = await filterLiveShortTermRecallEntries({
+        workspaceDir,
+        entries: [entry, { ...entry, key: "duplicate-source-2" }],
+      });
+
+      expect(live).toHaveLength(2);
+      expect(statSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -421,6 +459,71 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("ignores raw session and transcript snippets when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "session recap",
+        results: [
+          {
+            path: "memory/2026-06-18.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.92,
+            snippet:
+              "Session: 2026-06-18 10:37:05 EDT; Session Key: agent:cody:discord:channel:1502199757592989836; Session ID: 6d52b6a2-a2e1-4839-a69a-a532b9090a6d; Source: discord",
+          },
+          {
+            path: "memory/2026-06-18.md",
+            source: "memory",
+            startLine: 2,
+            endLine: 2,
+            score: 0.91,
+            snippet: "Conversation Summary: assistant: Traced all three. No changes made.",
+          },
+          {
+            path: "memory/2026-06-18.md",
+            source: "memory",
+            startLine: 3,
+            endLine: 3,
+            score: 0.9,
+            snippet:
+              "user: Save important context from this session to the daily memory file. STRICT RULES: 1. The file MUST be named exactly memory/2026-06-18.md",
+          },
+        ],
+      });
+
+      const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
+    });
+  });
+
+  it("ignores already-promoted score metadata snippets when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "promotion metadata",
+        results: [
+          {
+            path: "memory/2026-06-18.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 1,
+            score: 0.94,
+            snippet:
+              "2026-06-13 09:20 America/New_York - Polycore PR #112 re-review... [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
+          },
+        ],
+      });
+
+      const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
+    });
+  });
+
   it("keeps ordinary snippets that only quote dreaming prompt markers", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -540,6 +643,51 @@ describe("short-term promotion", () => {
       expect(ranked).toHaveLength(1);
       expect(ranked[0]?.recallCount).toBe(8);
       expect(ranked[0]?.uniqueQueries).toBe(4);
+    });
+  });
+
+  it("keeps duplicate daily signals from refreshing recall freshness", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-04-03",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.62,
+            snippet: "Added primary issue extraction for pain notifications.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-04-03",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T11:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.62,
+            snippet: "Added primary issue extraction for pain notifications.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const [entry] = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entry?.dailyCount).toBe(1);
+      expect(entry?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
     });
   });
 
@@ -1508,6 +1656,38 @@ describe("short-term promotion", () => {
     expect(
       testing.isContaminatedDreamingSnippet(
         "confidence: 0.58 - Candidate: Assistant: Mason shipped the enforcement pass. - evidence: memory/.dreams/session-corpus/2026-04-11.txt:167-167 - recalls: 0 - status: staged",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats raw session metadata snippets as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "Session: 2026-06-18 10:37:05 EDT; Session Key: agent:cody:discord:channel:1502199757592989836; Session ID: 6d52b6a2-a2e1-4839-a69a-a532b9090a6d; Source: discord",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats raw conversation summaries as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "Conversation Summary: assistant: Traced all three. No changes made.",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats raw transcript turns as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "user: Save important context from this session to the daily memory file. STRICT RULES: 1. The file MUST be named exactly memory/2026-06-18.md",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats promotion score metadata as contaminated", () => {
+    expect(
+      testing.isContaminatedDreamingSnippet(
+        "Polycore PR #112 re-review... [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
       ),
     ).toBe(true);
   });
@@ -3152,7 +3332,9 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
-    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
+      // "s3" is a protected-glossary term; it now surfaces as a standalone token past the
+      // per-script min-length gate (the longer terms still match as substrings).
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "s3", "sync"]);
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {

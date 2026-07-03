@@ -969,21 +969,6 @@ write_update_restart_service_secretref_env() {
   mv "$tmp_path" "$dotenv_path"
 }
 
-write_update_restart_service_auth_env() {
-  mkdir -p "$OPENCLAW_STATE_DIR"
-  local dotenv_path="$OPENCLAW_STATE_DIR/.env"
-  local tmp_path="$dotenv_path.tmp.$$"
-  if [ -f "$dotenv_path" ]; then
-    grep -v '^GATEWAY_AUTH_TOKEN_REF=' "$dotenv_path" >"$tmp_path" || true
-  else
-    : >"$tmp_path"
-  fi
-  printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
-  mv "$tmp_path" "$dotenv_path"
-  local systemd_env_path="$OPENCLAW_STATE_DIR/gateway.systemd.env"
-  printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >"$systemd_env_path"
-}
-
 prepare_update_restart_probe() {
   if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
     return 0
@@ -993,18 +978,6 @@ prepare_update_restart_probe() {
   seed_update_restart_probe_device_auth
   start_gateway legacy-ready-log-ok
   write_update_restart_service_secretref_env
-  install_update_restart_service_unit
-}
-
-prepare_update_restart_probe_current_install() {
-  if [ "$UPDATE_RESTART_MODE" != "auto-auth" ]; then
-    return 0
-  fi
-  echo "Preparing candidate-auth gateway for automatic update restart."
-  install_update_restart_systemctl_shim
-  seed_update_restart_probe_device_auth
-  start_gateway
-  write_update_restart_service_auth_env
   install_update_restart_service_unit
 }
 

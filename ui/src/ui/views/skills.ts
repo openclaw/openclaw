@@ -78,7 +78,13 @@ export type SkillsProps = {
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallSlug: string | null;
-  clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+  clawhubInstallMessage: {
+    kind: "success" | "error";
+    text: string;
+    acknowledgeSlug?: string;
+    acknowledgeVersion?: string;
+    acknowledgeLabel?: string;
+  } | null;
   onFilterChange: (next: string) => void;
   onAgentChange: (agentId: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
@@ -93,7 +99,7 @@ export type SkillsProps = {
   onClawHubQueryChange: (query: string) => void;
   onClawHubDetailOpen: (slug: string) => void;
   onClawHubDetailClose: () => void;
-  onClawHubInstall: (slug: string) => void;
+  onClawHubInstall: (slug: string, acknowledgeClawHubRisk?: boolean, version?: string) => void;
 };
 
 type StatusTabDef = { id: SkillsStatusFilter; label: string };
@@ -318,7 +324,29 @@ export function renderSkills(props: SkillsProps) {
               class="callout ${props.clawhubInstallMessage.kind === "error" ? "danger" : "success"}"
               style="margin-top: 8px;"
             >
-              ${props.clawhubInstallMessage.text}
+              <div
+                style="max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;"
+              >
+                ${props.clawhubInstallMessage.text}
+              </div>
+              ${props.clawhubInstallMessage.acknowledgeSlug
+                ? html`<button
+                    type="button"
+                    class="btn btn--sm"
+                    style="margin-top: 10px; white-space: normal;"
+                    ?disabled=${props.clawhubInstallSlug ===
+                    props.clawhubInstallMessage.acknowledgeSlug}
+                    @click=${() =>
+                      props.onClawHubInstall(
+                        props.clawhubInstallMessage?.acknowledgeSlug ?? "",
+                        true,
+                        props.clawhubInstallMessage?.acknowledgeVersion,
+                      )}
+                  >
+                    ${props.clawhubInstallMessage.acknowledgeLabel ??
+                    "Acknowledge risk and install"}
+                  </button>`
+                : nothing}
             </div>`
           : nothing}
         ${renderClawHubResults(props)}

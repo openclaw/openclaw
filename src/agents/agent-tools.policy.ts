@@ -3,11 +3,7 @@
  * sessions. Keeps runtime tool filtering tied to canonical config, session
  * provenance, and inherited sub-agent capabilities.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeUniqueSingleOrTrimmedStringList,
   uniqueStrings,
@@ -26,8 +22,10 @@ import {
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
+import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import {
   resolveSubagentCapabilityStore,
   resolveStoredSubagentInheritedToolAllowlist,
@@ -42,6 +40,8 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+
+export { resolveProviderToolPolicy };
 
 /**
  * Tools always denied for sub-agents regardless of depth.
@@ -145,57 +145,42 @@ export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolP
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
-type ToolPolicyConfig = {
-  allow?: string[];
-  alsoAllow?: string[];
-  deny?: string[];
-  profile?: string;
-};
-
-function normalizeProviderKey(value: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
+/** Resolve the shared profile, scope, extra, and sandbox policy layers. */
+export function resolveConfiguredToolPolicies(params: {
+  cfg: OpenClawConfig;
+  agentTools?: AgentToolsConfig;
+  sandboxMode?: "off" | "non-main" | "all";
+  agentId?: string | null;
+  extraPolicies?: readonly (SandboxToolPolicy | undefined)[];
+}): SandboxToolPolicy[] {
+  const policies: SandboxToolPolicy[] = [];
+  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  if (profilePolicy) {
+    policies.push(profilePolicy);
   }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
 
-function isCanonicalProviderKey(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderKey(value);
-}
+  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
+  if (globalPolicy) {
+    policies.push(globalPolicy);
+  }
 
-function buildProviderToolPolicyLookup(
-  entries: Array<[string, ToolPolicyConfig]>,
-): Map<string, ToolPolicyConfig> {
-  const lookup = new Map<
-    string,
-    {
-      canonical: boolean;
-      value: ToolPolicyConfig;
-    }
-  >();
-  for (const [key, value] of entries) {
-    const normalized = normalizeProviderKey(key);
-    if (!normalized) {
-      continue;
-    }
-    const canonical = isCanonicalProviderKey(key);
-    const existing = lookup.get(normalized);
-    // Alias and canonical keys can normalize to the same provider. Prefer the
-    // canonical entry so mixed legacy/canonical configs do not depend on
-    // Object.entries insertion order.
-    if (!existing || (canonical && !existing.canonical)) {
-      lookup.set(normalized, { canonical, value });
+  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
+  if (agentPolicy) {
+    policies.push(agentPolicy);
+  }
+
+  for (const policy of params.extraPolicies ?? []) {
+    if (policy) {
+      policies.push(policy);
     }
   }
-  const resolved = new Map<string, ToolPolicyConfig>();
-  for (const [key, entry] of lookup) {
-    resolved.set(key, entry.value);
+
+  if (params.sandboxMode === "all") {
+    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
   }
-  return resolved;
+
+  return policies;
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
@@ -320,42 +305,6 @@ export function resolveTrustedGroupId(params: {
     sessionContext: resolveGroupContextFromSessionKey(params.sessionKey),
     spawnedContext: resolveGroupContextFromSessionKey(params.spawnedBy),
   });
-}
-
-/** Resolve model/provider-scoped tool policy from canonical provider keys. */
-export function resolveProviderToolPolicy(params: {
-  byProvider?: Record<string, ToolPolicyConfig>;
-  modelProvider?: string;
-  modelId?: string;
-}): ToolPolicyConfig | undefined {
-  const provider = params.modelProvider?.trim();
-  if (!provider || !params.byProvider) {
-    return undefined;
-  }
-
-  const entries = Object.entries(params.byProvider);
-  if (entries.length === 0) {
-    return undefined;
-  }
-
-  const lookup = buildProviderToolPolicyLookup(entries);
-
-  const normalizedProvider = normalizeProviderKey(provider);
-  const rawModelId = normalizeOptionalLowercaseString(params.modelId);
-  // Model IDs can contain provider-like prefixes (for example OpenRouter refs);
-  // keep them inside the selected provider scope instead of treating them as a
-  // byProvider override.
-  const fullModelId = rawModelId ? `${normalizedProvider}/${rawModelId}` : undefined;
-
-  const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
-
-  for (const key of candidates) {
-    const match = lookup.get(key);
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
 }
 
 function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): string[] | undefined {

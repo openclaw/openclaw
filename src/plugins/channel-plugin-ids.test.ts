@@ -3420,6 +3420,185 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-other-channel"]);
   });
 
+  it("announces explicit configured channels without installed owners", () => {
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          channels: {
+            clickclack: {
+              token: "configured",
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual(["clickclack"]);
+  });
+
+  it("does not announce ownerless explicit channels suppressed by plugin policy", () => {
+    const ownerlessChannelConfig = {
+      channels: {
+        clickclack: {
+          token: "configured",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            enabled: false,
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            deny: ["clickclack"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            entries: {
+              clickclack: {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            allow: ["slack"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not announce explicit channels suppressed by plugin policy", () => {
+    const baseConfig = {
+      channels: {
+        "demo-channel": {
+          token: "configured",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...baseConfig,
+          plugins: {
+            enabled: false,
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...baseConfig,
+          plugins: {
+            deny: ["demo-channel"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...baseConfig,
+          plugins: {
+            entries: {
+              "demo-channel": {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps announce channels with another effective owner", () => {
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          channels: {
+            shared: {
+              token: "configured",
+            },
+          },
+          plugins: {
+            entries: {
+              "shared-good": {
+                enabled: true,
+              },
+              "shared-disabled": {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        manifestRecords: [
+          {
+            id: "shared-good",
+            channels: ["shared"],
+            origin: "config",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          } as never,
+          {
+            id: "shared-disabled",
+            channels: ["shared"],
+            origin: "config",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          } as never,
+        ],
+      }),
+    ).toStrictEqual(["shared"]);
+  });
+
   it("does not treat activation-only declarations as channel ownership", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["activation-only-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([

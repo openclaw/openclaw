@@ -421,6 +421,9 @@ function readDestructiveApprovalMode(
   if (value === "auto") {
     return bindingSchemaVersion === 1 ? "allow" : "auto";
   }
+  if (value === "ask" && bindingSchemaVersion === 2) {
+    return "ask";
+  }
   if (value === "on-request" && bindingSchemaVersion === 1) {
     return "auto";
   }

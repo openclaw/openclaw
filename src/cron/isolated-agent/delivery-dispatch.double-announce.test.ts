@@ -1438,6 +1438,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
+    expect(state.cronRunSessionCleanupAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
@@ -1463,6 +1464,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       status: "ok",
       delivered: false,
     });
+    expect(state.cronRunSessionCleanupAttempted).toBe(true);
     expect(retireSessionMcpRuntime).toHaveBeenCalledWith({
       sessionId: "test-session-id",
       reason: "cron-delete-after-run-fallback",
@@ -1480,6 +1482,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       status: "ok",
       delivered: false,
     });
+    expect(state.cronRunSessionCleanupAttempted).toBe(false);
     expect(callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.delete",

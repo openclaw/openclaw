@@ -1,6 +1,9 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.gateway.ChatSendAck
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
+import ai.openclaw.app.gateway.parseChatSendAck
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
@@ -10,9 +13,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRecord
 import android.media.AudioTrack
-import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -108,7 +109,6 @@ class TalkModeManager internal constructor(
     private const val tag = "TalkMode"
     private const val realtimeSampleRateHz = 24_000
     private const val realtimeAudioFrameMs = 100
-    private const val listenWatchdogMs = 12_000L
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
     private const val maxConversationEntries = 40
@@ -241,7 +241,13 @@ class TalkModeManager internal constructor(
   }
 
   /** Starts a push-to-talk capture session for gateway node.invoke callers. */
-  suspend fun beginPushToTalk(): TalkPttStartPayload {
+  suspend fun beginPushToTalk(allowNewCapture: Boolean): TalkPttStartPayload {
+    if (!allowNewCapture) {
+      // A background retry may reconcile an existing capture, but must never create one.
+      return activePttCaptureId
+        ?.let(::TalkPttStartPayload)
+        ?: throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+    }
     if (!isConnected()) {
       _statusText.value = "Gateway not connected"
       throw IllegalStateException("UNAVAILABLE: Gateway not connected")
@@ -351,7 +357,7 @@ class TalkModeManager internal constructor(
       )
     }
 
-    beginPushToTalk()
+    beginPushToTalk(allowNewCapture = true)
     val completion = CompletableDeferred<TalkPttStopPayload>()
     pttCompletion = completion
     pttAutoStopEnabled = true
@@ -381,11 +387,20 @@ class TalkModeManager internal constructor(
         reloadConfig()
         val startedAt = System.currentTimeMillis().toDouble() / 1000.0
         val prompt = buildPrompt(command)
-        val runId = sendChat(prompt, session)
-        val ok = waitForChatFinal(runId)
+        val ack = sendChat(prompt, session)
+        val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
+        if (ack.isTerminalFailure) {
+          _statusText.value = if (ack.normalizedStatus == "error") "Chat error" else "Aborted"
+          return@launch
+        }
+        val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
         val assistant =
           consumeRunText(runId)
-            ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
+            ?: waitForAssistantText(
+              session,
+              chatSendAckHistorySinceSeconds(ack, startedAt),
+              if (ok) 12_000 else 25_000,
+            )
         if (!assistant.isNullOrBlank()) {
           val playbackToken = playbackGeneration.incrementAndGet()
           cancelActivePlayback()
@@ -398,8 +413,9 @@ class TalkModeManager internal constructor(
         }
       } catch (err: Throwable) {
         Log.w(tag, "speakWakeCommand failed: ${err.message}")
+      } finally {
+        onComplete()
       }
-      onComplete()
     }
   }
 
@@ -679,6 +695,13 @@ class TalkModeManager internal constructor(
     disableRealtimeModeAndNotifyOwner()
   }
 
+  private fun realtimeCloseStatusText(reason: String?): String =
+    when (reason) {
+      null, "completed" -> "Off"
+      "error" -> "Talk failed: Realtime provider closed unexpectedly."
+      else -> "Talk failed: Realtime provider closed: $reason"
+    }
+
   @SuppressLint("MissingPermission")
   private fun startRealtimeCapture(sessionId: String) {
     realtimeCaptureJob?.cancel()
@@ -718,35 +741,14 @@ class TalkModeManager internal constructor(
       }
     realtimeCaptureJob =
       scope.launch(Dispatchers.IO) {
-        var audioRecord: AudioRecord? = null
+        var audioInput: AndroidAudioInputSession? = null
         try {
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
-          val minBuffer =
-            AudioRecord.getMinBufferSize(
-              realtimeSampleRateHz,
-              AudioFormat.CHANNEL_IN_MONO,
-              AudioFormat.ENCODING_PCM_16BIT,
-            )
-          if (minBuffer <= 0) {
-            throw IllegalStateException("AudioRecord buffer unavailable")
-          }
-          audioRecord =
-            AudioRecord
-              .Builder()
-              .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-              .setAudioFormat(
-                AudioFormat
-                  .Builder()
-                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(realtimeSampleRateHz)
-                  .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                  .build(),
-              ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
-              .build()
+          audioInput = AndroidAudioInputSession.open(context, realtimeSampleRateHz, frameBytes)
           val buffer = ByteArray(frameBytes)
-          audioRecord.startRecording()
+          audioInput.startRecording()
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
-            val read = audioRecord.read(buffer, 0, buffer.size)
+            val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             if (!shouldAppendRealtimeCapturedFrame(read)) continue
             audioFrames.trySend(buffer.copyOf(read))
@@ -757,13 +759,7 @@ class TalkModeManager internal constructor(
           failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
         } finally {
           audioFrames.close()
-          audioRecord?.let { record ->
-            try {
-              record.stop()
-            } catch (_: Throwable) {
-            }
-            record.release()
-          }
+          audioInput?.close()
         }
       }
   }
@@ -848,11 +844,15 @@ class TalkModeManager internal constructor(
         Log.w(tag, "realtime error: $message")
       }
       "close" -> {
-        Log.d(tag, "realtime close reason=${obj["reason"].asStringOrNull()}")
-        stopRealtimeRelay(closeSession = false)
+        val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        val currentStatus = _statusText.value
+        val closeStatus =
+          if (currentStatus.startsWith("Talk failed:")) currentStatus else realtimeCloseStatusText(closeReason)
+        Log.d(tag, "realtime close reason=$closeReason")
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
         if (_isEnabled.value) {
           _isEnabled.value = false
-          _statusText.value = "Off"
+          _statusText.value = closeStatus
           onStoppedByRelay()
         }
       }
@@ -1604,16 +1604,26 @@ class TalkModeManager internal constructor(
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
       Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
-      val runId = sendChat(prompt, session)
-      Log.d(tag, "chat.send ok runId=$runId")
-      val ok = waitForChatFinal(runId)
+      val ack = sendChat(prompt, session)
+      val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
+      Log.d(tag, "chat.send ok runId=$runId status=${ack.status}")
+      if (ack.isTerminalFailure) {
+        _statusText.value = if (ack.normalizedStatus == "error") "Chat error" else "Aborted"
+        start()
+        return
+      }
+      val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
       if (!ok) {
         Log.w(tag, "chat final timeout runId=$runId; attempting history fallback")
       }
       // Use text cached from the final event first — avoids chat.history polling
       val assistant =
         consumeRunText(runId)
-          ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
+          ?: waitForAssistantText(
+            session,
+            chatSendAckHistorySinceSeconds(ack, startedAt),
+            if (ok) 12_000 else 25_000,
+          )
       if (assistant.isNullOrBlank()) {
         _statusText.value = "No reply"
         Log.w(tag, "assistant text timeout runId=$runId")
@@ -1679,7 +1689,7 @@ class TalkModeManager internal constructor(
   private suspend fun sendChat(
     message: String,
     session: GatewaySession,
-  ): String {
+  ): ChatSendAck {
     val runId = UUID.randomUUID().toString()
     armPendingRun(runId)
     val params =
@@ -1692,11 +1702,15 @@ class TalkModeManager internal constructor(
       }
     try {
       val res = session.request("chat.send", params.toString())
-      val parsed = parseRunId(res) ?: runId
-      if (parsed != runId) {
-        pendingRunId = parsed
+      val parsed = parseChatSendAck(json, res)
+      val actualRunId = parsed.runId ?: runId
+      if (actualRunId != runId) {
+        pendingRunId = actualRunId
       }
-      return parsed
+      if (parsed.isTerminal) {
+        clearPendingRun(actualRunId)
+      }
+      return parsed.copy(runId = actualRunId)
     } catch (err: Throwable) {
       clearPendingRun(runId)
       throw err
@@ -1777,7 +1791,7 @@ class TalkModeManager internal constructor(
 
   private suspend fun waitForAssistantText(
     session: GatewaySession,
-    sinceSeconds: Double,
+    sinceSeconds: Double?,
     timeoutMs: Long,
   ): String? {
     val deadline = SystemClock.elapsedRealtime() + timeoutMs

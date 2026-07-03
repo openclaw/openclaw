@@ -618,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -859,6 +859,7 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/crestodian/operations.test.ts",
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
           "test/scripts/android-version.test.ts",
@@ -873,6 +874,17 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: [
+          "src/state/openclaw-agent-db.test.ts",
+          "src/state/openclaw-state-db.test.ts",
+          "src/state/sqlite-query-plan.test.ts",
+          "src/transcripts/store.test.ts",
+        ],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
         includePatterns: [
@@ -882,6 +894,7 @@ describe("test-projects args", () => {
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
           "test/scripts/check-package-dist-imports.test.ts",
+          "test/scripts/check-workflows.test.ts",
           "test/scripts/ci-hydrate-testbox-env.test.ts",
           "test/scripts/clawhub-fixture-server.test.ts",
           "test/scripts/codex-install-assertions.test.ts",
@@ -894,23 +907,52 @@ describe("test-projects args", () => {
           "test/scripts/fixture-plugin-commands.test.ts",
           "test/scripts/incremental-line-reader.test.ts",
           "test/scripts/ios-configure-signing.test.ts",
-          "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
+          "test/scripts/native-app-i18n.test.ts",
           "test/scripts/onboard-config-fixtures.test.ts",
           "test/scripts/parallels-lib-helpers.test.ts",
+          "test/scripts/parallels-package-log-progress-extract.test.ts",
           "test/scripts/parallels-smoke-model.test.ts",
           "test/scripts/plugin-package-dependencies.test.ts",
           "test/scripts/plugins-assertions.test.ts",
           "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
           "test/scripts/proxy-install-ca.test.ts",
           "test/scripts/release-preflight.test.ts",
+          "test/scripts/render-maturity-docs.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
+          "test/scripts/runtime-postbuild-stamp.test.ts",
           "test/scripts/test-install-sh-docker.test.ts",
           "test/scripts/test-projects.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.gateway.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/gateway/hooks-mapping.test.ts",
+          "src/gateway/server-methods/chat.abort-persistence.test.ts",
+          "src/gateway/server.agent.gateway-server-agent-b.test.ts",
+          "src/gateway/server.sessions.permissions-hooks.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.runtime-config.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/config/sessions/entry-freshness.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.cron.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/cron/isolated-agent/run-session-state.test.ts",
+          "src/cron/run-log.error-reason.test.ts",
         ],
         watchMode: false,
       },
@@ -924,6 +966,10 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/agent-bundle-mcp-runtime.test.ts",
+          "src/agents/agent-tools-agent-config.exec.test.ts",
+          "src/agents/bash-tools.exec-foreground-failures.test.ts",
+          "src/agents/cli-runner.reliability.test.ts",
           "src/agents/models-config.file-mode.test.ts",
           "src/agents/sandbox/ssh.test.ts",
         ],

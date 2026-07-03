@@ -395,6 +395,55 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoning_effort");
   });
 
+  it("still requests encrypted reasoning include when effort is unsupported", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+      input: [],
+    };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-build-0.1",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  it("merges encrypted reasoning include with existing include entries", () => {
+    const payload: Record<string, unknown> = {
+      include: ["file_search_call.results"],
+    };
+    runXaiToolPayloadWrapper({
+      payload,
+      modelId: "grok-build-0.1",
+    });
+
+    expect(payload.include).toEqual(["file_search_call.results", "reasoning.encrypted_content"]);
+  });
+
+  it("does not request encrypted reasoning include for non-reasoning xai models", () => {
+    const payload: Record<string, unknown> = {};
+    runXaiToolPayloadWrapper({
+      payload,
+      modelId: "grok-4-fast-non-reasoning",
+    });
+
+    expect(payload).not.toHaveProperty("include");
+  });
+
   it("keeps native xAI Responses thinking efforts before the shared runtime dispatches payloads", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 
@@ -573,6 +622,33 @@ describe("xai stream wrappers", () => {
         type: "function_call_output",
         call_id: "call_1",
         output: "(see attached image)",
+      },
+    ]);
+  });
+
+  it("uses audio fallback text for audio-only tool outputs", () => {
+    const payload: Record<string, unknown> = {
+      input: [
+        {
+          type: "function_call_output",
+          call_id: "call_audio",
+          output: [
+            {
+              type: "input_audio",
+              mimeType: "audio/wav",
+              data: "QUJDRA==",
+            },
+          ],
+        },
+      ],
+    };
+    runXaiToolPayloadWrapper({ payload, input: ["text"] });
+
+    expect(payload.input).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_audio",
+        output: "(see attached audio)",
       },
     ]);
   });

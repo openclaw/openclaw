@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
@@ -25,6 +26,7 @@ const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const CGROUP_MEMORY_LIMIT_PATHS = [
@@ -306,15 +308,7 @@ function parsePositiveIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const text = value.trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive safe integer`);
-  }
-  return parsed;
+  return parsePositiveInt(value, name);
 }
 
 function parseNonNegativeIntegerEnv(value, name) {
@@ -403,6 +397,14 @@ function resolveTsdownMaxOldSpaceMb(params = {}) {
     (params.platform ?? process.platform) === "win32"
       ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
       : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  const envOverride = parsePositiveIntegerEnv(
+    (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
+    TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  );
+  if (envOverride !== null) {
+    return envOverride;
+  }
+
   const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
   if (limitBytes === null) {
     return defaultMaxOldSpaceMb;

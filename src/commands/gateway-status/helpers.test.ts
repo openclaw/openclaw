@@ -436,18 +436,28 @@ describe("resolveProbeBudgetMs", () => {
     ).toBe(2_500);
   });
 
-  it("keeps non-local probe caps unchanged", () => {
+  it("lets active remote probes use the full caller budget", () => {
     expect(
       resolveProbeBudgetMs(15_000, {
         kind: "configRemote",
         active: true,
         url: "wss://gateway.example/ws",
       }),
-    ).toBe(1500);
+    ).toBe(15_000);
     expect(
       resolveProbeBudgetMs(15_000, {
         kind: "explicit",
         active: true,
+        url: "wss://gateway.example/ws",
+      }),
+    ).toBe(15_000);
+  });
+
+  it("keeps inactive remote and SSH tunnel probes on the short cap", () => {
+    expect(
+      resolveProbeBudgetMs(15_000, {
+        kind: "configRemote",
+        active: false,
         url: "wss://gateway.example/ws",
       }),
     ).toBe(1500);

@@ -587,6 +587,50 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("finalizes terminal visible-send failures without scheduling completion retry", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          error: "prompt lock failed after visible send",
+          terminal: true,
+        });
+        return true;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.delivery?.status).toBe("delivered");
+    expect(entry.delivery?.lastError).toBeUndefined();
+    expect(entry.delivery?.payload).toBeUndefined();
+    expect(entry.delivery?.suspendedAt).toBeUndefined();
+    expect(entry.delivery?.suspendedReason).toBeUndefined();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      deliveryStatus: "delivered",
+    });
+  });
+
   it("skips announce delivery when completion messages are disabled", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({

@@ -14,6 +14,7 @@ import {
 } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { toErrorObject } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
@@ -305,7 +306,7 @@ async function downloadToFile(
             })
             .catch(async (err: unknown) => {
               await fs.rm(dest, { force: true }).catch(() => {});
-              reject(toLintErrorObject(err, "Non-Error rejection"));
+              reject(toErrorObject(err, "Non-Error rejection"));
             });
         });
         req.on("error", reject);
@@ -751,18 +752,4 @@ export async function readMediaBuffer(
 export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -6,6 +6,10 @@ export { buildOpenAICompletionsParams } from "../agents/openai-transport-stream.
 export { stripSystemPromptCacheBoundary } from "../agents/system-prompt-cache-boundary.js";
 export { transformTransportMessages } from "../agents/transport-message-transform.js";
 export {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
+export {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,

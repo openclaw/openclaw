@@ -3,7 +3,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  attachModelProviderRequestTransport,
+  buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
+  deliverAgentHarnessUserInputPrompt,
+  formatAgentHarnessUserInputPrompt,
+  getModelProviderRequestTransport,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
 
@@ -150,5 +155,90 @@ describe("agent harness runtime SDK facade", () => {
     await import("./agent-harness-runtime.js");
 
     expect(loadResearchAutocapture).not.toHaveBeenCalled();
+  });
+
+  it("exposes attached model request transport metadata helpers", () => {
+    const model = attachModelProviderRequestTransport(
+      { id: "gpt-test", provider: "custom-openai" },
+      { auth: { mode: "header", headerName: "x-api-key", value: "secret" } },
+    );
+
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
+    });
+  });
+});
+
+describe("agent harness user input helpers", () => {
+  it("formats prompts and delivers through blocking replies first", async () => {
+    const onBlockReply = vi.fn();
+
+    await deliverAgentHarnessUserInputPrompt(
+      { onBlockReply },
+      [
+        {
+          id: "mode",
+          header: "Mode",
+          question: "Pick a mode",
+          isOther: true,
+          options: [{ label: "Deep", description: "Use more context" }],
+        },
+      ],
+      { intro: "Runtime needs input:" },
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: [
+        "Runtime needs input:",
+        "",
+        "Mode",
+        "Pick a mode",
+        "1. Deep - Use more context",
+        "Other: reply with your own answer.",
+      ].join("\n"),
+    });
+  });
+
+  it("normalizes keyed multi-question answers with option indexes", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "repo",
+            header: "Repository",
+            question: "Which repo?",
+            isOther: true,
+          },
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Which mode?",
+            isOther: false,
+            options: [{ label: "Fast" }, { label: "Deep" }],
+          },
+        ],
+        "repo: openclaw\nmode: 2",
+      ),
+    ).toEqual({
+      answers: {
+        mode: { answers: ["Deep"] },
+        repo: { answers: ["openclaw"] },
+      },
+    });
+  });
+
+  it("supports runtime-specific text formatting", () => {
+    expect(
+      formatAgentHarnessUserInputPrompt(
+        [
+          {
+            id: "answer",
+            header: "Header",
+            question: "a < b",
+          },
+        ],
+        { formatText: (text) => text.replaceAll("<", "&lt;") },
+      ),
+    ).toContain("a &lt; b");
   });
 });

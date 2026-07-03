@@ -11,6 +11,7 @@ struct ChatProTab: View {
     let headerTitle: String?
     let headerSubtitle: String?
     let showsAgentBadge: Bool
+    let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
 
     init(
@@ -18,56 +19,26 @@ struct ChatProTab: View {
         headerTitle: String? = nil,
         headerSubtitle: String? = nil,
         showsAgentBadge: Bool = true,
+        ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
         self.headerSubtitle = headerSubtitle
         self.showsAgentBadge = showsAgentBadge
+        self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
     }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                OpenClawProBackground()
-                VStack(spacing: 0) {
-                    self.header
-                    if let viewModel {
-                        OpenClawChatView(
-                            viewModel: viewModel,
-                            drawsBackground: false,
-                            showsSessionSwitcher: false,
-                            userAccent: self.chatUserAccent,
-                            assistantName: self.agentDisplayName,
-                            assistantAvatarText: self.agentBadge,
-                            assistantAvatarTint: OpenClawBrand.accent,
-                            showsAssistantAvatars: false,
-                            composerChrome: .clean,
-                            isComposerEnabled: self.gatewayConnected,
-                            messagePlaceholder: self.messagePlaceholder,
-                            talkControl: self.talkControl)
-                            .id(ObjectIdentifier(viewModel))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    } else {
-                        ProCard {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Chat is preparing")
-                                    .font(.headline)
-                                Text("The operator session will attach when the gateway is ready.")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding()
-                        Spacer()
-                    }
+        Group {
+            if self.ownsNavigationStack {
+                NavigationStack {
+                    self.content
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .safeAreaPadding(.top, 8)
+            } else {
+                self.content
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .navigationBarHidden(true)
         }
         .task {
             self.syncChatViewModel()
@@ -90,6 +61,49 @@ struct ChatProTab: View {
         }
     }
 
+    private var content: some View {
+        ZStack {
+            OpenClawProBackground()
+            VStack(spacing: 0) {
+                self.header
+                if let viewModel {
+                    OpenClawChatView(
+                        viewModel: viewModel,
+                        drawsBackground: false,
+                        showsSessionSwitcher: false,
+                        userAccent: self.chatUserAccent,
+                        assistantName: self.agentDisplayName,
+                        assistantAvatarText: self.agentBadge,
+                        assistantAvatarTint: OpenClawBrand.accent,
+                        showsAssistantAvatars: false,
+                        composerChrome: .clean,
+                        isComposerEnabled: self.gatewayConnected,
+                        messagePlaceholder: self.messagePlaceholder,
+                        emptyAssistantIntro: "What would you like to work on?",
+                        talkControl: self.talkControl)
+                        .id(ObjectIdentifier(viewModel))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
+                    ProCard {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Chat is preparing")
+                                .font(.headline)
+                            Text("The operator session will attach when the gateway is ready.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding()
+                    Spacer()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .safeAreaPadding(.top, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationBarHidden(true)
+    }
+
     private var header: some View {
         OpenClawAdaptiveHeaderRow(
             title: self.headerDisplayTitle,
@@ -105,33 +119,25 @@ struct ChatProTab: View {
                 self.headerIdentityBadge
             }
         } accessory: {
-            self.connectionPillButton
+            self.connectionStatusButton
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
-        .padding(.bottom, 4)
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
     private var headerIdentityBadge: some View {
         if self.showsAgentBadge {
             Text(self.agentBadge)
-                .font(.system(size: self.agentBadge.count > 2 ? 13 : 16, weight: .bold, design: .rounded))
+                .font(.system(size: self.agentBadge.count > 2 ? 11 : 14, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
-                .frame(width: 38, height: 38)
+                .frame(width: 32, height: 32)
                 .background(
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    OpenClawBrand.accent,
-                                    OpenClawBrand.accentHot,
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing)))
+                        .fill(OpenClawBrand.accent))
                 .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
-                .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: 10, y: 5)
         } else {
             ProIconBadge(systemName: "bubble.left", color: OpenClawBrand.accent)
         }
@@ -190,36 +196,44 @@ struct ChatProTab: View {
     }
 
     @ViewBuilder
-    private var connectionPillButton: some View {
+    private var connectionStatusButton: some View {
         if let openSettings {
             Button(action: openSettings) {
-                self.connectionPill
+                self.connectionStatusIcon
             }
             .buttonStyle(.plain)
+            .contentShape(Circle())
+            .accessibilityLabel(self.gatewayAccessibilityLabel)
             .accessibilityHint("Opens Settings / Gateway")
+            .accessibilityIdentifier("chat-gateway-status")
         } else {
-            self.connectionPill
+            self.connectionStatusIcon
+                .accessibilityLabel(self.gatewayAccessibilityLabel)
         }
     }
 
-    private var connectionPill: some View {
-        HStack(spacing: 6) {
-            ProStatusDot(color: self.gatewayPillColor)
-            Text(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
+    private var connectionStatusIcon: some View {
+        Image(systemName: self.gatewayStatusSymbol)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(self.gatewayPillColor)
+            .frame(width: 44, height: 44)
+    }
+
+    private var gatewayStatusSymbol: String {
+        switch self.gatewayDisplayState {
+        case .connected:
+            self.gatewayConnected ? "checkmark.circle.fill" : "exclamationmark.circle"
+        case .connecting:
+            "arrow.trianglehead.2.clockwise.rotate.90"
+        case .error:
+            "exclamationmark.triangle.fill"
+        case .disconnected:
+            "wifi.slash"
         }
-        .foregroundStyle(self.gatewayPillColor)
-        .padding(.horizontal, 10)
-        .frame(height: 30)
-        .background {
-            Capsule()
-                .fill(self.gatewayPillColor.opacity(0.11))
-        }
-        .overlay {
-            Capsule()
-                .strokeBorder(self.gatewayPillColor.opacity(0.16), lineWidth: 1)
-        }
+    }
+
+    private var gatewayAccessibilityLabel: String {
+        "Gateway: \(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
     }
 
     private var gatewayConnected: Bool {
@@ -238,7 +252,7 @@ struct ChatProTab: View {
         case .connected:
             self.gatewayConnected ? OpenClawBrand.ok : .secondary
         case .connecting:
-            OpenClawBrand.accent
+            OpenClawBrand.accentForeground
         case .error:
             OpenClawBrand.warn
         case .disconnected:
@@ -268,8 +282,8 @@ struct ChatProTab: View {
             ?? Self.defaultHeaderTitle(showsAgentBadge: self.showsAgentBadge, agentDisplayName: self.agentDisplayName)
     }
 
-    private var headerDisplaySubtitle: String {
-        self.normalized(self.headerSubtitle) ?? "AI Assistant"
+    private var headerDisplaySubtitle: String? {
+        self.normalized(self.headerSubtitle)
     }
 
     nonisolated static func defaultHeaderTitle(showsAgentBadge: Bool, agentDisplayName: String) -> String {
@@ -277,7 +291,7 @@ struct ChatProTab: View {
     }
 
     private var chatUserAccent: Color {
-        self.colorScheme == .light ? Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0) : OpenClawBrand.accent
+        self.colorScheme == .light ? OpenClawBrand.info : OpenClawBrand.accent
     }
 
     private var activeAgent: AgentSummary? {

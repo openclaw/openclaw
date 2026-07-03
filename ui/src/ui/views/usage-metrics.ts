@@ -20,7 +20,16 @@ function formatTokens(n: number): string {
     return `${(n / 1_000_000).toFixed(1)}M`;
   }
   if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1)}K`;
+    // Values from 999,950-999,999 round to "1000.0" at one-decimal
+    // thousands precision, which would display the nonsensical "1000.0K"
+    // instead of rolling over to the M branch above. Re-check the
+    // rounded result before formatting. Mirrors the guard in
+    // formatCompactTokenCount (../chat/token-format.ts).
+    const thousands = (n / 1_000).toFixed(1);
+    if (Number(thousands) >= 1_000) {
+      return `${(n / 1_000_000).toFixed(1)}M`;
+    }
+    return `${thousands}K`;
   }
   return String(n);
 }

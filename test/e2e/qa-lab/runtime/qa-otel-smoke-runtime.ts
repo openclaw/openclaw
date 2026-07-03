@@ -201,6 +201,10 @@ function readPositiveIntegerEnv(
   return parsed;
 }
 
+function createOtelSmokeRunId(): string {
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
 function oversizedBodyError(
   label: string,
   actualBytes: number,
@@ -229,10 +233,17 @@ function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     collectorMode: "local",
     logsExporter: "otlp",
-    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
+    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${createOtelSmokeRunId()}`),
     providerMode: "mock-openai",
     scenarioId: DEFAULT_SCENARIO_ID,
     help: false,
+  };
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -250,15 +261,19 @@ function parseArgs(argv: string[]): CliOptions {
       return value;
     };
     if (arg === "--output-dir") {
-      options.outputDir = readValue();
+      const value = readValue();
+      recordOnce(arg);
+      options.outputDir = value;
     } else if (arg === "--collector") {
       const value = readValue();
+      recordOnce(arg);
       if (value !== "local" && value !== "docker") {
         throw new Error(`--collector must be local or docker, got ${JSON.stringify(value)}`);
       }
       options.collectorMode = value;
     } else if (arg === "--logs-exporter") {
       const value = readValue();
+      recordOnce(arg);
       if (value !== "otlp" && value !== "stdout" && value !== "both") {
         throw new Error(
           `--logs-exporter must be otlp, stdout, or both, got ${JSON.stringify(value)}`,
@@ -266,14 +281,22 @@ function parseArgs(argv: string[]): CliOptions {
       }
       options.logsExporter = value;
     } else if (arg === "--provider-mode") {
-      options.providerMode = readValue();
+      const value = readValue();
+      recordOnce(arg);
+      options.providerMode = value;
     } else if (arg === "--scenario") {
-      options.scenarioId = readValue();
+      const value = readValue();
+      recordOnce(arg);
+      options.scenarioId = value;
       scenarioExplicit = true;
     } else if (arg === "--model") {
-      options.primaryModel = readValue();
+      const value = readValue();
+      recordOnce(arg);
+      options.primaryModel = value;
     } else if (arg === "--alt-model") {
-      options.alternateModel = readValue();
+      const value = readValue();
+      recordOnce(arg);
+      options.alternateModel = value;
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -1168,6 +1191,13 @@ async function startDockerOtelCollector(
   const osTmpdir = deps.tmpdir ?? tmpdir;
 
   const collectorPort = await reservePort();
+  let collectorTelemetryPort = await reservePort();
+  for (let attempt = 0; collectorTelemetryPort === collectorPort && attempt < 5; attempt += 1) {
+    collectorTelemetryPort = await reservePort();
+  }
+  if (collectorTelemetryPort === collectorPort) {
+    throw new Error("OpenTelemetry collector telemetry port matched receiver port after retries.");
+  }
   const tempDir = await makeTempDir(path.join(osTmpdir(), "openclaw-otel-collector-"));
   const configPath = path.join(tempDir, "collector.yaml");
   const containerName = `openclaw-otel-smoke-${makeUuid()}`;
@@ -1185,6 +1215,9 @@ exporters:
   otlphttp/openclaw:
     endpoint: ${receiverEndpoint}
 service:
+  telemetry:
+    metrics:
+      address: 127.0.0.1:${collectorTelemetryPort}
   pipelines:
     traces:
       receivers: [otlp]

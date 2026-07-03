@@ -63,7 +63,6 @@ export const ja_JP: TranslationMap = {
     docs: "ドキュメント",
     theme: "テーマ",
     colorMode: "カラーモード",
-    colorModeOption: "カラーモード: {mode}",
     resources: "リソース",
     search: "検索",
     save: "保存",
@@ -1335,6 +1334,8 @@ export const ja_JP: TranslationMap = {
     settings: "チャット設定",
     thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
     toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
+    commentaryToggle: "最終回答の後にコメントを残す",
+    commentaryLabel: "コメント",
     autoScrollMode: "自動スクロールモード",
     autoScrollAlways: "常に",
     autoScrollNearBottom: "下部付近",
@@ -1353,6 +1354,9 @@ export const ja_JP: TranslationMap = {
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
+    sidebar: {
+      allSessions: "All sessions",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1379,6 +1383,11 @@ export const ja_JP: TranslationMap = {
       retry: "再試行",
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
+    },
+    pairingQrExpired: {
+      title: "ペアリングQRの有効期限が切れました",
+      reason: "新しいセットアップコードを生成するには、もう一度 /pair qr を実行してください。",
+      badge: "期限切れ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1447,6 +1456,7 @@ export const ja_JP: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    hi: "हिन्दी (ヒンディー語)",
     ar: "العربية（アラビア語）",
     it: "Italiano（イタリア語）",
     tr: "Türkçe（Turkish）",
@@ -1457,6 +1467,7 @@ export const ja_JP: TranslationMap = {
     vi: "Tiếng Việt（ベトナム語）",
     nl: "Nederlands（オランダ語）",
     fa: "فارسی（ペルシア語）",
+    ru: "Русский (ロシア語)",
   },
   cron: {
     quickCreate: {

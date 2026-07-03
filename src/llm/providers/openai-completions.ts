@@ -17,6 +17,13 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIToolProjection,
 } from "../../agents/openai-tool-projection.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
+} from "../../agents/stream-first-event-timeout.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -33,7 +40,6 @@ import type {
   Model,
   OpenAICompletionsCompat,
   SimpleStreamOptions,
-  StopReason,
   StreamFunction,
   StreamOptions,
   TextContent,
@@ -50,7 +56,9 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -88,6 +96,13 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
+}
+
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+
+function sanitizeToolResultText(text: string, fallback: string): string {
+  const sanitized = sanitizeSurrogates(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
@@ -144,6 +159,7 @@ export const streamOpenAICompletions: StreamFunction<
       timestamp: Date.now(),
     };
 
+    let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = getCompat(model);
@@ -155,8 +171,9 @@ export const streamOpenAICompletions: StreamFunction<
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
+      firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
-        ...(options?.signal ? { signal: options.signal } : {}),
+        signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
       };
@@ -186,12 +203,23 @@ export const streamOpenAICompletions: StreamFunction<
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
+      const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
       // text-lane transition) and again by the end-of-stream loop; guard so its
       // *_end event is emitted exactly once.
       const finishedBlocks = new Set<StreamingBlock>();
-      const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+      const contentIndices = new WeakMap<StreamingBlock, number>();
+      const appendBlock = (block: StreamingBlock) => {
+        contentIndices.set(block, blocks.length);
+        blocks.push(block);
+      };
+      const getContentIndex = (block: StreamingBlock) => contentIndices.get(block) ?? -1;
+      const rememberFirstToolCallById = (id: string, block: StreamingToolCallBlock) => {
+        if (!toolCallBlocksByFirstId.has(id)) {
+          toolCallBlocksByFirstId.set(id, block);
+        }
+      };
       const finishBlock = (block: StreamingBlock) => {
         const contentIndex = getContentIndex(block);
         if (contentIndex === -1 || finishedBlocks.has(block)) {
@@ -229,7 +257,7 @@ export const streamOpenAICompletions: StreamFunction<
       const ensureTextBlock = () => {
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
-          blocks.push(textBlock);
+          appendBlock(textBlock);
           stream.push({
             type: "text_start",
             contentIndex: getContentIndex(textBlock),
@@ -245,7 +273,7 @@ export const streamOpenAICompletions: StreamFunction<
             thinking: "",
             thinkingSignature,
           };
-          blocks.push(thinkingBlock);
+          appendBlock(thinkingBlock);
           stream.push({
             type: "thinking_start",
             contentIndex: getContentIndex(thinkingBlock),
@@ -306,8 +334,9 @@ export const streamOpenAICompletions: StreamFunction<
           }
           if (toolCall.id) {
             toolCallBlocksById.set(toolCall.id, block);
+            rememberFirstToolCallById(toolCall.id, block);
           }
-          blocks.push(block);
+          appendBlock(block);
           stream.push({
             type: "toolcall_start",
             contentIndex: getContentIndex(block),
@@ -342,7 +371,18 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      for await (const chunk of openaiStream) {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+        provider: model.provider,
+        api: model.api,
+        model: model.id,
+        timeoutMs: getFirstStreamEventTimeoutMs(options) ?? 0,
+        stage: "completions",
+        abort: firstEventAbort.abort,
+        onTimeout: getFirstStreamEventTimeoutHandler(options),
+        hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+      });
+
+      for await (const chunk of guardedOpenaiStream) {
         if (!chunk || typeof chunk !== "object") {
           continue;
         }
@@ -372,7 +412,7 @@ export const streamOpenAICompletions: StreamFunction<
         }
 
         if (choice.finish_reason) {
-          const finishReasonResult = mapStopReason(choice.finish_reason);
+          const finishReasonResult = mapOpenAIStopReason(choice.finish_reason);
           output.stopReason = finishReasonResult.stopReason;
           if (finishReasonResult.errorMessage) {
             output.errorMessage = finishReasonResult.errorMessage;
@@ -427,6 +467,7 @@ export const streamOpenAICompletions: StreamFunction<
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
                 toolCallBlocksById.set(toolCall.id, block);
+                rememberFirstToolCallById(toolCall.id, block);
               }
               if (!block.name && toolCall.function?.name) {
                 block.name = toolCall.function.name;
@@ -452,9 +493,7 @@ export const streamOpenAICompletions: StreamFunction<
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
               if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
-                const matchingToolCall = output.content.find(
-                  (b) => b.type === "toolCall" && b.id === detail.id,
-                ) as ToolCall | undefined;
+                const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
                 if (matchingToolCall) {
                   matchingToolCall.thoughtSignature = JSON.stringify(detail);
                 }
@@ -516,6 +555,8 @@ export const streamOpenAICompletions: StreamFunction<
       }
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      firstEventAbort?.dispose();
     }
   })();
 
@@ -597,6 +638,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    fetch: buildGuardedModelFetch(model),
   });
 }
 
@@ -1117,18 +1159,19 @@ export function convertMessages(
         const toolMsg = transformedMessages[j] as ToolResultMessage;
 
         // Extract text and image content
-        const textResult = toolMsg.content
-          .filter(isTextContentBlock)
-          .map((block) => block.text)
-          .join("\n");
+        const textResult = extractToolResultText(toolMsg.content);
+        const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
-        const hasText = textResult.length > 0;
+        const content = sanitizeToolResultText(
+          textResult,
+          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
+        );
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
-          content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+          content,
           tool_call_id: toolMsg.toolCallId,
         };
         if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -1241,34 +1284,6 @@ function parseChunkUsage(
   };
   calculateCost(model, usage);
   return usage;
-}
-
-function mapStopReason(reason: string): {
-  stopReason: StopReason;
-  errorMessage?: string;
-} {
-  if (reason === null) {
-    return { stopReason: "stop" };
-  }
-  switch (reason) {
-    case "stop":
-    case "end":
-      return { stopReason: "stop" };
-    case "length":
-      return { stopReason: "length" };
-    case "function_call":
-    case "tool_calls":
-      return { stopReason: "toolUse" };
-    case "content_filter":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
-    case "network_error":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
-    default:
-      return {
-        stopReason: "error",
-        errorMessage: `Provider finish_reason: ${reason}`,
-      };
-  }
 }
 
 /**

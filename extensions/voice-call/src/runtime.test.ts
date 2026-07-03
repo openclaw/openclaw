@@ -29,22 +29,42 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   resolveVoiceCallSessionKey: (params: {
-    config: Pick<VoiceCallConfig, "sessionScope">;
+    config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
     callId: string;
     phone?: string;
     explicitSessionKey?: string;
   }) => {
     const explicit = params.explicitSessionKey?.trim();
     if (explicit) {
-      return explicit;
+      const lower = explicit.toLowerCase();
+      return lower === "global" || lower === "unknown" || lower.startsWith("agent:")
+        ? explicit
+        : `agent:${params.config.agentId?.trim().toLowerCase() || "main"}:${explicit}`;
     }
+    const agentId = params.config.agentId?.trim().toLowerCase() || "main";
+    const prefix = `agent:${agentId}:voice`;
     if (params.config.sessionScope === "per-call") {
-      return `voice:call:${params.callId}`;
+      return `${prefix}:call:${params.callId}`.toLowerCase();
     }
     const normalizedPhone = params.phone?.replace(/\D/g, "");
-    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+    return (
+      normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
+    ).toLowerCase();
   },
-  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
+  resolveVoiceCallNumberRouteKeyForCall: (call: {
+    direction?: "inbound" | "outbound";
+    to?: string;
+    metadata?: { numberRouteKey?: unknown };
+  }) =>
+    call.direction === "inbound"
+      ? typeof call.metadata?.numberRouteKey === "string"
+        ? call.metadata.numberRouteKey
+        : call.to
+      : undefined,
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig, numberRouteKey?: string) => {
+    const route = numberRouteKey ? config.numbers[numberRouteKey] : undefined;
+    return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
+  },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -378,9 +398,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await runtime.stop();
   });
 
-  it("wires the shared realtime agent consult tool and handler", async () => {
+  it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
+    config.numbers["+15550009999"] = {
+      agentId: "inbound-route",
+      responseModel: "openai/gpt-5.5",
+    };
     config.realtime.enabled = true;
     config.realtime.tools = [
       {
@@ -446,7 +470,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
       "embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:15550009999");
+    expect(consultParams.sessionKey).toBe("agent:main:voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
@@ -465,7 +489,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
-  it("uses persisted per-call session keys for realtime consults", async () => {
+  it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
@@ -513,7 +537,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       ),
       "per-call embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:call:call-1");
+    expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
@@ -582,7 +606,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         error: console.error,
         debug: console.debug,
       },
-      sessionKey: "voice:15550001234",
+      sessionKey: "agent:main:voice:15550001234",
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });

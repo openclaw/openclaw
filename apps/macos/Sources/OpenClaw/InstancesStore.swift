@@ -221,16 +221,6 @@ final class InstancesStore {
         }
     }
 
-    private func decodeAndApplyPresenceData(_ data: Data) {
-        do {
-            let decoded = try JSONDecoder().decode([PresenceEntry].self, from: data)
-            self.applyPresence(decoded)
-        } catch {
-            self.logger.error("presence decode from event failed: \(error.localizedDescription, privacy: .public)")
-            self.lastError = error.localizedDescription
-        }
-    }
-
     func handlePresenceEventPayload(_ payload: OpenClawProtocol.AnyCodable) {
         do {
             let wrapper = try GatewayPayloadDecoding.decode(payload, as: PresenceEventPayload.self)

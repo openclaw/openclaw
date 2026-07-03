@@ -14,6 +14,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
@@ -21,6 +22,7 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
@@ -104,13 +106,15 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
   currentChannelId?: string;
+  chatId?: string;
+  channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
@@ -155,6 +159,7 @@ export type RunCliAgentParams = {
 /** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;

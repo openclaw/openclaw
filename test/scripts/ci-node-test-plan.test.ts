@@ -177,6 +177,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
     expect(
       compact
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === "core-runtime-tui-pty")?.env,
+    ).toEqual({
+      OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+    });
+    expect(
+      compact
         .filter((shard) => shard.groups.some((group) => !group.includePatterns))
         .every((shard) => shard.timeoutMinutes === 120),
     ).toBe(true);
@@ -487,6 +494,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-infra-process",
       },
       {
+        configs: ["test/vitest/vitest.tui-pty.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-tui-pty",
+      },
+      {
         configs: [
           "test/vitest/vitest.media.config.ts",
           "test/vitest/vitest.media-understanding.config.ts",
@@ -528,6 +541,21 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "core-runtime-cron-service",
       },
     ]);
+  });
+
+  it("runs the TUI PTY local smoke inside the CI node shard", () => {
+    const tuiPtyShard = createNodeTestShards().find(
+      (shard) => shard.shardName === "core-runtime-tui-pty",
+    );
+
+    expect(tuiPtyShard).toMatchObject({
+      checkName: "checks-node-core-runtime-tui-pty",
+      configs: ["test/vitest/vitest.tui-pty.config.ts"],
+      env: {
+        OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+      },
+      requiresDist: false,
+    });
   });
 
   it("covers every infra test exactly once across core runtime infra shards", () => {
@@ -834,7 +862,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).includes("/"))
+      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);

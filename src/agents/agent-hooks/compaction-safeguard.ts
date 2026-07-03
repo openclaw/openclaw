@@ -10,6 +10,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
   computeAdaptiveChunkRatioWithWorker,
@@ -207,8 +208,13 @@ async function tryProviderSummarize(
     log.warn(`Compaction provider "${provider.id}" returned empty result, falling back to LLM.`);
     return undefined;
   } catch (err) {
-    // Abort/timeout errors must propagate — the caller requested cancellation.
-    if (isAbortError(err) || isTimeoutError(err)) {
+    // Propagate only when the caller explicitly cancelled. Provider-side
+    // AbortErrors (signal not aborted) fall through to LLM summarization.
+    if (params.signal?.aborted) {
+      throw err;
+    }
+    // Real non-abort transport timeouts (e.g. ETIMEDOUT) still propagate.
+    if (!isAbortError(err) && isTimeoutError(err)) {
       throw err;
     }
     log.warn(
@@ -445,6 +451,17 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       isError?: unknown;
     };
     if (toolResult.isError !== true) {
+      continue;
+    }
+    // Accepted sessions_spawn launches are successes, not failures, even when a legacy
+    // transcript persisted them with isError:true. Mirror the observer's detection
+    // (toolName + accepted child-run identity, see embedded-agent-subscribe.handlers.tools)
+    // so only real failures stay in the summary and non-spawn tools are never matched by shape.
+    if (
+      typeof toolResult.toolName === "string" &&
+      toolResult.toolName.trim() === "sessions_spawn" &&
+      normalizeAcceptedSessionSpawnResult(toolResult)
+    ) {
       continue;
     }
     const toolCallId = typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
@@ -1009,9 +1026,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           // Provider returned empty — fall through to LLM path.
           log.info("Compaction provider did not produce a result; falling back to LLM path.");
         } catch (err) {
-          // tryProviderSummarize rethrows abort/timeout — if we reach here it is
-          // an unexpected error from the assembly step. Fall through to LLM path.
-          if (isAbortError(err) || isTimeoutError(err)) {
+          // tryProviderSummarize rethrows on caller cancellation; reaching here
+          // means an unexpected error in the assembly step. Fall through to LLM.
+          if (signal?.aborted) {
+            throw err;
+          }
+          if (!isAbortError(err) && isTimeoutError(err)) {
             throw err;
           }
           log.warn(
