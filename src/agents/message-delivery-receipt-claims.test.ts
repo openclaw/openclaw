@@ -99,6 +99,41 @@ Message ID: 6655442331193344`),
     });
   });
 
+  it("parses delivery verbs as status claims (sent/queued/delivered/accepted)", () => {
+    expect(detectMessageDeliveryReceiptClaim("SMS was sent. Message ID: SM12345")).toMatchObject({
+      channel: "sms",
+      status: "sent",
+      providerId: "SM12345",
+    });
+    expect(detectMessageDeliveryReceiptClaim("SMS was queued. Message ID: SM12345")).toMatchObject({
+      channel: "sms",
+      status: "queued",
+      providerId: "SM12345",
+    });
+    expect(
+      detectMessageDeliveryReceiptClaim("SMS was delivered. Message ID: SM12345"),
+    ).toMatchObject({ channel: "sms", status: "delivered", providerId: "SM12345" });
+    expect(
+      detectMessageDeliveryReceiptClaim("SMS was accepted/queued. Message ID: SM12345"),
+    ).toMatchObject({ channel: "sms", status: "accepted/queued", providerId: "SM12345" });
+  });
+
+  it("detects bare accepted receipt starts without the /queued suffix", () => {
+    expect(
+      detectMessageDeliveryReceiptClaim("SMS was accepted. Message ID: 4797682962735104"),
+    ).toMatchObject({
+      channel: "sms",
+      status: "accepted",
+      providerId: "4797682962735104",
+    });
+  });
+
+  it("prefers explicit Status: field over delivery verb when both are present", () => {
+    expect(
+      detectMessageDeliveryReceiptClaim("SMS was queued. Status: delivered. Message ID: SM12345"),
+    ).toMatchObject({ channel: "sms", status: "delivered", providerId: "SM12345" });
+  });
+
   it("ignores generic non-SMS message confirmations", () => {
     expect(detectMessageDeliveryReceiptClaim("The Telegram message was sent.")).toBeNull();
   });

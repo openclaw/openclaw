@@ -41,6 +41,7 @@ import {
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
+import { SMS_DELIVERY_ASSERTION_RE_SOURCE } from "./message-delivery-receipt-claims.js";
 import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
@@ -245,13 +246,11 @@ function hasMessageToolOnlySourceDelivery(ctx: EmbeddedAgentSubscribeContext): b
 }
 
 function hasPotentialSmsReceiptAssertion(text: string): boolean {
-  return /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:sms|text message)\b)/iu.test(
-    text,
-  );
+  return new RegExp(SMS_DELIVERY_ASSERTION_RE_SOURCE, "iu").test(text);
 }
 
 function hasPartialSmsReceiptAssertionPrefix(text: string): boolean {
-  return /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
+  return /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered|accepted\/queued|accepted)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
     text,
   );
 }

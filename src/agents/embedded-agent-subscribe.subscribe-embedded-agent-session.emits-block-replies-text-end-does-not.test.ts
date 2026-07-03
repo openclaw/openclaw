@@ -488,6 +488,44 @@ Message ID: 6655442331193344`;
     expect(payload.text).not.toContain("SM_unverified_split");
   });
 
+  it("does not duplicate the guarded replacement when message_end follows a chunked receipt replacement", async () => {
+    // Regression: when blockReplyChunking is enabled and a text_end chunk contains
+    // an unsupported SMS receipt, emitBlockChunk emits the guard replacement but
+    // lastBlockReplyText must track the REPLACEMENT (not the original chunk) so
+    // message_end safety send does not re-emit the same "cannot verify" reply.
+    const onBlockReply = vi.fn();
+    const { emit } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 24, breakPreference: "newline" },
+    });
+    const receiptText = "I sent the SMS. Status: accepted/queued. Message ID: SM_chunk_dup_guard";
+
+    emitAssistantTextEnd({
+      emit,
+      content: receiptText,
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireBlockReplyPayload(onBlockReply);
+    expect(payload.text).toBe(
+      "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+    );
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: receiptText }],
+      } as AssistantMessage,
+    });
+    await Promise.resolve();
+
+    // The guard replacement must only be delivered once; message_end safety
+    // send must skip because lastBlockReplyText holds the replacement text.
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
   it("holds phase-aware SMS receipt prefixes before partial or block delivery can leak them", async () => {
     const onBlockReply = vi.fn();
     const onPartialReply = vi.fn();

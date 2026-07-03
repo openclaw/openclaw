@@ -312,6 +312,15 @@ function buildGatewayDeliveryPayload(params: {
   if ("pollId" in params.result) {
     payload.pollId = params.result.pollId;
   }
+  // Forward delivery receipt so client-side evidence extractors can verify
+  // provider status (e.g. Twilio queued/delivered) without a second round trip.
+  // Without this, successful SMS sends via the built-in message tool only carry
+  // the provider message id and the receipt guard rejects truthful status claims.
+  // Only forward the typed receipt field, not arbitrary channel result metadata,
+  // to avoid exposing plugin-private data through the client-facing payload.
+  if ("receipt" in params.result) {
+    payload.receipt = params.result.receipt;
+  }
   return payload;
 }
 

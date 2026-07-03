@@ -285,4 +285,63 @@ describe("message delivery receipts", () => {
       }),
     ).toEqual([]);
   });
+
+  it("harvests SMS receipt status from gateway delivery payloads that forward receipt metadata", () => {
+    // Gateway SMS sends round-trip through buildGatewayDeliveryPayload, which
+    // forwards receipt/meta so client-side evidence extraction can verify the
+    // provider status (e.g. Twilio queued) without a second round trip.
+    expect(
+      normalizeMessageToolDeliveryEvidence({
+        toolName: "message",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "{}",
+            },
+          ],
+          details: {
+            channel: "sms",
+            to: "+15551234567",
+            via: "gateway",
+            mediaUrl: null,
+            result: {
+              runId: "run-1",
+              messageId: "SM-gateway-status",
+              channel: "sms",
+              chatId: "+15551234567",
+              toJid: "+15551234567",
+              meta: {
+                from: "+15557654321",
+                status: "queued",
+              },
+              receipt: {
+                raw: [
+                  {
+                    channel: "sms",
+                    messageId: "SM-gateway-status",
+                    chatId: "+15551234567",
+                    toJid: "+15551234567",
+                    meta: {
+                      from: "+15557654321",
+                      status: "queued",
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-gateway-status",
+        status: "queued",
+        sender: "+15557654321",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
 });

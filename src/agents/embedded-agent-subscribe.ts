@@ -55,6 +55,7 @@ import {
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { SMS_DELIVERY_ASSERTION_RE_SOURCE } from "./message-delivery-receipt-claims.js";
 import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
 import { guardMessageDeliveryReceiptStreamData } from "./message-delivery-receipt-stream.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
@@ -334,11 +335,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const hasBlockReplyMedia = (payload: BlockReplyPayload): boolean =>
     Boolean(payload.mediaUrls?.length);
   const hasPotentialSmsReceiptAssertion = (text: string): boolean =>
-    /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:sms|text message)\b)/iu.test(
-      text,
-    );
+    new RegExp(SMS_DELIVERY_ASSERTION_RE_SOURCE, "iu").test(text);
   const hasPartialSmsReceiptAssertionPrefix = (text: string): boolean =>
-    /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
+    /\b(?:Sent(?:\s+to(?:\s+\S*)?)?|(?:sms|text message)\s+(?:was\s*)?|(?:sent|queued|delivered|accepted\/queued|accepted)\s+(?:(?:the|an?|this)\s+)?(?:s(?:m(?:s)?)?|t(?:e(?:x(?:t(?:\s+m(?:e(?:s(?:s(?:a(?:g(?:e)?)?)?)?)?)?)?)?)?)?)?)$/iu.test(
       text,
     );
   const hasPotentialOrPartialSmsReceiptAssertion = (text: string): boolean =>
@@ -399,7 +398,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       consumePendingToolMedia?: boolean;
       skipMessageDeliveryReceiptGuard?: boolean;
     },
-  ) => {
+  ): { emitted: boolean; payload: BlockReplyPayload } => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
     const consumesPendingToolMedia =
       options?.consumePendingToolMedia !== false && readPendingToolMediaReply(state) !== null;
@@ -421,7 +420,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         deliveryReceiptGuardSkippedReplies.add(deferredPayload);
       }
       state.deferredBlockReplies.push(deferredPayload);
-      return;
+      return { emitted: false, payload: deferredPayload };
     }
     const delivery = emitBlockReplySafely(withToolMedia, options);
     if (
@@ -434,6 +433,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         state.hasToolMediaBlockReply = true;
       }
     }
+    return delivery;
   };
   const flushDeferredBlockReplies = () => {
     if (state.deferredBlockReplies.length === 0) {
@@ -1166,7 +1166,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     pushAssistantText(chunk);
-    emitBlockReply(
+    const blockReplyDelivery = emitBlockReply(
       {
         text: cleanedText,
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
@@ -1182,7 +1182,16 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         skipMessageDeliveryReceiptGuard: options?.skipMessageDeliveryReceiptGuard,
       },
     );
+    // When the receipt guard replaces the chunk text, mark the REPLACEMENT as
+    // delivered so message_end safety send does not re-emit the same guarded
+    // reply. markBlockReplyTextHandled sets lastBlockReplyText to the original
+    // blockReplyText for dedup; when the guard replaced the text, also override
+    // lastDeliveredBlockReplyText so the safety-send check sees the replacement
+    // as already delivered.
     markBlockReplyTextHandled();
+    if (blockReplyDelivery.payload.text && blockReplyDelivery.payload.text !== cleanedText) {
+      state.lastDeliveredBlockReplyText = blockReplyDelivery.payload.text;
+    }
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>

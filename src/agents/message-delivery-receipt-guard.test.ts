@@ -255,4 +255,48 @@ Message ID: 4797682962735104`,
       mediaUrls: ["https://example.com/proof.png"],
     });
   });
+
+  it("rejects delivered claim when evidence only proves queued with same provider id", () => {
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "SMS was delivered. Message ID: SM-shared",
+        evidence: [
+          {
+            channel: "sms",
+            providerId: "SM-shared",
+            status: "queued",
+          },
+        ],
+      }),
+    ).toMatchObject({ allowed: false });
+  });
+
+  it("allows delivered claim when evidence status matches the delivery verb", () => {
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "SMS was delivered. Message ID: SM-shared",
+        evidence: [
+          {
+            channel: "sms",
+            providerId: "SM-shared",
+            status: "delivered",
+          },
+        ],
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("rejects delivered claim when evidence has no status but shares the provider id", () => {
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "SMS was delivered. Message ID: SM-shared",
+        evidence: [
+          {
+            channel: "sms",
+            providerId: "SM-shared",
+          },
+        ],
+      }),
+    ).toMatchObject({ allowed: false });
+  });
 });

@@ -8,16 +8,40 @@ export type MessageDeliveryReceiptClaim = {
   status?: string;
 };
 
-const SMS_PREFILTER_RE =
-  /\b(?:sms|text message)\b[\s\S]{0,240}\b(?:sent|queued|delivered|accepted\/queued|message id|status)\b|\b(?:sent|queued|delivered)\b[\s\S]{0,80}\b(?:sms|text message)\b(?:[\s\S]{0,240}\b(?:message id|status)\b)?|\bSent to\b[\s\S]{0,240}\b(?:To:|Status:|Message ID:)/iu;
-const SMS_DELIVERY_ASSERTION_RE =
-  /\b(?:Sent to\b|(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)\b|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:sms|text message)\b)/giu;
+const SMS_DELIVERY_VERBS = ["sent", "queued", "delivered", "accepted/queued", "accepted"] as const;
+const SMS_DELIVERY_VERB_RE_SOURCE = SMS_DELIVERY_VERBS.map((verb) =>
+  verb.replace(/[/.]/g, "\\$&"),
+).join("|");
+export const SMS_DELIVERY_ASSERTION_RE_SOURCE = `\\b(?:Sent to\\b|(?:sms|text message)\\s+(?:was\\s+)?(?:${SMS_DELIVERY_VERB_RE_SOURCE})\\b|(?:${SMS_DELIVERY_VERB_RE_SOURCE})\\s+(?:(?:the|an?|this)\\s+)?(?:sms|text message)\\b)`;
+const SMS_PREFILTER_RE = new RegExp(
+  `\\b(?:sms|text message)\\b[\\s\\S]{0,240}\\b(?:${SMS_DELIVERY_VERB_RE_SOURCE}|message id|status)\\b|\\b(?:${SMS_DELIVERY_VERB_RE_SOURCE})\\b[\\s\\S]{0,80}\\b(?:sms|text message)\\b(?:[\\s\\S]{0,240}\\b(?:message id|status)\\b)?|\\bSent to\\b[\\s\\S]{0,240}\\b(?:To:|Status:|Message ID:)`,
+  "iu",
+);
+const SMS_DELIVERY_ASSERTION_RE = new RegExp(SMS_DELIVERY_ASSERTION_RE_SOURCE, "giu");
+const SMS_DELIVERY_VERB_CAPTURE_RE = new RegExp(
+  `\\b(?:sms|text message)\\s+(?:was\\s+)?(${SMS_DELIVERY_VERB_RE_SOURCE})\\b|(${SMS_DELIVERY_VERB_RE_SOURCE})\\s+(?:(?:the|an?|this)\\s+)?(?:sms|text message)\\b`,
+  "iu",
+);
 const UNCERTAIN_OR_NEGATED_RE =
   /\b(?:not\s+(?:yet\s+)?sent|never\s+sent|did\s+not\s+send|didn't\s+send|haven't\s+sent|hasn't\s+sent|hadn't\s+sent)\b/iu;
 const QUOTED_DIAGNOSTIC_RE = /^\s*(?:>|["']).{0,120}\b(?:Sent to|Status:|Message ID:)/iu;
 
 function captureFirst(text: string, re: RegExp): string | undefined {
   return normalizeOptionalString(re.exec(text)?.[1]);
+}
+
+function captureFirstAnyGroup(text: string, re: RegExp): string | undefined {
+  const match = re.exec(text);
+  if (!match) {
+    return undefined;
+  }
+  for (let index = 1; index < match.length; index += 1) {
+    const value = normalizeOptionalString(match[index]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function normalizePhoneClaim(value: string | undefined): string | undefined {
@@ -48,7 +72,9 @@ function detectSingleMessageDeliveryReceiptClaim(text: string): MessageDeliveryR
   if (UNCERTAIN_OR_NEGATED_RE.test(trimmed) || QUOTED_DIAGNOSTIC_RE.test(trimmed)) {
     return null;
   }
-  const status = captureFirst(trimmed, /\bStatus:\s*([A-Za-z][A-Za-z/-]{1,40})/iu);
+  const explicitStatus = captureFirst(trimmed, /\bStatus:\s*([A-Za-z][A-Za-z/-]{1,40})/iu);
+  const verbStatus = captureFirstAnyGroup(trimmed, SMS_DELIVERY_VERB_CAPTURE_RE)?.toLowerCase();
+  const status = explicitStatus ?? verbStatus;
   const providerId = captureFirst(
     trimmed,
     /\b(?:Message ID|message id|provider id|provider message id):?\s*([A-Za-z0-9_-]{4,80})/iu,
@@ -59,10 +85,7 @@ function detectSingleMessageDeliveryReceiptClaim(text: string): MessageDeliveryR
       captureFirst(trimmed, /\b(?:sms|text message)\s+to\s*:?\s*(\+?\d[\d\s().-]{6,})/iu),
     );
   const sender = normalizePhoneClaim(captureFirst(trimmed, /\bFrom:\s*(\+?\d[\d\s().-]{6,})/iu));
-  const hasSmsDeliveryMarker =
-    /\b(?:(?:sms|text message)\s+(?:was\s+)?(?:sent|queued|delivered|accepted\/queued)|(?:sent|queued|delivered)\s+(?:(?:the|an?|this)\s+)?(?:sms|text message))\b/iu.test(
-      trimmed,
-    );
+  const hasSmsDeliveryMarker = SMS_DELIVERY_VERB_CAPTURE_RE.test(trimmed);
   if (!recipient && !hasSmsDeliveryMarker) {
     return null;
   }

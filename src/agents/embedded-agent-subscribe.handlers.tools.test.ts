@@ -956,6 +956,87 @@ describe("handleToolExecutionEnd message delivery evidence", () => {
       }),
     ]);
   });
+
+  it("records built-in message tool SMS receipt evidence from gateway delivery payloads", async () => {
+    // Gateway SMS sends round-trip through buildGatewayDeliveryPayload, which
+    // forwards receipt/meta so client-side evidence extraction captures the
+    // provider status (e.g. Twilio queued) alongside the provider message id.
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-sms-gateway",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-sms-gateway",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "{}",
+          },
+        ],
+        details: {
+          channel: "sms",
+          to: "+15551234567",
+          via: "gateway",
+          mediaUrl: null,
+          result: {
+            runId: "run-gateway",
+            messageId: "SM-gateway-evidence",
+            channel: "sms",
+            chatId: "+15551234567",
+            toJid: "+15551234567",
+            meta: {
+              from: "+15557654321",
+              status: "queued",
+            },
+            receipt: {
+              raw: [
+                {
+                  channel: "sms",
+                  messageId: "SM-gateway-evidence",
+                  chatId: "+15551234567",
+                  toJid: "+15551234567",
+                  meta: {
+                    from: "+15557654321",
+                    status: "queued",
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-gateway-evidence",
+        status: "queued",
+        sender: "+15557654321",
+        recipient: "+15551234567",
+      }),
+    ]);
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "SMS was queued. Message ID: SM-gateway-evidence",
+        evidence: ctx.state.messageDeliveryEvidence,
+      }),
+    ).toEqual({ allowed: true });
+  });
 });
 
 describe("handleToolExecutionEnd mutating failure recovery", () => {
