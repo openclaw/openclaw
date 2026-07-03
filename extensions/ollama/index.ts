@@ -439,16 +439,20 @@ export default definePluginEntry({
   id: "ollama",
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
-  nodeHostCommands: createOllamaNodeHostCommands(),
   register(api: OpenClawPluginApi) {
+    const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRisk(api.logger);
     }
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
+    if (startupPluginConfig.nodeInference?.enabled !== false) {
+      for (const command of createOllamaNodeHostCommands()) {
+        api.registerNodeHostCommand(command);
+      }
+    }
     api.registerNodeInvokePolicy(createOllamaNodeInvokePolicy());
     api.registerTool(createOllamaNodeInferenceTool(api));
-    const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
     const resolveCurrentPluginConfig = (config?: OpenClawConfig): OllamaPluginConfig => {
       const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");
       if (runtimePluginConfig) {

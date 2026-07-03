@@ -179,6 +179,7 @@ function captureWrappedOllamaPayload(
 
 describe("ollama plugin", () => {
   it("registers node-local inference commands, policy, and agent tool", () => {
+    const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
 
@@ -187,12 +188,13 @@ describe("ollama plugin", () => {
         id: "ollama",
         name: "Ollama",
         source: "test",
+        registerNodeHostCommand,
         registerNodeInvokePolicy,
         registerTool,
       }),
     );
 
-    expect(plugin.nodeHostCommands?.map((entry) => entry.command)).toEqual([
+    expect(registerNodeHostCommand.mock.calls.map(([entry]) => entry.command)).toEqual([
       "ollama.models",
       "ollama.chat",
     ]);
@@ -202,6 +204,28 @@ describe("ollama plugin", () => {
         defaultPlatforms: ["macos", "linux", "windows"],
       }),
     );
+    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
+  });
+
+  it("keeps the agent tool but does not advertise node inference when disabled locally", () => {
+    const registerNodeHostCommand = vi.fn();
+    const registerNodeInvokePolicy = vi.fn();
+    const registerTool = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "ollama",
+        name: "Ollama",
+        source: "test",
+        pluginConfig: { nodeInference: { enabled: false } },
+        registerNodeHostCommand,
+        registerNodeInvokePolicy,
+        registerTool,
+      }),
+    );
+
+    expect(registerNodeHostCommand).not.toHaveBeenCalled();
+    expect(registerNodeInvokePolicy).toHaveBeenCalledOnce();
     expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
   });
 

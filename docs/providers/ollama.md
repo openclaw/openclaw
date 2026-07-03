@@ -365,6 +365,22 @@ Each run asks Ollama to disable model thinking and caps output at 512 tokens
 unless the tool call requests a different `maxTokens` value. Some models, such
 as GPT-OSS, do not support disabling thinking and may still use reasoning tokens.
 
+To keep Ollama running on a node without making it available to agents, set the
+following in the config used by that node host:
+
+```bash
+openclaw config set plugins.entries.ollama.config.nodeInference.enabled false
+```
+
+If the node uses the foreground `openclaw node run` command from the setup
+above, stop that process and run the command again. If it uses an installed node
+service, run `openclaw node restart`.
+
+The node stops advertising `ollama.models` and `ollama.chat`; Ollama itself and
+the Gateway's Ollama provider remain unchanged. Set the value to `true` and
+restart the node to advertise local inference again. A changed command surface
+may require approval through `openclaw nodes pending` after reconnect.
+
 You can verify the same node commands without an agent turn:
 
 ```bash
