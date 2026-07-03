@@ -11970,4 +11970,212 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(resolved.requiresReasoningContentOnAssistantMessages).toBe(false);
   });
+
+  // issue #99241: text-only toolResult content must survive the provider-boundary
+  // transform without being replaced by image/attachment placeholders.
+  describe("issue #99241 – text-only toolResult provider boundary preservation", () => {
+    const MARKER = "EXACT_TOOL_TEXT_99241_BOUNDARY";
+
+    const responsesModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+
+    const completionsModel = {
+      id: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      api: "openai-completions",
+      provider: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+    } satisfies Model<"openai-completions">;
+
+    it("preserves text-only toolResult in Responses function_call_output", () => {
+      const params = buildOpenAIResponsesParams(
+        responsesModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-responses" as const,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_99241",
+                  name: "read_file",
+                  arguments: { path: "/tmp/test.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_99241",
+              toolName: "read_file",
+              content: [{ type: "text", text: MARKER }],
+              isError: false,
+              timestamp: 2,
+            },
+            { role: "user", content: "summarize", timestamp: 3 },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as {
+        input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+      };
+
+      const output = params.input?.find((item) => item.type === "function_call_output");
+      expect(output).toBeDefined();
+
+      // The marker text must be present in the serialized output
+      const outputText = output?.output as string;
+      expect(typeof outputText).toBe("string");
+      expect(outputText).toContain(MARKER);
+
+      // Must NOT contain any image/attachment placeholder text
+      expect(outputText).not.toContain("(see attached image)");
+      expect(outputText).not.toContain("Attached image(s) from tool result:");
+      expect(outputText).not.toContain("image_url");
+    });
+
+    it("preserves text-only toolResult in Completions messages", () => {
+      const params = buildOpenAICompletionsParams(
+        completionsModel,
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-completions" as const,
+              provider: "deepseek",
+              model: "deepseek-v4-pro",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_99241",
+                  name: "read_file",
+                  arguments: { path: "/tmp/test.txt" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_99241",
+              toolName: "read_file",
+              content: [{ type: "text", text: MARKER }],
+              isError: false,
+              timestamp: 2,
+            },
+            { role: "user", content: "summarize", timestamp: 3 },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: unknown[] };
+
+      // Find the tool result message in the converted output
+      const toolMsg = params.messages.find((m: any) => m.role === "tool" && m.content === MARKER);
+      expect(toolMsg).toBeDefined();
+      expect(toolMsg.content).toBe(MARKER);
+
+      // Must NOT contain any image/attachment placeholder text
+      expect(toolMsg.content).not.toContain("(see attached image)");
+      expect(toolMsg.content).not.toContain("Attached image(s) from tool result:");
+      expect(toolMsg.content).not.toContain("image_url");
+    });
+
+    it("does not inject image placeholders for text-only toolResult even with mixed content models", () => {
+      // Model supports images but toolResult is text-only
+      const params = buildOpenAIResponsesParams(
+        { ...responsesModel, input: ["text", "image"] },
+        {
+          systemPrompt: "system",
+          messages: [
+            {
+              role: "assistant",
+              api: "openai-responses" as const,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_99241b",
+                  name: "web_search",
+                  arguments: { query: "test" },
+                },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: "call_99241b",
+              toolName: "web_search",
+              content: [{ type: "text", text: MARKER }],
+              isError: false,
+              timestamp: 2,
+            },
+            { role: "user", content: "done", timestamp: 3 },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as {
+        input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+      };
+
+      const output = params.input?.find((item) => item.type === "function_call_output");
+      expect(output).toBeDefined();
+
+      const outputText = output?.output as string;
+      expect(typeof outputText).toBe("string");
+      expect(outputText).toContain(MARKER);
+      expect(outputText).not.toContain("(see attached image)");
+      expect(outputText).not.toContain("Attached image(s) from tool result:");
+      expect(outputText).not.toContain("input_image");
+    });
+  });
 });

@@ -471,4 +471,96 @@ describe("pruneContextMessages", () => {
     const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.content).toEqual([{ type: "text", text: placeholder }]);
   });
+
+  // issue #99241: text-only toolResult must retain text during soft/hard trim
+  // without using image/attachment placeholders.
+  describe("issue #99241 – text-only toolResult trimming preserves text", () => {
+    const MARKER = "EXACT_TOOL_TEXT_99241_BOUNDARY";
+
+    it("soft-trims text-only toolResult preserving text, no image placeholders", () => {
+      const largeText = MARKER + "\n" + "x".repeat(4_000);
+      const messages: AgentMessage[] = [
+        makeUser("summarize this"),
+        makeToolResult([{ type: "text", text: largeText }]),
+        makeAssistant([{ type: "text", text: "done" }]),
+      ];
+
+      const result = pruneContextMessages({
+        messages,
+        settings: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+          keepLastAssistants: 1,
+          softTrimRatio: 0,
+          hardClearRatio: 10,
+          hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+          softTrim: {
+            maxChars: 200,
+            headChars: 100,
+            tailChars: 50,
+          },
+        },
+        ctx: CONTEXT_WINDOW_1M,
+        isToolPrunable: () => true,
+        contextWindowTokensOverride: 100,
+      });
+
+      const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(toolResult.content).toHaveLength(1);
+      expect(toolResult.content[0]?.type).toBe("text");
+      const textBlock = toolResult.content[0] as { type: "text"; text: string };
+
+      // Must NOT use image/attachment placeholders
+      expect(textBlock.text).not.toContain("(see attached image)");
+      expect(textBlock.text).not.toContain("Attached image(s) from tool result:");
+      expect(textBlock.text).not.toContain("image_url");
+      expect(textBlock.text).not.toContain("[image removed");
+
+      // Must include trimming notice (confirms text was trimmed, not replaced)
+      expect(textBlock.text).toContain("Tool result trimmed");
+
+      // Must still contain the original marker text (trimmed, not replaced)
+      expect(textBlock.text).toContain(MARKER);
+    });
+
+    it("hard-clears text-only toolResult with text placeholder, no image placeholder", () => {
+      const largeText = MARKER + "\n" + "x".repeat(4_000);
+      const messages: AgentMessage[] = [
+        makeUser("summarize this"),
+        makeToolResult([{ type: "text", text: largeText }]),
+        makeAssistant([{ type: "text", text: "done" }]),
+      ];
+
+      const placeholder = "[Old tool result content cleared]";
+      const result = pruneContextMessages({
+        messages,
+        settings: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+          keepLastAssistants: 1,
+          softTrimRatio: 0,
+          hardClearRatio: 0,
+          minPrunableToolChars: 1,
+          softTrim: {
+            maxChars: 5_000,
+            headChars: 2_000,
+            tailChars: 2_000,
+          },
+          hardClear: {
+            enabled: true,
+            placeholder,
+          },
+        },
+        ctx: CONTEXT_WINDOW_1M,
+        isToolPrunable: () => true,
+        contextWindowTokensOverride: 8,
+      });
+
+      const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      expect(toolResult.content).toEqual([{ type: "text", text: placeholder }]);
+
+      // Confirm the placeholder is text-based, not image/attachment
+      const textBlock = toolResult.content[0] as { type: "text"; text: string };
+      expect(textBlock.text).not.toContain("(see attached image)");
+      expect(textBlock.text).not.toContain("image_url");
+    });
+  });
 });
