@@ -279,6 +279,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
+  // Never carry pre-run last-compaction stamps in the metadata patch: merging
+  // a stale snapshot must not roll back an outcome recorded while the run was
+  // in flight. The stamp is added conditionally at write time below.
+  delete next.lastCompactionAt;
+  delete next.lastCompactionOutcome;
+  delete next.lastCompactionReason;
   const metadataPatch = preserveUserFacingRunState
     ? {
         updatedAt: next.updatedAt,
@@ -392,6 +398,11 @@ export async function recordCliCompactionInStore(params: {
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
   const compactedAt = next.updatedAt;
+  // Same stale-snapshot rule as updateSessionStoreAfterAgentRun: the stamp is
+  // only ever applied from the guarded updater below, never from this copy.
+  delete next.lastCompactionAt;
+  delete next.lastCompactionOutcome;
+  delete next.lastCompactionReason;
   const newSessionId = normalizeOptionalString(params.newSessionId);
   const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);

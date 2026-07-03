@@ -67,6 +67,7 @@ import {
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import { isCompactionStampCurrent } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -2585,6 +2586,24 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Trim no-ops are successful skips: persist the outcome so /status
+    // reflects the latest attempt (parity with the LLM-compaction branch).
+    const stampTrimSkippedOutcome = async (classification: string) => {
+      await updateSessionStore(storePath, (store) => {
+        const entryToUpdate = store[compactTarget.primaryKey];
+        if (!entryToUpdate) {
+          return;
+        }
+        const skippedAt = Date.now();
+        if (!isCompactionStampCurrent(entryToUpdate, skippedAt)) {
+          return;
+        }
+        entryToUpdate.lastCompactionAt = skippedAt;
+        entryToUpdate.lastCompactionOutcome = "skipped";
+        entryToUpdate.lastCompactionReason = classification;
+      });
+    };
+
     const trimPreflight = await preflightSessionTranscriptForManualCompact(
       {
         sessionId,
@@ -2598,6 +2617,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     if (!trimPreflight.compacted) {
+      await stampTrimSkippedOutcome(
+        "kept" in trimPreflight ? "below_threshold" : "no_compactable_entries",
+      );
       if ("kept" in trimPreflight) {
         respond(
           true,
@@ -2655,6 +2677,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     if (!trimResult.compacted) {
+      await stampTrimSkippedOutcome(
+        "kept" in trimResult ? "below_threshold" : "no_compactable_entries",
+      );
       if ("kept" in trimResult) {
         respond(
           true,
