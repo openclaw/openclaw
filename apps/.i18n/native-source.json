@@ -10635,7 +10635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 58,
+      "line": 59,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Off",
       "surface": "apple",
@@ -10643,7 +10643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 60,
+      "line": 61,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "While Using",
       "surface": "apple",
@@ -10651,7 +10651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 62,
+      "line": 63,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always",
       "surface": "apple",
@@ -10659,7 +10659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 74,
+      "line": 75,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
       "surface": "apple",
@@ -10667,7 +10667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 76,
+      "line": 77,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
       "surface": "apple",
@@ -10675,7 +10675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 79,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
       "surface": "apple",
@@ -10683,7 +10683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 80,
+      "line": 81,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location sharing is disabled.",
       "surface": "apple",
@@ -10691,7 +10691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 82,
+      "line": 83,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location Services are off in iOS Settings.",
       "surface": "apple",
@@ -10699,7 +10699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 86,
+      "line": 87,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed. Precise Location is on.",
       "surface": "apple",
@@ -10707,7 +10707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 90,
+      "line": 91,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed. Precise Location is off.",
       "surface": "apple",
@@ -10715,7 +10715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 94,
+      "line": 95,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Foreground location requests are allowed.",
       "surface": "apple",
@@ -10723,7 +10723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 96,
+      "line": 97,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed. Precise Location is on.",
       "surface": "apple",
@@ -10731,7 +10731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 98,
+      "line": 99,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed. Precise Location is off.",
       "surface": "apple",
@@ -10739,7 +10739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 100,
+      "line": 101,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Background location requests and significant-change updates are allowed.",
       "surface": "apple",
@@ -10747,7 +10747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 102,
+      "line": 103,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is on.",
       "surface": "apple",
@@ -10755,7 +10755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 104,
+      "line": 105,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is off.",
       "surface": "apple",
@@ -10763,7 +10763,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 106,
+      "line": 107,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Always is selected, but iOS currently allows location only while using the app.",
       "surface": "apple",
@@ -10771,7 +10771,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 108,
+      "line": 109,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location permission is denied in iOS Settings.",
       "surface": "apple",
@@ -10779,7 +10779,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 110,
+      "line": 111,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Location permission is restricted on this device.",
       "surface": "apple",
@@ -10787,7 +10787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 112,
+      "line": 113,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "Choose a location mode to request iOS permission.",
       "surface": "apple",
@@ -10795,7 +10795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 114,
+      "line": 115,
       "path": "apps/ios/Sources/Location/LocationPermissionSummary.swift",
       "source": "OpenClaw cannot determine the current iOS location permission.",
       "surface": "apple",

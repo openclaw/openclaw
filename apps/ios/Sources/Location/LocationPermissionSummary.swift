@@ -14,6 +14,7 @@ struct LocationPermissionSummary: Equatable {
         authorizationStatus: CLAuthorizationStatus) -> OpenClawLocationMode
     {
         guard locationServicesEnabled else { return currentMode }
+        guard currentMode != .off else { return .off }
         switch authorizationStatus {
         case .authorizedAlways:
             return .always

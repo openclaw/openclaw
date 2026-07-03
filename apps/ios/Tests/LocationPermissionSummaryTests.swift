@@ -88,22 +88,22 @@ import Testing
         #expect(summary.detailText == "Location Services are off in iOS Settings.")
     }
 
-    @Test func `external ios always grant promotes disabled app mode`() {
+    @Test func `external ios always grant preserves disabled app mode`() {
         let mode = LocationPermissionSummary.reconciledDesiredMode(
             currentMode: .off,
             locationServicesEnabled: true,
             authorizationStatus: .authorizedAlways)
 
-        #expect(mode == .always)
+        #expect(mode == .off)
     }
 
-    @Test func `external ios while using grant promotes disabled app mode`() {
+    @Test func `external ios while using grant preserves disabled app mode`() {
         let mode = LocationPermissionSummary.reconciledDesiredMode(
             currentMode: .off,
             locationServicesEnabled: true,
             authorizationStatus: .authorizedWhenInUse)
 
-        #expect(mode == .whileUsing)
+        #expect(mode == .off)
     }
 
     @Test func `ios while using grant preserves always intent for mismatch warning`() {
