@@ -1,6 +1,7 @@
 // Policy doctor metadata tests cover rule metadata.
 import { describe, expect, it } from "vitest";
-import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
+import { POLICY_FIX_METADATA, POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { POLICY_CHECK_IDS, POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
 
 describe("policy doctor metadata", () => {
   it("describes strictness for agent-scoped policy fields", () => {
@@ -157,5 +158,98 @@ describe("policy doctor metadata", () => {
         selectors: ["agentIds"],
       },
     ]);
+  });
+
+  it("classifies every policy finding for fix recommendation coverage", () => {
+    expect(POLICY_FIX_METADATA.map((rule) => rule.checkId)).toHaveLength(
+      new Set(POLICY_FIX_METADATA.map((rule) => rule.checkId)).size,
+    );
+    expect([...POLICY_FIX_METADATA_BY_CHECK_ID.keys()].toSorted()).toEqual(
+      [...POLICY_CHECK_IDS].toSorted(),
+    );
+  });
+
+  it("keeps policy fix class assignments explicit", () => {
+    const grouped = Object.groupBy(POLICY_FIX_METADATA, (rule) => rule.fixClass);
+
+    expect({
+      automatic: grouped.automatic?.map((rule) => rule.checkId).toSorted(),
+      manual: grouped.manual?.map((rule) => rule.checkId).toSorted(),
+      reviewRequired: grouped.reviewRequired?.map((rule) => rule.checkId).toSorted(),
+      unsupported: grouped.unsupported?.map((rule) => rule.checkId).toSorted(),
+      validateOnly: grouped.validateOnly?.map((rule) => rule.checkId).toSorted() ?? [],
+    }).toEqual({
+      automatic: [
+        "policy/agents-tool-not-denied",
+        "policy/channels-denied-provider",
+        "policy/data-handling-redaction-disabled",
+        "policy/data-handling-telemetry-content-capture",
+        "policy/gateway-control-ui-insecure",
+        "policy/gateway-remote-enabled",
+        "policy/ingress-group-mention-required",
+        "policy/ingress-open-groups-denied",
+        "policy/tools-elevated-enabled",
+        "policy/tools-required-deny-missing",
+      ],
+      manual: [
+        "policy/attestation-hash-mismatch",
+        "policy/auth-profile-invalid-metadata",
+        "policy/auth-profile-unapproved-mode",
+        "policy/exec-approvals-agent-security-unapproved",
+        "policy/exec-approvals-allowlist-missing",
+        "policy/exec-approvals-allowlist-unexpected",
+        "policy/exec-approvals-default-security-unapproved",
+        "policy/exec-approvals-invalid",
+        "policy/exec-approvals-missing",
+        "policy/gateway-auth-disabled",
+        "policy/gateway-http-url-fetch-unrestricted",
+        "policy/policy-hash-mismatch",
+        "policy/policy-jsonc-invalid",
+        "policy/policy-jsonc-missing",
+        "policy/sandbox-browser-cdp-source-range-missing",
+        "policy/secrets-unmanaged-provider",
+        "policy/tools-missing-owner",
+        "policy/tools-missing-risk-level",
+        "policy/tools-missing-sensitivity-token",
+        "policy/tools-unknown-risk-level",
+        "policy/tools-unknown-sensitivity-token",
+      ],
+      reviewRequired: [
+        "policy/agents-workspace-access-denied",
+        "policy/data-handling-session-retention-not-enforced",
+        "policy/data-handling-session-transcript-memory-enabled",
+        "policy/exec-approvals-auto-allow-skills-enabled",
+        "policy/gateway-http-endpoint-enabled",
+        "policy/gateway-node-command-denied",
+        "policy/gateway-non-loopback-bind",
+        "policy/gateway-rate-limit-missing",
+        "policy/gateway-tailscale-funnel",
+        "policy/ingress-dm-policy-unapproved",
+        "policy/ingress-dm-scope-unapproved",
+        "policy/mcp-denied-server",
+        "policy/mcp-unapproved-server",
+        "policy/models-denied-provider",
+        "policy/models-unapproved-provider",
+        "policy/network-private-access-enabled",
+        "policy/sandbox-backend-unapproved",
+        "policy/sandbox-container-host-network-denied",
+        "policy/sandbox-container-mount-mode-required",
+        "policy/sandbox-container-namespace-join-denied",
+        "policy/sandbox-container-runtime-socket-mount",
+        "policy/sandbox-container-unconfined-profile",
+        "policy/sandbox-mode-unapproved",
+        "policy/secrets-denied-provider-source",
+        "policy/secrets-insecure-provider",
+        "policy/tools-also-allow-missing",
+        "policy/tools-also-allow-unexpected",
+        "policy/tools-exec-ask-unapproved",
+        "policy/tools-exec-host-unapproved",
+        "policy/tools-exec-security-unapproved",
+        "policy/tools-fs-workspace-only-required",
+        "policy/tools-profile-unapproved",
+      ],
+      unsupported: ["policy/sandbox-container-posture-unobservable"],
+      validateOnly: [],
+    });
   });
 });
