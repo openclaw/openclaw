@@ -2,6 +2,7 @@ import type { RouteHookOptions } from "@openclaw/uirouter";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { loadChannels } from "../../lib/channels/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatusState } from "../../lib/model-auth.ts";
 import {
@@ -9,7 +10,6 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
-import { loadChannels } from "../channels/data.ts";
 import { loadCronJobsPage, loadCronStatus } from "../cron/data.ts";
 import { loadDebug } from "../debug/data.ts";
 import { loadPresence } from "../instances/data.ts";

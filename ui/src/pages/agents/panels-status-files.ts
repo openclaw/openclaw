@@ -14,6 +14,7 @@ import type {
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   formatCronPayload,
@@ -22,7 +23,6 @@ import {
   formatNextRun,
 } from "../../lib/presenter.ts";
 import { formatBytes, type AgentContext } from "../../ui/views/agents-utils.ts";
-import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../channels/config-extras.ts";
 import type { AgentsPanel } from "./types.ts";
 
 function countWords(text: string) {

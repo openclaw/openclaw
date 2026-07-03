@@ -5,7 +5,7 @@ import {
   SETTINGS_NAVIGATION_ROUTES,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-routes.ts";
+import { isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 
@@ -17,9 +17,10 @@ function renderSettingsSectionNav(
   if (!isSettingsNavigationRoute(currentRouteId)) {
     return nothing;
   }
+  const routes = SETTINGS_NAVIGATION_ROUTES.filter(isRouteId);
   return html`
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
-      ${SETTINGS_NAVIGATION_ROUTES.map((routeId) => {
+      ${routes.map((routeId) => {
         const active = currentRouteId === routeId;
         const href = pathForRoute(routeId, basePath);
         return html`

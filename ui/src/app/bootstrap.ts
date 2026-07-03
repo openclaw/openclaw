@@ -17,6 +17,7 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability, resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -433,6 +434,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const gateway = createApplicationGateway(settings, startup.password ?? "");
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
+  const channels = createChannelCapability(gateway);
   const config = createApplicationConfigCapability({
     basePath,
     auth: {
@@ -520,6 +522,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     gateway,
     agentIdentity,
     agentSelection,
+    channels,
     config,
     runtimeConfig,
     sessions,
@@ -549,6 +552,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       stopConfigRefresh();
       router.stop();
       gateway.stop();
+      channels.dispose();
       sessions.dispose();
       runtimeConfig.dispose();
       overlays.dispose();

@@ -16,12 +16,10 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
-  ChannelsStatusSnapshot,
   SessionCompactionCheckpoint,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
-  NostrProfile,
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../api/types.ts";
@@ -56,20 +54,6 @@ import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "../pages/agents/data.ts";
-import {
-  handleChannelConfigReload as handleChannelConfigReloadInternal,
-  handleChannelConfigSave as handleChannelConfigSaveInternal,
-  handleNostrProfileCancel as handleNostrProfileCancelInternal,
-  handleNostrProfileEdit as handleNostrProfileEditInternal,
-  handleNostrProfileFieldChange as handleNostrProfileFieldChangeInternal,
-  handleNostrProfileImport as handleNostrProfileImportInternal,
-  handleNostrProfileSave as handleNostrProfileSaveInternal,
-  handleNostrProfileToggleAdvanced as handleNostrProfileToggleAdvancedInternal,
-  handleWhatsAppLogout as handleWhatsAppLogoutInternal,
-  handleWhatsAppStart as handleWhatsAppStartInternal,
-  handleWhatsAppWait as handleWhatsAppWaitInternal,
-} from "../pages/channels/actions.ts";
-import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
 import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
 import { restoreChatComposerState } from "../pages/chat/composer-persistence.ts";
 import {
@@ -423,17 +407,6 @@ export class OpenClawApp extends LitElement {
   @state() aiAgentsSearchQuery = "";
   @state() aiAgentsActiveSection: string | null = null;
   @state() aiAgentsActiveSubsection: string | null = null;
-
-  @state() channelsLoading = false;
-  @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
-  @state() channelsError: string | null = null;
-  @state() channelsLastSuccess: number | null = null;
-  @state() whatsappLoginMessage: string | null = null;
-  @state() whatsappLoginQrDataUrl: string | null = null;
-  @state() whatsappLoginConnected: boolean | null = null;
-  @state() whatsappBusy = false;
-  @state() nostrProfileFormState: NostrProfileFormState | null = null;
-  @state() nostrProfileAccountId: string | null = null;
 
   @state() presenceLoading = false;
   @state() presenceEntries: PresenceEntry[] = [];
@@ -1293,50 +1266,6 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof steerQueuedChatMessageInternal>[0],
       id,
     );
-  }
-
-  async handleWhatsAppStart(force: boolean) {
-    await handleWhatsAppStartInternal(this, force);
-  }
-
-  async handleWhatsAppWait() {
-    await handleWhatsAppWaitInternal(this);
-  }
-
-  async handleWhatsAppLogout() {
-    await handleWhatsAppLogoutInternal(this);
-  }
-
-  async handleChannelConfigSave() {
-    await handleChannelConfigSaveInternal(this);
-  }
-
-  async handleChannelConfigReload() {
-    await handleChannelConfigReloadInternal(this);
-  }
-
-  handleNostrProfileEdit(accountId: string, profile: NostrProfile | null) {
-    handleNostrProfileEditInternal(this, accountId, profile);
-  }
-
-  handleNostrProfileCancel() {
-    handleNostrProfileCancelInternal(this);
-  }
-
-  handleNostrProfileFieldChange(field: keyof NostrProfile, value: string) {
-    handleNostrProfileFieldChangeInternal(this, field, value);
-  }
-
-  async handleNostrProfileSave() {
-    await handleNostrProfileSaveInternal(this);
-  }
-
-  async handleNostrProfileImport() {
-    await handleNostrProfileImportInternal(this);
-  }
-
-  handleNostrProfileToggleAdvanced() {
-    handleNostrProfileToggleAdvancedInternal(this);
   }
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {

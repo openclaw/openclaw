@@ -16,6 +16,7 @@ import type {
 } from "../../api/types.ts";
 // Cron page data, mutations, and loader.
 import { t } from "../../i18n/index.ts";
+import { loadChannels, type ChannelsState } from "../../lib/channels/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { toNumber } from "../../lib/format.ts";
 import {
@@ -29,7 +30,6 @@ import {
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { loadChannels, type ChannelsState } from "../channels/data.ts";
 import { getCronJobPayload, hasCronJobPayload } from "./payload.ts";
 import { CRON_CHANNEL_LAST } from "./types.ts";
 import type { CronFormState } from "./types.ts";

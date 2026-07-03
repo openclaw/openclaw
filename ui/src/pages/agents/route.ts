@@ -2,6 +2,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { loadChannels } from "../../lib/channels/index.ts";
 import {
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
@@ -18,7 +19,6 @@ import {
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
 } from "../../ui/views/agents-utils.ts";
-import { loadChannels } from "../channels/data.ts";
 import { runCronJob } from "../cron/data.ts";
 import {
   buildToolsEffectiveRequestKey,

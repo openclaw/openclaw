@@ -1,6 +1,3 @@
-// import { page as activityPage } from "./pages/activity/route.ts";
-// import { page as agentsPage } from "./pages/agents/route.ts";
-// import { page as channelsPage } from "./pages/channels/route.ts";
 // import { pages as configPages } from "./pages/config/route.ts";
 // import { page as cronPage } from "./pages/cron/route.ts";
 // import { page as debugPage } from "./pages/debug/route.ts";
@@ -15,6 +12,9 @@
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
 import type { ApplicationContext } from "./app/context.ts";
+// import { page as activityPage } from "./pages/activity/route.ts";
+// import { page as agentsPage } from "./pages/agents/route.ts";
+import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 
@@ -35,7 +35,7 @@ export type AppRoute = PageDefinition<
   unknown
 >;
 
-export const APP_ROUTE_TREE = [chatPage, skillWorkshopPage] as const;
+export const APP_ROUTE_TREE = [chatPage, channelsPage, skillWorkshopPage] as const;
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
 export const APP_ROUTE_IDS = APP_ROUTE_TREE.map((route) => route.id) as readonly RouteId[];
 
