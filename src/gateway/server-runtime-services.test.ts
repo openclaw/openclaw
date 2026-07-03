@@ -410,3 +410,26 @@ function createMaintenanceHandles() {
     mediaCleanup: trackTestInterval(setInterval(() => undefined, 60_000)),
   };
 }
+
+it("clears tracked maintenance interval handles between test cases", () => {
+  const activeIntervalCount = () => {
+    const resources = (
+      process as NodeJS.Process & { getActiveResourcesInfo(): string[] }
+    ).getActiveResourcesInfo();
+    return resources.filter((resource) => resource === "Timeout").length;
+  };
+
+  const before = activeIntervalCount();
+  createMaintenanceHandles();
+  const during = activeIntervalCount();
+  expect(during - before).toBeGreaterThanOrEqual(4);
+
+  for (const handle of testIntervalHandles) {
+    clearInterval(handle);
+  }
+  testIntervalHandles.length = 0;
+
+  const after = activeIntervalCount();
+  console.log(`[interval-cleanup] before=${before} during=${during} after=${after}`);
+  expect(after).toBe(before);
+});

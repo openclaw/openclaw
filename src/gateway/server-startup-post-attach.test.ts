@@ -2219,6 +2219,31 @@ describe("startGatewayPostAttachRuntime", () => {
     currentLiveCron = reloadedCron;
     expect(ctx.getCron()).toBe(reloadedCron);
   });
+
+  it("clears tracked post-attach interval handles between test cases", () => {
+    const activeIntervalCount = () => {
+      const resources = (
+        process as NodeJS.Process & { getActiveResourcesInfo(): string[] }
+      ).getActiveResourcesInfo();
+      return resources.filter((resource) => resource === "Timeout").length;
+    };
+
+    const before = activeIntervalCount();
+    trackTestInterval(setInterval(() => {}, 1 << 30));
+    trackTestInterval(setInterval(() => {}, 1 << 30));
+    trackTestInterval(setInterval(() => {}, 1 << 30));
+    const during = activeIntervalCount();
+    expect(during - before).toBeGreaterThanOrEqual(3);
+
+    for (const handle of testIntervalHandles) {
+      clearInterval(handle);
+    }
+    testIntervalHandles.length = 0;
+
+    const after = activeIntervalCount();
+    console.log(`[interval-cleanup] before=${before} during=${during} after=${after}`);
+    expect(after).toBe(before);
+  });
 });
 
 function createPostAttachRuntimeDeps(
