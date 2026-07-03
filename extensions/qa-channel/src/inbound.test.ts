@@ -1,8 +1,19 @@
 // Qa Channel tests cover inbound plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
+import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
 import { handleQaInbound, isHttpMediaUrl } from "./inbound.js";
+
+vi.mock("./bus-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bus-client.js")>();
+  return {
+    ...actual,
+    deleteQaBusMessage: vi.fn(async () => ({ message: {} })),
+    editQaBusMessage: vi.fn(async () => ({ message: {} })),
+    sendQaBusMessage: vi.fn(async () => ({ message: { id: "preview-1" } })),
+  };
+});
 
 type HandleQaInboundParams = Parameters<typeof handleQaInbound>[0];
 
@@ -66,6 +77,119 @@ describe("isHttpMediaUrl", () => {
 });
 
 describe("handleQaInbound", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("publishes partial replies as one edited preview before final delivery", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          conversation: { id: "qa-room", kind: "group" },
+          threadId: "42",
+        },
+      }),
+    );
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
+    await assembled.replyOptions?.onPartialReply?.({ text: "preview expanded" });
+    await assembled.delivery.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToId: "msg-1",
+        text: "preview",
+        threadId: "42",
+        to: "thread:qa-room/42",
+      }),
+    );
+    expect(editQaBusMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ messageId: "preview-1", text: "preview expanded" }),
+    );
+    expect(editQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ messageId: "preview-1", text: "final answer" }),
+    );
+  });
+
+  it("keeps block deliveries separate and retains tool calls discovered after a preview", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
+    await assembled.replyOptions?.onToolStart?.({
+      phase: "start",
+      name: "search",
+      args: { query: "qa" },
+    });
+    await assembled.delivery.deliver({ text: "tool result" }, { kind: "block" });
+    await assembled.delivery.deliver({ text: "final answer" }, { kind: "final" });
+
+    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(3);
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "tool result",
+        toolCalls: [{ name: "search", arguments: { query: "[redacted]" } }],
+      }),
+    );
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        text: "final answer",
+        toolCalls: [{ name: "search", arguments: { query: "[redacted]" } }],
+      }),
+    );
+  });
+
+  it("deletes an active preview when reply dispatch fails", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
+    assembled.delivery.onError?.(new Error("model failed"), { kind: "final" });
+
+    await vi.waitFor(() => {
+      expect(deleteQaBusMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "preview-1" }),
+      );
+    });
+  });
+
+  it("deletes a preview after a queued edit fails", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    vi.mocked(editQaBusMessage).mockRejectedValueOnce(new Error("edit failed"));
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onPartialReply?.({ text: "first preview" });
+    await expect(
+      assembled.replyOptions?.onPartialReply?.({ text: "broken preview" }),
+    ).rejects.toThrow("edit failed");
+    assembled.delivery.onError?.(new Error("dispatch failed"), { kind: "final" });
+
+    await vi.waitFor(() => {
+      expect(deleteQaBusMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: "preview-1" }),
+      );
+    });
+  });
+
   it("marks group messages that match configured mention patterns", async () => {
     const runtime = createPluginRuntimeMock();
     vi.mocked(runtime.channel.mentions.buildMentionRegexes).mockReturnValue([/\b@?openclaw\b/i]);

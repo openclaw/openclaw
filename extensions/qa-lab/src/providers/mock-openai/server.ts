@@ -159,6 +159,7 @@ const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
+const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
@@ -2415,6 +2416,16 @@ async function buildResponsesPayload(
         phase: "final_answer",
         streamDeltas: splitMockStreamingText(QA_TELEGRAM_STREAM_SINGLE_MARKER),
         text: QA_TELEGRAM_STREAM_SINGLE_MARKER,
+      },
+    ]);
+  }
+  if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_final_only_marker_stream",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
+        text: exactReplyDirective,
       },
     ]);
   }
