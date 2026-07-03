@@ -6,7 +6,7 @@ import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./consol
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
-import { createSubsystemLogger } from "./subsystem.js";
+import { createSubsystemLogger, runtimeForLogger } from "./subsystem.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-subsystem-log-");
 
@@ -287,5 +287,36 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(fs.readFileSync(firstDay, "utf8")).toContain("first day subsystem log");
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day subsystem log");
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
+  });
+});
+
+describe("runtimeForLogger", () => {
+  it("serializes plain objects via writeJson", () => {
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as const;
+    const rt = runtimeForLogger(logger as unknown as ReturnType<typeof createSubsystemLogger>);
+    rt.writeJson({ ok: true });
+    expect(logger.info).toHaveBeenCalledWith('{\n  "ok": true\n}');
+  });
+
+  it("falls back to String(value) for circular references", () => {
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as const;
+    const obj: Record<string, unknown> = {};
+    obj.self = obj;
+
+    const rt = runtimeForLogger(logger as unknown as ReturnType<typeof createSubsystemLogger>);
+    rt.writeJson(obj);
+
+    expect(logger.info).toHaveBeenCalledWith('"[object Object]"');
+  });
+
+  it("falls back to constant for null-prototype circular references", () => {
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as const;
+    const obj = Object.create(null);
+    obj.self = obj;
+
+    const rt = runtimeForLogger(logger as unknown as ReturnType<typeof createSubsystemLogger>);
+    rt.writeJson(obj);
+
+    expect(logger.info).toHaveBeenCalledWith('"[unserializable]"');
   });
 });

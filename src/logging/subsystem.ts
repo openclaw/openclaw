@@ -4,7 +4,12 @@ import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
-import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
+import {
+  defaultRuntime,
+  safeJsonOutput,
+  type OutputRuntimeEnv,
+  type RuntimeEnv,
+} from "../runtime.js";
 import {
   formatConsoleTimestamp,
   getConsoleSettings,
@@ -500,7 +505,7 @@ export function runtimeForLogger(
       logger.info(value);
     },
     writeJson(value: unknown, space = 2) {
-      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+      logger.info(safeJsonOutput(value, space));
     },
     exit,
   };
