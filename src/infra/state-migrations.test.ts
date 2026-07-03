@@ -326,6 +326,29 @@ function insertCurrentConversationBindingRow(
   );
 }
 
+function insertConfigHealthRow(
+  env: NodeJS.ProcessEnv,
+  params: {
+    configPath: string;
+    lastKnownGoodJson: string | null;
+    lastPromotedGoodJson: string | null;
+    lastObservedSuspiciousSignature: string | null;
+  },
+): void {
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+  executeSqliteQuerySync(
+    db,
+    stateDb.insertInto("config_health_entries").values({
+      config_path: params.configPath,
+      last_known_good_json: params.lastKnownGoodJson,
+      last_promoted_good_json: params.lastPromotedGoodJson,
+      last_observed_suspicious_signature: params.lastObservedSuspiciousSignature,
+      updated_at_ms: Date.now(),
+    }),
+  );
+}
+
 function createConfig(): OpenClawConfig {
   return {
     agents: {
@@ -1976,6 +1999,81 @@ describe("state migrations", () => {
         last_observed_suspicious_signature: "abc123:size-drop",
       },
     ]);
+    await expectMissingPath(sourcePath);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("abc123");
+  });
+
+  it("archives legacy config health JSON when all entries already exist in SQLite (even with timestamp drift)", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const configPath = path.join(stateDir, "openclaw.json");
+    const logsDir = path.join(stateDir, "logs");
+    const sourcePath = path.join(logsDir, "config-health.json");
+    // Fingerprint from when the legacy JSON was last written (older)
+    const legacyFingerprint = {
+      hash: "abc123",
+      bytes: 42,
+      mtimeMs: 1,
+      ctimeMs: 2,
+      dev: "3",
+      ino: "4",
+      mode: 384,
+      nlink: 1,
+      uid: 501,
+      gid: 20,
+      hasMeta: true,
+      gatewayMode: "local",
+      observedAt: "2026-01-01T00:00:00.000Z",
+    };
+    // Fingerprint written by the live config-health code more recently
+    const liveFingerprint = {
+      hash: "abc123",
+      bytes: 42,
+      mtimeMs: 1,
+      ctimeMs: 2,
+      dev: "3",
+      ino: "4",
+      mode: 384,
+      nlink: 1,
+      uid: 501,
+      gid: 20,
+      hasMeta: true,
+      gatewayMode: "local",
+      observedAt: "2026-07-03T00:00:00.000Z",
+    };
+    await fs.mkdir(logsDir, { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        entries: {
+          [configPath]: {
+            lastKnownGood: legacyFingerprint,
+          },
+        },
+      }),
+      "utf8",
+    );
+    insertConfigHealthRow(env, {
+      configPath,
+      lastKnownGoodJson: JSON.stringify(liveFingerprint),
+      lastPromotedGoodJson: null,
+      lastObservedSuspiciousSignature: null,
+    });
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.configHealth.hasLegacy).toBe(true);
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toContain(
+      `Legacy config health 1 entry already tracked in shared SQLite state; archiving ${sourcePath}`,
+    );
+    expect(result.changes).toContainEqual(
+      expect.stringContaining("Archived config health state legacy source"),
+    );
+    expect(result.changes).not.toContainEqual(expect.stringContaining("Migrated"));
     await expectMissingPath(sourcePath);
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain("abc123");
   });

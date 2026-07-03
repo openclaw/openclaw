@@ -2166,10 +2166,10 @@ function migrateLegacyConfigHealth(params: {
           );
           importedCount = entriesToInsert.length;
         }
-        shouldArchive = conflictCount === 0;
+        shouldArchive = conflictCount === 0 || entriesToInsert.length === 0;
         if (conflictCount > 0) {
           warnings.push(
-            `Left legacy config health state in place because ${conflictCount} ${conflictCount === 1 ? "entry conflicts" : "entries conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
+            `Legacy config health ${conflictCount} ${conflictCount === 1 ? "entry" : "entries"} already tracked in shared SQLite state; archiving ${params.detected.sourcePath}`,
           );
         }
       },
