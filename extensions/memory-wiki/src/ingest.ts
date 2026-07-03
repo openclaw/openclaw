@@ -26,8 +26,9 @@ type IngestMemoryWikiSourceResult = {
 };
 
 function resolveSourceTitle(sourcePath: string, explicitTitle?: string): string {
-  if (explicitTitle?.trim()) {
-    return explicitTitle.trim();
+  const trimmedTitle = explicitTitle?.trim();
+  if (trimmedTitle !== undefined && trimmedTitle.length > 0) {
+    return trimmedTitle;
   }
   return path.basename(sourcePath, path.extname(sourcePath)).replace(/[-_]+/g, " ").trim();
 }
