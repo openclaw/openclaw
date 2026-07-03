@@ -1156,13 +1156,37 @@ function resolveExplicitLiveFallbackApi(provider: string): Api {
   );
 }
 
-function resolveDefaultBedrockLiveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+function resolveDefaultBedrockLiveBaseUrl(
+  params: {
+    cfg?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): string {
+  const env = params.env ?? process.env;
   const region =
+    resolveBedrockDiscoveryRegion(params.cfg) ??
     normalizeOptionalEnvValue(env.AWS_REGION) ??
     normalizeOptionalEnvValue(env.AWS_DEFAULT_REGION) ??
     resolveAwsProfileRegion(env) ??
     DEFAULT_BEDROCK_LIVE_REGION;
   return `https://bedrock-runtime.${region}.amazonaws.com`;
+}
+
+function resolveBedrockDiscoveryRegion(cfg: OpenClawConfig | undefined): string | undefined {
+  const pluginConfig = cfg?.plugins?.entries?.["amazon-bedrock"]?.config;
+  if (!isRecord(pluginConfig)) {
+    return undefined;
+  }
+  const discoveryConfig = pluginConfig.discovery;
+  if (!isRecord(discoveryConfig)) {
+    return undefined;
+  }
+  const region = discoveryConfig.region;
+  return typeof region === "string" ? normalizeOptionalEnvValue(region) : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function resolveAwsProfileRegion(env: NodeJS.ProcessEnv): string | undefined {
@@ -1843,6 +1867,39 @@ describe("buildLiveGatewayConfig", () => {
 
       expect(cfg.models?.providers?.["amazon-bedrock"]?.baseUrl).toBe(
         "https://bedrock-runtime.ap-south-1.amazonaws.com",
+      );
+    } finally {
+      restoreOptionalEnv("AWS_REGION", previousAwsRegion);
+    }
+  });
+
+  it("uses configured Bedrock discovery regions for explicit fallback models", () => {
+    const previousAwsRegion = process.env.AWS_REGION;
+    setTestEnvValue("AWS_REGION", "eu-west-1");
+    try {
+      const cfg = buildLiveGatewayConfig({
+        cfg: {
+          plugins: {
+            entries: {
+              "amazon-bedrock": {
+                config: {
+                  discovery: {
+                    region: "ap-northeast-1",
+                  },
+                },
+              },
+            },
+          },
+        },
+        candidates: [
+          createExplicitLiveFallbackModel("amazon-bedrock", "global.anthropic.claude-sonnet-4-6"),
+        ],
+        liveAgentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
+        liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
+      });
+
+      expect(cfg.models?.providers?.["amazon-bedrock"]?.baseUrl).toBe(
+        "https://bedrock-runtime.ap-northeast-1.amazonaws.com",
       );
     } finally {
       restoreOptionalEnv("AWS_REGION", previousAwsRegion);
@@ -3040,27 +3097,34 @@ function mergeLiveProviderConfig(params: {
   };
 }
 
-function buildLiveProviderConfigs(candidates: Array<Model>): Record<string, ModelProviderConfig> {
+function buildLiveProviderConfigs(params: {
+  candidates: Array<Model>;
+  cfg: OpenClawConfig;
+}): Record<string, ModelProviderConfig> {
   const providers: Record<string, ModelProviderConfig> = {};
-  for (const model of candidates) {
+  for (const model of params.candidates) {
     const existing = providers[model.provider];
     if (existing) {
       existing.models ??= [];
       existing.models.push(toLiveModelConfig(model));
       continue;
     }
-    providers[model.provider] = buildLiveProviderConfig(model);
+    providers[model.provider] = buildLiveProviderConfig({ model, cfg: params.cfg });
   }
   return providers;
 }
 
-function buildLiveProviderConfig(model: Model): ModelProviderConfig {
+function buildLiveProviderConfig(params: {
+  model: Model;
+  cfg: OpenClawConfig;
+}): ModelProviderConfig {
+  const { model } = params;
   const provider = normalizeProviderId(model.provider);
   const config: ModelProviderConfig = {
     api: model.api as ModelProviderConfig["api"],
     baseUrl:
       provider === "amazon-bedrock"
-        ? (model.baseUrl ?? resolveDefaultBedrockLiveBaseUrl())
+        ? (model.baseUrl ?? resolveDefaultBedrockLiveBaseUrl({ cfg: params.cfg }))
         : model.baseUrl,
     timeoutSeconds: resolveGatewayLiveProviderTimeoutSeconds(),
     models: [toLiveModelConfig(model)],
@@ -3217,7 +3281,10 @@ function buildLiveGatewayConfig(params: {
   const providerOverrides = params.providerOverrides ?? {};
   const lmstudioProvider = params.cfg.models?.providers?.lmstudio;
   const baseProviders = params.cfg.models?.providers ?? {};
-  const candidateProviders = buildLiveProviderConfigs(params.candidates);
+  const candidateProviders = buildLiveProviderConfigs({
+    candidates: params.candidates,
+    cfg: params.cfg,
+  });
   const discoveredProviders = Object.fromEntries(
     Object.entries(candidateProviders).map(([provider, discovered]) => [
       provider,
