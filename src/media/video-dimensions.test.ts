@@ -28,9 +28,9 @@ describe("parseFfprobeVideoDimensions", () => {
   });
 
   it("returns undefined for malformed JSON instead of throwing", () => {
-    expect(parseFfprobeVideoDimensions("{")).toBeUndefined();
-    expect(parseFfprobeVideoDimensions("")).toBeUndefined();
-    expect(parseFfprobeVideoDimensions("not json")).toBeUndefined();
+    for (const stdout of ["{", "", "not json", "null", "42", '"text"', '{"streams":{}}']) {
+      expect(parseFfprobeVideoDimensions(stdout)).toBeUndefined();
+    }
   });
 });
 
