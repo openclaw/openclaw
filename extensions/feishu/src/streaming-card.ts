@@ -343,19 +343,21 @@ export class FeishuStreamingSession {
       } finally {
         await releaseCreate();
       }
-      if (createData.code === 0 && createData.data?.card_id) {
+      if (cd.code === 0 && cd.data?.card_id) {
+        cardId = cd.data.card_id;
         break;
       }
       // Token-invalid → clear cache and retry once (#97287)
-      if ((createData.code === 99991663 || createData.code === 99991664) && !retriedCard) {
-        retriedCard = true;
+      if ((cd.code === 99991663 || cd.code === 99991664) && attempts === 0) {
+        attempts = 1;
+        void attempts;
         clearFeishuTokenCache();
         continue;
       }
-      throw new Error(`Create card failed: ${createData.msg}`);
+      throw new Error(`Create card failed: ${cd.msg}`);
     }
-    const cardId = createData.data.card_id;
-    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
+    const cardIdOut = cardId;
+    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardIdOut } });
 
     // Prefer message.reply when we have a reply target — reply_in_thread
     // reliably routes streaming cards into Feishu topics, whereas

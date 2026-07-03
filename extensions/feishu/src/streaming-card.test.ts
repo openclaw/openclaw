@@ -1187,4 +1187,79 @@ describe("resolveStreamingCardSendMode", () => {
   it("uses create mode when no reply routing fields are provided", () => {
     expect(resolveStreamingCardSendMode()).toBe("create");
   });
+
+  it("releases guarded-fetch on non-JSON card create response and preserves HTTP status (#97295)", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockImplementation(async () => {
+      return {
+        response: {
+          ok: false,
+          status: 502,
+          json: async () => {
+            throw new Error("Unexpected token '<', \"<html>...\" is not valid JSON");
+          },
+        },
+        release,
+      };
+    });
+    await expect(
+      new FeishuStreamingSession({} as never, {
+        appId: "app_non_json_card",
+        appSecret: "secret",
+      }).start("chat_id", "open_id"),
+    ).rejects.toThrow("502");
+    // Guarded-fetch release must be called even when JSON parsing fails
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries card create on token-invalid error JSON body (#97295)", async () => {
+    const authToken = "tk_retry";
+    const authRelease = vi.fn();
+    let callCount = 0;
+    const cardRelease = vi.fn();
+    fetchWithSsrFGuardMock.mockReset();
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }) => {
+      if (url.includes("/auth/")) {
+        return {
+          response: {
+            ok: true,
+            json: async () => ({
+              code: 0,
+              msg: "ok",
+              tenant_access_token: authToken,
+              expire: 7200,
+            }),
+          },
+          release: authRelease,
+        };
+      }
+      callCount += 1;
+      // First card create returns token-invalid; second succeeds
+      const jsonBody =
+        callCount === 1
+          ? { code: 99991663, msg: "Invalid access token" }
+          : { code: 0, msg: "ok", data: { card_id: "card_retried" } };
+      return {
+        response: { ok: true, status: 200, json: async () => jsonBody },
+        release: cardRelease,
+      };
+    });
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_retried" } })),
+        },
+      },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+
+    await expect(
+      new FeishuStreamingSession(client, {
+        appId: "app_token_invalid_card",
+        appSecret: "secret",
+      }).start("chat_id", "open_id"),
+    ).resolves.not.toThrow();
+    // Card create was called twice (first returned token-invalid)
+    expect(callCount).toBe(2);
+  });
 });
