@@ -200,7 +200,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
     return { candidate, source };
   });
   const implementationCandidates = candidatesWithSources.filter(
-    ({ source }) => source.trim() !== `export * from "./${aliasFileName}";`,
+    ({ source }) => !isRuntimeAliasSource(source, aliasFileName),
   );
   const candidateNames = implementationCandidates.map(({ candidate }) => candidate);
   if (candidateNames.length === 1) {
@@ -300,7 +300,21 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
 }
 
 const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
-  /(^|\n)\s*export\s+default[\s({[]|(^|\n)\s*export\s*\{[^}]*\bas default\b[^}]*\}/;
+  /(^|\n)\s*export\b\s*(?:default\b|\{[^}]*(?:\bas\s+default\b|\bdefault\b\s*(?=[,}]))[^}]*\})/u;
+
+function formatRuntimeAliasSource(targetFileName, forwardDefault = false) {
+  const specifier = JSON.stringify(`./${targetFileName}`);
+  const starSource = `export * from ${specifier};\n`;
+  return forwardDefault ? `${starSource}export { default } from ${specifier};\n` : starSource;
+}
+
+function isRuntimeAliasSource(source, targetFileName) {
+  const normalizedSource = source.trim();
+  return (
+    normalizedSource === formatRuntimeAliasSource(targetFileName).trim() ||
+    normalizedSource === formatRuntimeAliasSource(targetFileName, true).trim()
+  );
+}
 
 /**
  * Builds alias module source for a runtime chunk target. `export * from`
@@ -312,18 +326,16 @@ const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
  */
 function buildRuntimeAliasSource(params) {
   const { distDir, fsImpl, targetFileName } = params;
-  const specifier = `./${targetFileName}`;
-  const starSource = `export * from ${JSON.stringify(specifier)};\n`;
   let targetSource;
   try {
     targetSource = fsImpl.readFileSync(path.join(distDir, targetFileName), "utf8");
   } catch {
-    return starSource;
+    return formatRuntimeAliasSource(targetFileName);
   }
-  if (!RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource)) {
-    return starSource;
-  }
-  return `${starSource}export { default } from ${JSON.stringify(specifier)};\n`;
+  return formatRuntimeAliasSource(
+    targetFileName,
+    RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource),
+  );
 }
 
 /**
