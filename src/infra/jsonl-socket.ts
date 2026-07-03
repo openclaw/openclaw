@@ -49,10 +49,9 @@ export async function requestJsonlSocket<T>(params: {
     });
     client.on("data", (data) => {
       buffer += data.toString("utf8");
-      if (Buffer.byteLength(buffer, "utf8") > JSONL_SOCKET_MAX_BUFFER_BYTES) {
-        finish(null);
-        return;
-      }
+      // Parse all complete lines before checking the cap so a valid
+      // accepted response is not rejected because of oversized trailing
+      // bytes that follow it.
       let idx = buffer.indexOf("\n");
       while (idx !== -1) {
         const line = buffer.slice(0, idx).trim();
@@ -72,6 +71,12 @@ export async function requestJsonlSocket<T>(params: {
         } catch {
           // ignore
         }
+      }
+      // Only the unterminated remainder remains — cap it to prevent
+      // unbounded buffering from a peer that never sends a newline.
+      if (Buffer.byteLength(buffer, "utf8") > JSONL_SOCKET_MAX_BUFFER_BYTES) {
+        finish(null);
+        return;
       }
     });
   });

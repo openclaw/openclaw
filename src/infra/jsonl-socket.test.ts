@@ -162,6 +162,57 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     });
   });
 
+  it("accepts a complete response line even when trailing data would exceed the cap", async () => {
+    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+      const socketPath = path.join(dir, "socket.sock");
+      const server = net.createServer((socket) => {
+        socket.on("error", () => {
+          // The requester destroys the socket after accepting the line,
+          // so the producer may see EPIPE on the trailing write.
+        });
+        socket.on("data", () => {
+          // Send a valid JSON line first, then oversized trailing data
+          // without a newline. The valid line should be accepted before
+          // the unterminated remainder hits the cap.
+          socket.write('{"ok":true}\n');
+          const chunk = "x".repeat(64 * 1024);
+          let writtenBytes = 0;
+          const writeChunk = () => {
+            while (writtenBytes <= testApi.JSONL_SOCKET_MAX_BUFFER_BYTES) {
+              writtenBytes += Buffer.byteLength(chunk, "utf8");
+              if (!socket.write(chunk)) {
+                socket.once("drain", writeChunk);
+                return;
+              }
+            }
+          };
+          writeChunk();
+        });
+      });
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
+
+      try {
+        const startMs = Date.now();
+        const result = await requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 500,
+          accept: (msg: unknown) => {
+            const m = msg as Record<string, unknown>;
+            return m.ok === true ? "accepted" : undefined;
+          },
+        });
+        expect(result).toBe("accepted");
+        expect(Date.now() - startMs).toBeLessThan(250);
+      } finally {
+        server.close();
+      }
+    });
+  });
+
   it("returns null when the response exceeds the buffer size cap", async () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
