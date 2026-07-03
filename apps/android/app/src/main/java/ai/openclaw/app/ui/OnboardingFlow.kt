@@ -213,7 +213,6 @@ fun OnboardingFlow(
       )
 
     fun scanGatewaySetupCode() {
-      setupCode = ""
       setupError = null
       qrScanner
         .startScan()
