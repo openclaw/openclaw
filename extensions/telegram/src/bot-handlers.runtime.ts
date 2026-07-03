@@ -49,7 +49,6 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
-import { sleep } from "../../../src/utils.js";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -1747,16 +1746,17 @@ export const registerTelegramHandlers = ({
   const TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS = [250, 1000, 2500] as const;
   const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
-  const resolvePluginCallbackSubmitText = (result: unknown): string | undefined => {
-    if (!result || typeof result !== "object" || !("submitText" in result)) {
-      return undefined;
-    }
-    const submitText = (result as { submitText?: unknown }).submitText;
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+
+  const resolvePluginCallbackSubmitText = (submitText: unknown): string | undefined => {
     if (typeof submitText !== "string") {
       return undefined;
     }
-    const trimmed = submitText.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+    const trimmed = submitText?.trim();
+    return trimmed ? trimmed : undefined;
   };
 
   const isReplySessionInitConflictError = (err: unknown): boolean =>
@@ -1779,12 +1779,16 @@ export const registerTelegramHandlers = ({
           storeAllowFrom: params.storeAllowFrom,
           options: { spooledReplay: true },
         });
-        if (!isReplySessionInitConflictResult(result)) {
+        if (result.kind === "completed") {
           return;
         }
         const retryDelayMs = TELEGRAM_PLUGIN_CALLBACK_SUBMIT_RETRY_DELAYS_MS[attempt];
-        if (retryDelayMs === undefined) {
-          return;
+        if (!isReplySessionInitConflictResult(result) || retryDelayMs === undefined) {
+          throw new TelegramRetryableCallbackError(
+            result.kind === "failed-retryable"
+              ? result.error
+              : new Error("telegram plugin callback submitText was skipped"),
+          );
         }
         logVerbose(
           `telegram plugin callback submitText hit active reply session; retrying in ${retryDelayMs}ms`,
@@ -2739,7 +2743,7 @@ export const registerTelegramHandlers = ({
         },
       });
       if (pluginCallback.handled) {
-        const submitText = resolvePluginCallbackSubmitText(pluginCallback.result);
+        const submitText = resolvePluginCallbackSubmitText(pluginCallback.result?.submitText);
         if (submitText) {
           const { ctx: syntheticCtx, message: syntheticMessage } =
             buildCallbackSyntheticTextContext({

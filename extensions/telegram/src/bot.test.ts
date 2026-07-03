@@ -18,7 +18,10 @@ import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
-import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
+import type {
+  TelegramInteractiveHandlerContext,
+  TelegramInteractiveHandlerRegistration,
+} from "./interactive-dispatch.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -3967,8 +3970,8 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("smart-replies-plugin", {
       channel: "telegram",
       namespace: "openclaw-smart-replies",
-      handler: (async () => ({ handled: true, submitText: "Fix a broken tool" })) as never,
-    });
+      handler: async () => ({ handled: true, submitText: "Fix a broken tool" }),
+    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramRuntime({
       state: {
         openKeyedStore: ((options) =>
@@ -4047,8 +4050,8 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("smart-replies-plugin", {
       channel: "telegram",
       namespace: "openclaw-smart-replies",
-      handler: (async () => ({ handled: true, submitText: "Make Alice funnier" })) as never,
-    });
+      handler: async () => ({ handled: true, submitText: "Make Alice funnier" }),
+    } satisfies TelegramInteractiveHandlerRegistration);
     setTelegramRuntime({
       state: {
         openKeyedStore: ((options) =>
@@ -4111,6 +4114,76 @@ describe("createTelegramBot", () => {
       "replySpy retry call",
     );
     expect(payload.Body).toContain("Make Alice funnier");
+  });
+
+  it("keeps plugin-owned callback buttons when submitted text processing fails", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    replySpy.mockImplementation(async (_ctx, opts) => {
+      await opts?.onReplyStart?.();
+      throw new Error("transient submit failure");
+    });
+    registerPluginInteractiveHandler("smart-replies-plugin", {
+      channel: "telegram",
+      namespace: "openclaw-smart-replies",
+      handler: async () => ({ handled: true, submitText: "Try this later" }),
+    } satisfies TelegramInteractiveHandlerRegistration);
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: ((options) =>
+          createPluginStateKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openKeyedStore"],
+        openSyncKeyedStore: ((options) =>
+          createPluginStateSyncKeyedStoreForTests(
+            "telegram",
+            options,
+          )) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        config: {
+          channels: {
+            telegram: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      });
+      const callbackHandler = getOnHandler("callback_query") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await expect(
+        callbackHandler({
+          callbackQuery: {
+            id: "cbq-smart-reply-submit-fail",
+            data: "openclaw-smart-replies:v1:VHJ5IHRoaXMgbGF0ZXI",
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 9, type: "private" },
+              date: 1736380800,
+              message_id: 11,
+              text: "Pick a direction",
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ download: async () => new Uint8Array() }),
+        }),
+      ).rejects.toThrow("transient submit failure");
+    } finally {
+      clearTelegramRuntime();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
   });
 
   it("passes false command auth to Telegram plugin callbacks for non-allowlisted group senders", async () => {

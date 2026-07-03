@@ -48,9 +48,19 @@ export type TelegramInteractiveHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type TelegramInteractiveHandlerResult = {
+  handled?: boolean;
+  /**
+   * Submit text through Telegram's normal inbound path after the callback handler
+   * returns, so plugin buttons can act like user-authored replies.
+   */
+  submitText?: string;
+} | void;
+
 export type TelegramInteractiveHandlerRegistration = PluginInteractiveRegistration<
   TelegramInteractiveHandlerContext,
-  "telegram"
+  "telegram",
+  TelegramInteractiveHandlerResult
 >;
 
 type TelegramInteractiveDispatchContext = Omit<
@@ -82,7 +92,10 @@ export async function dispatchTelegramPluginInteractiveHandler(params: {
   };
   onMatched?: () => Promise<void> | void;
 }) {
-  return await dispatchPluginInteractiveHandler<TelegramInteractiveHandlerRegistration>({
+  return await dispatchPluginInteractiveHandler<
+    TelegramInteractiveHandlerRegistration,
+    TelegramInteractiveHandlerResult
+  >({
     channel: "telegram",
     data: params.data,
     dedupeId: params.callbackId,
