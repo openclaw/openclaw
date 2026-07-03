@@ -76,7 +76,6 @@ export async function requestJsonlSocket<T>(params: {
       // unbounded buffering from a peer that never sends a newline.
       if (Buffer.byteLength(buffer, "utf8") > JSONL_SOCKET_MAX_BUFFER_BYTES) {
         finish(null);
-        return;
       }
     });
   });
