@@ -7,6 +7,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/run-attempt-thread-cleanup.test.ts",
+      "extensions/codex/src/app-server/run-attempt.cleanup-window.test.ts",
       "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
       "extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts",
       "extensions/codex/src/app-server/run-attempt.hooks.test.ts",
