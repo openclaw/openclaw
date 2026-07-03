@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthRemoveCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -23,6 +24,7 @@ const {
   modelsAuthLoginCommand,
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
+  modelsAuthRemoveCommand,
   modelsAuthSetupTokenCommand,
   modelsSetCommand,
   modelsSetImageCommand,
@@ -44,6 +46,9 @@ vi.mock("../commands/models/auth.js", () => ({
 }));
 vi.mock("../commands/models/auth-list.js", () => ({
   modelsAuthListCommand: mocks.modelsAuthListCommand,
+}));
+vi.mock("../commands/models/auth-remove.js", () => ({
+  modelsAuthRemoveCommand: mocks.modelsAuthRemoveCommand,
 }));
 vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderClearCommand: mocks.noopAsync,
@@ -84,6 +89,7 @@ describe("models cli", () => {
     modelsAuthLoginCommand.mockClear();
     modelsAuthPasteApiKeyCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
+    modelsAuthRemoveCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
     modelsSetCommand.mockClear();
     modelsSetImageCommand.mockClear();
@@ -174,6 +180,26 @@ describe("models cli", () => {
       expected: { agent: "poe", provider: "openai" },
     },
     {
+      label: "remove",
+      args: [
+        "models",
+        "auth",
+        "--agent",
+        "poe",
+        "remove",
+        "openai:user@example.com",
+        "--yes",
+        "--json",
+      ],
+      command: modelsAuthRemoveCommand,
+      expected: {
+        agent: "poe",
+        profileId: "openai:user@example.com",
+        yes: true,
+        json: true,
+      },
+    },
+    {
       label: "setup-token",
       args: ["models", "auth", "--agent", "poe", "setup-token", "--provider", "anthropic"],
       command: modelsAuthSetupTokenCommand,
@@ -201,6 +227,24 @@ describe("models cli", () => {
     await runModelsCommand(args);
 
     expectCommandOptions(command, expected);
+  });
+
+  it("passes provider-wide remove options through models auth remove", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "remove",
+      "--provider",
+      "openai",
+      "--all",
+      "--dry-run",
+    ]);
+
+    expectCommandOptions(modelsAuthRemoveCommand, {
+      provider: "openai",
+      all: true,
+      dryRun: true,
+    });
   });
 
   it("passes --method through models auth login", async () => {

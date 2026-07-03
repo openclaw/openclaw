@@ -191,6 +191,11 @@ stopped because credentials were removed.
 Removing saved auth does not revoke keys at the provider. Rotate or revoke the
 key in the provider dashboard when you need provider-side invalidation.
 
+To remove saved profiles from the CLI, use `openclaw models auth remove
+<profileId> --yes` for one profile, or `openclaw models auth remove --provider
+<id> --all --yes` for every saved profile for a provider. Use `--dry-run` first
+to preview the affected profiles without writing.
+
 ## Controlling which credential is used
 
 ### OpenAI and legacy `openai-codex` ids

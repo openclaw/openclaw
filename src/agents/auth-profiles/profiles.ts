@@ -197,42 +197,74 @@ export async function removeProviderAuthProfilesWithLock(params: {
   provider: string;
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
-  const providerKey = resolveProviderIdForAuth(params.provider);
-  const storeOrderKey = normalizeProviderId(params.provider);
+  const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
+  return await removeAuthProfilesWithLock({
+    agentDir: params.agentDir,
+    profileIds: listProfilesForProvider(store, params.provider),
+  });
+}
+
+function removeAuthProfileEntries(store: AuthProfileStore, profileIds: readonly string[]): boolean {
+  const targetProfileIds = new Set(profileIds.map((profileId) => profileId.trim()).filter(Boolean));
+  if (targetProfileIds.size === 0) {
+    return false;
+  }
+
+  let changed = false;
+  for (const profileId of targetProfileIds) {
+    if (store.profiles[profileId]) {
+      delete store.profiles[profileId];
+      changed = true;
+    }
+    if (store.usageStats?.[profileId]) {
+      delete store.usageStats[profileId];
+      changed = true;
+    }
+  }
+
+  for (const [provider, order] of Object.entries(store.order ?? {})) {
+    const next = order.filter((profileId) => !targetProfileIds.has(profileId));
+    if (next.length !== order.length) {
+      changed = true;
+      if (next.length > 0) {
+        store.order = { ...store.order, [provider]: next };
+      } else {
+        delete store.order?.[provider];
+      }
+    }
+  }
+  if (store.order && Object.keys(store.order).length === 0) {
+    store.order = undefined;
+  }
+
+  for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
+    if (targetProfileIds.has(profileId)) {
+      delete store.lastGood?.[provider];
+      changed = true;
+    }
+  }
+  if (store.lastGood && Object.keys(store.lastGood).length === 0) {
+    store.lastGood = undefined;
+  }
+
+  if (store.usageStats && Object.keys(store.usageStats).length === 0) {
+    store.usageStats = undefined;
+  }
+  return changed;
+}
+
+/** Removes selected auth profiles and related state. */
+export async function removeAuthProfilesWithLock(params: {
+  profileIds: readonly string[];
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const profileIds = dedupeProfileIds(params.profileIds);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    updater: (store) => {
-      const profileIds = listProfilesForProvider(store, params.provider);
-      let changed = false;
-      for (const profileId of profileIds) {
-        if (store.profiles[profileId]) {
-          delete store.profiles[profileId];
-          changed = true;
-        }
-        if (store.usageStats?.[profileId]) {
-          delete store.usageStats[profileId];
-          changed = true;
-        }
-      }
-      if (store.order?.[storeOrderKey]) {
-        delete store.order[storeOrderKey];
-        changed = true;
-        if (Object.keys(store.order).length === 0) {
-          store.order = undefined;
-        }
-      }
-      if (store.lastGood?.[providerKey]) {
-        delete store.lastGood[providerKey];
-        changed = true;
-        if (Object.keys(store.lastGood).length === 0) {
-          store.lastGood = undefined;
-        }
-      }
-      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
-        store.usageStats = undefined;
-      }
-      return changed;
+    saveOptions: {
+      pruneOrderProfileIds: profileIds,
     },
+    updater: (store) => removeAuthProfileEntries(store, profileIds),
   });
 }
 
