@@ -18,6 +18,7 @@ const WATCH_IGNORED_PATH_SEGMENTS = new Set([".git", "dist", "node_modules"]);
 const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
+const PENDING_RESTART_CHECK_MS = 2_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 
@@ -298,6 +299,8 @@ export async function runWatchMain(params = {}) {
     let autoDoctorAttempted = false;
     let shutdownExitCode = null;
     let shutdownKillTimer = null;
+    let pendingRestartCheckTimer = null;
+    let restartDeferred = false;
 
     const signalWatchProcess = (child, signal) => {
       if (!child || typeof child.kill !== "function") {
@@ -329,11 +332,29 @@ export async function runWatchMain(params = {}) {
       }
     };
 
+    /** Checks whether the build output entrypoint is present before restarting. */
+    const isDistEntryReady = () => {
+      try {
+        return fs.statSync(path.join(deps.cwd, "dist", "entry.js")).isFile();
+      } catch {
+        return false;
+      }
+    };
+
+    const clearPendingRestartTimer = () => {
+      if (pendingRestartCheckTimer !== null) {
+        clearTimeout(pendingRestartCheckTimer);
+        pendingRestartCheckTimer = null;
+      }
+      restartDeferred = false;
+    };
+
     const settle = (code) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearPendingRestartTimer();
       if (shutdownKillTimer) {
         clearTimeout(shutdownKillTimer);
       }
@@ -351,6 +372,7 @@ export async function runWatchMain(params = {}) {
     const requestShutdown = (code) => {
       shuttingDown = true;
       shutdownExitCode = code;
+      clearPendingRestartTimer();
       if (!watchProcess || typeof watchProcess.kill !== "function") {
         settle(code);
         return;
@@ -373,6 +395,7 @@ export async function runWatchMain(params = {}) {
     };
 
     const startRunner = () => {
+      clearPendingRestartTimer();
       watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
         cwd: deps.cwd,
         detached: useChildProcessGroup,
@@ -486,6 +509,44 @@ export async function runWatchMain(params = {}) {
       if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
         return;
       }
+      if (!watchProcess) {
+        if (isDistEntryReady()) {
+          startRunner();
+        }
+        return;
+      }
+      // Guard: do not restart into a half-built dist/. If the entrypoint is
+      // missing (mid-rebuild), defer the restart and poll for it to appear.
+      // Without this check, killing the current healthy process and restarting
+      // into a missing entry causes a crash-loop.
+      if (!isDistEntryReady()) {
+        if (!restartDeferred) {
+          restartDeferred = true;
+          logWatcher("dist/entry.js missing; deferring restart until build completes.", deps);
+          pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
+        }
+        return;
+      }
+      restartRequested = true;
+      if (typeof watchProcess.kill === "function") {
+        signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
+      }
+    };
+
+    /** Polls for dist/entry.js to reappear and triggers the deferred restart. */
+    const checkPendingRestart = () => {
+      // Guard: clearTimeout does not cancel a timer whose callback is already
+      // queued, so re-check the shutdown flag when the callback actually runs.
+      if (shuttingDown) {
+        return;
+      }
+      pendingRestartCheckTimer = null;
+      if (!isDistEntryReady()) {
+        pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
+        return;
+      }
+      logWatcher("dist/entry.js is now ready; triggering deferred restart.", deps);
+      restartDeferred = false;
       if (!watchProcess) {
         startRunner();
         return;
