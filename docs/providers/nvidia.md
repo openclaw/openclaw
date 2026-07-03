@@ -84,9 +84,6 @@ OpenClaw falls back to the bundled catalog and bundled default below.
 Nemotron 3 Ultra is the default NVIDIA model in OpenClaw. NVIDIA's build page for
 [`nvidia/nemotron-3-ultra-550b-a55b`](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b)
 lists it as an available free endpoint with a 1M-token context specification.
-NVIDIA's featured-model feed currently reports a 1,048,576-token context and
-an 8,192-token max output for the hosted endpoint, which the bundled catalog
-mirrors.
 
 The bundled Ultra row sends
 `chat_template_kwargs: { enable_thinking: false, force_nonempty_content: true }`
