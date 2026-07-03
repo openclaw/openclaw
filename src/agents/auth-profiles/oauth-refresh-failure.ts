@@ -17,18 +17,21 @@ export type OAuthRefreshFailureReason =
 
 type OAuthRefreshFailure = {
   provider: string | null;
+  profileId?: string;
   reason: OAuthRefreshFailureReason | null;
 };
 
 /** Error type that carries provider and classified OAuth refresh failure reason. */
 export class OAuthRefreshFailureError extends Error {
   readonly provider: string;
+  readonly profileId?: string;
   readonly reason: OAuthRefreshFailureReason | null;
 
-  constructor(params: { provider: string; message: string; cause?: unknown }) {
+  constructor(params: { provider: string; profileId?: string; message: string; cause?: unknown }) {
     super(params.message, { cause: params.cause });
     this.name = "OAuthRefreshFailureError";
     this.provider = params.provider;
+    this.profileId = params.profileId;
     this.reason = classifyOAuthRefreshFailureReason(params.message);
   }
 }
@@ -55,6 +58,27 @@ function sanitizeOAuthRefreshFailureProvider(provider: string | null | undefined
   const sanitized = provider ? sanitizeForLog(provider).replaceAll("`", "").trim() : "";
   const normalized = normalizeProviderId(sanitized);
   return normalized && SAFE_PROVIDER_ID_RE.test(normalized) ? normalized : null;
+}
+
+function sanitizeOAuthRefreshFailureProfileId(profileId: string | null | undefined): string | null {
+  const sanitized = profileId ? sanitizeForLog(profileId).trim() : "";
+  return sanitized || null;
+}
+
+function quoteShellArg(value: string): string {
+  const escaped =
+    process.platform === "win32" ? value.replaceAll("'", "''") : value.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
+}
+
+/** Wrap a rendered login command in a Markdown code span that survives embedded backticks. */
+export function formatOAuthRefreshFailureLoginCommandMarkdown(command: string): string {
+  let fence = "`";
+  while (command.includes(fence)) {
+    fence += "`";
+  }
+  const padding = command.startsWith("`") || command.endsWith("`") ? " " : "";
+  return `${fence}${padding}${command}${padding}${fence}`;
 }
 
 /** Classify a raw OAuth refresh failure message into a stable reason code. */
@@ -96,19 +120,38 @@ export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailur
 
 /** Classify provider/reason from the structured OAuth refresh failure error. */
 export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
-  if (!(err instanceof OAuthRefreshFailureError)) {
-    return null;
+  const seen = new Set<object>();
+  let candidate = err;
+  while (candidate && typeof candidate === "object") {
+    if (candidate instanceof OAuthRefreshFailureError) {
+      const profileId = sanitizeOAuthRefreshFailureProfileId(candidate.profileId);
+      return {
+        provider: sanitizeOAuthRefreshFailureProvider(candidate.provider),
+        ...(profileId ? { profileId } : {}),
+        reason: candidate.reason,
+      };
+    }
+    if (seen.has(candidate)) {
+      return null;
+    }
+    seen.add(candidate);
+    candidate = (candidate as { cause?: unknown }).cause;
   }
-  return {
-    provider: sanitizeOAuthRefreshFailureProvider(err.provider),
-    reason: err.reason,
-  };
+  return null;
 }
 
 /** Build the login command operators should run after OAuth refresh failure. */
-export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
+export function buildOAuthRefreshFailureLoginCommand(
+  provider: string | null | undefined,
+  options?: { profileId?: string | null },
+): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   return sanitizedProvider
-    ? formatCliCommand(`openclaw models auth login --provider ${sanitizedProvider}`)
+    ? formatCliCommand(
+        sanitizedProfileId
+          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${quoteShellArg(sanitizedProfileId)}`
+          : `openclaw models auth login --provider ${sanitizedProvider}`,
+      )
     : formatCliCommand("openclaw models auth login");
 }

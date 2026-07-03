@@ -1,15 +1,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-
-type MatrixPreflightAudioRuntime = typeof import("./preflight-audio.runtime.js");
 const MATRIX_DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
-let matrixPreflightAudioRuntimePromise: Promise<MatrixPreflightAudioRuntime> | undefined;
-
-function loadMatrixPreflightAudioRuntime(): Promise<MatrixPreflightAudioRuntime> {
-  matrixPreflightAudioRuntimePromise ??= import("./preflight-audio.runtime.js");
-  return matrixPreflightAudioRuntimePromise;
-}
+const loadMatrixPreflightAudioRuntime = createLazyRuntimeModule(
+  () => import("./preflight-audio.runtime.js"),
+);
 
 export function formatMatrixAudioTranscript(transcript: string): string {
   return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;

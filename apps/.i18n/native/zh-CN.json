@@ -589,9 +589,9 @@
       "translated": "为 Tailscale 或公共主机开启此项。仍支持私有 LAN ws://。"
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "token"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "留空以保留已保存的令牌"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -857,11 +857,6 @@
       "id": "native.android.c8ce503b95d13058",
       "source": "Linked phones and node hosts will appear here after pairing.",
       "translated": "配对后，已关联的手机和节点主机将显示在这里。"
-    },
-    {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "设备配对管理员需要提升访问权限。已连接的节点仍可正常工作。"
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -1624,6 +1619,21 @@
       "translated": "使用期间"
     },
     {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "替换 Gateway 设置？"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "替换设置"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "取消"
+    },
+    {
       "id": "native.android.718cb50d1bff3e32",
       "source": "Connected",
       "translated": "已连接"
@@ -1752,6 +1762,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "更新"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "许可证"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw 感谢开源社区中的合作伙伴。"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "此构建未包含任何许可证声明。"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "打开 ${license.title}"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -3487,11 +3517,6 @@
       "id": "native.apple.95300e4dfd7aad42",
       "source": "Dream diary day",
       "translated": "梦境日记日期"
-    },
-    {
-      "id": "native.apple.21d92f01c5cc2412",
-      "source": "\\(day.entryCount) \\(day.entryCount == 1 ? \"entry\" : \"entries\")",
-      "translated": "\\(day.entryCount) \\(day.entryCount == 1 ? \"entry\" : \"entries\")"
     },
     {
       "id": "native.apple.f0df95f0790fe675",
@@ -5239,14 +5264,14 @@
       "translated": "OpenClaw 无法确定当前通知权限状态。"
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "选择系统、浅色或深色外观"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "外观"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "选择系统、浅色或深色外观"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5287,6 +5312,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "关于"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "许可证"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5467,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "未捆绑许可证"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "此版本中不提供许可证文件。"
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw 感谢其在开源社区中的合作伙伴。"
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6304,9 +6349,9 @@
       "translated": "OpenClaw 可能会使用运动数据来支持设备感知的交互和自动化。"
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "当你选择现有照片与助手分享时，OpenClaw 需要访问照片图库。"
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw 允许你的助手读取你允许的照片，并允许你选择要分享的照片。"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6939,6 +6984,11 @@
       "translated": "从助手中搜索并添加联系人。"
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "照片"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "日历（添加事件）"
@@ -6967,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "列出、添加和完成提醒事项。"
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "受限"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "读取你为助手选择的照片。"
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "读取助手使用的最近照片。"
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7079,6 +7144,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "离线"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "就绪"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "正在聆听"
@@ -7107,16 +7182,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "原生 WebRTC"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "离线"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "就绪"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7187,6 +7252,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "正在更新 OpenClaw"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "关闭"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "已暂停"
     },
     {
       "id": "native.apple.732051c3e897a9f1",
