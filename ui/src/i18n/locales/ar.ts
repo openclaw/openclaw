@@ -1333,6 +1333,9 @@ export const ar: TranslationMap = {
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
+    sidebar: {
+      allSessions: "كل الجلسات",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
@@ -147,13 +148,28 @@ function resolveRoomEventTranscriptBody(params: ReplyPromptEnvelopeBaseParams): 
   );
 }
 
+function resolvePerTurnDeliveryDirective(params: {
+  inboundEventKind?: InboundEventKind;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): string | undefined {
+  if (params.inboundEventKind === "room_event") {
+    return params.sourceReplyDeliveryMode === "message_tool_only"
+      ? "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way."
+      : "Treat this as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.";
+  }
+  if (
+    params.inboundEventKind === "user_request" &&
+    params.sourceReplyDeliveryMode === "message_tool_only"
+  ) {
+    return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
+  }
+  return undefined;
+}
+
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
   const roomEventBody = resolveRoomEventTranscriptBody(params);
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
-  const deliveryDirective =
-    params.sourceReplyDeliveryMode === "message_tool_only"
-      ? "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way."
-      : "Treat this as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.";
+  const deliveryDirective = resolvePerTurnDeliveryDirective(params);
   return [
     "[OpenClaw room event]",
     "inbound_event_kind: room_event",
@@ -186,7 +202,13 @@ export function buildReplyPromptEnvelopeBase(
   const resumableRoomEventContext = isRoomEvent
     ? buildRoomEventContext(params, buildResumableRoomContext(inboundUserContext))
     : undefined;
-  const currentInboundContextText = isRoomEvent ? roomEventContext : inboundUserContext;
+  const userRequestDeliveryDirective = resolvePerTurnDeliveryDirective({
+    inboundEventKind: params.inboundEventKind,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+  });
+  const currentInboundContextText = isRoomEvent
+    ? roomEventContext
+    : [inboundUserContext, userRequestDeliveryDirective].filter(Boolean).join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,

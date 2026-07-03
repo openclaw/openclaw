@@ -8,13 +8,18 @@ import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
+import ai.openclaw.app.GatewayTalkSetupReadiness
+import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.gatewayTalkSetupDescription
+import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.isReady
 import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
@@ -407,14 +412,16 @@ private fun VoiceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
-  val micEnabled by viewModel.micEnabled.collectAsState()
-  val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
+  val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) viewModel.refreshTalkSetupReadiness()
+  }
 
   SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      VoiceSetupPanel(
-        voiceActive = micEnabled || talkModeEnabled,
-      )
+      VoiceSetupPanel(talkSetupReadiness)
       Text(text = "Audio Test", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = "Check that OpenClaw can speak clearly on this phone.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       SettingsWaveformPanel(active = speakerEnabled, onClick = ::playVoiceSetupTone)
@@ -433,31 +440,27 @@ private fun VoiceSettingsScreen(
 
 @Composable
 private fun VoiceSetupPanel(
-  voiceActive: Boolean,
+  readiness: GatewayTalkSetupReadiness,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-    VoiceSetupActionRow(
-      title = "Realtime Provider",
-      subtitle = "Gateway voice relay",
-      icon = Icons.Default.GraphicEq,
-      statusText = if (voiceActive) "Live" else "Ready",
-      ready = true,
-    )
-    VoiceSetupActionRow(
-      title = "Voice",
-      subtitle = "Voice input",
-      icon = Icons.Default.Mic,
-      statusText = "Configured",
-      ready = true,
-    )
-    VoiceSetupActionRow(
-      title = "Transport",
-      subtitle = "Socket relay",
-      icon = Icons.Default.Bolt,
-      statusText = "Configured",
-      ready = true,
-    )
+    VoiceSetupReadinessRow(title = "Realtime Talk", state = readiness.realtimeTalk, icon = Icons.Default.GraphicEq)
+    VoiceSetupReadinessRow(title = "Dictation", state = readiness.dictation, icon = Icons.Default.Mic)
   }
+}
+
+@Composable
+private fun VoiceSetupReadinessRow(
+  title: String,
+  state: GatewayTalkSetupState,
+  icon: ImageVector,
+) {
+  VoiceSetupActionRow(
+    title = title,
+    subtitle = gatewayTalkSetupDescription(state),
+    icon = icon,
+    statusText = gatewayTalkSetupStatusText(state),
+    ready = state.isReady,
+  )
 }
 
 @Composable

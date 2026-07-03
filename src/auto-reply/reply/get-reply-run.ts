@@ -174,6 +174,7 @@ function normalizeMessageTimestampMs(value: unknown): number | undefined {
 }
 
 async function updateRoomEventAmbientTranscriptWatermark(params: {
+  expectedSessionId: string;
   sessionCtx: TemplateContext;
   storePath?: string;
   sessionKey?: string;
@@ -191,6 +192,7 @@ async function updateRoomEventAmbientTranscriptWatermark(params: {
     key,
     messageId,
     timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
+    expectedSessionId: params.expectedSessionId,
   });
 }
 
@@ -539,6 +541,7 @@ export async function runPreparedReply(
   let { sessionEntry, resolvedThinkLevel } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
   const heartbeatRunScope = resolveHeartbeatRunScope(opts);
+  const explicitThinkingLevelOverride = normalizeThinkLevel(opts?.thinkingLevelOverride);
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
@@ -945,7 +948,9 @@ export async function runPreparedReply(
     });
   }
   if (!thinkingLevelSupported) {
-    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    const explicitThink =
+      (directives.hasThinkDirective && directives.thinkLevel !== undefined) ||
+      explicitThinkingLevelOverride !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
@@ -1307,6 +1312,7 @@ export async function runPreparedReply(
           onMessagePersisted: isRoomEvent
             ? async () =>
                 await updateRoomEventAmbientTranscriptWatermark({
+                  expectedSessionId: preparedSessionState.sessionId,
                   sessionCtx,
                   storePath,
                   sessionKey: sessionKey ?? preparedSessionState.sessionId,

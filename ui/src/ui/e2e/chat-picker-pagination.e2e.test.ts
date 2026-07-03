@@ -165,7 +165,7 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Chat session" }).click();
+      await page.getByRole("button", { name: "Search sessions" }).click();
 
       const searchInput = page.locator('[data-chat-session-picker-search="true"]').last();
       await searchInput.waitFor({ state: "visible", timeout: 10_000 });
@@ -285,7 +285,7 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Chat session" }).click();
+      await page.getByRole("button", { name: "Search sessions" }).click();
 
       await page.getByRole("option", { name: /Main chat/u }).waitFor({ timeout: 10_000 });
       await page.getByText("1", { exact: true }).waitFor({ timeout: 10_000 });

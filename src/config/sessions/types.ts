@@ -113,6 +113,7 @@ export type SessionContextBudgetStatus = {
 };
 
 export type AmbientTranscriptWatermark = {
+  sessionId: string;
   messageId: string;
   timestampMs?: number;
   updatedAt: number;

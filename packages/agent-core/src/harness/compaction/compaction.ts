@@ -37,6 +37,7 @@ import {
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
+  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -246,13 +247,15 @@ export function shouldCompact(
 
 const IMAGE_BLOCK_CHARS = 4800;
 
-function countContentBlockChars(content: Array<{ type: string; text?: string }>): number {
+function countContentBlockChars(
+  content: Array<{ type: string; content?: unknown; text?: string }>,
+): number {
   let chars = 0;
   for (const block of content) {
-    if (block.type === "text" && block.text) {
-      chars += block.text.length;
-    } else if (block.type === "image") {
+    if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
+    } else {
+      chars += getCompactionContentBlockText(block).length;
     }
   }
   return chars;

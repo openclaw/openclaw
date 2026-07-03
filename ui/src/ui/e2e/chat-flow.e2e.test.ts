@@ -686,23 +686,25 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
-      await page.getByRole("button", { name: "Chat session" }).click();
-      const sessionsList = await gateway.waitForRequest("sessions.list");
-      expect(requireRecord(sessionsList.params)).toMatchObject({
-        includeGlobal: true,
-        includeUnknown: true,
-        limit: 50,
-      });
+      // The chat boot hydrates the sidebar session list; that request stays
+      // deferred here while the composer must remain fully usable.
+      await gateway.waitForRequest("sessions.list");
 
       await composer.fill("draft while sessions load");
       expect(await composer.inputValue()).toBe("draft while sessions load");
       await composer.fill("");
 
+      // The background hydrate must not take the shared sessions loading
+      // flag, which would disable New Session for the whole request.
+      expect(await page.getByRole("button", { name: "New session" }).first().isEnabled()).toBe(
+        true,
+      );
+
       await gateway.resolveDeferred("sessions.list");
-      await page.getByRole("option", { name: /Main/ }).waitFor({
-        state: "visible",
-        timeout: 10_000,
-      });
+      await page
+        .locator(".sidebar-recent-session", { hasText: "Main" })
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }
@@ -1074,8 +1076,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
-      await page.getByRole("button", { name: "Chat session" }).click();
-      await page.getByRole("option", { name: /Session B/ }).click();
+      await page
+        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .click();
       const historyRequest = await gateway.waitForRequest("chat.history");
       expect(requireRecord(historyRequest.params)).toMatchObject({
         sessionKey: "agent:main:session-b",
