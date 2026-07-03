@@ -418,6 +418,14 @@ describe("amazon-bedrock provider plugin", () => {
     expect(supportsBedrockPromptCaching("us.anthropic.claude-fable-5")).toBe(true);
   });
 
+  it("recognizes Claude 5 generation inference profiles as prompt-cache eligible", () => {
+    expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5")).toBe(true);
+    expect(supportsBedrockPromptCaching("us.anthropic.claude-sonnet-5")).toBe(true);
+    expect(supportsBedrockPromptCaching("global.anthropic.claude-sonnet-5-20260630")).toBe(true);
+    // Older Claude 3 models without their own cache rule stay ineligible.
+    expect(supportsBedrockPromptCaching("us.anthropic.claude-3-haiku-20240307-v1:0")).toBe(false);
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
