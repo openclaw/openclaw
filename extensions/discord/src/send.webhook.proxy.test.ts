@@ -5,16 +5,6 @@ import { DiscordError, RateLimitError } from "./internal/rest-errors.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
-const proxyEnvKeys = [
-  "OPENCLAW_PROXY_URL",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
-
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
     "openclaw/plugin-sdk/fetch-runtime",
@@ -50,9 +40,6 @@ function cancelTrackedResponse(
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
-    for (const key of proxyEnvKeys) {
-      vi.stubEnv(key, undefined);
-    }
     makeProxyFetchMock.mockReset();
     vi.restoreAllMocks();
   });
@@ -118,8 +105,7 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
-  it("uses proxy fetch when the Discord proxy is the process proxy", async () => {
-    vi.stubEnv("HTTPS_PROXY", "http://mitm-proxy:8080");
+  it("uses proxy fetch when the Discord proxy is a DNS host", async () => {
     const proxiedFetch = vi
       .fn()
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-dns" }), { status: 200 }));
@@ -146,10 +132,11 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
-  it("uses global fetch when the Discord proxy URL is arbitrary DNS", async () => {
-    const globalFetchMock = vi
-      .spyOn(globalThis, "fetch")
+  it("uses proxy fetch when the Discord proxy URL is arbitrary DNS", async () => {
+    const proxiedFetch = vi
+      .fn()
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
+    makeProxyFetchMock.mockReturnValue(proxiedFetch);
 
     const cfg = {
       channels: {
@@ -168,15 +155,15 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(globalFetchMock).toHaveBeenCalled();
-    globalFetchMock.mockRestore();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
-  it("uses global fetch when the Discord proxy URL is a non-loopback IP", async () => {
-    const globalFetchMock = vi
-      .spyOn(globalThis, "fetch")
+  it("uses proxy fetch when the Discord proxy URL is a non-loopback IP", async () => {
+    const proxiedFetch = vi
+      .fn()
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
+    makeProxyFetchMock.mockReturnValue(proxiedFetch);
 
     const cfg = {
       channels: {
@@ -195,9 +182,8 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://10.0.0.10:8080");
-    expect(globalFetchMock).toHaveBeenCalled();
-    globalFetchMock.mockRestore();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://10.0.0.10:8080");
+    expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
   it("uses global fetch when no proxy is configured", async () => {

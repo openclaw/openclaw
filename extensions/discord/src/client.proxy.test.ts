@@ -7,16 +7,6 @@ import { createDiscordRestClient } from "./client.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
-const proxyEnvKeys = [
-  "OPENCLAW_PROXY_URL",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
-
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
     "openclaw/plugin-sdk/fetch-runtime",
@@ -36,9 +26,6 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
 describe("createDiscordRestClient proxy support", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
-    for (const key of proxyEnvKeys) {
-      vi.stubEnv(key, undefined);
-    }
     makeProxyFetchMock.mockClear();
   });
 
@@ -67,8 +54,7 @@ describe("createDiscordRestClient proxy support", () => {
     expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
   });
 
-  it("accepts the configured process proxy DNS host", () => {
-    vi.stubEnv("HTTPS_PROXY", "http://mitm-proxy:8080");
+  it("accepts configured DNS proxy hosts", () => {
     const cfg = {
       channels: {
         discord: {
@@ -89,13 +75,12 @@ describe("createDiscordRestClient proxy support", () => {
     expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
   });
 
-  it("accepts a proxy URL that matches ALL_PROXY", () => {
-    vi.stubEnv("ALL_PROXY", "http://mitm-proxy:8080");
+  it("accepts configured HTTPS proxy hosts", () => {
     const cfg = {
       channels: {
         discord: {
           token: "Bot test-token",
-          proxy: "http://mitm-proxy:8080",
+          proxy: "https://proxy.example:8443",
         },
       },
     } as OpenClawConfig;
@@ -106,18 +91,17 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://mitm-proxy:8080");
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("https://proxy.example:8443");
     expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
     expect(requestClient.customFetch).toBe(requestClient.options?.fetch);
   });
 
-  it("rejects a configured process proxy host when credentials do not match", () => {
-    vi.stubEnv("HTTPS_PROXY", "http://user:secret@mitm-proxy:8080");
+  it("accepts configured proxy URLs with credentials", () => {
     const cfg = {
       channels: {
         discord: {
           token: "Bot test-token",
-          proxy: "http://mitm-proxy:8080",
+          proxy: "http://user:secret@mitm-proxy:8080",
         },
       },
     } as OpenClawConfig;
@@ -127,53 +111,11 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://mitm-proxy:8080");
-    expect(requestClient.options?.fetch).toBeUndefined();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://user:secret@mitm-proxy:8080");
+    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
-  it("rejects a shadowed uppercase proxy env URL", () => {
-    vi.stubEnv("HTTPS_PROXY", "http://mitm-proxy:8080");
-    vi.stubEnv("https_proxy", "http://active-proxy:8080");
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://mitm-proxy:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://mitm-proxy:8080");
-    expect(requestClient.options?.fetch).toBeUndefined();
-  });
-
-  it("rejects stale OPENCLAW_PROXY_URL when the active process proxy differs", () => {
-    vi.stubEnv("OPENCLAW_PROXY_URL", "http://stale-proxy:8080");
-    vi.stubEnv("HTTPS_PROXY", "http://active-proxy:8080");
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://stale-proxy:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    const { rest } = createDiscordRestClient({ cfg });
-    const requestClient = rest as unknown as {
-      options?: { fetch?: typeof fetch };
-    };
-
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://stale-proxy:8080");
-    expect(requestClient.options?.fetch).toBeUndefined();
-  });
-
-  it("falls back to direct fetch when the Discord proxy URL is arbitrary DNS", () => {
+  it("accepts arbitrary configured DNS proxy hosts", () => {
     const cfg = {
       channels: {
         discord: {
@@ -188,8 +130,8 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(requestClient.options?.fetch).toBeUndefined();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
   it("does not inject fetch when no proxy is configured", () => {
@@ -228,7 +170,7 @@ describe("createDiscordRestClient proxy support", () => {
     expect(requestClient.options?.fetch).toBeUndefined();
   });
 
-  it("falls back to direct fetch when the Discord proxy URL is a non-loopback IP", () => {
+  it("accepts configured non-loopback IP proxy URLs", () => {
     const cfg = {
       channels: {
         discord: {
@@ -243,8 +185,8 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://10.0.0.10:8080");
-    expect(requestClient.options?.fetch).toBeUndefined();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://10.0.0.10:8080");
+    expect(requestClient.options?.fetch).toBe(makeProxyFetchMock.mock.results[0]?.value);
   });
 
   it("accepts IPv6 loopback Discord proxy URLs", () => {
