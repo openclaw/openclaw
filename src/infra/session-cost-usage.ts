@@ -2730,6 +2730,9 @@ export async function loadSessionLogs(params: {
       let timestamp = 0;
       if (typeof parsed.timestamp === "string") {
         timestamp = new Date(parsed.timestamp).getTime();
+        if (Number.isNaN(timestamp)) {
+          timestamp = 0;
+        }
       } else if (typeof message.timestamp === "number") {
         timestamp = message.timestamp;
       }
