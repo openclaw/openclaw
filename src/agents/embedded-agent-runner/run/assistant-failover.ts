@@ -3,9 +3,9 @@
  */
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { emitAuthProfileFallbackEvent } from "../../../infra/diagnostic-events.js";
-import { redactIdentifier } from "../../../logging/redact-identifier.js";
+import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   formatAssistantErrorText,
@@ -284,7 +284,8 @@ export async function handleAssistantFailover(params: {
       // retry can proceed with the next profile while the failure record settles.
       void markFailedProfilePromise;
       const nextProfileId = params.getLastProfileId?.();
-      emitAuthProfileFallbackEvent({
+      emitTrustedDiagnosticEvent({
+        type: "auth_profile.fallback",
         provider: params.provider,
         model: params.modelId,
         fromProfileIdHash: failedProfileId ? redactIdentifier(failedProfileId) : undefined,
