@@ -74,7 +74,7 @@ type QaSuiteExecutionPlan =
 
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
-const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 500;
+const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 
 type QaUnifiedPartitionResult = {
   evidenceSummaries: QaEvidenceSummaryJson[];

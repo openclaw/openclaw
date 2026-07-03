@@ -589,9 +589,9 @@
       "translated": "Activa esto para Tailscale o hosts públicos. La LAN privada ws:// sigue siendo compatible."
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "token"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "Dejar en blanco para conservar el token guardado"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -857,11 +857,6 @@
       "id": "native.android.c8ce503b95d13058",
       "source": "Linked phones and node hosts will appear here after pairing.",
       "translated": "Los teléfonos vinculados y los hosts de nodos aparecerán aquí después del emparejamiento."
-    },
-    {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "El administrador de emparejamiento de dispositivos necesita acceso elevado. Los nodos conectados siguen funcionando."
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -1624,6 +1619,21 @@
       "translated": "Mientras se usa"
     },
     {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "¿Reemplazar la configuración de Gateway?"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "Reemplazar configuración"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "Cancelar"
+    },
+    {
       "id": "native.android.718cb50d1bff3e32",
       "source": "Connected",
       "translated": "Conectado"
@@ -1752,6 +1762,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Actualizar"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Licencias"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw agradece a sus socios en la comunidad de código abierto."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "No se incluyen avisos de licencia en esta compilación."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "Abrir ${license.title}"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -5234,14 +5264,14 @@
       "translated": "OpenClaw no puede determinar el estado actual del permiso de notificaciones."
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "Elige apariencia del sistema, clara u oscura"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "Apariencia"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "Elige la apariencia del sistema, clara u oscura"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5312,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "Acerca de"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Licencias"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "No se incluyen licencias"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Los archivos de licencia no están disponibles en esta compilación."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw agradece a sus socios de la comunidad de código abierto."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6349,9 @@
       "translated": "OpenClaw puede usar datos de movimiento para admitir interacciones y automatizaciones conscientes del dispositivo."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw necesita acceso a la fototeca cuando eliges fotos existentes para compartirlas con tu asistente."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw permite que tu asistente lea las fotos que autorices y te permite elegir fotos para compartir."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +6984,11 @@
       "translated": "Busca y añade contactos desde el asistente."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Fotos"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Calendario (Añadir eventos)"
@@ -6962,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Enumera, añade y completa recordatorios."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Limitado"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Leer las fotos que selecciones para el asistente."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Leer fotos recientes para el asistente."
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7144,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "Sin conexión"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "Listo"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "Escuchando"
@@ -7102,16 +7182,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "WebRTC nativo"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "Sin conexión"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "Listo"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7252,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "Actualizando OpenClaw"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "Desactivado"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "En pausa"
     },
     {
       "id": "native.apple.732051c3e897a9f1",

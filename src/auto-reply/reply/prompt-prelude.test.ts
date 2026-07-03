@@ -92,12 +92,11 @@ describe("buildReplyPromptEnvelope", () => {
 
     expect(envelope.prefixedCommandBody).toBe("[OpenClaw room event]");
     expect(envelope.queuedBody).toBe("[OpenClaw room event]");
-    expect(envelope.transcriptCommandBody).toBe("");
+    expect(envelope.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
     expect(envelope.currentInboundContext?.text).toBe(
       [
         "[OpenClaw room event]",
         "inbound_event_kind: room_event",
-        "visible_reply_contract: message_tool_only",
         [
           "Room context:",
           "Conversation info (untrusted metadata):",
@@ -117,7 +116,6 @@ describe("buildReplyPromptEnvelope", () => {
       [
         "[OpenClaw room event]",
         "inbound_event_kind: room_event",
-        "visible_reply_contract: message_tool_only",
         [
           "Room context:",
           "Conversation info (untrusted metadata):",
@@ -131,6 +129,36 @@ describe("buildReplyPromptEnvelope", () => {
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (untrusted, chronological, selected for current message):",
+    );
+  });
+
+  it("uses attributed coalesced room-event lines for current event and transcript", () => {
+    const ambientTranscriptBody = ["#35676 Keśava: No wtf", "#35677 Ayaan: fr"].join("\n");
+    const sessionCtx = finalizeInboundContext({
+      Body: "No wtf\nfr",
+      BodyStripped: "No wtf\nfr",
+      Provider: "telegram",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      MessageSid: "35677",
+      SenderName: "Ayaan",
+      AmbientTranscriptBody: ambientTranscriptBody,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "No wtf\nfr",
+      hasUserBody: true,
+      inboundUserContext: "Conversation context:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.transcriptCommandBody).toBe(ambientTranscriptBody);
+    expect(envelope.currentInboundContext?.text).toContain(
+      `Current event:\n${ambientTranscriptBody}`,
     );
   });
 
@@ -213,14 +241,14 @@ describe("buildReplyPromptEnvelope", () => {
       sessionCtx,
       baseBody: "",
       hasUserBody: true,
-      inboundUserContext: "Sender (untrusted metadata):\nsender_id=U123",
+      inboundUserContext: 'Conversation info (untrusted metadata):\n{"sender":{"id":"U123"}}',
       isBareSessionReset: true,
       startupAction: "reset",
       startupContextPrelude: "Startup context",
       softResetTail: "re-read persona files",
     });
 
-    expect(envelope.prefixedCommandBody).toContain("Sender (untrusted metadata):");
+    expect(envelope.prefixedCommandBody).toContain("Conversation info (untrusted metadata):");
     expect(envelope.prefixedCommandBody).toContain("Startup context");
     expect(envelope.prefixedCommandBody).toContain("re-read persona files");
     expect(envelope.transcriptCommandBody).toBe("re-read persona files");

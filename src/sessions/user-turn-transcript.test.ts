@@ -502,6 +502,45 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
+    it("notifies once after fallback user-turn persistence", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-notify-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+      const persistedMessages: unknown[] = [];
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "#35676 Keśava: No wtf",
+          timestamp: 123,
+          idempotencyKey: "chat-run-ambient:user",
+        },
+        target: {
+          transcriptPath,
+          sessionId: "session-1",
+          sessionKey: "main",
+          cwd: dir,
+        },
+        updateMode: "none",
+        onMessagePersisted: (message) => {
+          persistedMessages.push(message);
+        },
+      });
+
+      await recorder.persistFallback();
+      await recorder.persistFallback();
+
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
+        }),
+      ]);
+      expect(readTranscriptMessages(transcriptPath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "#35676 Keśava: No wtf",
+        }),
+      ]);
+    });
+
     it("resolves media lazily at persistence time", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-lazy-media-");
       const transcriptPath = path.join(dir, "session.jsonl");

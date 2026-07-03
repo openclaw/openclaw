@@ -589,9 +589,9 @@
       "translated": "Tailscale या सार्वजनिक होस्ट के लिए इसे चालू करें। Private LAN ws:// समर्थित रहता है।"
     },
     {
-      "id": "native.android.60da1ba96bf1ed31",
-      "source": "token",
-      "translated": "टोकन"
+      "id": "native.android.d56dcd9606f37263",
+      "source": "Leave blank to keep saved token",
+      "translated": "सहेजा गया टोकन बनाए रखने के लिए खाली छोड़ें"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -857,11 +857,6 @@
       "id": "native.android.c8ce503b95d13058",
       "source": "Linked phones and node hosts will appear here after pairing.",
       "translated": "पेयरिंग के बाद लिंक किए गए फ़ोन और नोड होस्ट यहाँ दिखाई देंगे।"
-    },
-    {
-      "id": "native.android.3df83311891719d9",
-      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
-      "translated": "डिवाइस पेयरिंग एडमिन को उन्नत एक्सेस चाहिए। कनेक्टेड नोड फिर भी काम करते हैं।"
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -1624,6 +1619,21 @@
       "translated": "उपयोग करते समय"
     },
     {
+      "id": "native.android.f3d5fd047bfdb023",
+      "source": "Replace gateway setup?",
+      "translated": "Gateway सेटअप बदलें?"
+    },
+    {
+      "id": "native.android.869c8be127ce5282",
+      "source": "Replace setup",
+      "translated": "सेटअप बदलें"
+    },
+    {
+      "id": "native.android.c6c8e0c4b8a9a7cf",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
       "id": "native.android.718cb50d1bff3e32",
       "source": "Connected",
       "translated": "कनेक्टेड"
@@ -1752,6 +1762,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "अपडेट"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "लाइसेंस"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw ओपन-सोर्स समुदाय में अपने भागीदारों की सराहना करता है।"
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "इस बिल्ड में कोई लाइसेंस नोटिस पैकेज नहीं किए गए हैं।"
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} खोलें"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -5234,14 +5264,14 @@
       "translated": "OpenClaw वर्तमान नोटिफ़िकेशन अनुमति स्थिति निर्धारित नहीं कर सकता।"
     },
     {
+      "id": "native.apple.cfec8b4d042a8066",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "सिस्टम, हल्का या गहरा रूप चुनें"
+    },
+    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "दिखावट"
-    },
-    {
-      "id": "native.apple.80fade864c8ad242",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "सिस्टम, लाइट या डार्क दिखावट चुनें"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5282,6 +5312,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "परिचय"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "लाइसेंस"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5462,6 +5497,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "कोई लाइसेंस शामिल नहीं है"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "इस बिल्ड में लाइसेंस फ़ाइलें उपलब्ध नहीं हैं।"
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw ओपन-सोर्स समुदाय में अपने साझेदारों की सराहना करता है।"
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6299,9 +6349,9 @@
       "translated": "OpenClaw device-aware इंटरैक्शन और ऑटोमेशन का समर्थन करने के लिए motion data का उपयोग कर सकता है."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "जब आप अपने सहायक के साथ साझा करने के लिए मौजूदा फ़ोटो चुनते हैं, तो OpenClaw को फ़ोटो लाइब्रेरी एक्सेस की आवश्यकता होती है।"
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw आपके असिस्टेंट को आपकी अनुमति वाली फ़ोटो पढ़ने देता है और आपको साझा करने के लिए फ़ोटो चुनने देता है।"
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6934,6 +6984,11 @@
       "translated": "असिस्टेंट से संपर्क खोजें और जोड़ें।"
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "फ़ोटो"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "कैलेंडर (इवेंट जोड़ें)"
@@ -6962,6 +7017,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "असिस्टेंट के लिए आपके द्वारा चुनी गई फ़ोटो पढ़ें।"
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "असिस्टेंट के लिए हाल की फ़ोटो पढ़ें।"
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -7074,6 +7144,16 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "ऑफ़लाइन"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "तैयार"
+    },
+    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "सुन रहा है"
@@ -7102,16 +7182,6 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "Native WebRTC"
-    },
-    {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "ऑफ़लाइन"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "तैयार"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7182,6 +7252,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "OpenClaw अपडेट किया जा रहा है"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.apple.5590d661cdc81fbf",
+      "source": "Paused",
+      "translated": "रोका गया"
     },
     {
       "id": "native.apple.732051c3e897a9f1",

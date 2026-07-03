@@ -1466,6 +1466,16 @@ private fun SettingsShellScreen(
       }
 
       item {
+        SettingsSectionTitle("Licenses")
+      }
+      item {
+        SettingsGroup(
+          rows = listOf(SettingsRow("Licenses", "", Icons.Default.Storage, route = SettingsRoute.Licenses)),
+          onOpen = onRouteChange,
+        )
+      }
+
+      item {
         Column(
           modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
           horizontalAlignment = Alignment.CenterHorizontally,
@@ -1643,6 +1653,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     SettingsRoute.Profile,
     SettingsRoute.Appearance,
     SettingsRoute.About,
+    SettingsRoute.Licenses,
     -> "Profile & device"
 
     SettingsRoute.Health -> "Diagnostics"
@@ -1749,7 +1760,9 @@ private fun SettingsListRow(
     Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
     Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      if (row.value.isNotBlank()) {
+        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }

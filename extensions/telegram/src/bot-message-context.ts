@@ -9,6 +9,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -60,14 +61,9 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
-type TelegramMessageContextRuntime = typeof import("./bot-message-context.runtime.js");
-
-let telegramMessageContextRuntimePromise: Promise<TelegramMessageContextRuntime> | undefined;
-
-async function loadTelegramMessageContextRuntime() {
-  telegramMessageContextRuntimePromise ??= import("./bot-message-context.runtime.js");
-  return await telegramMessageContextRuntimePromise;
-}
+const loadTelegramMessageContextRuntime = createLazyRuntimeModule(
+  () => import("./bot-message-context.runtime.js"),
+);
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
 type TelegramReactionApi = (
