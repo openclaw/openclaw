@@ -70,7 +70,7 @@ flow:
             - lambda:
                 async: true
                 expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.hasActiveRun === true))"
-            - 5000
+            - 15000
             - 100
         - set: startIndex
           value:

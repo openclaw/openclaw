@@ -134,10 +134,12 @@ async function waitForCrablineReady(params: {
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
+      const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+      const probeTimeoutMs = Math.min(15_000, remainingMs);
       const payload = (await params.gateway.call(
         "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
+        { probe: false, timeoutMs: Math.min(5_000, probeTimeoutMs) },
+        { timeoutMs: probeTimeoutMs },
       )) as {
         channelAccounts?: Record<
           string,
