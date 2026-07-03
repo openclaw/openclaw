@@ -109,6 +109,16 @@ gh workflow run openclaw-npm-release.yml \
   -f full_release_validation_run_id=<full-validation-run-id>
 ```
 
+For a fork or non-production rehearsal that intentionally cannot satisfy the
+monthly `.33` or protected-`main` month policy, add
+`-f bypass_stable_guard=true` to both npm preflight and publish dispatches. The
+default is `false`. The bypass is accepted only with `npm_dist_tag=stable` and
+is recorded in the workflow summary. It does not bypass the canonical
+`stable/YYYY.M.33` workflow ref, branch-tip/tag/checkout equality, final-tag
+syntax, package/tag version equality, referenced run and manifest identity,
+tarball provenance, environment approval, registry readback, or selector
+repair evidence.
+
 The publish workflow verifies the referenced run identities, the prepared
 tarball digest, and both npm registry selectors. Independently confirm the
 result after the workflow succeeds:
@@ -893,7 +903,11 @@ package cannot ship without every publishable official plugin, including
   non-beta publication so the workflow authenticates the exact validation run
 - `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`,
   `latest`, or `stable` and defaults to `beta`. Final patch `33` and later must
-  use `stable`; `stable` rejects earlier patches and non-final tags.
+  use `stable`; by default, `stable` rejects earlier patches, and it always
+  rejects non-final tags.
+- `bypass_stable_guard`: testing-only boolean, default `false`; with
+  `npm_dist_tag=stable`, bypasses monthly stable eligibility while preserving
+  release identity, artifact, approval, and readback checks.
 
 `OpenClaw Release Publish` accepts these operator-controlled inputs:
 

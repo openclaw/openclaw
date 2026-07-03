@@ -34,6 +34,11 @@ on:
           - beta
           - latest
           - stable
+      bypass_stable_guard:
+        description: Testing only; relax the stable patch and protected-main month policy on the canonical stable branch
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
@@ -123,6 +128,7 @@ jobs:
 
       - name: Validate npm release request
         env:
+          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
@@ -405,6 +411,7 @@ jobs:
 
       - name: Validate npm release request
         env:
+          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
@@ -748,6 +755,7 @@ jobs:
 
       - name: Recheck npm release request
         env:
+          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
@@ -761,6 +769,7 @@ jobs:
       - name: Publish
         id: publish
         env:
+          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
           OPENCLAW_PREPACK_PREPARED: "1"
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.preflight_provenance.outputs.tarball_path }}
@@ -782,6 +791,7 @@ jobs:
       - name: Summarize stable npm publication
         if: ${{ always() && inputs.npm_dist_tag == 'stable' }}
         env:
+          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ github.sha }}
           STABLE_BRANCH: ${{ github.ref_name }}
@@ -801,6 +811,7 @@ jobs:
           {
             echo "## npm stable publication"
             echo "- Package: openclaw@${release_version}"
+            echo "- Stable guard bypass: ${BYPASS_STABLE_GUARD}"
             echo "- Stable branch: ${STABLE_BRANCH}"
             echo "- Release tag: ${RELEASE_TAG}"
             echo "- Release SHA: ${RELEASE_SHA}"

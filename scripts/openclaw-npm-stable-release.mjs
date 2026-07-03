@@ -7,10 +7,31 @@ import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "stable"]);
 
-export function validateNpmPublishBoundary(packageVersion, npmDistTag) {
+export function parseStableGuardBypass(value = "") {
+  if (value === "" || value === "false") {
+    return false;
+  }
+  if (value === "true") {
+    return true;
+  }
+  throw new Error(`BYPASS_STABLE_GUARD must be "true" or "false"; got "${value}".`);
+}
+
+function requireStableBypassTag(npmDistTag, bypassStableGuard) {
+  if (bypassStableGuard && npmDistTag !== "stable") {
+    throw new Error("BYPASS_STABLE_GUARD may only be used with the stable npm dist-tag.");
+  }
+}
+
+export function validateNpmPublishBoundary(
+  packageVersion,
+  npmDistTag,
+  { bypassStableGuard = false } = {},
+) {
   if (!SUPPORTED_DIST_TAGS.has(npmDistTag)) {
     throw new Error(`Unsupported npm dist-tag "${npmDistTag}".`);
   }
+  requireStableBypassTag(npmDistTag, bypassStableGuard);
   const parsed = parseReleaseVersion(packageVersion);
   if (parsed === null) {
     throw new Error(`Unsupported release version "${packageVersion}".`);
@@ -33,7 +54,7 @@ export function validateNpmPublishBoundary(packageVersion, npmDistTag) {
     if (parsed.correctionNumber !== undefined) {
       throw new Error("Stable npm publication does not allow correction suffixes.");
     }
-    if (parsed.patch < 33) {
+    if (!bypassStableGuard && parsed.patch < 33) {
       throw new Error("Stable npm publication requires release patch 33 or above.");
     }
     return parsed;
@@ -47,13 +68,17 @@ export function validateNpmPublishBoundary(packageVersion, npmDistTag) {
 }
 
 export function validateStableNpmReleaseRequest(request) {
+  const bypassStableGuard = request.bypassStableGuard ?? false;
+  requireStableBypassTag(request.npmDistTag, bypassStableGuard);
   const taggedVersion = request.releaseTag.startsWith("v")
     ? parseReleaseVersion(request.releaseTag.slice(1))
     : null;
 
   if (request.npmDistTag !== "stable") {
     if (taggedVersion !== null) {
-      validateNpmPublishBoundary(taggedVersion.version, request.npmDistTag);
+      validateNpmPublishBoundary(taggedVersion.version, request.npmDistTag, {
+        bypassStableGuard,
+      });
     } else if (!SUPPORTED_DIST_TAGS.has(request.npmDistTag)) {
       throw new Error(`Unsupported npm dist-tag "${request.npmDistTag}".`);
     }
@@ -67,7 +92,7 @@ export function validateStableNpmReleaseRequest(request) {
   ) {
     throw new Error("Stable npm publication requires an exact final vYYYY.M.P release tag.");
   }
-  validateNpmPublishBoundary(taggedVersion.version, request.npmDistTag);
+  validateNpmPublishBoundary(taggedVersion.version, request.npmDistTag, { bypassStableGuard });
 
   const releaseVersion = taggedVersion.version;
   const stableBranch = `stable/${taggedVersion.year}.${taggedVersion.month}.33`;
@@ -89,6 +114,10 @@ export function validateStableNpmReleaseRequest(request) {
   }
   if (new Set(shaValues.map((sha) => sha.toLowerCase())).size !== 1) {
     throw new Error("Stable npm checkout, tag, and stable branch tip SHAs must match exactly.");
+  }
+
+  if (bypassStableGuard) {
+    return { stable: true, releaseVersion, stableBranch, bypassStableGuard: true };
   }
 
   const mainVersion = parseReleaseVersion(request.mainPackageVersion);
@@ -237,8 +266,10 @@ function validateRequestFromRepository() {
   const npmDistTag = process.env.RELEASE_NPM_DIST_TAG ?? "";
   const releaseTag = process.env.RELEASE_TAG ?? "";
   const npmWorkflowRef = process.env.NPM_WORKFLOW_REF ?? "";
+  const bypassStableGuard = parseStableGuardBypass(process.env.BYPASS_STABLE_GUARD ?? "");
   if (npmDistTag !== "stable") {
     return validateStableNpmReleaseRequest({
+      bypassStableGuard,
       npmDistTag,
       releaseTag,
       npmWorkflowRef,
@@ -254,6 +285,7 @@ function validateRequestFromRepository() {
   if (!parsed || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
     return validateStableNpmReleaseRequest({
       npmDistTag,
+      bypassStableGuard,
       releaseTag,
       npmWorkflowRef,
       checkoutSha: "",
@@ -264,6 +296,34 @@ function validateRequestFromRepository() {
     });
   }
   const stableBranch = `stable/${parsed.year}.${parsed.month}.33`;
+  if (bypassStableGuard) {
+    execFileSync(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        "origin",
+        `+refs/heads/${stableBranch}:refs/remotes/origin/${stableBranch}`,
+      ],
+      { stdio: "inherit" },
+    );
+    execFileSync(
+      "git",
+      ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
+      { stdio: "inherit" },
+    );
+    return validateStableNpmReleaseRequest({
+      npmDistTag,
+      bypassStableGuard,
+      releaseTag,
+      npmWorkflowRef,
+      checkoutSha: git(["rev-parse", "HEAD"]),
+      tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
+      stableBranchSha: git(["rev-parse", `refs/remotes/origin/${stableBranch}`]),
+      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
+      mainPackageVersion: "",
+    });
+  }
   execFileSync(
     "git",
     [
@@ -282,6 +342,7 @@ function validateRequestFromRepository() {
   );
   return validateStableNpmReleaseRequest({
     npmDistTag,
+    bypassStableGuard,
     releaseTag,
     npmWorkflowRef,
     checkoutSha: git(["rev-parse", "HEAD"]),
@@ -318,7 +379,10 @@ async function main() {
   }
   if (command === "publish-plan") {
     const npmDistTag = process.env.REQUESTED_PUBLISH_TAG ?? "";
-    const parsed = validateNpmPublishBoundary(process.env.PACKAGE_VERSION ?? "", npmDistTag);
+    const bypassStableGuard = parseStableGuardBypass(process.env.BYPASS_STABLE_GUARD ?? "");
+    const parsed = validateNpmPublishBoundary(process.env.PACKAGE_VERSION ?? "", npmDistTag, {
+      bypassStableGuard,
+    });
     console.log(parsed.channel);
     console.log(npmDistTag);
     return;

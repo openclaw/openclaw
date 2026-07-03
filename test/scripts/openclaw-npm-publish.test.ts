@@ -142,6 +142,41 @@ describe("openclaw npm publish wrapper", () => {
     expect(result.stderr).toContain("Stable npm publication requires release patch 33 or above");
   });
 
+  it("publishes the current pre-.33 final version to stable with the explicit bypass", () => {
+    const tempRoot = makeTempDir("openclaw-npm-publish-");
+    const binDir = path.join(tempRoot, "bin");
+    const npmLog = path.join(tempRoot, "npm.log");
+    mkdirSync(binDir);
+    writeFileSync(path.join(binDir, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" > "${npmLog}"\n`, {
+      mode: 0o755,
+    });
+
+    const result = runPublishWrapper(["--publish"], {
+      BYPASS_STABLE_GUARD: "true",
+      OPENCLAW_NPM_PUBLISH_TAG: "stable",
+      PATH: `${binDir}:${process.env.PATH}`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(npmLog, "utf8")).toContain(
+      "publish --access public --tag stable --provenance",
+    );
+    expect(result.stdout).toContain("Resolved publish tag: stable");
+  });
+
+  it.each([
+    ["malformed bypass", "stable", "sometimes", 'must be "true" or "false"'],
+    ["non-stable bypass", "beta", "true", "only be used with the stable npm dist-tag"],
+  ])("rejects %s before npm publish", (_label, distTag, bypass, expectedError) => {
+    const result = runPublishWrapper(["--publish"], {
+      BYPASS_STABLE_GUARD: bypass,
+      OPENCLAW_NPM_PUBLISH_TAG: distTag,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(expectedError);
+  });
+
   it("rejects unknown requested dist-tags instead of falling back to beta", () => {
     const result = runPublishWrapper(["--publish"], {
       OPENCLAW_NPM_PUBLISH_TAG: "nightly",

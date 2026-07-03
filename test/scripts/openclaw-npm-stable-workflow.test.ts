@@ -7,7 +7,14 @@ const workflowPath = ".github/workflows/openclaw-npm-release.yml";
 type Step = { env?: Record<string, string>; id?: string; if?: string; name?: string; run?: string };
 type Job = { environment?: string; steps?: Step[] };
 type Workflow = {
-  on?: { workflow_dispatch?: { inputs?: { npm_dist_tag?: { options?: string[] } } } };
+  on?: {
+    workflow_dispatch?: {
+      inputs?: {
+        bypass_stable_guard?: { default?: boolean; type?: string };
+        npm_dist_tag?: { options?: string[] };
+      };
+    };
+  };
   jobs?: Record<string, Job>;
 };
 
@@ -62,6 +69,33 @@ describe("minimal npm stable workflow", () => {
     expect(
       parsed.jobs?.validate_publish_request?.steps?.map((candidate) => candidate.name),
     ).not.toContain("Setup Node environment");
+  });
+
+  it("threads an explicit, default-off stable guard bypass through every policy gate", () => {
+    const parsed = workflow();
+    const input = parsed.on?.workflow_dispatch?.inputs?.bypass_stable_guard;
+    expect(input).toMatchObject({ default: false, type: "boolean" });
+
+    const policySteps = [
+      step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request"),
+      step(parsed.jobs?.validate_publish_request, "Validate npm release request"),
+      step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request"),
+      step(parsed.jobs?.publish_openclaw_npm, "Publish"),
+    ];
+    for (const policyStep of policySteps) {
+      expect(policyStep.env?.BYPASS_STABLE_GUARD).toBe("${{ inputs.bypass_stable_guard }}");
+    }
+    const trustedRef = step(
+      parsed.jobs?.validate_publish_request,
+      "Require trusted workflow ref for publish",
+    );
+    expect(trustedRef.env?.BYPASS_STABLE_GUARD).toBeUndefined();
+    expect(trustedRef.run).not.toContain("BYPASS_STABLE_GUARD");
+    expect(trustedRef.run).toContain('"${WORKFLOW_REF}" == refs/heads/stable/*');
+
+    const summary = step(parsed.jobs?.publish_openclaw_npm, "Summarize stable npm publication");
+    expect(summary.env?.BYPASS_STABLE_GUARD).toBe("${{ inputs.bypass_stable_guard }}");
+    expect(summary.run).toContain("Stable guard bypass: ${BYPASS_STABLE_GUARD}");
   });
 
   it("authenticates exact stable run and Full Validation identities", () => {

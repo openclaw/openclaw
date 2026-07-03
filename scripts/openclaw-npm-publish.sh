@@ -71,6 +71,7 @@ fi
 
 publish_plan="$(
   PACKAGE_VERSION="${package_version}" REQUESTED_PUBLISH_TAG="${OPENCLAW_NPM_PUBLISH_TAG:-}" \
+    BYPASS_STABLE_GUARD="${BYPASS_STABLE_GUARD:-}" \
     node scripts/openclaw-npm-stable-release.mjs publish-plan
 )"
 

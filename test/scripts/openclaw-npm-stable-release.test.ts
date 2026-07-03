@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   capturePriorStableSelector,
   parsePriorStableSelector,
+  parseStableGuardBypass,
   stableSelectorRepairCommand,
   validateFullReleaseValidationManifest,
   validateNpmPublishBoundary,
@@ -15,6 +16,14 @@ const sha = "a".repeat(40);
 const branch = "stable/2026.6.33";
 
 describe("npm stable publication boundary", () => {
+  it("parses only explicit boolean stable guard values", () => {
+    expect(parseStableGuardBypass()).toBe(false);
+    expect(parseStableGuardBypass("")).toBe(false);
+    expect(parseStableGuardBypass("false")).toBe(false);
+    expect(parseStableGuardBypass("true")).toBe(true);
+    expect(() => parseStableGuardBypass("1")).toThrow(/must be "true" or "false"/u);
+  });
+
   it.each([
     ["2026.6.11-alpha.1", "alpha"],
     ["2026.6.11-beta.1", "beta"],
@@ -64,6 +73,49 @@ describe("npm stable publication boundary", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("stable\nstable\n");
     expect(result.stderr).toBe("");
+  });
+
+  it("allows a pre-.33 final stable version only with the explicit bypass", () => {
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11", "stable", { bypassStableGuard: true }),
+    ).not.toThrow();
+    expect(() => validateNpmPublishBoundary("2026.6.11", "stable")).toThrow(/patch 33 or above/u);
+  });
+
+  it.each(["alpha", "beta", "latest"])(
+    "rejects stable guard bypass with the %s dist-tag",
+    (distTag) => {
+      expect(() =>
+        validateNpmPublishBoundary("2026.6.11", distTag, { bypassStableGuard: true }),
+      ).toThrow(/only be used with the stable npm dist-tag/u);
+    },
+  );
+
+  it("preserves the unknown dist-tag rejection when bypass is requested", () => {
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11", "nightly", { bypassStableGuard: true }),
+    ).toThrow('Unsupported npm dist-tag "nightly"');
+  });
+
+  it.each([
+    ["malformed bypass", "stable", "sometimes", /must be "true" or "false"/u],
+    ["non-stable bypass", "beta", "true", /only be used with the stable npm dist-tag/u],
+  ])("rejects %s in the dependency-free CLI", (_label, distTag, bypass, error) => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/openclaw-npm-stable-release.mjs", "publish-plan"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          BYPASS_STABLE_GUARD: bypass,
+          PACKAGE_VERSION: "2026.6.11",
+          REQUESTED_PUBLISH_TAG: distTag,
+        },
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(error);
   });
 });
 
@@ -127,6 +179,45 @@ describe("stable npm release request", () => {
         releaseTag: sha,
       }),
     ).toEqual({ stable: false });
+  });
+
+  it("bypasses patch and protected-main policy while preserving canonical branch identity", () => {
+    const bypassed = {
+      ...valid,
+      bypassStableGuard: true,
+      releaseTag: "v2026.6.11",
+      packageVersion: "2026.6.11",
+      mainPackageVersion: "",
+    };
+    expect(validateStableNpmReleaseRequest(bypassed)).toEqual({
+      stable: true,
+      releaseVersion: "2026.6.11",
+      stableBranch: "stable/2026.6.33",
+      bypassStableGuard: true,
+    });
+    expect(() =>
+      validateStableNpmReleaseRequest({ ...bypassed, packageVersion: "2026.6.12" }),
+    ).toThrow(/package version mismatch/u);
+    expect(() =>
+      validateStableNpmReleaseRequest({
+        ...bypassed,
+        npmWorkflowRef: "refs/heads/dev/stable-publish-test",
+      }),
+    ).toThrow(/workflow ref mismatch/u);
+    expect(() =>
+      validateStableNpmReleaseRequest({ ...bypassed, stableBranchSha: "b".repeat(40) }),
+    ).toThrow(/stable branch tip SHAs must match/u);
+  });
+
+  it("rejects bypass on a regular npm release request", () => {
+    expect(() =>
+      validateStableNpmReleaseRequest({
+        ...valid,
+        bypassStableGuard: true,
+        npmDistTag: "beta",
+        releaseTag: sha,
+      }),
+    ).toThrow(/only be used with the stable npm dist-tag/u);
   });
 });
 
