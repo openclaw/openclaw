@@ -1,7 +1,8 @@
 /**
  * Tests for A2A Task registry.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert";
 import {
   createTask,
   getTask,
@@ -13,54 +14,52 @@ import {
 describe("task registry", () => {
   it("creates and retrieves a task", () => {
     const task = createTask("agent:main:explicit:123");
-    expect(task.id).toBeTruthy();
-    expect(task.sessionKey).toBe("agent:main:explicit:123");
-    expect(task.state).toBe("working");
-    expect(task.createdAt).toBeLessThanOrEqual(Date.now());
+    assert.ok(task.id);
+    assert.strictEqual(task.sessionKey, "agent:main:explicit:123");
+    assert.strictEqual(task.state, "working");
+    assert.ok(task.createdAt <= Date.now());
 
     const found = getTask(task.id);
-    expect(found).toBeDefined();
-    expect(found!.id).toBe(task.id);
+    assert.ok(found);
+    assert.strictEqual(found!.id, task.id);
   });
 
   it("updates task state", () => {
     const task = createTask("session-key");
-    expect(task.state).toBe("working");
+    assert.strictEqual(task.state, "working");
 
     const updated = updateTaskState(task.id, "completed");
-    expect(updated!.state).toBe("completed");
-    expect(updated!.updatedAt).toBeGreaterThanOrEqual(task.updatedAt);
+    assert.strictEqual(updated!.state, "completed");
+    assert.ok(updated!.updatedAt >= task.updatedAt);
 
     const found = getTask(task.id);
-    expect(found!.state).toBe("completed");
+    assert.strictEqual(found!.state, "completed");
   });
 
   it("returns undefined for unknown task", () => {
-    expect(getTask("nonexistent")).toBeUndefined();
-    expect(updateTaskState("nonexistent", "completed")).toBeUndefined();
+    assert.strictEqual(getTask("nonexistent"), undefined);
+    assert.strictEqual(updateTaskState("nonexistent", "completed"), undefined);
   });
 
   it("deletes a task", () => {
     const task = createTask("key");
-    expect(getTask(task.id)).toBeDefined();
+    assert.ok(getTask(task.id));
 
-    expect(deleteTask(task.id)).toBe(true);
-    expect(getTask(task.id)).toBeUndefined();
-    expect(deleteTask("nonexistent")).toBe(false);
+    assert.strictEqual(deleteTask(task.id), true);
+    assert.strictEqual(getTask(task.id), undefined);
+    assert.strictEqual(deleteTask("nonexistent"), false);
   });
 
   it("lists all tasks", () => {
-    // Create a few tasks
     createTask("key-a");
     createTask("key-b");
     createTask("key-c");
 
     const all = listTasks();
-    expect(all.length).toBeGreaterThanOrEqual(3);
+    assert.ok(all.length >= 3);
 
-    // Each task should have unique id
     const ids = new Set(all.map((t) => t.id));
-    expect(ids.size).toBe(all.length);
+    assert.strictEqual(ids.size, all.length);
   });
 
   it("task state transitions", () => {
@@ -76,7 +75,7 @@ describe("task registry", () => {
 
     for (const state of validStates) {
       const updated = updateTaskState(task.id, state);
-      expect(updated!.state).toBe(state);
+      assert.strictEqual(updated!.state, state);
     }
   });
 });

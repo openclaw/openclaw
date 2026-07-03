@@ -1,7 +1,8 @@
 /**
  * Tests for A2A Agent Card builder.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert";
 import { buildAgentCard } from "./agent-card.js";
 
 describe("buildAgentCard", () => {
@@ -11,19 +12,19 @@ describe("buildAgentCard", () => {
       gatewayUrl: "https://openclaw.example.com",
     });
 
-    expect(card.name).toBe("OpenClaw");
-    expect(card.url).toBe("https://openclaw.example.com");
-    expect(card.version).toBe("2026.7.0");
-    expect(card.capabilities.streaming).toBe(true);
-    expect(card.capabilities.pushNotifications).toBe(false);
-    expect(card.defaultInputModes).toEqual(["text"]);
-    expect(card.defaultOutputModes).toEqual(["text"]);
-    expect(card.skills).toHaveLength(1);
-    expect(card.skills[0].id).toBe("main");
-    expect(card.skills[0].name).toBe("main");
-    expect(card.skills[0].description).toBe("Main assistant");
-    expect(card.skills[0].tags).toEqual(["openclaw"]);
-    expect(card.agents).toEqual(["main"]);
+    assert.strictEqual(card.name, "OpenClaw");
+    assert.strictEqual(card.url, "https://openclaw.example.com");
+    assert.strictEqual(card.version, "2026.7.0");
+    assert.strictEqual(card.capabilities.streaming, true);
+    assert.strictEqual(card.capabilities.pushNotifications, false);
+    assert.deepStrictEqual(card.defaultInputModes, ["text"]);
+    assert.deepStrictEqual(card.defaultOutputModes, ["text"]);
+    assert.strictEqual(card.skills.length, 1);
+    assert.strictEqual(card.skills[0].id, "main");
+    assert.strictEqual(card.skills[0].name, "main");
+    assert.strictEqual(card.skills[0].description, "Main assistant");
+    assert.deepStrictEqual(card.skills[0].tags, ["openclaw"]);
+    assert.deepStrictEqual(card.agents, ["main"]);
   });
 
   it("builds a card with multiple agents", () => {
@@ -36,12 +37,12 @@ describe("buildAgentCard", () => {
       gatewayUrl: "http://localhost:18789",
     });
 
-    expect(card.skills).toHaveLength(3);
-    expect(card.skills[0].id).toBe("main");
-    expect(card.skills[1].id).toBe("researcher");
-    expect(card.skills[2].id).toBe("coder");
-    expect(card.skills[2].description).toBeUndefined();
-    expect(card.agents).toEqual(["main", "researcher", "coder"]);
+    assert.strictEqual(card.skills.length, 3);
+    assert.strictEqual(card.skills[0].id, "main");
+    assert.strictEqual(card.skills[1].id, "researcher");
+    assert.strictEqual(card.skills[2].id, "coder");
+    assert.strictEqual(card.skills[2].description, undefined);
+    assert.deepStrictEqual(card.agents, ["main", "researcher", "coder"]);
   });
 
   it("handles empty agent list", () => {
@@ -50,7 +51,7 @@ describe("buildAgentCard", () => {
       gatewayUrl: "http://localhost:18789",
     });
 
-    expect(card.skills).toHaveLength(0);
-    expect(card.agents).toEqual([]);
+    assert.strictEqual(card.skills.length, 0);
+    assert.deepStrictEqual(card.agents, []);
   });
 });

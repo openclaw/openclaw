@@ -1,7 +1,8 @@
 /**
  * Tests for JSON-RPC 2.0 parser and formatter.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it } from "node:test";
+import assert from "node:assert";
 import {
   parseJsonRpc,
   formatResponse,
@@ -20,13 +21,12 @@ describe("parseJsonRpc", () => {
         params: { message: "hello" },
       }),
     );
-
-    expect(Array.isArray(result)).toBe(false);
+    assert.strictEqual(Array.isArray(result), false);
     if (!Array.isArray(result) && !("code" in result)) {
-      expect(result.jsonrpc).toBe("2.0");
-      expect(result.id).toBe(1);
-      expect(result.method).toBe("tasks/send");
-      expect(result.params).toEqual({ message: "hello" });
+      assert.strictEqual(result.jsonrpc, "2.0");
+      assert.strictEqual(result.id, 1);
+      assert.strictEqual(result.method, "tasks/send");
+      assert.deepStrictEqual(result.params, { message: "hello" });
     }
   });
 
@@ -38,35 +38,30 @@ describe("parseJsonRpc", () => {
         params: { taskId: "abc" },
       }),
     );
-
     if (!Array.isArray(result) && !("code" in result)) {
-      expect(isNotification(result)).toBe(true);
-      expect(result.method).toBe("tasks/cancel");
+      assert.strictEqual(isNotification(result), true);
+      assert.strictEqual(result.method, "tasks/cancel");
     }
   });
 
   it("rejects invalid json", () => {
     const result = parseJsonRpc("not json");
-    expect(result).toEqual(JSONRPC_ERROR.PARSE_ERROR);
+    assert.deepStrictEqual(result, JSONRPC_ERROR.PARSE_ERROR);
   });
 
   it("rejects missing jsonrpc version", () => {
-    const result = parseJsonRpc(
-      JSON.stringify({ id: 1, method: "test" }),
-    );
-    expect(result).toEqual(JSONRPC_ERROR.INVALID_REQUEST);
+    const result = parseJsonRpc(JSON.stringify({ id: 1, method: "test" }));
+    assert.deepStrictEqual(result, JSONRPC_ERROR.INVALID_REQUEST);
   });
 
   it("rejects missing method", () => {
-    const result = parseJsonRpc(
-      JSON.stringify({ jsonrpc: "2.0", id: 1 }),
-    );
-    expect(result).toEqual(JSONRPC_ERROR.INVALID_REQUEST);
+    const result = parseJsonRpc(JSON.stringify({ jsonrpc: "2.0", id: 1 }));
+    assert.deepStrictEqual(result, JSONRPC_ERROR.INVALID_REQUEST);
   });
 
   it("rejects non-object", () => {
     const result = parseJsonRpc("1");
-    expect(result).toEqual(JSONRPC_ERROR.INVALID_REQUEST);
+    assert.deepStrictEqual(result, JSONRPC_ERROR.INVALID_REQUEST);
   });
 
   it("parses a batch request", () => {
@@ -76,12 +71,11 @@ describe("parseJsonRpc", () => {
         { jsonrpc: "2.0", id: 2, method: "tasks/get", params: { taskId: "x" } },
       ]),
     );
-
-    expect(Array.isArray(result)).toBe(true);
+    assert.strictEqual(Array.isArray(result), true);
     if (Array.isArray(result)) {
-      expect(result).toHaveLength(2);
-      expect(result[0].id).toBe(1);
-      expect(result[1].id).toBe(2);
+      assert.strictEqual(result.length, 2);
+      assert.strictEqual(result[0].id, 1);
+      assert.strictEqual(result[1].id, 2);
     }
   });
 
@@ -92,37 +86,34 @@ describe("parseJsonRpc", () => {
         { invalid: true },
       ]),
     );
-    expect(result).toEqual(JSONRPC_ERROR.INVALID_REQUEST);
+    assert.deepStrictEqual(result, JSONRPC_ERROR.INVALID_REQUEST);
   });
 
   it("rejects empty batch", () => {
     const result = parseJsonRpc("[]");
-    expect(result).toEqual(JSONRPC_ERROR.INVALID_REQUEST);
+    assert.deepStrictEqual(result, JSONRPC_ERROR.INVALID_REQUEST);
   });
 });
 
 describe("formatResponse / formatError", () => {
   it("formats a success response", () => {
     const resp = formatResponse(1, { taskId: "abc", state: "working" });
-    expect(resp.jsonrpc).toBe("2.0");
-    expect(resp.id).toBe(1);
-    expect(resp.result).toEqual({ taskId: "abc", state: "working" });
-    expect(resp.error).toBeUndefined();
+    assert.strictEqual(resp.jsonrpc, "2.0");
+    assert.strictEqual(resp.id, 1);
+    assert.deepStrictEqual(resp.result, { taskId: "abc", state: "working" });
+    assert.strictEqual("error" in resp, false);
   });
 
   it("formats an error response", () => {
-    const resp = formatError(1, {
-      code: -32001,
-      message: "Task not found",
-    });
-    expect(resp.jsonrpc).toBe("2.0");
-    expect(resp.id).toBe(1);
-    expect(resp.error?.code).toBe(-32001);
-    expect(resp.error?.message).toBe("Task not found");
+    const resp = formatError(1, { code: -32001, message: "Task not found" });
+    assert.strictEqual(resp.jsonrpc, "2.0");
+    assert.strictEqual(resp.id, 1);
+    assert.strictEqual(resp.error?.code, -32001);
+    assert.strictEqual(resp.error?.message, "Task not found");
   });
 
   it("formats a notification response with null id", () => {
     const resp = formatResponse(undefined, "ok");
-    expect(resp.id).toBeNull();
+    assert.strictEqual(resp.id, null);
   });
 });
