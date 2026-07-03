@@ -138,7 +138,13 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  const fd = fs.openSync(pathname, "r");
+  // Open with O_NONBLOCK on POSIX so that FIFOs (named pipes) without a
+  // writer are discovered by the fstat isFile check below rather than
+  // blocking the CLI indefinitely at open time.  On Windows O_NONBLOCK is
+  // not available; the ?? 0 fallback keeps the default O_RDONLY semantics.
+  const openFlags =
+    fs.constants.O_RDONLY | ((fs.constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0);
+  const fd = fs.openSync(pathname, openFlags);
   // Bounded read: for regular files, use fstat to determine actual size
   // and allocate only what's needed, so small batch files don't pay the
   // full 50 MB memory cost.  For special files like /dev/zero whose

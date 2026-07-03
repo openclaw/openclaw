@@ -1,4 +1,5 @@
 // Config set input tests cover config value parsing from CLI input and files.
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -138,4 +139,22 @@ describe("config set input parsing", () => {
       expect(() => parseBatchSource({ batchFile: batchPath })).toThrow("Failed to parse");
     });
   });
+
+  it("rejects FIFO (named pipe) --batch-file paths without blocking", () => {
+    // POSIX-only: verify that O_NONBLOCK prevents the CLI from hanging when
+    // a user supplies a FIFO path with no writer. Without O_NONBLOCK the
+    // openSync call blocks indefinitely before fstat can check the file type.
+    if (process.platform === "win32") return;
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-set-input-fifo-"));
+    try {
+      const fifoPath = path.join(tempDir, "batch.fifo");
+      execSync(`mkfifo "${fifoPath}"`);
+      // Must throw (not hang).  The O_NONBLOCK open lets fstat identify the
+      // FIFO, then the zero-byte read falls through to parseBatchEntries
+      // which rejects the empty input.
+      expect(() => parseBatchSource({ batchFile: fifoPath })).toThrow("Failed to parse");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 5_000);
 });
