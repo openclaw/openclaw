@@ -1,6 +1,11 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import {
+  buildFeishuPostMessagePayload,
+  buildMarkdownCard,
+  normalizeFeishuPostMarkdownNewlines,
+} from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -63,6 +68,130 @@ let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTempl
 let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
+
+describe("buildFeishuPostMessagePayload", () => {
+  it("prepends structured mention targets as native post at elements", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "hello **world**",
+      mentions: [
+        { openId: "ou_alice", name: "Alice", key: "@_user_1" },
+        { openId: " ou_bob ", name: " Bob ", key: "@_user_2" },
+      ],
+    });
+
+    expect(payload.msgType).toBe("post");
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_alice", user_name: "Alice" },
+            { tag: "at", user_id: "ou_bob", user_name: "Bob" },
+            { tag: "md", text: "hello **world**" },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("leaves body-supplied at tags literal in the markdown element", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: 'please keep <at user_id="ou_body">Body User</at> literal',
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_target", user_name: "Target User" },
+            { tag: "md", text: 'please keep <at user_id="ou_body">Body User</at> literal' },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("upgrades single newlines to paragraph breaks for Feishu md rendering", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "first line\nsecond line\nthird line",
+    });
+    const element = JSON.parse(payload.content).zh_cn.content[0][0];
+    expect(element.tag).toBe("md");
+    expect(element.text).toBe("first line\n\nsecond line\n\nthird line");
+  });
+
+  it("preserves existing double newlines and code blocks when upgrading newlines", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: [
+        "paragraph one",
+        "",
+        "paragraph two has",
+        "a soft break",
+        "",
+        "```ts",
+        "const x = 1\nconst y = 2",
+        "```",
+        "",
+        "tail with",
+        "soft break",
+      ].join("\n"),
+    });
+    const element = JSON.parse(payload.content).zh_cn.content[0][0];
+    expect(element.text).toBe(
+      [
+        "paragraph one",
+        "",
+        "paragraph two has",
+        "",
+        "a soft break",
+        "",
+        "```ts",
+        "const x = 1\nconst y = 2",
+        "```",
+        "",
+        "tail with",
+        "",
+        "soft break",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("normalizeFeishuPostMarkdownNewlines", () => {
+  it("upgrades single newlines to paragraph breaks", () => {
+    expect(normalizeFeishuPostMarkdownNewlines("line one\nline two\nline three")).toBe(
+      "line one\n\nline two\n\nline three",
+    );
+  });
+
+  it("preserves existing double newlines", () => {
+    expect(normalizeFeishuPostMarkdownNewlines("para a\n\npara b")).toBe("para a\n\npara b");
+  });
+
+  it("preserves fenced code block internals", () => {
+    const input = "intro\n```\ncode line 1\ncode line 2\n```\noutro";
+    expect(normalizeFeishuPostMarkdownNewlines(input)).toBe(
+      "intro\n\n```\ncode line 1\ncode line 2\n```\n\noutro",
+    );
+  });
+
+  it("preserves inline code spans", () => {
+    const input = "run `const x = 1\nconst y = 2` now\nmore text";
+    const result = normalizeFeishuPostMarkdownNewlines(input);
+    expect(result).toContain("`const x = 1\nconst y = 2`");
+    expect(result).toBe("run `const x = 1\nconst y = 2` now\n\nmore text");
+  });
+
+  it("does not alter text without newlines", () => {
+    expect(normalizeFeishuPostMarkdownNewlines("plain single line")).toBe("plain single line");
+  });
+
+  it("is idempotent", () => {
+    const once = normalizeFeishuPostMarkdownNewlines("a\nb\n\nc\nd");
+    const twice = normalizeFeishuPostMarkdownNewlines(once);
+    expect(twice).toBe(once);
+  });
+});
 
 describe("getMessageFeishu", () => {
   beforeAll(async () => {

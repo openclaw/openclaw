@@ -31,6 +31,7 @@ vi.mock("./media.js", () => ({
 vi.mock("./send.js", () => ({
   editMessageFeishu: vi.fn(),
   getMessageFeishu: vi.fn(),
+  normalizeFeishuPostMarkdownNewlines: (text: string) => text,
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,

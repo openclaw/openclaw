@@ -47,6 +47,7 @@ import {
   isFeishuCardWithinEnvelope,
 } from "./presentation-card.js";
 import {
+  normalizeFeishuPostMarkdownNewlines,
   sendCardFeishu,
   sendMarkdownCardFeishu,
   sendMessageFeishu,
@@ -462,7 +463,7 @@ async function sendFeishuFallbackPayload(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: (text, limit) => chunkTextForOutbound(normalizeFeishuPostMarkdownNewlines(text), limit),
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: {

@@ -5,7 +5,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { convertMarkdownTables, findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -557,7 +557,55 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
-function buildFeishuPostMessagePayload(params: {
+/**
+ * Upgrades single `\n` to `\n\n` outside code regions for Feishu `post` + `tag: md`
+ * rendering.
+ *
+ * Feishu's post+md renderer collapses a single `\n` to a space, so multi-paragraph
+ * prose appears cramped unless single newlines are expanded to paragraph breaks.
+ * Only `\n\n` is treated as a paragraph break.
+ *
+ * Fenced and inline code regions are left untouched so code examples preserve
+ * their original line shape. The function is idempotent — applying it a second
+ * time is a no-op because already-expanded `\n\n` pairs skip the upgrade.
+ */
+export function normalizeFeishuPostMarkdownNewlines(text: string): string {
+  if (!text.includes("\n")) {
+    return text;
+  }
+
+  // Record every \n position that lives inside a code region so we can skip it.
+  const codeRegions = findCodeRegions(text);
+  const codeNewlines = new Set<number>();
+  for (const region of codeRegions) {
+    for (let i = region.start; i < region.end; i++) {
+      if (text[i] === "\n") {
+        codeNewlines.add(i);
+      }
+    }
+  }
+
+  // Walk the text line by line.  Insert a blank line between consecutive
+  // non-empty lines whose separator \n is NOT inside a code region.
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let charPos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    result.push(lines[i]);
+    if (i >= lines.length - 1) {
+      continue;
+    }
+    // charPos of the \n that splits lines[i] from lines[i+1]
+    const nlPos = charPos + lines[i].length;
+    charPos = nlPos + 1;
+    if (!codeNewlines.has(nlPos) && lines[i] !== "" && lines[i + 1] !== "") {
+      result.push("");
+    }
+  }
+  return result.join("\n");
+}
+
+export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
 }): {
@@ -569,7 +617,7 @@ function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: normalizeFeishuPostMarkdownNewlines(messageText),
     },
   ];
   return {
