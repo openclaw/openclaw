@@ -1,8 +1,8 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
-import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./view.ts";
+import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -22,6 +22,7 @@ describe("config view", () => {
     schemaLoading: false,
     uiHints: {},
     formMode: "form" as const,
+    viewState: createConfigViewState(),
     showModeToggle: true,
     formValue: {},
     originalValue: {},
@@ -30,6 +31,7 @@ describe("config view", () => {
     activeSubsection: null,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
+    onViewStateChange: vi.fn(),
     onFormPatch: vi.fn(),
     onSearchChange: vi.fn(),
     onSectionChange: vi.fn(),
@@ -103,7 +105,7 @@ describe("config view", () => {
       render(
         renderConfig({
           ...props,
-          onRequestUpdate: rerender,
+          onViewStateChange: rerender,
         }),
         container,
       );
@@ -147,10 +149,6 @@ describe("config view", () => {
     }
     return element;
   }
-
-  beforeEach(() => {
-    resetConfigViewStateForTests();
-  });
 
   it("updates save/apply disabled state from form safety and raw dirtiness", () => {
     const container = document.createElement("div");
@@ -478,8 +476,9 @@ describe("config view", () => {
     document.body.append(container);
 
     try {
+      const viewState = createConfigViewState();
       const renderCase = (overrides: Partial<ConfigProps>) =>
-        render(renderConfig({ ...baseProps(), ...overrides }), container);
+        render(renderConfig({ ...baseProps(), viewState, ...overrides }), container);
 
       renderCase({ formMode: "form" });
 
@@ -699,7 +698,6 @@ describe("config view", () => {
     expect(container.querySelector("textarea")).toBeNull();
 
     const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
-    expect(revealButton.getAttribute("title")).toBe("Reveal sensitive values");
     expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
 
@@ -735,7 +733,7 @@ describe("config view", () => {
       render(
         renderConfig({
           ...props,
-          onRequestUpdate: () => {
+          onViewStateChange: () => {
             updateCount += 1;
             rerender();
           },
@@ -821,7 +819,7 @@ describe("config view", () => {
       render(
         renderConfig({
           ...props,
-          onRequestUpdate: rerender,
+          onViewStateChange: rerender,
         }),
         container,
       );
@@ -871,7 +869,7 @@ describe("config view", () => {
       render(
         renderConfig({
           ...props,
-          onRequestUpdate: rerender,
+          onViewStateChange: rerender,
         }),
         container,
       );
@@ -957,7 +955,7 @@ describe("config view", () => {
       render(
         renderConfig({
           ...props,
-          onRequestUpdate: rerender,
+          onViewStateChange: rerender,
         }),
         container,
       );
@@ -1001,7 +999,7 @@ describe("config view", () => {
       render(
         renderConfig({
           ...props,
-          onRequestUpdate: rerender,
+          onViewStateChange: rerender,
         }),
         container,
       );

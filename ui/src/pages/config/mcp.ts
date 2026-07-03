@@ -1,4 +1,4 @@
-// Control UI view renders mcp screen content.
+// Control UI MCP Settings page presentation.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { html, nothing, type TemplateResult } from "lit";
 

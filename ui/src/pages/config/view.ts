@@ -52,6 +52,41 @@ export type WebPushUiState = {
   loading: boolean;
 };
 
+type ConfigFormMode = "form" | "raw";
+
+type ConfigDiffPath = string[];
+type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
+type RawDiffCache = {
+  original: string;
+  current: string;
+  diff: ConfigDiffEntry[];
+};
+
+export type ConfigViewState = {
+  rawRevealed: boolean;
+  rawDiffOpen: boolean;
+  envRevealed: boolean;
+  validityDismissed: boolean;
+  revealedSensitivePaths: Set<string>;
+  lastCustomThemeImportFocusToken: number | null;
+  rawDiffCache?: RawDiffCache;
+  lastConfigContextKey: string | null;
+  lastFormModeForScroll: ConfigFormMode | null;
+};
+
+export function createConfigViewState(): ConfigViewState {
+  return {
+    rawRevealed: false,
+    rawDiffOpen: false,
+    envRevealed: false,
+    validityDismissed: false,
+    revealedSensitivePaths: new Set(),
+    lastCustomThemeImportFocusToken: null,
+    lastConfigContextKey: null,
+    lastFormModeForScroll: null,
+  };
+}
+
 export type ConfigProps = {
   raw: string;
   originalRaw: string;
@@ -65,7 +100,8 @@ export type ConfigProps = {
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
-  formMode: "form" | "raw";
+  formMode: ConfigFormMode;
+  viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
   formValue: Record<string, unknown> | null;
@@ -74,7 +110,8 @@ export type ConfigProps = {
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;
-  onFormModeChange: (mode: "form" | "raw") => void;
+  onFormModeChange: (mode: ConfigFormMode) => void;
+  onViewStateChange: () => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
   onSearchChange: (query: string) => void;
   onSectionChange: (section: string | null) => void;
@@ -122,7 +159,6 @@ export type ConfigProps = {
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
-  onRequestUpdate?: () => void;
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -549,17 +585,6 @@ const MAX_CONFIG_DIFF_CHANGES = 1_000;
 const MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS = 2_000;
 const MAX_RAW_DIFF_CHARS = 200_000;
 
-type ConfigDiffPath = string[];
-type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
-
-let rawDiffCache:
-  | {
-      original: string;
-      current: string;
-      diff: ConfigDiffEntry[];
-    }
-  | undefined;
-
 function formatConfigDiffPath(path: ConfigDiffPath): string {
   return path.length > 0 ? path.join(".") : "<root>";
 }
@@ -681,13 +706,17 @@ function computeDiff(
   return changes;
 }
 
-function computeRawDiff(original: string, current: string): ConfigDiffEntry[] {
-  if (rawDiffCache?.original === original && rawDiffCache.current === current) {
-    return rawDiffCache.diff;
+function computeRawDiff(
+  viewState: ConfigViewState,
+  original: string,
+  current: string,
+): ConfigDiffEntry[] {
+  if (viewState.rawDiffCache?.original === original && viewState.rawDiffCache.current === current) {
+    return viewState.rawDiffCache.diff;
   }
   if (original.length > MAX_RAW_DIFF_CHARS || current.length > MAX_RAW_DIFF_CHARS) {
-    rawDiffCache = { original, current, diff: [] };
-    return rawDiffCache.diff;
+    viewState.rawDiffCache = { original, current, diff: [] };
+    return viewState.rawDiffCache.diff;
   }
   try {
     const originalValue = JSON5.parse(original) as unknown;
@@ -700,17 +729,17 @@ function computeRawDiff(original: string, current: string): ConfigDiffEntry[] {
       Array.isArray(originalValue) ||
       Array.isArray(currentValue)
     ) {
-      rawDiffCache = { original, current, diff: [] };
+      viewState.rawDiffCache = { original, current, diff: [] };
       return [];
     }
     const diff = computeDiff(
       originalValue as Record<string, unknown>,
       currentValue as Record<string, unknown>,
     );
-    rawDiffCache = { original, current, diff };
+    viewState.rawDiffCache = { original, current, diff };
     return diff;
   } catch {
-    rawDiffCache = { original, current, diff: [] };
+    viewState.rawDiffCache = { original, current, diff: [] };
     return [];
   }
 }
@@ -950,13 +979,14 @@ function renderNotificationsSection(props: ConfigProps) {
 }
 
 function renderAppearanceSection(props: ConfigProps) {
+  const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
   if (
     showCustomThemeImport &&
     props.customThemeImportFocusToken != null &&
-    props.customThemeImportFocusToken !== cvs.lastCustomThemeImportFocusToken
+    props.customThemeImportFocusToken !== viewState.lastCustomThemeImportFocusToken
   ) {
-    cvs.lastCustomThemeImportFocusToken = props.customThemeImportFocusToken;
+    viewState.lastCustomThemeImportFocusToken = props.customThemeImportFocusToken;
     focusCustomThemeImportInput();
   }
   const importedName = importedThemeName(props);
@@ -1167,33 +1197,14 @@ function renderAppearanceSection(props: ConfigProps) {
   `;
 }
 
-interface ConfigEphemeralState {
-  rawRevealed: boolean;
-  rawDiffOpen: boolean;
-  envRevealed: boolean;
-  validityDismissed: boolean;
-  revealedSensitivePaths: Set<string>;
-  lastCustomThemeImportFocusToken: number | null;
-}
-
-function createConfigEphemeralState(): ConfigEphemeralState {
-  return {
-    rawRevealed: false,
-    rawDiffOpen: false,
-    envRevealed: false,
-    validityDismissed: false,
-    revealedSensitivePaths: new Set(),
-    lastCustomThemeImportFocusToken: null,
-  };
-}
-
-const cvs = createConfigEphemeralState();
-let lastConfigContextKey: string | null = null;
-let lastFormModeForScroll: ConfigProps["formMode"] | null = null;
-
-function resetConfigEphemeralState() {
-  Object.assign(cvs, createConfigEphemeralState());
-  rawDiffCache = undefined;
+function resetConfigEphemeralState(viewState: ConfigViewState) {
+  viewState.rawRevealed = false;
+  viewState.rawDiffOpen = false;
+  viewState.envRevealed = false;
+  viewState.validityDismissed = false;
+  viewState.revealedSensitivePaths.clear();
+  viewState.lastCustomThemeImportFocusToken = null;
+  viewState.rawDiffCache = undefined;
 }
 
 function configContextKey(props: ConfigProps): string {
@@ -1208,30 +1219,28 @@ function configContextKey(props: ConfigProps): string {
   ].join("\u001e");
 }
 
-function isSensitivePathRevealed(path: Array<string | number>): boolean {
+function isSensitivePathRevealed(
+  viewState: ConfigViewState,
+  path: Array<string | number>,
+): boolean {
   const key = pathKey(path);
-  return key ? cvs.revealedSensitivePaths.has(key) : false;
+  return key ? viewState.revealedSensitivePaths.has(key) : false;
 }
 
-function toggleSensitivePathReveal(path: Array<string | number>) {
+function toggleSensitivePathReveal(viewState: ConfigViewState, path: Array<string | number>) {
   const key = pathKey(path);
   if (!key) {
     return;
   }
-  if (cvs.revealedSensitivePaths.has(key)) {
-    cvs.revealedSensitivePaths.delete(key);
+  if (viewState.revealedSensitivePaths.has(key)) {
+    viewState.revealedSensitivePaths.delete(key);
   } else {
-    cvs.revealedSensitivePaths.add(key);
+    viewState.revealedSensitivePaths.add(key);
   }
 }
 
-export function resetConfigViewStateForTests() {
-  resetConfigEphemeralState();
-  lastConfigContextKey = null;
-  lastFormModeForScroll = null;
-}
-
 export function renderConfig(props: ConfigProps) {
+  const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
   const showRootTab = props.showRootTab ?? true;
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
@@ -1243,7 +1252,7 @@ export function renderConfig(props: ConfigProps) {
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const requestUpdate = props.onViewStateChange;
   // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
   const resetContentScroll = (target: EventTarget | null) => {
     queueMicrotask(() => {
@@ -1264,17 +1273,17 @@ export function renderConfig(props: ConfigProps) {
   };
 
   // Reset scroll position when switching between form and raw mode
-  if (lastFormModeForScroll !== null && lastFormModeForScroll !== formMode) {
+  if (viewState.lastFormModeForScroll !== null && viewState.lastFormModeForScroll !== formMode) {
     resetContentScroll(null);
   }
-  lastFormModeForScroll = formMode;
+  viewState.lastFormModeForScroll = formMode;
 
   const currentContextKey = configContextKey(props);
-  if (lastConfigContextKey !== currentContextKey) {
-    resetConfigEphemeralState();
-    lastConfigContextKey = currentContextKey;
+  if (viewState.lastConfigContextKey !== currentContextKey) {
+    resetConfigEphemeralState(viewState);
+    viewState.lastConfigContextKey = currentContextKey;
   }
-  const envSensitiveVisible = cvs.envRevealed;
+  const envSensitiveVisible = viewState.envRevealed;
 
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
@@ -1424,15 +1433,15 @@ export function renderConfig(props: ConfigProps) {
   // Compute diff for showing changes (works for both form and raw modes)
   const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
-  if ((!hasRawChanges || formMode !== "raw") && cvs.rawDiffOpen) {
-    cvs.rawDiffOpen = false;
+  if ((!hasRawChanges || formMode !== "raw") && viewState.rawDiffOpen) {
+    viewState.rawDiffOpen = false;
   }
-  if (!hasRawChanges || formMode !== "raw" || !cvs.rawDiffOpen) {
-    rawDiffCache = undefined;
+  if (!hasRawChanges || formMode !== "raw" || !viewState.rawDiffOpen) {
+    viewState.rawDiffCache = undefined;
   }
   const rawDiff =
-    formMode === "raw" && hasRawChanges && cvs.rawDiffOpen
-      ? computeRawDiff(props.originalRaw, props.raw)
+    formMode === "raw" && hasRawChanges && viewState.rawDiffOpen
+      ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
 
@@ -1618,7 +1627,7 @@ export function renderConfig(props: ConfigProps) {
                 </div>
               </div>
             `}
-        ${validity === "invalid" && !cvs.validityDismissed
+        ${validity === "invalid" && !viewState.validityDismissed
           ? html`
               <div class="config-validity-warning">
                 <svg
@@ -1644,7 +1653,7 @@ export function renderConfig(props: ConfigProps) {
                 <button
                   class="btn btn--sm"
                   @click=${() => {
-                    cvs.validityDismissed = true;
+                    viewState.validityDismissed = true;
                     requestUpdate();
                   }}
                 >
@@ -1695,15 +1704,15 @@ export function renderConfig(props: ConfigProps) {
           ? html`
               <details
                 class="config-diff"
-                ?open=${cvs.rawDiffOpen}
+                ?open=${viewState.rawDiffOpen}
                 @toggle=${(e: Event) => {
                   const details = e.target as HTMLDetailsElement;
-                  if (cvs.rawDiffOpen === details.open) {
+                  if (viewState.rawDiffOpen === details.open) {
                     return;
                   }
-                  cvs.rawDiffOpen = details.open;
+                  viewState.rawDiffOpen = details.open;
                   if (!details.open) {
-                    rawDiffCache = undefined;
+                    viewState.rawDiffCache = undefined;
                   }
                   requestUpdate();
                 }}
@@ -1734,7 +1743,7 @@ export function renderConfig(props: ConfigProps) {
                                   change.path,
                                   change.from,
                                   props.uiHints,
-                                  cvs.rawRevealed,
+                                  viewState.rawRevealed,
                                 )}</span
                               >
                               <span class="config-diff__arrow">→</span>
@@ -1743,7 +1752,7 @@ export function renderConfig(props: ConfigProps) {
                                   change.path,
                                   change.to,
                                   props.uiHints,
-                                  cvs.rawRevealed,
+                                  viewState.rawRevealed,
                                 )}</span
                               >
                             </div>
@@ -1781,7 +1790,7 @@ export function renderConfig(props: ConfigProps) {
                           : ""}"
                         title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
                         @click=${() => {
-                          cvs.envRevealed = !cvs.envRevealed;
+                          viewState.envRevealed = !viewState.envRevealed;
                           requestUpdate();
                         }}
                       >
@@ -1838,9 +1847,10 @@ export function renderConfig(props: ConfigProps) {
                           activeSubsection: effectiveSubsection,
                           revealSensitive:
                             props.activeSection === "env" ? envSensitiveVisible : false,
-                          isSensitivePathRevealed,
+                          isSensitivePathRevealed: (path) =>
+                            isSensitivePathRevealed(viewState, path),
                           onToggleSensitivePath: (path) => {
-                            toggleSensitivePathReveal(path);
+                            toggleSensitivePathReveal(viewState, path);
                             requestUpdate();
                           },
                         })}
@@ -1851,7 +1861,7 @@ export function renderConfig(props: ConfigProps) {
                       [],
                       props.uiHints,
                     );
-                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
+                    const blurred = sensitiveCount > 0 && !viewState.rawRevealed;
                     return html`
                       ${formUnsafe
                         ? html`
@@ -1882,7 +1892,7 @@ export function renderConfig(props: ConfigProps) {
                                     aria-label="Toggle raw config redaction"
                                     aria-pressed=${!blurred}
                                     @click=${() => {
-                                      cvs.rawRevealed = !cvs.rawRevealed;
+                                      viewState.rawRevealed = !viewState.rawRevealed;
                                       requestUpdate();
                                     }}
                                   >

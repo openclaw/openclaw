@@ -14,13 +14,19 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { renderMcp } from "./mcp.ts";
 import { getPresetById } from "./presets.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
   type QuickSettingsSecurity,
 } from "./quick.ts";
-import { renderConfig, type ConfigProps } from "./view.ts";
+import {
+  createConfigViewState,
+  renderConfig,
+  type ConfigProps,
+  type ConfigViewState,
+} from "./view.ts";
 
 export type ConfigPageId =
   | "config"
@@ -270,6 +276,7 @@ export class ConfigPage extends LitElement {
   @state() private customThemeImportExpanded = false;
   @state() private customThemeImportFocusToken = 0;
   private customThemeImportSelectOnSuccess = false;
+  private readonly configViewState: ConfigViewState = createConfigViewState();
   private stops: Array<() => void> = [];
 
   override createRenderRoot() {
@@ -474,6 +481,7 @@ export class ConfigPage extends LitElement {
       schemaLoading: state.configSchemaLoading,
       uiHints: state.configUiHints,
       formMode: this.formModes[this.pageId],
+      viewState: this.configViewState,
       rawAvailable: Boolean(state.configSnapshot?.config || state.configForm || state.configRaw),
       showModeToggle: this.pageId === "config",
       formValue: state.configForm,
@@ -483,6 +491,7 @@ export class ConfigPage extends LitElement {
       activeSubsection,
       onRawChange: (next) => runtimeConfig.setRaw(next),
       onFormModeChange: (mode) => this.setFormMode(mode),
+      onViewStateChange: () => this.requestUpdate(),
       onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
       onSearchChange: (query) => this.setSearchQuery(query),
       onSectionChange: (section) => this.setActiveSection(section),
@@ -535,13 +544,27 @@ export class ConfigPage extends LitElement {
       onBackToQuick: this.pageId === "config" ? () => (this.settingsMode = "quick") : undefined,
       webPush: undefined,
     };
-    return this.pageId === "mcp"
-      ? renderConfig({
-          ...props,
-          activeSection: "mcp",
-          showModeToggle: false,
-        })
-      : renderConfig(props);
+    if (this.pageId !== "mcp") {
+      return renderConfig(props);
+    }
+    return renderMcp({
+      configObject,
+      configDirty: state.configFormDirty,
+      configSaving: state.configSaving,
+      configApplying: state.configApplying,
+      connected: state.connected,
+      onSaveConfig: () => void runtimeConfig.save(),
+      onApplyConfig: () => void runtimeConfig.apply(),
+      onServerEnabledChange: (name, enabled) => runtimeConfig.setMcpServerEnabled(name, enabled),
+      editor: renderConfig({
+        ...props,
+        activeSection: "mcp",
+        activeSubsection: null,
+        showModeToggle: false,
+        includeSections: ["mcp"],
+        navRootLabel: "MCP",
+      }),
+    });
   }
 
   private renderQuickConfig(configObject: Record<string, unknown>) {

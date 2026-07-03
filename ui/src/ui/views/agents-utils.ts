@@ -13,12 +13,7 @@ import type {
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../../api/types.ts";
-import { DEFAULT_ASSISTANT_AVATAR } from "../../lib/assistant-identity.ts";
-import {
-  isRenderableControlUiAvatarUrl,
-  resolveAgentAvatarUrl,
-  resolveChatAvatarRenderUrl,
-} from "../../lib/avatar.ts";
+import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -219,31 +214,7 @@ export function assistantAvatarFallbackUrl(basePath: string): string {
   return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }
 
-function isAvatarUrl(value: string): boolean {
-  const trimmed = value.trim();
-  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
-}
-
-const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
-
-export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
-    return null;
-  }
-  if (isAvatarUrl(trimmed)) {
-    return null;
-  }
-  if (
-    trimmed.length > 8 ||
-    /\s/.test(trimmed) ||
-    /[\\/.:]/.test(trimmed) ||
-    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
-  ) {
-    return null;
-  }
-  return trimmed;
-}
+export { resolveAssistantTextAvatar };
 
 function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },

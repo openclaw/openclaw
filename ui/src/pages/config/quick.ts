@@ -8,6 +8,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
+import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import type { BorderRadiusStop, TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
@@ -18,12 +19,8 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
+import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import {
-  assistantAvatarFallbackUrl,
-  resolveAssistantTextAvatar,
-} from "../../ui/views/agents-utils.ts";
 import {
   CONFIG_PRESETS,
   detectActivePreset,
@@ -269,7 +266,7 @@ function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   return html`
     <img
       class="qs-assistant-avatar qs-assistant-avatar--fallback"
-      src=${assistantAvatarFallbackUrl(props.basePath ?? "")}
+      src=${controlUiPublicAssetPath("apple-touch-icon.png", props.basePath ?? "")}
       alt=${assistantName}
     />
   `;
