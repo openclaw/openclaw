@@ -1253,8 +1253,9 @@
               },
               {
                 "group": "Bundled plugin guides",
-                "pages": [
-                  "plugins/codex-harness",
+                  "pages": [
+                    "plugins/a2a",
+                    "plugins/admin-http-rpc",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
