@@ -139,14 +139,14 @@ enum ExecHostOutputLimiter {
 
     static func truncate(_ value: String) -> String {
         let bytes = value.utf8
-        guard bytes.count > maxOutputFieldBytes else { return value }
+        guard bytes.count > self.maxOutputFieldBytes else { return value }
 
-        let tailBudget = maxOutputFieldBytes - truncationMarker.utf8.count
+        let tailBudget = self.maxOutputFieldBytes - self.truncationMarker.utf8.count
         var start = bytes.index(bytes.endIndex, offsetBy: -tailBudget)
         while start < bytes.endIndex, (bytes[start] & 0xC0) == 0x80 {
             start = bytes.index(after: start)
         }
-        return truncationMarker + String(decoding: bytes[start...], as: UTF8.self)
+        return self.truncationMarker + String(decoding: bytes[start...], as: UTF8.self)
     }
 }
 
