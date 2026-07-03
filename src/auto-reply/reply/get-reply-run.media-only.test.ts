@@ -2055,6 +2055,7 @@ describe("runPreparedReply media-only handling", () => {
       key: '["telegram","","-100123",""]',
       messageId: "35676",
       timestampMs: 1_710_000_000_000,
+      expectedSessionId: expect.any(String),
     });
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",
