@@ -143,6 +143,10 @@ export class ChatPage extends LitElement {
       scheduleChatScroll(state, true);
     };
     void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
+    void historyLoad.then(
+      () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
+      () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
+    );
     const sessionsRefresh = refreshRouteSessionOptions(state);
     flushChatQueueAfterIdleSessionReconciliation(
       state,
@@ -230,6 +234,30 @@ export class ChatPage extends LitElement {
     });
     return true;
   };
+
+  private sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
+    const state = this.state;
+    if (!state || !state.connected || state.sessionKey !== expectedSessionKey) {
+      return;
+    }
+    const revision = this.context.skillWorkshopRevision.consume(expectedSessionKey);
+    if (!revision) {
+      return;
+    }
+    void state
+      .handleSendChat(revision.instructions, {
+        restoreDraft: true,
+        skillWorkshopRevision: {
+          proposalId: revision.proposalId,
+          agentId: revision.proposalAgentId,
+        },
+      })
+      .catch((error: unknown) => {
+        state.lastError = error instanceof Error ? error.message : String(error);
+        state.chatError = state.lastError;
+        state.requestUpdate?.();
+      });
+  }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.key !== "Escape") {
@@ -480,7 +508,10 @@ export class ChatPage extends LitElement {
       this.connectedClient = snapshot.client;
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
-      void refreshPageChat(state, { startup: true }).finally(() => state.requestUpdate?.());
+      void refreshPageChat(state, { startup: true }).finally(() => {
+        state.requestUpdate?.();
+        this.sendPendingSkillWorkshopRevision(state.sessionKey);
+      });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
     }

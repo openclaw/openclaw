@@ -30,6 +30,7 @@ import type {
   ApplicationContext,
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
+  ApplicationSkillWorkshopRevisionHandoff,
   ApplicationTheme,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
@@ -174,6 +175,26 @@ function createApplicationNavigationPreferences(
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+  };
+}
+
+function createSkillWorkshopRevisionHandoff(): ApplicationSkillWorkshopRevisionHandoff {
+  let pending: Parameters<ApplicationSkillWorkshopRevisionHandoff["prepare"]>[0] | null = null;
+  return {
+    prepare: (handoff) => {
+      pending = handoff;
+    },
+    consume: (sessionKey) => {
+      if (!pending || pending.sessionKey !== sessionKey) {
+        return null;
+      }
+      const handoff = pending;
+      pending = null;
+      return handoff;
+    },
+    clear: () => {
+      pending = null;
     },
   };
 }
@@ -422,6 +443,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
+  const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
   const identity = loadLocalUserIdentity();
   const router = createApplicationRouter();
@@ -501,6 +523,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     overlays,
     navigation,
     theme,
+    skillWorkshopRevision,
     navigate,
     replace,
     preload: (routeId) => router.preloadRoute(routeId, context),
@@ -526,6 +549,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       sessions.dispose();
       overlays.dispose();
       theme.dispose();
+      skillWorkshopRevision.clear();
     },
   };
 }

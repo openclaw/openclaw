@@ -15,9 +15,6 @@ export const page = definePage({
       render: (data: unknown) => html`
         <openclaw-skill-workshop-page
           .data=${data as SkillWorkshopRouteData | undefined}
-          .onRevisionRequest=${async () => {
-            throw new Error("Chat is disabled while the application migration is in progress.");
-          }}
         ></openclaw-skill-workshop-page>
       `,
     })),

@@ -2,10 +2,13 @@
 import { consume } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { applicationContext } from "../../app/context.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { loadSettings } from "../../app/settings.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import type { AgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
@@ -26,10 +29,7 @@ import {
 import { renderSkillWorkshop } from "./view.ts";
 import { filterSkillWorkshopProposals } from "./view.ts";
 
-export type SkillWorkshopPageContext = SkillWorkshopContext & {
-  assistantName: string;
-  agentIdentity: AgentIdentityCapability;
-};
+export type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
 
 export type SkillWorkshopRevisionRequest = (
   instructions: string,
@@ -42,6 +42,60 @@ type SkillWorkshopRenderContext = {
   workshopAgentName: string;
   onRevisionRequest?: SkillWorkshopRevisionRequest;
 };
+
+type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
+
+function findRevisionSessionRow(
+  result: SessionsListResult | null,
+  sessionKey: string | undefined,
+): GatewaySessionRow | null {
+  const key = sessionKey?.trim();
+  return key ? (result?.sessions.find((row) => row.key === key) ?? null) : null;
+}
+
+function isUsableRevisionSession(row: GatewaySessionRow | null): row is GatewaySessionRow {
+  return Boolean(row && !row.archived && !row.hasActiveRun);
+}
+
+async function loadRevisionSessionsForAgent(
+  context: SkillWorkshopPageContext,
+  agentId: string,
+): Promise<SessionsListResult | null> {
+  const current = context.sessions.state;
+  if (current.agentId === agentId && current.result?.sessions.length) {
+    return current.result;
+  }
+  return context.sessions.list({ agentId });
+}
+
+async function resolveRevisionSessionKey(
+  state: SkillWorkshopState,
+  context: SkillWorkshopPageContext,
+  proposal: SkillWorkshopProposal,
+  proposalAgentId: string,
+): Promise<string | null> {
+  const gatewayHello = context.gateway.snapshot.hello;
+  if (state.skillWorkshopUseCurrentChatForRevisions) {
+    return resolveSessionKey(loadSettings().sessionKey, gatewayHello).trim() || null;
+  }
+
+  const agentId = normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId);
+  const sessions = await loadRevisionSessionsForAgent(context, agentId);
+  const originRow = findRevisionSessionRow(sessions, proposal.origin?.sessionKey);
+  if (isUsableRevisionSession(originRow)) {
+    return originRow.key;
+  }
+
+  const createdKey = await context.sessions.create({
+    agentId,
+    label: `Skill Workshop: ${proposal.slug || proposal.key}`.slice(0, 80),
+  });
+  const sessionKey = resolveSessionKey(createdKey, gatewayHello).trim();
+  if (!sessionKey) {
+    throw new Error(context.sessions.state.error ?? "Could not prepare a Skill Workshop session.");
+  }
+  return sessionKey;
+}
 
 function setSkillWorkshopUseCurrentChatForRevisions(
   state: SkillWorkshopState,
@@ -299,6 +353,34 @@ export class SkillWorkshopPage extends LitElement {
   private stopGatewaySubscription?: () => void;
   private stopAgentIdentitySubscription?: () => void;
 
+  private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
+    instructions,
+    proposal,
+    proposalAgentId,
+  ) => {
+    if (!this.state || !this.context) {
+      throw new Error("Skill Workshop is not ready.");
+    }
+    const sessionKey = await resolveRevisionSessionKey(
+      this.state,
+      this.context,
+      proposal,
+      proposalAgentId,
+    );
+    if (!sessionKey) {
+      throw new Error(
+        this.context.sessions.state.error ?? "Could not prepare a Skill Workshop session.",
+      );
+    }
+    this.context.skillWorkshopRevision.prepare({
+      sessionKey,
+      instructions,
+      proposalId: proposal.key,
+      proposalAgentId: normalizeAgentId(proposal.origin?.agentId ?? proposalAgentId),
+    });
+    this.context.navigate("chat", { search: searchForSession(sessionKey) });
+  };
+
   override connectedCallback() {
     super.connectedCallback();
     this.startGatewaySubscription();
@@ -378,7 +460,7 @@ export class SkillWorkshopPage extends LitElement {
             context: this.context,
             workshopAgentName:
               this.context.agentIdentity.get(this.state.skillWorkshopAgentId)?.name?.trim() ?? "",
-            onRevisionRequest: this.onRevisionRequest,
+            onRevisionRequest: this.onRevisionRequest ?? this.handleRevisionRequest,
           },
           this.requestPageUpdate,
         )

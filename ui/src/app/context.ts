@@ -54,6 +54,19 @@ export type ApplicationNavigationPreferences = {
 
 export type ApplicationNavigationOptions = Pick<RouteLocation, "search" | "hash">;
 
+export type SkillWorkshopRevisionHandoff = {
+  sessionKey: string;
+  instructions: string;
+  proposalId: string;
+  proposalAgentId: string;
+};
+
+export type ApplicationSkillWorkshopRevisionHandoff = {
+  prepare: (handoff: SkillWorkshopRevisionHandoff) => void;
+  consume: (sessionKey: string) => SkillWorkshopRevisionHandoff | null;
+  clear: () => void;
+};
+
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly assistantName: string;
@@ -65,6 +78,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
+  readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly preload: (routeId: TRouteId) => Promise<void>;
