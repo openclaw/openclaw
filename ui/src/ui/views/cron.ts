@@ -1633,6 +1633,12 @@ function renderJob(job: CronJob, props: CronProps) {
           </span>
           <span class="chip">${job.sessionTarget}</span>
           <span class="chip">${job.wakeMode}</span>
+          ${(() => {
+            const modelLabel = getCronJobModelLabel(job);
+            return modelLabel
+              ? html`<span class="chip">${t("cron.form.model")}: ${modelLabel}</span>`
+              : nothing;
+          })()}
         </div>
         <div class="row cron-job-actions">
           <button
@@ -1720,6 +1726,14 @@ function renderJob(job: CronJob, props: CronProps) {
   `;
 }
 
+function getCronJobModelLabel(job: CronJob): string | null {
+  const payload = getCronJobPayload(job);
+  if (!payload || payload.kind !== "agentTurn") {
+    return null;
+  }
+  return payload.model?.trim() || t("agents.default");
+}
+
 function renderJobPayload(job: CronJob) {
   const payload = getCronJobPayload(job);
   if (!payload) {
@@ -1772,6 +1786,10 @@ function renderJobPayload(job: CronJob) {
         <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
           ${unsafeHTML(toSanitizedMarkdownHtml(payload.message))}
         </div>
+      </div>
+      <div class="cron-job-detail-section">
+        <span class="cron-job-detail-label">${t("cron.form.model")}</span>
+        <span class="muted cron-job-detail-value">${getCronJobModelLabel(job)}</span>
       </div>
       ${delivery
         ? html`<div class="cron-job-detail-section">

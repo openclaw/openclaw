@@ -8,6 +8,7 @@ function createDraft(overrides: Partial<CronQuickCreateDraft> = {}): CronQuickCr
     name: "Inbox check",
     schedulePreset: "every-morning",
     deliveryPreset: "notify",
+    model: "",
     ...overrides,
   };
 }
@@ -46,5 +47,23 @@ describe("cron quick create", () => {
     expect(patch.payloadKind).toBe("systemEvent");
     expect(patch.deliveryMode).toBe("none");
     expect(patch.wakeMode).toBe("now");
+  });
+
+  it("maps a selected model into the cron agentTurn payload override", () => {
+    const patch = draftToCronFormPatch(
+      createDraft({ deliveryPreset: "notify", model: "  openai/gpt-5.2  " }),
+    );
+
+    expect(patch.payloadKind).toBe("agentTurn");
+    expect(patch.payloadModel).toBe("openai/gpt-5.2");
+  });
+
+  it("does not map a model for silent systemEvent presets", () => {
+    const patch = draftToCronFormPatch(
+      createDraft({ deliveryPreset: "silent", model: "openai/gpt-5.2" }),
+    );
+
+    expect(patch.payloadKind).toBe("systemEvent");
+    expect(patch.payloadModel).toBeUndefined();
   });
 });

@@ -438,6 +438,7 @@ describe("cron view", () => {
     );
     expect(details).toEqual([
       { label: "Prompt", value: "do it" },
+      { label: "Model", value: "Default" },
       { label: "Delivery", value: "webhook (https://example.invalid/cron)" },
     ]);
   });
@@ -937,5 +938,78 @@ describe("cron view", () => {
       container.remove();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("renders quick-create model input and datalist for non-silent presets", () => {
+    const container = document.createElement("div");
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "how",
+        draft: createDefaultDraft(),
+        modelSuggestions: ["openai/gpt-5.2", "anthropic/claude-opus-4-8"],
+        onDraftChange: () => undefined,
+        onStepChange: () => undefined,
+        onCreate: () => undefined,
+        onCancel: () => undefined,
+      }),
+      container,
+    );
+
+    const modelInput = container.querySelector<HTMLInputElement>("#cron-quick-create-model");
+    expect(modelInput).toBeTruthy();
+    expect(modelInput?.getAttribute("list")).toBe("cron-quick-create-model-suggestions");
+
+    const datalist = container.querySelector("#cron-quick-create-model-suggestions");
+    const options = datalist?.querySelectorAll("option");
+    expect(options?.length).toBe(2);
+    const optionValues = Array.from(options ?? []).map((opt) => opt.value);
+    expect(optionValues).toEqual(["openai/gpt-5.2", "anthropic/claude-opus-4-8"]);
+  });
+
+  it("hides quick-create model input for silent preset", () => {
+    const container = document.createElement("div");
+    const draft = createDefaultDraft();
+    draft.deliveryPreset = "silent";
+
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "how",
+        draft,
+        modelSuggestions: ["openai/gpt-5.2"],
+        onDraftChange: () => undefined,
+        onStepChange: () => undefined,
+        onCreate: () => undefined,
+        onCancel: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector("#cron-quick-create-model")).toBeNull();
+  });
+
+  it("dispatches model changes via onDraftChange in quick-create", () => {
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn();
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "how",
+        draft: createDefaultDraft(),
+        modelSuggestions: ["openai/gpt-5.2"],
+        onDraftChange,
+        onStepChange: () => undefined,
+        onCreate: () => undefined,
+        onCancel: () => undefined,
+      }),
+      container,
+    );
+
+    const modelInput = container.querySelector<HTMLInputElement>("#cron-quick-create-model");
+    modelInput!.value = "openai/gpt-5.2";
+    modelInput?.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledWith({ model: "openai/gpt-5.2" });
   });
 });

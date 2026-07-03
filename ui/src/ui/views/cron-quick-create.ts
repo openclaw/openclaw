@@ -17,6 +17,7 @@ export type CronQuickCreateProps = {
   open: boolean;
   step: CronQuickCreateStep;
   draft: CronQuickCreateDraft;
+  modelSuggestions?: readonly string[];
   onDraftChange: (patch: Partial<CronQuickCreateDraft>) => void;
   onStepChange: (step: CronQuickCreateStep) => void;
   onCreate: () => void;
@@ -31,6 +32,7 @@ export type CronQuickCreateDraft = {
   name: string;
   schedulePreset: SchedulePresetId | "custom";
   deliveryPreset: DeliveryPresetId;
+  model: string;
 };
 
 type SchedulePresetId =
@@ -123,6 +125,7 @@ export function createDefaultDraft(): CronQuickCreateDraft {
     name: "",
     schedulePreset: "every-morning",
     deliveryPreset: "notify",
+    model: "",
   };
 }
 
@@ -199,6 +202,12 @@ export function draftToCronFormPatch(draft: CronQuickCreateDraft): Partial<CronF
       patch.deliveryMode = "none";
       patch.wakeMode = "now";
       break;
+  }
+
+  // Model override: only meaningful for agentTurn payloads.
+  // Silent preset maps to systemEvent, so model is naturally excluded.
+  if (patch.payloadKind === "agentTurn" && draft.model.trim()) {
+    patch.payloadModel = draft.model.trim();
   }
 
   return patch;
@@ -346,6 +355,41 @@ function renderHowStep(props: CronQuickCreateProps) {
           `,
         )}
       </div>
+      ${props.draft.deliveryPreset !== "silent"
+        ? html`
+            <div class="cqc-body__section">
+              <label class="cqc-field__label">${t("cron.form.model")}</label>
+              <input
+                id="cron-quick-create-model"
+                class="cqc-input"
+                type="text"
+                .value=${props.draft.model}
+                list="cron-quick-create-model-suggestions"
+                placeholder=${t("cron.form.modelPlaceholder")}
+                @input=${(e: Event) =>
+                  props.onDraftChange({ model: (e.target as HTMLInputElement).value })}
+              />
+              <div class="muted" style="font-size:0.8em;margin-top:4px;">
+                ${t("cron.form.modelHelp")}
+              </div>
+            </div>
+            ${(() => {
+              const suggestions = props.modelSuggestions;
+              if (!suggestions?.length) {
+                return nothing;
+              }
+              const unique = [...new Set(suggestions.map((s) => s.trim()).filter(Boolean))];
+              if (!unique.length) {
+                return nothing;
+              }
+              return html`
+                <datalist id="cron-quick-create-model-suggestions">
+                  ${unique.map((value) => html`<option value=${value}></option>`)}
+                </datalist>
+              `;
+            })()}
+          `
+        : nothing}
     </div>
     <div class="cqc-actions">
       <div class="cqc-actions__secondary">
