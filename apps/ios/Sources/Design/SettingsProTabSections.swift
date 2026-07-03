@@ -1058,12 +1058,14 @@ extension SettingsProTab {
             SecureField("", text: text)
                 .font(OpenClawType.subhead)
                 .textFieldStyle(.roundedBorder)
+                .accessibilityLabel(placeholder)
             if text.wrappedValue.isEmpty {
                 Text(placeholder)
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 8)
                     .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
         .font(OpenClawType.subhead)

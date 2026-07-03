@@ -168,6 +168,12 @@ struct OpenClawTypographyTests {
         #expect(settingsSections.contains("func gatewaySecureField"))
         #expect(settingsSections.contains("self.gatewaySecureField(\"Gateway Auth Token\""))
         #expect(settingsSections.contains("self.gatewaySecureField(\"Gateway Password\""))
+        let gatewaySecureField = try Self.extract(
+            settingsSections,
+            from: "func gatewaySecureField",
+            to: "    var voiceFeatureCard")
+        #expect(gatewaySecureField.contains(".accessibilityLabel(placeholder)"))
+        #expect(gatewaySecureField.contains(".accessibilityHidden(true)"))
         #expect(settingsSections.contains("Picker(selection: self.$selectedAgentPickerId)"))
         #expect(settingsSections.contains("Text(\"Agent\")"))
 
