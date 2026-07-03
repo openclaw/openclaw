@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/runware-provider",
+  "version": "2026.6.11",
+  "description": "OpenClaw Runware provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  }
+}

@@ -533,6 +533,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/chutes/**"
+"extensions: runware":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/runware/**"
+          - "docs/providers/runware.md"
 "extensions: diffs":
   - changed-files:
       - any-glob-to-any-file:

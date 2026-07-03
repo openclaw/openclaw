@@ -7748,6 +7748,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Advanced configuration
   - H2: Related
 
+## providers/runware.md
+
+- Route: /providers/runware
+- Headings:
+  - H2: Getting started
+  - H2: Model discovery (no manual catalog)
+  - H2: Request compatibility fixes
+  - H2: Related
+
 ## providers/runway.md
 
 - Route: /providers/runway

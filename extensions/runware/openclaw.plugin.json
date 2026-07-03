@@ -1,0 +1,56 @@
+{
+  "id": "runware",
+  "name": "Runware",
+  "description": "OpenClaw Runware provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["runware", "runware-ai", "runwareai"],
+  "providerAuthAliases": {
+    "runware-ai": "runware",
+    "runwareai": "runware"
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "runware-native",
+      "hosts": ["api.runware.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "runware": { "family": "runware" },
+      "runware-ai": { "family": "runware" },
+      "runwareai": { "family": "runware" }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "runware",
+        "envVars": ["RUNWARE_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "runware",
+      "method": "api-key",
+      "choiceId": "runware-api-key",
+      "choiceLabel": "Runware API key",
+      "choiceHint": "OpenAI-compatible access to a live-updated model catalog",
+      "groupId": "runware",
+      "groupLabel": "Runware",
+      "groupHint": "OpenAI-compatible access to a live-updated model catalog",
+      "optionKey": "runwareApiKey",
+      "cliFlag": "--runware-api-key",
+      "cliOption": "--runware-api-key <key>",
+      "cliDescription": "Runware API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

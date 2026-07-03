@@ -66,6 +66,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
 - [Qwen OAuth / Portal](/providers/qwen-oauth)
+- [Runware (OpenAI-compatible, live model catalog)](/providers/runware)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)

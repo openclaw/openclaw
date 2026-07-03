@@ -51,7 +51,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-59 plugins
+60 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -138,6 +138,8 @@ Each entry lists the package, distribution route, and description.
 - **[openrouter](/plugins/reference/openrouter)** (`@openclaw/openrouter-provider`) - included in OpenClaw. Adds OpenRouter model provider support to OpenClaw.
 
 - **[policy](/plugins/reference/policy)** (`@openclaw/policy`) - included in OpenClaw. Adds policy-backed doctor checks for workspace conformance.
+
+- **[runware](/plugins/reference/runware)** (`@openclaw/runware-provider`) - included in OpenClaw. OpenClaw Runware provider plugin.
 
 - **[runway](/plugins/reference/runway)** (`@openclaw/runway-provider`) - included in OpenClaw. Adds video generation provider support.
 
