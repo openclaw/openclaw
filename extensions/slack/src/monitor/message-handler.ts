@@ -338,7 +338,7 @@ export function createSlackMessageHandler(params: {
     opts: IngressSlackMessageOptions,
   ): Promise<SlackDispatchCompletion | undefined> {
     if (opts.source === "message" && message.type !== "message") {
-      return;
+      return undefined;
     }
     if (
       opts.source === "message" &&
@@ -347,7 +347,7 @@ export function createSlackMessageHandler(params: {
       message.subtype !== "bot_message" &&
       message.subtype !== "thread_broadcast"
     ) {
-      return;
+      return undefined;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
     if (
@@ -358,7 +358,7 @@ export function createSlackMessageHandler(params: {
         ts: message.ts,
       }))
     ) {
-      return;
+      return undefined;
     }
     const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
     if (seenMessageKey && opts.source === "message" && !wasSeen) {
@@ -370,7 +370,7 @@ export function createSlackMessageHandler(params: {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
-        return;
+        return undefined;
       }
     }
     trackEvent?.();
