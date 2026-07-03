@@ -373,7 +373,7 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
   const storeHasRows =
     classification.cronRunTranscriptPaths.size > 0 ||
     classification.dreamingNarrativeTranscriptPaths.size > 0 ||
-    storePathHasEntries(sessionsDir);
+    storeHasSessionEntry(sessionsDir, absPath);
   const hasClassifiedPath = (paths: ReadonlySet<string>) =>
     paths.has(normalizedAbsPath) ||
     (normalizedPrimaryPath !== null && paths.has(normalizedPrimaryPath));
@@ -389,7 +389,11 @@ function classifySessionTranscriptFromSessionStore(absPath: string): {
   };
 }
 
-function storePathHasEntries(sessionsDir: string): boolean {
+function storeHasSessionEntry(sessionsDir: string, absPath: string): boolean {
+  const sessionId = parseUsageCountedSessionIdFromFileName(path.basename(absPath));
+  if (!sessionId) {
+    return false;
+  }
   const storePath = path.join(sessionsDir, "sessions.json");
   try {
     const raw = fsSync.readFileSync(storePath, "utf-8");
@@ -397,7 +401,17 @@ function storePathHasEntries(sessionsDir: string): boolean {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return false;
     }
-    return Object.keys(parsed as Record<string, unknown>).length > 0;
+    const store = parsed as Record<string, unknown>;
+    for (const entry of Object.values(store)) {
+      if (
+        entry &&
+        typeof entry === "object" &&
+        (entry as Record<string, unknown>).sessionId === sessionId
+      ) {
+        return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -874,13 +888,14 @@ export async function buildSessionEntry(
       //   !generatedByCronRun — not already classified
       //   allowArchiveContentCronClassification — .reset/.deleted only
       //   collected.length === 0 — first message only (mid-transcript fix)
+      //   opts.generatedByCronRun === undefined — caller didn't classify
       //   sessionStoreClassification?.generatedByCronRun === undefined —
-      //     only fallback when session-store has no data.  When the session
-      //     store was loaded and explicitly says "not cron" (false), trust it.
+      //     session-store has no data for this path
       if (
         !generatedByCronRun &&
         allowArchiveContentCronClassification &&
         collected.length === 0 &&
+        opts.generatedByCronRun === undefined &&
         sessionStoreClassification?.generatedByCronRun === undefined &&
         isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
       ) {
