@@ -13,6 +13,7 @@ public final class OpenClawChatViewModel {
     static let maxAttachmentBytes = 5_000_000
 
     public private(set) var messages: [OpenClawChatMessage] = []
+
     public var input: String = ""
     public private(set) var thinkingLevel: String
     public private(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
@@ -29,7 +30,10 @@ public final class OpenClawChatViewModel {
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
     public private(set) var streamingAssistantText: String?
+
     public private(set) var pendingToolCalls: [OpenClawChatPendingToolCall] = []
+
+    private(set) var timelineRevision: UInt64 = 0
     public private(set) var sessions: [OpenClawChatSessionEntry] = []
     private let transport: any OpenClawChatTransport
     private var sessionDefaults: OpenClawChatSessionsDefaults?
@@ -43,7 +47,12 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     private var pendingRuns = Set<String>() {
-        didSet { self.pendingRunCount = self.pendingRuns.count }
+        didSet {
+            let nextCount = self.pendingRuns.count
+            guard nextCount != self.pendingRunCount else { return }
+            self.pendingRunCount = nextCount
+            self.markTimelineChanged()
+        }
     }
 
     private var pendingLocalUserEchoMessageIDsByRunID: [String: UUID] = [:]
@@ -129,8 +138,10 @@ public final class OpenClawChatViewModel {
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
+            guard self.pendingToolCallsById != oldValue else { return }
             self.pendingToolCalls = self.pendingToolCallsById.values
                 .sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
+            self.markTimelineChanged()
         }
     }
 
@@ -318,6 +329,35 @@ public final class OpenClawChatViewModel {
 
     // MARK: - Internals
 
+    private func markTimelineChanged() {
+        self.timelineRevision &+= 1
+    }
+
+    private func replaceMessages(_ messages: [OpenClawChatMessage]) {
+        guard self.messages != messages else { return }
+        self.messages = messages
+        self.markTimelineChanged()
+    }
+
+    private func appendMessage(_ message: OpenClawChatMessage) {
+        self.messages.append(message)
+        self.markTimelineChanged()
+    }
+
+    private func removeMessage(id: UUID) {
+        let previousCount = self.messages.count
+        self.messages.removeAll { $0.id == id }
+        if self.messages.count != previousCount {
+            self.markTimelineChanged()
+        }
+    }
+
+    private func updateStreamingAssistantText(_ text: String?) {
+        guard self.streamingAssistantText != text else { return }
+        self.streamingAssistantText = text
+        self.markTimelineChanged()
+    }
+
     private func logDiagnostic(_ message: String) {
         self.diagnosticsLog?(message)
     }
@@ -366,7 +406,7 @@ public final class OpenClawChatViewModel {
     {
         guard self.canApplyHistory(request) else { return false }
         let incoming = Self.decodeMessages(payload.messages ?? [])
-        self.messages = if preservingOptimisticLocalMessages {
+        let nextMessages = if preservingOptimisticLocalMessages {
             Self.reconcileRunRefreshMessages(
                 previous: self.messages,
                 incoming: incoming,
@@ -374,6 +414,7 @@ public final class OpenClawChatViewModel {
         } else {
             Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
         }
+        self.replaceMessages(nextMessages)
         self.prunePendingLocalUserEchoMessageIDs()
         self.pruneProvisionalFinalMessages()
         self.pruneRunMessageScopes()
@@ -414,7 +455,7 @@ public final class OpenClawChatViewModel {
         self.healthOK = false
         self.clearPendingRuns(reason: nil)
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
         self.sessionId = nil
         self.bootstrapTask = Task { [weak self] in
             guard let self else { return }
@@ -488,7 +529,7 @@ public final class OpenClawChatViewModel {
         if self.hasAssistantMessageAfterLatestUser() {
             self.clearPendingRuns(reason: nil)
             self.pendingToolCallsById = [:]
-            self.streamingAssistantText = nil
+            self.updateStreamingAssistantText(nil)
         }
     }
 
@@ -733,7 +774,7 @@ public final class OpenClawChatViewModel {
             usage: incoming.usage,
             stopReason: incoming.stopReason,
             errorMessage: incoming.errorMessage)
-        self.messages = Self.dedupeMessages(updated)
+        self.replaceMessages(Self.dedupeMessages(updated))
         self.prunePendingLocalUserEchoMessageIDs()
         return true
     }
@@ -769,7 +810,7 @@ public final class OpenClawChatViewModel {
         if let runId = provisional?.runId {
             self.runMessageScopesByRunID.removeValue(forKey: runId)
         }
-        self.messages = Self.dedupeMessages(updated)
+        self.replaceMessages(Self.dedupeMessages(updated))
         self.pruneProvisionalFinalMessages()
         self.pruneRunMessageScopes()
         return true
@@ -975,7 +1016,7 @@ public final class OpenClawChatViewModel {
             "chat.ui send queued sessionKey=\(sessionKey) "
                 + "localRunId=\(runId) pending=\(self.pendingRunCount)")
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
 
         // Optimistically append user message to UI.
         var userContent: [OpenClawChatMessageContent] = [
@@ -1014,7 +1055,7 @@ public final class OpenClawChatViewModel {
         }
         let userMessageTimestamp = Date().timeIntervalSince1970 * 1000
         let userMessageID = UUID()
-        self.messages.append(
+        self.appendMessage(
             OpenClawChatMessage(
                 id: userMessageID,
                 role: "user",
@@ -1138,13 +1179,13 @@ public final class OpenClawChatViewModel {
             self.onSessionChanged?(next)
         }
         self.modelSelectionID = Self.defaultModelSelectionID
-        self.messages = []
+        self.replaceMessages([])
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
         self.clearPendingRuns(reason: nil)
         self.startBootstrap(sessionKey: next)
     }
@@ -1174,13 +1215,13 @@ public final class OpenClawChatViewModel {
         self.sessionKey = next
         self.onSessionChanged?(next)
         self.modelSelectionID = Self.defaultModelSelectionID
-        self.messages = []
+        self.replaceMessages([])
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
         self.clearPendingRuns(reason: nil)
         self.errorText = nil
         self.startBootstrap()
@@ -1715,7 +1756,7 @@ public final class OpenClawChatViewModel {
         }
 
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
-        self.messages = Self.dedupeMessages(reconciled)
+        self.replaceMessages(Self.dedupeMessages(reconciled))
         self.pruneProvisionalFinalMessages()
         self.pruneRunMessageScopes()
     }
@@ -1742,7 +1783,7 @@ public final class OpenClawChatViewModel {
             // Keep multiple clients in sync: if another client finishes a run for our session, refresh history.
             switch chat.state {
             case "final", "aborted", "error":
-                self.streamingAssistantText = nil
+                self.updateStreamingAssistantText(nil)
                 self.pendingToolCallsById = [:]
                 self.appendFinalChatMessageIfPresent(chat)
                 let context = self.beginHistoryRequest()
@@ -1764,7 +1805,7 @@ public final class OpenClawChatViewModel {
                 self.clearPendingRuns(reason: nil)
             }
             self.pendingToolCallsById = [:]
-            self.streamingAssistantText = nil
+            self.updateStreamingAssistantText(nil)
             self.appendFinalChatMessageIfPresent(chat)
             let context = self.beginHistoryRequest()
             Task { await self.refreshHistoryAfterRun(historyRequest: context) }
@@ -1817,7 +1858,7 @@ public final class OpenClawChatViewModel {
         }
 
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [message])
-        self.messages = Self.dedupeMessages(reconciled)
+        self.replaceMessages(Self.dedupeMessages(reconciled))
         if self.messages.contains(where: { $0.id == message.id }) {
             self.provisionalFinalMessagesByID[message.id] = ProvisionalFinalMessage(
                 reconciliationKey: reconciliationKey,
@@ -1859,7 +1900,7 @@ public final class OpenClawChatViewModel {
         switch evt.stream {
         case "assistant":
             if let text = evt.data["text"]?.value as? String {
-                self.streamingAssistantText = text
+                self.updateStreamingAssistantText(text)
             }
         case "lifecycle":
             self.handleAgentLifecycleEvent(evt, isPendingRun: isPendingRun)
@@ -1904,7 +1945,7 @@ public final class OpenClawChatViewModel {
             self.clearPendingRun(evt.runId)
         }
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
         let context = self.beginHistoryRequest()
         Task { await self.refreshHistoryAfterRun(historyRequest: context) }
     }
@@ -1943,7 +1984,7 @@ public final class OpenClawChatViewModel {
     private func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
         self.clearPendingRun(response.runId)
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
         self.logDiagnostic(
             "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
                 + "runId=\(response.runId) status=ok")
@@ -1955,7 +1996,7 @@ public final class OpenClawChatViewModel {
             self.removePendingLocalUserEcho(for: response.runId)
             self.clearPendingRun(response.runId)
             self.pendingToolCallsById = [:]
-            self.streamingAssistantText = nil
+            self.updateStreamingAssistantText(nil)
             self.errorText = "Chat failed before the run started; try again."
             self.logDiagnostic(
                 "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
@@ -1965,7 +2006,7 @@ public final class OpenClawChatViewModel {
             self.removePendingLocalUserEcho(for: response.runId)
             self.clearPendingRun(response.runId)
             self.pendingToolCallsById = [:]
-            self.streamingAssistantText = nil
+            self.updateStreamingAssistantText(nil)
             self.errorText = "Chat failed before the run started; try again."
             self.logDiagnostic(
                 "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
@@ -1978,7 +2019,7 @@ public final class OpenClawChatViewModel {
 
     private func removePendingLocalUserEcho(for runId: String) {
         guard let messageID = pendingLocalUserEchoMessageIDsByRunID[runId] else { return }
-        self.messages.removeAll { $0.id == messageID }
+        self.removeMessage(id: messageID)
         self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
     }
 
@@ -2052,7 +2093,7 @@ public final class OpenClawChatViewModel {
         guard self.hasAssistantMessage(after: timestamp) else { return false }
         self.clearPendingRun(runId)
         self.pendingToolCallsById = [:]
-        self.streamingAssistantText = nil
+        self.updateStreamingAssistantText(nil)
         return true
     }
 

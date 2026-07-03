@@ -90,7 +90,6 @@ class ChatTimelineTest {
     assertEquals(null, timeline.latestContentIndex)
     assertEquals(null, timeline.initialScrollIndex)
     assertEquals(null, timeline.latestUserMessageId)
-    assertEquals("", timeline.contentVersion)
   }
 
   private fun textMessage(

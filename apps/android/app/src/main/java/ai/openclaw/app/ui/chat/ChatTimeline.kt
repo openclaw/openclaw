@@ -25,7 +25,7 @@ internal data class ChatTimeline(
   val latestContentIndex: Int?,
   val initialScrollIndex: Int?,
   val latestUserMessageId: String?,
-  val contentVersion: String,
+  val latestContentVersion: String,
 )
 
 internal fun buildChatTimeline(
@@ -50,7 +50,7 @@ internal fun buildChatTimeline(
       latestContentIndex = null,
       initialScrollIndex = null,
       latestUserMessageId = null,
-      contentVersion = "",
+      latestContentVersion = "",
     )
   }
 
@@ -86,8 +86,53 @@ internal fun buildChatTimeline(
     latestContentIndex = latestContentIndex,
     initialScrollIndex = latestUserIndex.takeIf { it >= 0 } ?: scrollTargetIndex,
     latestUserMessageId = latestUserMessage?.id,
-    contentVersion = items.joinToString(separator = "|", transform = ::chatTimelineItemVersion),
+    latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream),
   )
+}
+
+// Reader restoration only needs to detect changes at the live edge. Avoid hashing
+// the full transcript whenever a streamed response updates.
+private fun latestContentVersion(
+  messages: List<ChatMessage>,
+  pendingRunCount: Int,
+  pendingToolCalls: List<ChatPendingToolCall>,
+  stream: String?,
+): String {
+  val latest = messages.lastOrNull()
+  return buildString {
+    append(messages.size)
+    append(':')
+    append(latest?.id.orEmpty())
+    append(':')
+    append(latest?.role.orEmpty())
+    append(':')
+    append(latest?.timestampMs ?: "")
+    latest?.content?.forEach { content ->
+      append(':')
+      append(content.type)
+      append('=')
+      append(content.text?.hashCode() ?: 0)
+      append(',')
+      append(content.mimeType.orEmpty())
+      append(',')
+      append(content.fileName.orEmpty())
+      append(',')
+      append(content.base64?.length ?: 0)
+    }
+    append(":runs=")
+    append(pendingRunCount)
+    append(":tools=")
+    pendingToolCalls.forEach { call ->
+      append(call.toolCallId)
+      append(',')
+      append(call.name)
+      append(',')
+      append(call.isError)
+      append(';')
+    }
+    append(":stream=")
+    append(stream?.hashCode() ?: 0)
+  }
 }
 
 internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
@@ -95,36 +140,5 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
     is ChatTimelineItem.Message -> "message:${item.message.id}"
     is ChatTimelineItem.PendingTools -> "tools"
     is ChatTimelineItem.StreamingAssistant -> "stream"
-    ChatTimelineItem.Thinking -> "thinking"
-  }
-
-private fun chatTimelineItemVersion(item: ChatTimelineItem): String =
-  when (item) {
-    is ChatTimelineItem.Message ->
-      buildString {
-        append("message:")
-        append(item.message.id)
-        append(':')
-        append(item.message.role)
-        append(':')
-        append(item.message.timestampMs ?: "")
-        append(':')
-        item.message.content.forEach { content ->
-          append(content.type)
-          append('=')
-          append(content.text?.length ?: 0)
-          append(';')
-        }
-      }
-    is ChatTimelineItem.PendingTools ->
-      buildString {
-        append("tools:")
-        append(
-          item.toolCalls.joinToString(separator = ",") { call ->
-            "${call.toolCallId}:${call.name}:${call.isError}"
-          },
-        )
-      }
-    is ChatTimelineItem.StreamingAssistant -> "stream:${item.text.length}"
     ChatTimelineItem.Thinking -> "thinking"
   }

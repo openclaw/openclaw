@@ -467,7 +467,12 @@ private fun ChatMessageList(
         streamingAssistantText = streamingAssistantText,
       )
     }
-  val readerScroll = rememberChatReaderScrollController(sessionKey = sessionKey, timeline = timeline)
+  val readerScroll =
+    rememberChatReaderScrollController(
+      sessionKey = sessionKey,
+      timeline = timeline,
+      historyLoading = historyLoading,
+    )
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(

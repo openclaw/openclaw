@@ -21,10 +21,11 @@ public struct OpenClawChatView: View {
     @State private var scrollPosition: UUID?
     @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
-    @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
-    @State private var lastVisibleContentVersion: String?
     @State private var hasNewerContentBelow = false
+    @State private var followTarget: ScrollFollowTarget? = .latest
+    @State private var isAtLiveEdge = true
+    @State private var isUserScrolling = false
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
     private let style: Style
@@ -40,6 +41,11 @@ public struct OpenClawChatView: View {
     private let messagePlaceholder: String?
     private let emptyAssistantIntro: String?
     private let talkControl: OpenClawChatTalkControl?
+
+    private enum ScrollFollowTarget: Equatable {
+        case latest
+        case user(UUID)
+    }
 
     private enum Layout {
         #if os(macOS)
@@ -193,10 +199,24 @@ public struct OpenClawChatView: View {
                 let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
                 return distanceFromBottom <= Layout.liveEdgeThreshold
             } action: { _, isAtLiveEdge in
+                self.isAtLiveEdge = isAtLiveEdge
                 guard self.hasPerformedInitialScroll else { return }
-                self.isPinnedToBottom = isAtLiveEdge
-                if isAtLiveEdge {
+                if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingUserTurn {
+                    self.followTarget = .latest
                     self.hasNewerContentBelow = false
+                }
+            }
+            .onScrollPhaseChange { _, phase in
+                guard self.hasPerformedInitialScroll else { return }
+                if phase == .interacting {
+                    self.isUserScrolling = true
+                    self.followTarget = nil
+                } else if phase == .idle, self.isUserScrolling {
+                    self.isUserScrolling = false
+                    if self.isAtLiveEdge {
+                        self.followTarget = .latest
+                        self.hasNewerContentBelow = false
+                    }
                 }
             }
 
@@ -226,49 +246,23 @@ public struct OpenClawChatView: View {
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
             self.restoreInitialScrollPosition()
             self.hasPerformedInitialScroll = true
-            self.lastVisibleContentVersion = self.visibleContentVersion
             self.lastUserMessageID = self.latestVisibleUserMessageID
             self.hasNewerContentBelow = false
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
             self.hasPerformedInitialScroll = false
-            self.isPinnedToBottom = true
+            self.followTarget = .latest
+            self.isAtLiveEdge = true
+            self.isUserScrolling = false
             self.hasNewerContentBelow = false
-            self.lastVisibleContentVersion = nil
             self.lastUserMessageID = nil
         }
         .onChange(of: self.scenePhase) { _, newValue in
             guard newValue == .active else { return }
             self.viewModel.resumeFromForeground()
         }
-        .onChange(of: self.viewModel.isSending) { _, isSending in
-            guard isSending, self.hasPerformedInitialScroll else { return }
-            self.isPinnedToBottom = true
-            self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: self.latestVisibleUserMessageID ?? self.scrollerBottomID, anchor: Layout.newTurnAnchor)
-        }
-        .onChange(of: self.viewModel.messages.count) { _, _ in
-            guard self.hasPerformedInitialScroll else { return }
-            let latestUserMessageID = self.latestVisibleUserMessageID
-            if latestUserMessageID != nil, latestUserMessageID != self.lastUserMessageID {
-                self.lastUserMessageID = latestUserMessageID
-                self.isPinnedToBottom = true
-                self.hasNewerContentBelow = false
-                self.lastVisibleContentVersion = self.visibleContentVersion
-                self.moveScrollPosition(to: latestUserMessageID!, anchor: Layout.newTurnAnchor)
-                return
-            }
-
-            self.handleVisibleContentChange()
-        }
-        .onChange(of: self.viewModel.pendingRunCount) { _, _ in
-            self.handleVisibleContentChange()
-        }
-        .onChange(of: self.viewModel.pendingToolCalls) { _, _ in
-            self.handleVisibleContentChange()
-        }
-        .onChange(of: self.viewModel.streamingAssistantText) { _, _ in
-            self.handleVisibleContentChange()
+        .onChange(of: self.viewModel.timelineRevision) { _, _ in
+            self.handleTimelineChange()
         }
     }
 
@@ -366,14 +360,11 @@ public struct OpenClawChatView: View {
         }?.id
     }
 
-    private var visibleContentVersion: String {
-        var parts = self.visibleMessages.map(self.contentVersionPart(for:))
-        parts.append("pendingRuns:\(self.viewModel.pendingRunCount)")
-        parts.append("pendingTools:\(self.viewModel.pendingToolCalls.map(\.toolCallId).joined(separator: ","))")
-        if let streamingText = self.viewModel.streamingAssistantText {
-            parts.append("stream:\(streamingText.count)")
+    private var isFollowingUserTurn: Bool {
+        if case .user = self.followTarget {
+            return true
         }
-        return parts.joined(separator: "|")
+        return false
     }
 
     private var showsJumpToLatest: Bool {
@@ -382,7 +373,7 @@ public struct OpenClawChatView: View {
 
     private var jumpToLatestButton: some View {
         Button {
-            self.isPinnedToBottom = true
+            self.followTarget = .latest
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID)
         } label: {
@@ -558,24 +549,44 @@ public struct OpenClawChatView: View {
 
     private func restoreInitialScrollPosition() {
         if let latestUserMessageID = self.latestVisibleUserMessageID {
-            self.isPinnedToBottom = false
+            self.followTarget = nil
             self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor, animated: false)
         } else {
-            self.isPinnedToBottom = true
+            self.followTarget = .latest
             self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
         }
     }
 
-    private func handleVisibleContentChange() {
+    private func handleTimelineChange() {
         guard self.hasPerformedInitialScroll else { return }
-        let nextVersion = self.visibleContentVersion
-        guard nextVersion != self.lastVisibleContentVersion else { return }
-        self.lastVisibleContentVersion = nextVersion
-
-        if self.isPinnedToBottom {
+        if self.viewModel.messages.isEmpty,
+           self.viewModel.pendingRunCount == 0,
+           self.viewModel.pendingToolCalls.isEmpty,
+           self.viewModel.streamingAssistantText == nil
+        {
+            self.lastUserMessageID = nil
+            self.followTarget = .latest
             self.hasNewerContentBelow = false
             self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
-        } else {
+            return
+        }
+        let latestUserMessageID = self.latestVisibleUserMessageID
+        if let latestUserMessageID, latestUserMessageID != self.lastUserMessageID {
+            self.lastUserMessageID = latestUserMessageID
+            self.followTarget = .user(latestUserMessageID)
+            self.hasNewerContentBelow = false
+            self.moveScrollPosition(to: latestUserMessageID, anchor: Layout.newTurnAnchor)
+            return
+        }
+
+        switch self.followTarget {
+        case .latest:
+            self.hasNewerContentBelow = false
+            self.moveScrollPosition(to: self.scrollerBottomID, animated: false)
+        case let .user(messageID):
+            self.hasNewerContentBelow = true
+            self.moveScrollPosition(to: messageID, anchor: Layout.newTurnAnchor, animated: false)
+        case nil:
             self.hasNewerContentBelow = true
         }
     }
@@ -590,31 +601,6 @@ public struct OpenClawChatView: View {
         withTransaction(transaction) {
             self.scrollPosition = id
         }
-    }
-
-    private func contentVersionPart(for message: OpenClawChatMessage) -> String {
-        var parts: [String] = [
-            message.id.uuidString,
-            message.role,
-            "\(message.timestamp ?? 0)",
-            message.toolCallId ?? "",
-            message.toolName ?? "",
-            message.stopReason ?? "",
-            message.errorMessage ?? "",
-        ]
-        for content in message.content {
-            parts.append(
-                [
-                    content.type ?? "",
-                    "\(content.text?.count ?? 0)",
-                    "\(content.thinking?.count ?? 0)",
-                    content.mimeType ?? "",
-                    content.fileName ?? "",
-                    content.id ?? "",
-                    content.name ?? "",
-                ].joined(separator: ":"))
-        }
-        return parts.joined(separator: ":")
     }
 
     private func mergeToolResults(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {

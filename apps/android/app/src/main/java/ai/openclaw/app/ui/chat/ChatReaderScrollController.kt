@@ -6,19 +6,60 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-private const val FollowTargetOffsetPx = 24
-
-private enum class ChatScrollFollowTarget {
+internal enum class ChatScrollFollowTarget {
   ReadAnchor,
   LatestContent,
 }
+
+internal data class ChatReaderState(
+  val initialized: Boolean = false,
+  val followTarget: ChatScrollFollowTarget? = null,
+  val hasNewerContent: Boolean = false,
+  val latestUserMessageId: String? = null,
+  val latestContentVersion: String? = null,
+)
+
+internal val ChatReaderStateSaver =
+  listSaver<ChatReaderState, Any>(
+    save = { state ->
+      listOf(
+        state.initialized,
+        state.followTarget?.name.orEmpty(),
+        state.hasNewerContent,
+        state.latestUserMessageId != null,
+        state.latestUserMessageId.orEmpty(),
+        state.latestContentVersion != null,
+        state.latestContentVersion.orEmpty(),
+      )
+    },
+    restore = { saved ->
+      ChatReaderState(
+        initialized = saved[0] as Boolean,
+        followTarget =
+          (saved[1] as String).takeIf(String::isNotEmpty)?.let(ChatScrollFollowTarget::valueOf),
+        hasNewerContent = saved[2] as Boolean,
+        latestUserMessageId = (saved[4] as String).takeIf { saved[3] as Boolean },
+        latestContentVersion = (saved[6] as String).takeIf { saved[5] as Boolean },
+      )
+    },
+  )
+
+internal data class ChatReaderTransition(
+  val state: ChatReaderState,
+  val scrollIndex: Int? = null,
+  val animated: Boolean = false,
+)
 
 internal data class ChatReaderScrollController(
   val listState: LazyListState,
@@ -30,88 +71,150 @@ internal data class ChatReaderScrollController(
 internal fun rememberChatReaderScrollController(
   sessionKey: String,
   timeline: ChatTimeline,
+  historyLoading: Boolean,
 ): ChatReaderScrollController {
   val listState = rememberLazyListState()
   val scope = rememberCoroutineScope()
-  val currentReadAnchorTarget by rememberUpdatedState(timeline.scrollTargetIndex)
-  val currentLatestContentTarget by rememberUpdatedState(timeline.latestContentIndex)
-  var hasAppliedInitialScroll by rememberSaveable(sessionKey) { mutableStateOf(false) }
-  var followTarget by rememberSaveable(sessionKey) { mutableStateOf<ChatScrollFollowTarget?>(null) }
-  var hasNewerContent by rememberSaveable(sessionKey) { mutableStateOf(false) }
-  var observedContentVersion by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
-  var observedLatestUserMessageId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
+  val targetTolerancePx = with(LocalDensity.current) { 24.dp.roundToPx() }
+  val currentTimeline by rememberUpdatedState(timeline)
+  var readerState by
+    rememberSaveable(sessionKey, stateSaver = ChatReaderStateSaver) {
+      mutableStateOf(ChatReaderState())
+    }
+  var isApplyingScroll by remember(sessionKey) { mutableStateOf(false) }
 
-  LaunchedEffect(sessionKey, timeline.initialScrollIndex, timeline.items.isNotEmpty()) {
-    if (hasAppliedInitialScroll || timeline.items.isEmpty()) return@LaunchedEffect
-    val initialIndex =
-      timeline.initialScrollIndex ?: timeline.scrollTargetIndex ?: timeline.latestContentIndex ?: 0
-    listState.scrollToItem(index = initialIndex)
-    hasAppliedInitialScroll = true
-    observedContentVersion = timeline.contentVersion
-    observedLatestUserMessageId = timeline.latestUserMessageId
-    hasNewerContent = false
-    followTarget = timeline.followTargetForIndex(initialIndex)
+  suspend fun applyTransition(transition: ChatReaderTransition) {
+    readerState = transition.state
+    val index = transition.scrollIndex ?: return
+    isApplyingScroll = true
+    try {
+      if (transition.animated) {
+        listState.animateScrollToItem(index)
+      } else {
+        listState.scrollToItem(index)
+      }
+    } finally {
+      isApplyingScroll = false
+    }
   }
 
-  LaunchedEffect(sessionKey, timeline.contentVersion) {
-    if (!hasAppliedInitialScroll || timeline.items.isEmpty()) return@LaunchedEffect
-    val previousContentVersion = observedContentVersion
-    val previousUserMessageId = observedLatestUserMessageId
-    observedContentVersion = timeline.contentVersion
-    observedLatestUserMessageId = timeline.latestUserMessageId
-    if (previousContentVersion == null || previousContentVersion == timeline.contentVersion) return@LaunchedEffect
-
-    val hasNewUserTurn =
-      previousUserMessageId != null &&
-        timeline.latestUserMessageId != null &&
-        previousUserMessageId != timeline.latestUserMessageId
-    when {
-      hasNewUserTurn -> {
-        val target = timeline.scrollTargetIndex ?: timeline.latestContentIndex ?: return@LaunchedEffect
-        followTarget = ChatScrollFollowTarget.ReadAnchor
-        hasNewerContent = false
-        listState.animateScrollToItem(index = target)
+  LaunchedEffect(sessionKey, timeline, historyLoading) {
+    val transition =
+      if (readerState.initialized) {
+        readerState.onTimelineChanged(timeline, historyLoading)
+      } else {
+        initialChatReaderTransition(timeline)
       }
-      followTarget != null -> {
-        val followedTarget = followTarget ?: return@LaunchedEffect
-        val target = timeline.indexForFollowTarget(followedTarget) ?: return@LaunchedEffect
-        hasNewerContent = followedTarget == ChatScrollFollowTarget.ReadAnchor && target != timeline.latestContentIndex
-        listState.scrollToItem(index = target)
-      }
-      else -> {
-        hasNewerContent = true
-      }
-    }
+    applyTransition(transition)
   }
 
   LaunchedEffect(sessionKey) {
     snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
       .collect { (index, offset) ->
-        if (!hasAppliedInitialScroll) return@collect
-        val nextFollowTarget =
-          when {
-            isAtTarget(index, offset, currentLatestContentTarget) -> ChatScrollFollowTarget.LatestContent
-            isAtTarget(index, offset, currentReadAnchorTarget) -> ChatScrollFollowTarget.ReadAnchor
-            else -> null
-          }
-        followTarget = nextFollowTarget
-        if (nextFollowTarget == ChatScrollFollowTarget.LatestContent) hasNewerContent = false
+        if (!readerState.initialized || isApplyingScroll) return@collect
+        readerState = readerState.onViewportChanged(index, offset, currentTimeline, targetTolerancePx)
       }
   }
 
   return ChatReaderScrollController(
     listState = listState,
-    showJumpToLatest = hasNewerContent && timeline.items.isNotEmpty(),
+    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty(),
     jumpToLatest = {
       scope.launch {
-        val target = currentLatestContentTarget ?: currentReadAnchorTarget ?: return@launch
-        followTarget = ChatScrollFollowTarget.LatestContent
-        hasNewerContent = false
-        listState.animateScrollToItem(index = target)
+        applyTransition(readerState.jumpToLatest(currentTimeline))
       }
     },
   )
 }
+
+internal fun initialChatReaderTransition(timeline: ChatTimeline): ChatReaderTransition {
+  val initialIndex = timeline.initialScrollIndex ?: timeline.scrollTargetIndex ?: timeline.latestContentIndex
+  return ChatReaderTransition(
+    state =
+      ChatReaderState(
+        initialized = initialIndex != null,
+        followTarget = timeline.followTargetForIndex(initialIndex),
+        latestUserMessageId = timeline.latestUserMessageId,
+        latestContentVersion = timeline.latestContentVersion,
+      ),
+    scrollIndex = initialIndex,
+  )
+}
+
+internal fun ChatReaderState.onTimelineChanged(
+  timeline: ChatTimeline,
+  historyLoading: Boolean = false,
+): ChatReaderTransition {
+  if (timeline.items.isEmpty()) {
+    return ChatReaderTransition(state = if (historyLoading) this else ChatReaderState())
+  }
+  if (timeline.latestContentVersion == latestContentVersion) {
+    return ChatReaderTransition(state = this)
+  }
+  val hasNewUserTurn =
+    timeline.latestUserMessageId != null && timeline.latestUserMessageId != latestUserMessageId
+  if (hasNewUserTurn) {
+    return ChatReaderTransition(
+      state =
+        copy(
+          followTarget = ChatScrollFollowTarget.ReadAnchor,
+          hasNewerContent = false,
+          latestUserMessageId = timeline.latestUserMessageId,
+          latestContentVersion = timeline.latestContentVersion,
+        ),
+      scrollIndex = timeline.scrollTargetIndex ?: timeline.latestContentIndex,
+      animated = true,
+    )
+  }
+
+  val target = followTarget
+  if (target == null) {
+    return ChatReaderTransition(
+      state =
+        copy(
+          hasNewerContent = true,
+          latestUserMessageId = timeline.latestUserMessageId,
+          latestContentVersion = timeline.latestContentVersion,
+        ),
+    )
+  }
+
+  val targetIndex = timeline.indexForFollowTarget(target)
+  return ChatReaderTransition(
+    state =
+      copy(
+        hasNewerContent = target == ChatScrollFollowTarget.ReadAnchor && targetIndex != timeline.latestContentIndex,
+        latestUserMessageId = timeline.latestUserMessageId,
+        latestContentVersion = timeline.latestContentVersion,
+      ),
+    scrollIndex = targetIndex,
+  )
+}
+
+internal fun ChatReaderState.onViewportChanged(
+  index: Int,
+  offset: Int,
+  timeline: ChatTimeline,
+  targetTolerancePx: Int,
+): ChatReaderState {
+  val nextTarget =
+    if (isAtTarget(index, offset, timeline.latestContentIndex, targetTolerancePx)) {
+      ChatScrollFollowTarget.LatestContent
+    } else {
+      null
+    }
+  return copy(
+    followTarget = nextTarget,
+    hasNewerContent = if (nextTarget == ChatScrollFollowTarget.LatestContent) false else hasNewerContent,
+  )
+}
+
+internal fun ChatReaderState.jumpToLatest(timeline: ChatTimeline): ChatReaderTransition =
+  ChatReaderTransition(
+    state = copy(followTarget = ChatScrollFollowTarget.LatestContent, hasNewerContent = false),
+    scrollIndex = timeline.latestContentIndex ?: timeline.scrollTargetIndex,
+    animated = true,
+  )
 
 private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): Int? =
   when (target) {
@@ -119,7 +222,7 @@ private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): I
     ChatScrollFollowTarget.LatestContent -> latestContentIndex
   }
 
-private fun ChatTimeline.followTargetForIndex(index: Int): ChatScrollFollowTarget? =
+private fun ChatTimeline.followTargetForIndex(index: Int?): ChatScrollFollowTarget? =
   when (index) {
     latestContentIndex -> ChatScrollFollowTarget.LatestContent
     scrollTargetIndex -> ChatScrollFollowTarget.ReadAnchor
@@ -130,4 +233,5 @@ private fun isAtTarget(
   index: Int,
   offset: Int,
   target: Int?,
-): Boolean = target != null && index == target && offset <= FollowTargetOffsetPx
+  tolerancePx: Int,
+): Boolean = target != null && index == target && offset <= tolerancePx

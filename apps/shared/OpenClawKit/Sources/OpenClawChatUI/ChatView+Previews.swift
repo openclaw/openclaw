@@ -8,7 +8,6 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         case empty
         case loading
         case error
-        case scrollProof
     }
 
     let scenario: Scenario
@@ -21,12 +20,6 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         switch self.scenario {
         case .connected:
             break
-        case .scrollProof:
-            return OpenClawChatHistoryPayload(
-                sessionKey: sessionKey,
-                sessionId: Self.scrollProofRunID,
-                messages: Self.scrollProofMessages(),
-                thinkingLevel: "medium")
         case .empty:
             return OpenClawChatHistoryPayload(
                 sessionKey: sessionKey,
@@ -122,7 +115,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         switch self.scenario {
-        case .connected, .empty, .loading, .scrollProof:
+        case .connected, .empty, .loading:
             true
         case .error:
             false
@@ -130,58 +123,12 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
-        guard self.scenario == .scrollProof else {
-            return AsyncStream<OpenClawChatTransportEvent> { continuation in
-                continuation.finish()
-            }
-        }
-
-        return AsyncStream<OpenClawChatTransportEvent> { continuation in
-            let task = Task {
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
-                continuation.yield(
-                    OpenClawChatTransportEvent.agent(
-                        OpenClawAgentEventPayload(
-                            runId: Self.scrollProofRunID,
-                            seq: 1,
-                            stream: "assistant",
-                            ts: 1_900_000_010,
-                            data: [
-                                "text": AnyCodable(
-                                    "This live reply is streaming below the reader's current viewport. The transcript should stay put until Jump to latest is tapped."),
-                            ])))
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                continuation.yield(
-                    OpenClawChatTransportEvent.agent(
-                        OpenClawAgentEventPayload(
-                            runId: Self.scrollProofRunID,
-                            seq: 2,
-                            stream: "tool",
-                            ts: 1_900_000_013,
-                            data: [
-                                "phase": AnyCodable("start"),
-                                "name": AnyCodable("scroll.proof"),
-                                "toolCallId": AnyCodable("preview-scroll-proof-tool"),
-                            ])))
-                continuation.yield(
-                    OpenClawChatTransportEvent.agent(
-                        OpenClawAgentEventPayload(
-                            runId: Self.scrollProofRunID,
-                            seq: 3,
-                            stream: "assistant",
-                            ts: 1_900_000_014,
-                            data: [
-                                "text": AnyCodable(
-                                    "This live reply is streaming below the reader's current viewport. The transcript should stay put until Jump to latest is tapped.\n\nA tool row arrived too; layout growth still must not pull the reader away."),
-                            ])))
-            }
-            continuation.onTermination = { @Sendable _ in task.cancel() }
+        AsyncStream { continuation in
+            continuation.finish()
         }
     }
 
     func setActiveSessionKey(_: String) async throws {}
-
-    private static let scrollProofRunID = "preview-scroll-proof-run"
 
     private static func message(role: String, text: String, timestamp: Double) -> AnyCodable {
         AnyCodable([
@@ -224,35 +171,6 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             "toolCallId": toolCallId,
             "toolName": name,
         ])
-    }
-
-    private static func scrollProofMessages() -> [AnyCodable] {
-        [
-            Self.message(role: "user", text: "Open the iOS chat proof thread.", timestamp: 1),
-            Self.message(
-                role: "assistant",
-                text: "Loaded the thread. There is enough previous conversation visible to preserve orientation before the next turn begins.",
-                timestamp: 2),
-            Self.message(role: "user", text: "Show me a few earlier details so I know where I am.", timestamp: 3),
-            Self.message(
-                role: "assistant",
-                text: "Earlier context remains in the transcript. Scroll position should be tied to reader intent, not to message count.",
-                timestamp: 4),
-            Self.message(role: "user", text: "I am going to scroll away from the live edge now.", timestamp: 5),
-            Self.message(
-                role: "assistant",
-                text: "When the reader moves away, incoming text should wait offscreen and surface a clear return action.",
-                timestamp: 6),
-            Self.message(role: "user", text: "Keep this turn near the top of the viewport when the thread reopens.", timestamp: 7),
-            Self.message(
-                role: "assistant",
-                text: """
-                Restored near the latest user turn with previous context still visible. The next live rows are intentionally delayed so the proof can scroll away first.
-
-                Keep reading from here: this paragraph is long enough to make the delayed stream arrive below the fold on tall phones. If the scroll controller is correct, this text remains anchored while new assistant, thinking, and tool rows are inserted later in the timeline.
-                """,
-                timestamp: 8),
-        ]
     }
 
     private static func session(
@@ -307,12 +225,6 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
     OpenClawChatPreview(
         scenario: .error,
         sessionKey: "error-preview")
-}
-
-#Preview("Chat scroll proof") {
-    OpenClawChatPreview(
-        scenario: .scrollProof,
-        sessionKey: "scroll-proof-preview")
 }
 
 #Preview("Onboarding chat") {

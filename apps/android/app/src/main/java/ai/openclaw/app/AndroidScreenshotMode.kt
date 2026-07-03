@@ -10,7 +10,6 @@ enum class AndroidScreenshotScene(
 ) {
   Connect("connect"),
   Chat("chat"),
-  ChatProof("chat-proof"),
   Voice("voice"),
   Screen("screen"),
   Settings("settings"),
