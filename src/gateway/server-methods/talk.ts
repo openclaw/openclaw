@@ -87,7 +87,7 @@ function resolveCatalogProviderSelection(
   try {
     const resolvedProvider = resolveAutomaticProvider();
     return {
-      activeProvider: configuredProvider ?? resolvedProvider,
+      activeProvider: resolvedProvider,
       ready: true,
     };
   } catch {

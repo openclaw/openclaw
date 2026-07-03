@@ -453,6 +453,81 @@ describe("talk.catalog handler", () => {
     });
   });
 
+  it("reports the provider selected by runtime resolution when aliases collide", async () => {
+    const transcriptionAlias = {
+      id: "transcription-alias",
+      label: "Transcription Alias",
+      aliases: ["shared-transcription"],
+      isConfigured: vi.fn(() => true),
+    };
+    const transcriptionDirect = {
+      id: "shared-transcription",
+      label: "Transcription Direct",
+      isConfigured: vi.fn(() => true),
+    };
+    const realtimeAlias = {
+      id: "realtime-alias",
+      label: "Realtime Alias",
+      aliases: ["shared-realtime"],
+      isConfigured: vi.fn(() => true),
+      createBridge: vi.fn(),
+    };
+    const realtimeDirect = {
+      id: "shared-realtime",
+      label: "Realtime Direct",
+      isConfigured: vi.fn(() => true),
+      createBridge: vi.fn(),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      transcriptionAlias,
+      transcriptionDirect,
+    ] as never);
+    mocks.listRealtimeVoiceProviders.mockReturnValue([realtimeAlias, realtimeDirect] as never);
+    mocks.canonicalizeRealtimeTranscriptionProviderId.mockReturnValueOnce("shared-transcription");
+    mocks.canonicalizeRealtimeVoiceProviderId.mockReturnValueOnce("shared-realtime");
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: realtimeAlias,
+      providerConfig: { enabled: true },
+    } as never);
+
+    const respond = vi.fn();
+    await talkHandlers["talk.catalog"]({
+      req: { type: "req", id: "1", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              realtime: {
+                provider: "shared-realtime",
+                providers: { "shared-realtime": { enabled: true } },
+              },
+            },
+            plugins: {
+              entries: {
+                "voice-call": {
+                  config: {
+                    streaming: {
+                      provider: "shared-transcription",
+                      providers: { "shared-transcription": { enabled: true } },
+                    },
+                  },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      transcription: { ready: true, activeProvider: "transcription-alias" },
+      realtime: { ready: true, activeProvider: "realtime-alias" },
+    });
+  });
+
   it("reports an authoritative setup requirement when automatic selection fails", async () => {
     mocks.listRealtimeTranscriptionProviders.mockReturnValue([
       {
