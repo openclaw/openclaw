@@ -50,25 +50,37 @@ function redactTelegramBotTokenPath(value: string): string {
   return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
 }
 
-// Registry of known Bot API path-token redactors keyed by hostname.
-// A hostname entry applies only to that host; pass no hostname to apply all policies.
-const BOT_TOKEN_PATH_REDACTORS: Record<string, (value: string) => string> = {
-  "api.telegram.org": redactTelegramBotTokenPath,
-};
+// Universal bot token path redactors applied to every URL regardless of hostname.
+// The regex is strict enough (≥6-digit id + ≥20-char secret) to avoid false positives
+// on ordinary /bot application routes, so hostname-gating is unnecessary.
+const UNIVERSAL_BOT_TOKEN_PATH_REDACTORS: Array<(value: string) => string> = [
+  redactTelegramBotTokenPath,
+];
+
+// Registry of hostname-specific Bot API path-token redactors for future extensibility.
+// A matching hostname entry runs in addition to the universal redactors above.
+const BOT_TOKEN_PATH_REDACTORS: Record<string, (value: string) => string> = {};
 
 /**
  * Redact known Bot API credential path segments from a URL string.
- * When `hostname` is provided, only matching hostname policies apply.
- * When omitted, all registered policies are applied (useful for unparseable URL-like strings).
+ * Universal redactors (Telegram bot token path) always apply.
+ * When `hostname` is provided and matches a hostname-specific policy, that
+ * policy also runs. When omitted, all hostname-specific policies run too.
  */
 export function redactBotTokenPath(value: string, hostname?: string): string {
-  if (hostname) {
-    const redactor = BOT_TOKEN_PATH_REDACTORS[hostname];
-    return redactor ? redactor(value) : value;
-  }
   let result = value;
-  for (const redactor of Object.values(BOT_TOKEN_PATH_REDACTORS)) {
+  for (const redactor of UNIVERSAL_BOT_TOKEN_PATH_REDACTORS) {
     result = redactor(result);
+  }
+  if (hostname) {
+    const hostRedactor = BOT_TOKEN_PATH_REDACTORS[hostname];
+    if (hostRedactor) {
+      result = hostRedactor(result);
+    }
+  } else {
+    for (const redactor of Object.values(BOT_TOKEN_PATH_REDACTORS)) {
+      result = redactor(result);
+    }
   }
   return result;
 }

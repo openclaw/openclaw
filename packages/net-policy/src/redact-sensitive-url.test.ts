@@ -171,13 +171,31 @@ describe("redactBotTokenPath", () => {
     ).toBe("timeout /bot***/sendMessage and keep /bot/settings");
   });
 
-  it("does not redact non-matching hostname URLs", () => {
+  it("redacts Telegram bot token for any hostname (universal redactor)", () => {
     expect(
       redactBotTokenPath(
         `https://example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage`,
         "example.com",
       ),
-    ).toBe(`https://example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage`);
+    ).toBe("https://example.com/bot***/sendMessage");
+  });
+
+  it("redacts Telegram bot token on custom self-hosted API roots", () => {
+    expect(
+      redactBotTokenPath(
+        `https://telegram.internal/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/getMe`,
+        "telegram.internal",
+      ),
+    ).toBe("https://telegram.internal/bot***/getMe");
+  });
+
+  it("redacts Telegram bot token on proxy API roots", () => {
+    expect(
+      redactBotTokenPath(
+        `https://tg-proxy.example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage`,
+        "tg-proxy.example.com",
+      ),
+    ).toBe("https://tg-proxy.example.com/bot***/sendMessage");
   });
 
   it.each([

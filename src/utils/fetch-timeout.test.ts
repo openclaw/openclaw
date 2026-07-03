@@ -164,6 +164,24 @@ describe("buildTimeoutAbortSignal", () => {
     expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
   });
 
+  it("redacts Telegram bot tokens from custom self-hosted API root timeout URLs", async () => {
+    const record = await captureTimeoutLogUrl(
+      `https://telegram.internal/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/getMe?chat_id=1`,
+    );
+
+    expect(record.url).toBe("https://telegram.internal/bot***/getMe");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
+  it("redacts Telegram bot tokens from proxy API root timeout URLs", async () => {
+    const record = await captureTimeoutLogUrl(
+      `https://tg-proxy.example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?foo=bar`,
+    );
+
+    expect(record.url).toBe("https://tg-proxy.example.com/bot***/sendMessage");
+    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
+  });
+
   it("redacts Telegram bot tokens from unparseable (fallback) timeout URL strings", async () => {
     const record = await captureTimeoutLogUrl(
       `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
