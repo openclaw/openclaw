@@ -1,7 +1,17 @@
 // find tool tests cover custom search operation wiring and result-limit
 // normalization for session file discovery.
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureTool } from "../../utils/tools-manager.js";
 import { createFindToolDefinition, type FindOperations } from "./find.js";
+
+vi.mock("../../utils/tools-manager.js", () => ({
+  ensureTool: vi.fn(),
+}));
+
+const mockedEnsureTool = vi.mocked(ensureTool);
 
 function operations(results: string[]): FindOperations {
   return {
@@ -18,6 +28,10 @@ function textContent(
 }
 
 describe("find tool", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
   it("clamps non-positive limits before delegating to custom search operations", async () => {
     // Clamp before delegation so custom backends never receive a zero/negative
     // limit that could make real matches disappear.
@@ -52,5 +66,31 @@ describe("find tool", () => {
 
     expect(textContent(result)).toBe("a.ts\nb.ts");
     expect(result.details).toBeUndefined();
+  });
+
+  it("rejects partial fd output when fd exits with an error", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-find-fd-"));
+    try {
+      const fdPath = join(tempDir, "fd");
+      writeFileSync(
+        fdPath,
+        `#!/usr/bin/env node
+const searchRoot = process.argv[process.argv.length - 1];
+process.stdout.write(searchRoot + "/partial.ts\\n");
+process.stderr.write("fd failed while reading subtree\\n");
+process.exit(2);
+`,
+      );
+      chmodSync(fdPath, 0o755);
+      mockedEnsureTool.mockResolvedValue(fdPath);
+
+      const tool = createFindToolDefinition(tempDir);
+
+      await expect(
+        tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never),
+      ).rejects.toThrow("fd failed while reading subtree");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
