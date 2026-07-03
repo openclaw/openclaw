@@ -1346,6 +1346,17 @@ describe("subagent-announce continuation drain (F7)", () => {
 
     // It must NOT be spawned immediately via a volatile in-process path.
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    const dispatchCall = dispatchToolDelegatesMock.mock.calls[0]?.[0] as {
+      chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
+    };
+    expect(dispatchCall.chainState).toMatchObject({
+      currentChainCount: 1,
+      accumulatedChainTokens: 1_000,
+    });
   });
 
   it("spawns a delayed bracket delegate immediately (no durable enqueue) when the child chain-cost persist fails (#1144)", async () => {

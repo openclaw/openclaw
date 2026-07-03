@@ -1322,6 +1322,7 @@ export async function runSubagentAnnounceFlow(params: {
     // Track whether a bracket delegate was consumed from findings — must
     // capture BEFORE stripping mutates findings (P0-1 from review).
     let bracketDelegateReservedCurrentHop = false;
+    let delayedBracketDelegateDrainArmed = false;
 
     if (continuationEnabled && (findings !== "(no output)" || toolDelegates.length > 0)) {
       const continuationResult = stripContinuationSignal(findings);
@@ -1558,7 +1559,6 @@ export async function runSubagentAnnounceFlow(params: {
                   ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
                   ...(chainSignal.model ? { model: chainSignal.model } : {}),
                 });
-                bracketDelegateReservedCurrentHop = true;
                 void drainChildContinuationQueue({
                   childSessionKey: params.childSessionKey,
                   requesterOrigin: targetRequesterOrigin,
@@ -1570,6 +1570,7 @@ export async function runSubagentAnnounceFlow(params: {
                     `[subagent-chain-hop] Failed to arm durable delayed bracket delegate hedge for ${params.childSessionKey}: ${String(err)}`,
                   );
                 });
+                delayedBracketDelegateDrainArmed = true;
               }
             } else {
               // Fire-and-forget — don't block the announce flow
@@ -1772,7 +1773,11 @@ export async function runSubagentAnnounceFlow(params: {
           });
         }
       }
-      if (deferInitialChildToolDrain && !postBracketChildDrainArmed) {
+      if (
+        deferInitialChildToolDrain &&
+        !postBracketChildDrainArmed &&
+        !delayedBracketDelegateDrainArmed
+      ) {
         const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
         const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
         const chainState = buildChildContinuationSpawnState(
