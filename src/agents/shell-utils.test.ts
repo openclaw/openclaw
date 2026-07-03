@@ -412,24 +412,39 @@ describe("sanitizeBinaryOutput", () => {
     expect(sanitizeBinaryOutput("a\u200Cb")).toBe("ab");
   });
 
-  it("escapes control characters to hex form instead of deleting them", () => {
-    // ESC (27) and BEL (7) should become visible escapes, not disappear.
-    const input = "SSH banner: \x1B[0m alert \x07";
+  it("strips ANSI/OSC escape sequences before escaping residual controls", () => {
+    // SGR color, cursor home, and a window-title OSC sequence should disappear,
+    // leaving only the printable text and escaped residual control bytes.
+    const input = "\x1B[1;32mWelcome\x1B[0m \x1B]0;title\x07\x1B[H\x07";
     const output = sanitizeBinaryOutput(input);
-    expect(output).toContain("\\x1b");
+    expect(output).toBe("Welcome \\x07");
+  });
+
+  it("escapes non-ANSI control characters to hex form instead of deleting them", () => {
+    // BEL (7) and BS (8) should become visible escapes, not disappear.
+    const input = "SSH banner: \x07 alert \x08";
+    const output = sanitizeBinaryOutput(input);
     expect(output).toContain("\\x07");
+    expect(output).toContain("\\x08");
     expect(output).toContain("SSH banner:");
     expect(output).toContain("alert");
-    expect(output).not.toContain("\x1B");
     expect(output).not.toContain("\x07");
+    expect(output).not.toContain("\x08");
   });
 
   it("keeps output non-empty when only control characters are present", () => {
     // Previously this would return an empty string, causing binary/MIME fallback.
-    expect(sanitizeBinaryOutput("\x1B\x07\x08")).toBe("\\x1b\\x07\\x08");
+    expect(sanitizeBinaryOutput("\x07\x08\x0B")).toBe("\\x07\\x08\\x0b");
   });
 
   it("escapes NUL bytes", () => {
     expect(sanitizeBinaryOutput("a\x00b")).toBe("a\\x00b");
+  });
+
+  it("escapes residual controls after stripping ANSI sequences", () => {
+    // ANSI SGR is stripped, but the raw BEL and NUL inside the text are escaped.
+    const input = "\x1B[31merror\x07\x00\x1B[0m";
+    const output = sanitizeBinaryOutput(input);
+    expect(output).toBe("error\\x07\\x00");
   });
 });
