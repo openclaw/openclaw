@@ -209,14 +209,15 @@
       <div class="mount-fallback__panel" tabindex="-1">
         <p class="mount-fallback__eyebrow">OpenClaw Control UI</p>
         <h1 id="openclaw-mount-fallback-title">Control UI did not start</h1>
-        <p>
-          The browser loaded the static page, but the app bundle did not register the
-          <code>openclaw-app</code> web component. A browser extension or early content script may
+        <p id="openclaw-mount-fallback-message">
+          The browser loaded the static page, but the app bundle could not start.
+          This usually happens when the gateway is restarting — the page will recover
+          automatically. If it does not, a browser extension or early content script may
           be blocking module execution.
         </p>
         <ul>
+          <li>Wait a moment — retrying automatically with backoff.</li>
           <li>Try again in a clean browser profile or private window.</li>
-          <li>Disable extensions that run on all pages, then reload this dashboard.</li>
           <li>
             See
             <a
@@ -254,6 +255,9 @@
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
         var timer;
+        var retryTimer;
+        var retryCount = 0;
+        var maxRetries = 10;
 
         function appMounted() {
           try {
@@ -271,6 +275,7 @@
         function hideFallback() {
           fallback.hidden = true;
           document.body.classList.remove("openclaw-mount-fallback-active");
+          window.clearTimeout(retryTimer);
         }
 
         function showFallback() {
@@ -284,11 +289,44 @@
               panel.focus();
             }
           }
+          // Auto-retry with backoff when fallback appears
+          retryTimer = window.setTimeout(function () {
+            hideFallback();
+            retryLoadApp();
+          }, 2000);
         }
 
         function armFallbackTimer() {
           window.clearTimeout(timer);
           timer = window.setTimeout(showFallback, delay);
+        }
+
+        function retryLoadApp() {
+          if (appMounted() || retryCount >= maxRetries) return;
+          retryCount++;
+          var script = document.createElement("script");
+          script.type = "module";
+          script.src = "/src/main.ts?t=" + Date.now();
+          document.body.appendChild(script);
+          // Re-arm the watchdog for this retry attempt
+          armFallbackTimer();
+          // Re-register the whenDefined listener for the new attempt
+          if (window.customElements && typeof window.customElements.whenDefined === "function") {
+            window.customElements.whenDefined(tagName).then(
+              function () {
+                window.clearTimeout(timer);
+                hideFallback();
+              },
+              function () {},
+            );
+          }
+          // Schedule next retry with exponential backoff if still not mounted
+          retryTimer = window.setTimeout(function () {
+            if (!appMounted()) {
+              hideFallback();
+              retryLoadApp();
+            }
+          }, Math.min(1000 * Math.pow(1.5, retryCount), 15000));
         }
 
         armFallbackTimer();
@@ -311,7 +349,8 @@
         if (wait) {
           wait.addEventListener("click", function () {
             hideFallback();
-            armFallbackTimer();
+            retryCount = 0;
+            retryLoadApp();
           });
         }
       })();
