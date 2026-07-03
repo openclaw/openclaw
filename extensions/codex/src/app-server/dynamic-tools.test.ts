@@ -178,7 +178,7 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
-  it("keeps turn-yield direct while deferring OpenClaw session spawn", () => {
+  it("keeps OpenClaw control-path tools direct while deferring broad tools", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({ name: "web_search" }),
@@ -207,16 +207,8 @@ describe("createCodexDynamicToolBridge", () => {
       namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
       deferLoading: true,
     });
-    expectDynamicSpec(heartbeat, {
-      name: HEARTBEAT_RESPONSE_TOOL_NAME,
-      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      deferLoading: true,
-    });
-    expectDynamicSpec(sessionsSpawn, {
-      name: "sessions_spawn",
-      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      deferLoading: true,
-    });
+    expectNoNamespace(heartbeat);
+    expectNoNamespace(sessionsSpawn);
     expectNoNamespace(sessionsYield);
   });
 
@@ -259,7 +251,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual(["message", HEARTBEAT_RESPONSE_TOOL_NAME]);
+    expect(specNames(bridge.specs).sort()).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
 
     const result = await bridge.handleToolCall(
       {

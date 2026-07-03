@@ -1594,7 +1594,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", () => {
+  it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
     const tools = [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
@@ -1619,10 +1619,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(message).not.toHaveProperty("deferLoading");
     expect(webSearch?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
     expect(webSearch?.deferLoading).toBe(true);
-    expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
-    expect(heartbeat?.deferLoading).toBe(true);
-    expect(sessionsSpawn?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
-    expect(sessionsSpawn?.deferLoading).toBe(true);
+    expect(heartbeat).not.toHaveProperty("namespace");
+    expect(heartbeat).not.toHaveProperty("deferLoading");
+    expect(sessionsSpawn).not.toHaveProperty("namespace");
+    expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
@@ -1683,8 +1683,9 @@ describe("runCodexAppServerAttempt", () => {
       registeredTools,
     );
 
-    expect(specNames(heartbeatBridge.specs)).toEqual(registeredToolNames);
-    expect(specNames(nextNormalBridge.specs)).toEqual(registeredToolNames);
+    const sortedRegisteredToolNames = [...registeredToolNames].sort();
+    expect(specNames(heartbeatBridge.specs).sort()).toEqual(sortedRegisteredToolNames);
+    expect(specNames(nextNormalBridge.specs).sort()).toEqual(sortedRegisteredToolNames);
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {
