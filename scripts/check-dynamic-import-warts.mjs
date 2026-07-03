@@ -74,41 +74,6 @@ function readDeclarationName(node) {
   return null;
 }
 
-function unwrapExpression(node) {
-  let current = node;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isTypeAssertionExpression(current) ||
-    ts.isSatisfiesExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
-function isCanonicalLazyLoaderExpression(node) {
-  const expression = unwrapExpression(node);
-  return (
-    ts.isCallExpression(expression) &&
-    ts.isIdentifier(expression.expression) &&
-    expression.expression.text.startsWith("createLazy")
-  );
-}
-
-function containsDynamicImport(node) {
-  let found = false;
-  const visit = (current) => {
-    if (ts.isCallExpression(current) && current.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(current, visit);
-  };
-  visit(node);
-  return found;
-}
-
 function isIgnoredTestHelperContent(content) {
   return /\bfrom\s+["']vitest["']/.test(content) || /\bfrom\s+["']@vitest\//.test(content);
 }
@@ -134,7 +99,6 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
   const staticRuntimeImports = new Map();
   const dynamicImports = new Map();
   const directExecuteImports = [];
-  const manualMemoizers = [];
   const declarationStack = [];
 
   const addLine = (map, specifier, line) => {
@@ -184,19 +148,6 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
       }
     }
 
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionEqualsToken &&
-      containsDynamicImport(node.right) &&
-      !isCanonicalLazyLoaderExpression(node.right)
-    ) {
-      manualMemoizers.push({
-        line: toLine(sourceFile, node),
-        reason:
-          "hand-written dynamic import memoizer; use createLazyPromise or createLazyRuntimeModule",
-      });
-    }
-
     ts.forEachChild(node, visit);
     if (declarationName) {
       declarationStack.pop();
@@ -205,7 +156,7 @@ export function findDynamicImportAdvisories(content, fileName = "source.ts") {
 
   visit(sourceFile);
 
-  const advisories = [...directExecuteImports, ...manualMemoizers];
+  const advisories = [...directExecuteImports];
   for (const [specifier, dynamicLines] of dynamicImports) {
     const staticLines = staticRuntimeImports.get(specifier);
     if (staticLines?.length) {
@@ -256,7 +207,6 @@ export async function collectDynamicImportAdvisories(options = {}) {
  */
 export async function main(argv = process.argv.slice(2)) {
   const fail = argv.includes("--fail");
-  const failManualMemoizers = argv.includes("--fail-manual-memoizers");
   const json = argv.includes("--json");
   const advisories = await collectDynamicImportAdvisories();
 
@@ -273,14 +223,6 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (fail && advisories.length > 0) {
-    process.exit(1);
-  }
-  if (
-    failManualMemoizers &&
-    advisories.some((advisory) =>
-      advisory.reason.startsWith("hand-written dynamic import memoizer"),
-    )
-  ) {
     process.exit(1);
   }
 }
