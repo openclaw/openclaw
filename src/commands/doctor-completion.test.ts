@@ -131,12 +131,20 @@ describe("shell completion health mapping", () => {
     await fs.chmod(profilePath, 0o444);
 
     const prompter = {
-      shouldRepair: true,
       confirm: vi.fn(async () => true),
       confirmAutoFix: vi.fn(async () => true),
       confirmAggressiveAutoFix: vi.fn(async () => true),
       confirmRuntimeRepair: vi.fn(async () => true),
-      resolveServiceRepairMode: vi.fn(() => ({ shouldRepair: true })),
+      select: vi.fn(async (_params, fallback) => fallback),
+      shouldRepair: true,
+      shouldForce: false,
+      repairMode: {
+        shouldRepair: true,
+        shouldForce: false,
+        nonInteractive: false,
+        canPrompt: true,
+        updateInProgress: false,
+      },
     };
 
     await expect(doctorShellCompletion({} as never, prompter)).resolves.toBeUndefined();
