@@ -301,6 +301,7 @@ export async function runWatchMain(params = {}) {
     let shutdownKillTimer = null;
     let pendingRestartCheckTimer = null;
     let restartDeferred = false;
+    let knownEntryMtime = null;
 
     const signalWatchProcess = (child, signal) => {
       if (!child || typeof child.kill !== "function") {
@@ -332,10 +333,23 @@ export async function runWatchMain(params = {}) {
       }
     };
 
-    /** Checks whether the build output entrypoint is present before restarting. */
-    const isDistEntryReady = () => {
+    /** Checks whether the build output entrypoint is present and has fresh mtime. */
+    const isDistEntryFresh = () => {
+      const entryPath = path.join(deps.cwd, "dist", "entry.js");
       try {
-        return fs.statSync(path.join(deps.cwd, "dist", "entry.js")).isFile();
+        const stat = fs.statSync(entryPath);
+        if (!stat.isFile()) {
+          return false;
+        }
+        const currentMtime = stat.mtimeMs;
+        // First check: record mtime and accept. Subsequent checks: mtime must
+        // be newer than the recorded value, otherwise the build output is stale
+        // and restarting would crash-loop into a half-rebuilt dist/.
+        if (knownEntryMtime === null || currentMtime > knownEntryMtime) {
+          knownEntryMtime = currentMtime;
+          return true;
+        }
+        return false;
       } catch {
         return false;
       }
@@ -347,6 +361,7 @@ export async function runWatchMain(params = {}) {
         pendingRestartCheckTimer = null;
       }
       restartDeferred = false;
+      knownEntryMtime = null;
     };
 
     const settle = (code) => {
@@ -510,19 +525,23 @@ export async function runWatchMain(params = {}) {
         return;
       }
       if (!watchProcess) {
-        if (isDistEntryReady()) {
+        if (isDistEntryFresh()) {
           startRunner();
         }
         return;
       }
       // Guard: do not restart into a half-built dist/. If the entrypoint is
-      // missing (mid-rebuild), defer the restart and poll for it to appear.
-      // Without this check, killing the current healthy process and restarting
-      // into a missing entry causes a crash-loop.
-      if (!isDistEntryReady()) {
+      // missing (mid-rebuild) or stale (mtime unchanged since last restart
+      // request), defer the restart and poll for fresh build output. Without
+      // this check, killing the current healthy process and restarting into
+      // an absent entry causes a crash-loop.
+      if (!isDistEntryFresh()) {
         if (!restartDeferred) {
           restartDeferred = true;
-          logWatcher("dist/entry.js missing; deferring restart until build completes.", deps);
+          logWatcher(
+            "Build output missing or stale; deferring restart until fresh build completes.",
+            deps,
+          );
           pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
         }
         return;
@@ -541,7 +560,7 @@ export async function runWatchMain(params = {}) {
         return;
       }
       pendingRestartCheckTimer = null;
-      if (!isDistEntryReady()) {
+      if (!isDistEntryFresh()) {
         pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
         return;
       }

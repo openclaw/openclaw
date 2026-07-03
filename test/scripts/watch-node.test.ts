@@ -170,6 +170,9 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
 
     watcher.emit("change", "src/some-file.ts");
     expect(child.signals).toEqual(["SIGTERM"]);
+
+    // Clean up: shut down the watch loop
+    fakeProcess.emit("SIGTERM");
   });
 
   it("defers restart when dist/entry.js is missing", () => {
@@ -181,6 +184,9 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     watcher.emit("change", "src/some-file.ts");
     // Child should NOT have been killed — restart is deferred
     expect(child.signals).toEqual([]);
+
+    // Clean up: shut down the watch loop to clear the pending timer
+    fakeProcess.emit("SIGTERM");
   });
 
   it("defers again when entry.js still missing after poll", async () => {
