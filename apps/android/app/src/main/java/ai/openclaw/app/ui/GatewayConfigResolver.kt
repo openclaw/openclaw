@@ -338,12 +338,11 @@ internal fun composeGatewayManualUrl(
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
 }
 
-/** Strips IPv6 interface zones so parsed hosts match socket-ready literals. */
+/** Rejects IPv6 interface zones; OkHttp WebSocket URL strings cannot dial scoped hosts. */
 internal fun normalizeGatewayConnectionHost(rawHost: String): String {
-  var host = rawHost.trim().trim('[', ']')
-  val zoneIndex = host.indexOf('%')
-  if (zoneIndex >= 0) {
-    host = host.substring(0, zoneIndex)
+  val host = rawHost.trim().trim('[', ']')
+  if (host.contains('%')) {
+    return ""
   }
   return host
 }
