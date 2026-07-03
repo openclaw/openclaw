@@ -41,6 +41,7 @@ import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
+import { withModelsJsonFileAccessLock } from "./models-config-state.js";
 import {
   buildModelsJsonSourceFingerprint,
   prepareOpenClawModelsJsonSource,
@@ -384,30 +385,32 @@ async function loadReadOnlyPersistedProviderRows(
   agentDir: string,
   getPluginMetadataSnapshot: () => PluginModelCatalogMetadataSnapshot,
 ): Promise<Record<string, Record<string, unknown>>> {
-  const raw = await readFile(join(agentDir, "models.json"), "utf8");
-  const providers = { ...readProviderCatalogRows(JSON.parse(raw) as unknown) };
-  for (const catalogFile of listPluginModelCatalogFiles(agentDir)) {
-    const catalogRaw = await readFile(catalogFile.path, "utf8").catch(() => undefined);
-    if (!catalogRaw) {
-      continue;
+  return await withModelsJsonFileAccessLock(join(agentDir, "models.json"), async () => {
+    const raw = await readFile(join(agentDir, "models.json"), "utf8");
+    const providers = { ...readProviderCatalogRows(JSON.parse(raw) as unknown) };
+    for (const catalogFile of listPluginModelCatalogFiles(agentDir)) {
+      const catalogRaw = await readFile(catalogFile.path, "utf8").catch(() => undefined);
+      if (!catalogRaw) {
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(catalogRaw) as unknown;
+      } catch {
+        continue;
+      }
+      Object.assign(
+        providers,
+        filterGeneratedPluginModelCatalogProviders({
+          catalogPluginId: catalogFile.pluginId,
+          parsedCatalog: parsed,
+          pluginMetadataSnapshot: getPluginMetadataSnapshot(),
+          providers: readProviderCatalogRows(parsed),
+        }),
+      );
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(catalogRaw) as unknown;
-    } catch {
-      continue;
-    }
-    Object.assign(
-      providers,
-      filterGeneratedPluginModelCatalogProviders({
-        catalogPluginId: catalogFile.pluginId,
-        parsedCatalog: parsed,
-        pluginMetadataSnapshot: getPluginMetadataSnapshot(),
-        providers: readProviderCatalogRows(parsed),
-      }),
-    );
-  }
-  return providers;
+    return providers;
+  });
 }
 
 async function loadReadOnlyPersistedModelCatalog(params?: {

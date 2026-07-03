@@ -1,9 +1,13 @@
 // Covers model catalog loading, plugin manifests, normalization, and suppression.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
+import {
+  PLUGIN_MODEL_CATALOG_FILE,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+} from "./plugin-model-catalog.js";
 
 type AgentModelDiscoveryModule = typeof import("./agent-model-discovery.js");
 
@@ -15,6 +19,7 @@ let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCache: typeof import("./model-catalog.js").resetModelCatalogCache;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
+let withModelsJsonFileAccessLock: typeof import("./models-config-state.js").withModelsJsonFileAccessLock;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let prepareOpenClawModelsJsonSourceMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
@@ -341,6 +346,7 @@ describe("loadModelCatalog", () => {
       resetModelCatalogCache,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
+    ({ withModelsJsonFileAccessLock } = await import("./models-config-state.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
     augmentCatalogMock = vi.mocked(providerRuntime.augmentModelCatalogWithProviderPlugins);
   });
@@ -875,8 +881,8 @@ describe("loadModelCatalog", () => {
   });
 
   it("loads generated plugin catalog rows in read-only mode", async () => {
-    const catalogPath = "/tmp/openclaw/plugins/read-only-shard/catalog.json";
-    mkdirSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true });
+    const catalogPath = join("/tmp/openclaw/plugins/read-only-shard", PLUGIN_MODEL_CATALOG_FILE);
+    mkdirSync(dirname(catalogPath), { recursive: true });
     writeFileSync(catalogPath, "{}");
     try {
       readFileMock.mockImplementation(async (pathname: string) => {
@@ -943,6 +949,71 @@ describe("loadModelCatalog", () => {
         }),
       ).toBe(true);
     } finally {
+      rmSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true, force: true });
+    }
+  });
+
+  it("waits for model catalog sidecar writes before reading persisted plugin rows", async () => {
+    const catalogPath = join("/tmp/openclaw/plugins/read-only-shard", PLUGIN_MODEL_CATALOG_FILE);
+    mkdirSync(dirname(catalogPath), { recursive: true });
+    writeFileSync(catalogPath, "{}");
+    let releaseWrite: (() => void) | undefined;
+    const writerStarted = new Promise<void>((resolve) => {
+      void withModelsJsonFileAccessLock("/tmp/openclaw/models.json", async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseWrite = release;
+        });
+      });
+    });
+    try {
+      await writerStarted;
+      readFileMock.mockImplementation(async (pathname: string) => {
+        if (pathname.endsWith("models.json")) {
+          return JSON.stringify({ providers: {} });
+        }
+        if (pathname === catalogPath) {
+          return JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              zai: {
+                models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+              },
+            },
+          });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      loadPluginMetadataSnapshotMock.mockReturnValueOnce({
+        ...emptyPluginMetadataSnapshot(),
+        index: {
+          policyHash: "test-policy",
+          plugins: [{ pluginId: "read-only-shard", enabled: true }],
+        },
+        normalizePluginId: (id: string) => id,
+        owners: {
+          providers: new Map([["zai", ["read-only-shard"]]]),
+          modelCatalogProviders: new Map([["zai", ["read-only-shard"]]]),
+          setupProviders: new Map(),
+        },
+      });
+
+      const loadPromise = loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(readFileMock).not.toHaveBeenCalled();
+
+      releaseWrite?.();
+      const result = await loadPromise;
+
+      expect(requireCatalogEntry(result, "zai", "glm-5.1")).toMatchObject({
+        provider: "zai",
+        id: "glm-5.1",
+        name: "GLM 5.1",
+      });
+      expect(readFileMock).toHaveBeenCalledWith(join("/tmp/openclaw", "models.json"), "utf8");
+      expect(readFileMock).toHaveBeenCalledWith(catalogPath, "utf8");
+    } finally {
+      releaseWrite?.();
       rmSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true, force: true });
     }
   });
