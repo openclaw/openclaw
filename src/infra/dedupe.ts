@@ -1,7 +1,7 @@
 // Provides small process-local dedupe caches.
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pruneMapToMaxSize } from "./map-size.js";
-import { resolveNonNegativeIntegerOption } from "./numeric-options.js";
 
 /** Small in-memory TTL/LRU-style cache for replay and duplicate suppression. */
 export type DedupeCache = {
