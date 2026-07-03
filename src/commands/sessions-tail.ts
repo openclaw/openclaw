@@ -91,13 +91,14 @@ function parseTailCount(value: string | number | undefined): number | null {
     return DEFAULT_TAIL_COUNT;
   }
   if (typeof value === "number") {
-    return Number.isInteger(value) && value >= 0 ? value : null;
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) {
     return null;
   }
-  return Number.parseInt(trimmed, 10);
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function toOptionalString(value: unknown): string | undefined {
