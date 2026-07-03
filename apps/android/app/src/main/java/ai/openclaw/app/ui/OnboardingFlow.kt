@@ -1175,8 +1175,10 @@ private fun gatewayProblemNeedsCredentialUpdate(problem: GatewayConnectionProble
   when (problem?.code) {
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
+    "AUTH_TOKEN_NOT_CONFIGURED",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
     "AUTH_TOKEN_MISSING",
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
@@ -1185,6 +1187,12 @@ private fun gatewayProblemNeedsCredentialUpdate(problem: GatewayConnectionProble
       problem?.recommendedNextStep == "update_auth_credentials" ||
         problem?.recommendedNextStep == "update_auth_configuration"
   }
+
+private fun gatewayProblemNeedsAuthenticationRecovery(problem: GatewayConnectionProblem?): Boolean =
+  gatewayProblemNeedsCredentialUpdate(problem) ||
+    problem?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" ||
+    problem?.code == "AUTH_SCOPE_MISMATCH" ||
+    problem?.recommendedNextStep == "review_auth_configuration"
 
 internal data class NearbyGatewayUiState(
   val subtitle: String,
@@ -1238,8 +1246,8 @@ internal fun gatewayRecoveryUiState(
     gatewayConnectionProblem?.isPairingRequired == true &&
       !gatewayConnectionProblem.canAutoRetry -> GatewayRecoveryUiState.ApprovalRequired
     gatewayConnectionProblem?.isPairingRequired == true -> GatewayRecoveryUiState.Pairing
-    gatewayRecoveryPrimaryAction(ready = false, problem = gatewayConnectionProblem) !=
-      GatewayRecoveryPrimaryAction.RetryConnection -> GatewayRecoveryUiState.AuthenticationRequired
+    gatewayProblemNeedsAuthenticationRecovery(gatewayConnectionProblem) ->
+      GatewayRecoveryUiState.AuthenticationRequired
     gatewayConnectionProblem?.pauseReconnect == true -> GatewayRecoveryUiState.Failed
     nodeCapabilityApproval == GatewayNodeCapabilityApproval.Loading -> GatewayRecoveryUiState.Finishing
     connectSettling -> GatewayRecoveryUiState.Finishing
@@ -1331,6 +1339,10 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
     -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
+    "AUTH_TOKEN_NOT_CONFIGURED",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
+    -> "Gateway authentication is not configured. Edit this connection and try again."
+    "AUTH_SCOPE_MISMATCH" -> "Gateway access needs review. Check gateway authentication scopes, then retry."
     "AUTH_PASSWORD_MISSING" -> "Gateway password is required. Enter it again or edit this connection."
     "AUTH_PASSWORD_MISMATCH" -> "Gateway password is invalid. Re-enter it or reset this gateway connection."
     "AUTH_TOKEN_MISSING" -> "Gateway token is required. Enter it again or edit this connection."

@@ -1242,8 +1242,80 @@
       "id": "native.android.732f5b59ba7e1513"
     },
     {
+      "kind": "conditional-branch",
+      "line": 86,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Setup code expired",
+      "surface": "android",
+      "id": "native.android.b331b5b54e147e41"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 87,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Gateway token needed",
+      "surface": "android",
+      "id": "native.android.fd29725b5271ffcc"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 88,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Gateway token not configured",
+      "surface": "android",
+      "id": "native.android.a20706c18b04439c"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 89,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Gateway password needed",
+      "surface": "android",
+      "id": "native.android.ef63577677f434bd"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 90,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Gateway password invalid",
+      "surface": "android",
+      "id": "native.android.841612944fc3c917"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 91,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Gateway password not configured",
+      "surface": "android",
+      "id": "native.android.746689fea659f156"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 92,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Gateway access needs review",
+      "surface": "android",
+      "id": "native.android.3b34fd01c808e358"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 93,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Saved auth invalid",
+      "surface": "android",
+      "id": "native.android.baaf14ba36d7cc94"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 94,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
+      "source": "Device identity required",
+      "surface": "android",
+      "id": "native.android.ec80b07c46a3bb1f"
+    },
+    {
       "kind": "ui-toast",
-      "line": 146,
+      "line": 177,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayDiagnostics.kt",
       "source": "Copied gateway diagnostics",
       "surface": "android",
@@ -1827,7 +1899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1330,
+      "line": 1338,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "surface": "android",
@@ -1835,7 +1907,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1334,
+      "line": 1345,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "surface": "android",
+      "id": "native.android.e03bb4ea463ba7a5"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1346,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway password is required. Enter it again or edit this connection.",
       "surface": "android",
@@ -1843,7 +1923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1335,
+      "line": 1347,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway password is invalid. Re-enter it or reset this gateway connection.",
       "surface": "android",
@@ -1851,7 +1931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1336,
+      "line": 1348,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway token is required. Enter it again or edit this connection.",
       "surface": "android",
@@ -1859,7 +1939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1338,
+      "line": 1350,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
       "surface": "android",
@@ -1867,7 +1947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1342,
+      "line": 1354,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
       "surface": "android",
@@ -1875,7 +1955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1343,
+      "line": 1355,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway authentication is not configured. Edit this connection and try again.",
       "surface": "android",
@@ -1883,7 +1963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1344,
+      "line": 1356,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway authentication needs review. Check gateway settings, then retry.",
       "surface": "android",
@@ -1891,7 +1971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1361,
+      "line": 1373,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "$summary $it",
       "surface": "android",
@@ -1899,7 +1979,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 1408,
+      "line": 1420,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Approval command copied",
       "surface": "android",
@@ -1907,7 +1987,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 1435,
+      "line": 1447,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Diagnostic copied",
       "surface": "android",

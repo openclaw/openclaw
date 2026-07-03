@@ -1336,34 +1336,50 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   role: String?,
   scopes: List<String>,
   pendingDeviceTokenRetry: Boolean,
-): Boolean =
-  when (error.details?.code) {
+): Boolean {
+  val details = error.details
+  val code = details?.code
+  if (code == "PAIRING_REQUIRED") {
+    val pairingDetails = details
+    return !(
+      hasBootstrapToken &&
+        role?.trim() == "node" &&
+        scopes.isEmpty() &&
+        pairingDetails.reason == "not-paired" &&
+        (
+          pairingDetails.pauseReconnect == false ||
+            pairingDetails.recommendedNextStep == "wait_then_retry"
+        )
+    )
+  }
+  when (details?.recommendedNextStep) {
+    "wait_then_retry" -> return false
+    "retry_with_device_token" -> return !pendingDeviceTokenRetry
+    "update_auth_configuration",
+    "update_auth_credentials",
+    "review_auth_configuration",
+    -> return true
+  }
+  return when (code) {
     "AUTH_TOKEN_MISSING",
+    "AUTH_TOKEN_NOT_CONFIGURED",
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_BOOTSTRAP_TOKEN_INVALID",
     "AUTH_PASSWORD_MISSING",
     "AUTH_PASSWORD_MISMATCH",
+    "AUTH_PASSWORD_NOT_CONFIGURED",
+    "AUTH_SCOPE_MISMATCH",
     "AUTH_RATE_LIMITED",
     "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
     "DEVICE_IDENTITY_REQUIRED",
     -> true
-    "PAIRING_REQUIRED" ->
-      !(
-        hasBootstrapToken &&
-          role?.trim() == "node" &&
-          scopes.isEmpty() &&
-          error.details.reason == "not-paired" &&
-          (
-            error.details.pauseReconnect == false ||
-              error.details.recommendedNextStep == "wait_then_retry"
-          )
-      )
     // The first shared-token mismatch may schedule one trusted stored-device-token retry.
     // Once no retry is pending, keep the terminal recovery action visible until credentials change.
     "AUTH_TOKEN_MISMATCH" -> !pendingDeviceTokenRetry
     "PROTOCOL_MISMATCH" -> true
     else -> false
   }
+}
 
 /** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
 internal fun buildGatewayWebSocketUrl(

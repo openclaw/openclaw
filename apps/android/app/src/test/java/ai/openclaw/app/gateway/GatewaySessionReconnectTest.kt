@@ -372,6 +372,9 @@ class GatewaySessionReconnectTest {
         Triple("AUTH_TOKEN_MISMATCH", false, true),
         Triple("AUTH_TOKEN_MISMATCH", true, false),
         Triple("AUTH_DEVICE_TOKEN_MISMATCH", false, true),
+        Triple("AUTH_TOKEN_NOT_CONFIGURED", false, true),
+        Triple("AUTH_PASSWORD_NOT_CONFIGURED", false, true),
+        Triple("AUTH_SCOPE_MISMATCH", false, true),
       )
 
     for ((code, pendingDeviceTokenRetry, expected) in cases) {
@@ -396,6 +399,43 @@ class GatewaySessionReconnectTest {
         )
 
       assertEquals("$code pending=$pendingDeviceTokenRetry", expected, actual)
+    }
+  }
+
+  @Test
+  fun structuredRecoveryAdviceControlsReconnectPause() {
+    val cases =
+      listOf(
+        Triple("wait_then_retry", false, false),
+        Triple("retry_with_device_token", true, false),
+        Triple("retry_with_device_token", false, true),
+        Triple("update_auth_configuration", false, true),
+        Triple("update_auth_credentials", false, true),
+        Triple("review_auth_configuration", false, true),
+      )
+
+    for ((nextStep, pendingDeviceTokenRetry, expected) in cases) {
+      val error =
+        GatewaySession.ErrorShape(
+          code = "INVALID_REQUEST",
+          message = "authentication failed",
+          details =
+            GatewayConnectErrorDetails(
+              code = "AUTH_UNAUTHORIZED",
+              canRetryWithDeviceToken = nextStep == "retry_with_device_token",
+              recommendedNextStep = nextStep,
+            ),
+        )
+      val actual =
+        shouldPauseGatewayReconnectAfterAuthFailure(
+          error = error,
+          hasBootstrapToken = false,
+          role = "operator",
+          scopes = listOf("operator.read"),
+          pendingDeviceTokenRetry = pendingDeviceTokenRetry,
+        )
+
+      assertEquals("$nextStep pending=$pendingDeviceTokenRetry", expected, actual)
     }
   }
 

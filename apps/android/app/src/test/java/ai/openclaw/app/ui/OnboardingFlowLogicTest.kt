@@ -348,6 +348,8 @@ class OnboardingFlowLogicTest {
       listOf(
         "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired. Scan a fresh setup QR.",
         "AUTH_DEVICE_TOKEN_MISMATCH" to "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
+        "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway authentication is not configured. Edit this connection and try again.",
+        "AUTH_SCOPE_MISMATCH" to "Gateway access needs review. Check gateway authentication scopes, then retry.",
         "AUTH_PASSWORD_MISMATCH" to "Gateway password is invalid. Re-enter it or reset this gateway connection.",
         "AUTH_TOKEN_MISSING" to "Gateway token is required. Enter it again or edit this connection.",
         "DEVICE_IDENTITY_REQUIRED" to "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
@@ -377,6 +379,8 @@ class OnboardingFlowLogicTest {
       listOf(
         "AUTH_BOOTSTRAP_TOKEN_INVALID" to "scan_fresh_setup_code",
         "AUTH_DEVICE_TOKEN_MISMATCH" to "update_auth_credentials",
+        "AUTH_TOKEN_NOT_CONFIGURED" to "update_auth_configuration",
+        "AUTH_SCOPE_MISMATCH" to "review_auth_configuration",
       )
 
     for ((code, nextStep) in cases) {
@@ -407,6 +411,20 @@ class OnboardingFlowLogicTest {
       gatewayRecoveryPrimaryAction(
         ready = false,
         problem = authProblem(code = "AUTH_DEVICE_TOKEN_MISMATCH", recommendedNextStep = "update_auth_credentials"),
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryPrimaryAction.EditConnection,
+      gatewayRecoveryPrimaryAction(
+        ready = false,
+        problem = authProblem(code = "AUTH_TOKEN_NOT_CONFIGURED"),
+      ),
+    )
+    assertEquals(
+      GatewayRecoveryPrimaryAction.RetryConnection,
+      gatewayRecoveryPrimaryAction(
+        ready = false,
+        problem = authProblem(code = "AUTH_SCOPE_MISMATCH", recommendedNextStep = "review_auth_configuration"),
       ),
     )
     assertEquals(
