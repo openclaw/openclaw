@@ -138,6 +138,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
       supportedActions: ["delete", "edit", "react", "thread-create"],
       supportsNativeCommands: true,
+      supportsOutboundSequences: true,
       state,
     });
   }

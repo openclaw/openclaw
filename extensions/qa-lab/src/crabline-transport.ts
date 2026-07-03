@@ -351,6 +351,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
       supportsNativeCommands: params.selection.channel === "telegram",
+      supportsOutboundSequences: params.selection.channel === "telegram",
       state: params.state,
     });
     this.#adapter = params.adapter;
@@ -397,6 +398,13 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }
 
   override async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
+    if (this.#selection.channel !== "telegram") {
+      throw createQaTransportUnsupportedOperationError({
+        operation: "message.wait-for-outbound-sequence",
+        supportedOperations: this.supportedOperations,
+        transportId: this.id,
+      });
+    }
     return await waitForQaTransportOutboundSequence({
       input,
       readEvents: () => this.#state.getOutboundEvents(),

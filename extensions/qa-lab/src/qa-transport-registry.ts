@@ -105,7 +105,6 @@ const CRABLINE_BASELINE_OPERATIONS = [
   "message.send-inbound",
   "message.wait-for-none",
   "message.wait-for-outbound",
-  "message.wait-for-outbound-sequence",
   "state.read",
   "state.reset",
 ] as const satisfies readonly QaTransportOperation[];
@@ -132,7 +131,9 @@ function createCrablineCapabilityManifest(channelId: string) {
     ],
     operations: [
       ...CRABLINE_BASELINE_OPERATIONS,
-      ...(isTelegram ? (["message.send-native-command"] as const) : []),
+      ...(isTelegram
+        ? (["message.send-native-command", "message.wait-for-outbound-sequence"] as const)
+        : []),
     ],
   });
 }

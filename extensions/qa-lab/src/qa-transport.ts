@@ -261,6 +261,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     requiredPluginIds: readonly string[];
     supportedActions?: readonly QaTransportActionName[];
     supportsNativeCommands?: boolean;
+    supportsOutboundSequences?: boolean;
     state: QaTransportState;
   }) {
     this.id = params.id;
@@ -276,10 +277,12 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
         "message.send-inbound",
         "message.wait-for-none",
         "message.wait-for-outbound",
-        "message.wait-for-outbound-sequence",
         "state.read",
         "state.reset",
         ...(params.supportsNativeCommands ? (["message.send-native-command"] as const) : []),
+        ...(params.supportsOutboundSequences
+          ? (["message.wait-for-outbound-sequence"] as const)
+          : []),
         ...actionOperations,
       ] satisfies QaTransportOperation[]
     ).toSorted();
@@ -377,6 +380,13 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }
 
   async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
+    if (!this.supportedOperations.includes("message.wait-for-outbound-sequence")) {
+      throw createQaTransportUnsupportedOperationError({
+        operation: "message.wait-for-outbound-sequence",
+        supportedOperations: this.supportedOperations,
+        transportId: this.id,
+      });
+    }
     return await waitForQaTransportOutboundSequence({
       input,
       readEvents: () => this.state.getSnapshot().events,

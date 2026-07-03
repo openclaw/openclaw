@@ -248,6 +248,17 @@ describe("crabline transport", () => {
       try {
         expect(transport.id).toBe("crabline");
         expect(transport.requiredPluginIds).toEqual(["slack"]);
+        expect(transport.supportedOperations).not.toContain("message.wait-for-outbound-sequence");
+        await expect(
+          transport.waitForOutboundSequence({
+            finalTextIncludes: "final marker",
+          }),
+        ).rejects.toMatchObject({
+          normalized: {
+            code: "unsupported_operation",
+            operation: "message.wait-for-outbound-sequence",
+          },
+        });
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
             slack: {

@@ -51,6 +51,10 @@ describe("qa transport registry", () => {
       channelId: "telegram",
       driver: "crabline",
     });
+    const crablineSlack = await qaTransportAdapterFactoryRegistry.resolveCapabilityManifest({
+      channelId: "slack",
+      driver: "crabline",
+    });
 
     expect(qaChannel.schemaVersion).toBe(QA_TRANSPORT_CAPABILITY_MANIFEST_VERSION);
     expect(qaChannel.capabilities).toContain("messages.preview-lifecycle");
@@ -65,6 +69,8 @@ describe("qa transport registry", () => {
     });
     expect(crablineTelegram.capabilities).toContain("messages.preview-lifecycle");
     expect(crablineTelegram.operations).toContain("message.send-native-command");
+    expect(crablineTelegram.operations).toContain("message.wait-for-outbound-sequence");
+    expect(crablineSlack.operations).not.toContain("message.wait-for-outbound-sequence");
 
     const created = await qaTransportAdapterFactoryRegistry.create(
       createFactoryContext({ requestedCapabilities: ["messages.text"] }),
