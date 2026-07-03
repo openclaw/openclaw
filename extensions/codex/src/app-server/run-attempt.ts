@@ -2850,6 +2850,8 @@ export async function runCodexAppServerAttempt(
     resolveCompletion?.();
   });
   let abortListener: (() => void) | undefined;
+  let activeSteeringQueue: ReturnType<typeof createCodexSteeringQueue> | undefined;
+  let handle: Parameters<typeof setActiveEmbeddedRun>[1] | undefined;
   let turnAttemptCleanupFinished = false;
   const cleanupTurnAttempt = async () => {
     if (turnAttemptCleanupFinished) {
@@ -2920,53 +2922,55 @@ export async function runCodexAppServerAttempt(
       runAbortController.signal.removeEventListener("abort", abortListener);
     }
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    steeringQueueRef.current?.cancel();
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
-  };
-  emitLifecycleStart();
-  const activeProjector = projectorRef.current;
-  if (!activeProjector) {
-    throw new Error("codex app-server projector was not initialized");
-  }
-  turnWatches.armTerminalIdleWatch();
-  turnWatches.touchActivity("turn:start", { arm: true });
-  turnWatches.armAttemptIdleWatch();
-  turnWatches.touchActivity("turn:start", { attemptProgress: true });
-  for (const notification of pendingNotifications.splice(0)) {
-    await enqueueNotification(notification);
-  }
-  if (!completed && isTerminalTurnStatus(turn.turn.status)) {
-    await enqueueNotification({
-      method: "turn/completed",
-      params: {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        turn: turn.turn as unknown as JsonObject,
-      },
-    });
-  }
-
-  const activeSteeringQueue = createCodexSteeringQueue({
-    client,
-    threadId: thread.threadId,
-    turnId: activeTurnId,
-    answerPendingUserInput: (text) =>
-      userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
-    signal: runAbortController.signal,
-  });
-  steeringQueueRef.current = activeSteeringQueue;
-  const handle = {
-    kind: "embedded" as const,
-    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
-      activeSteeringQueue.queue(text, optionsLocal),
-    isStreaming: () => !completed && !runAbortController.signal.aborted,
-    isStopped: () => completed || timedOut || runAbortController.signal.aborted,
-    isCompacting: () => projectorRef.current?.isCompacting() ?? false,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    cancel: () => runAbortController.abort("cancelled"),
-    abort: () => runAbortController.abort("aborted"),
+    activeSteeringQueue?.cancel();
+    if (handle) {
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+    }
   };
   try {
+    emitLifecycleStart();
+    const activeProjector = projectorRef.current;
+    if (!activeProjector) {
+      throw new Error("codex app-server projector was not initialized");
+    }
+    turnWatches.armTerminalIdleWatch();
+    turnWatches.touchActivity("turn:start", { arm: true });
+    turnWatches.armAttemptIdleWatch();
+    turnWatches.touchActivity("turn:start", { attemptProgress: true });
+    for (const notification of pendingNotifications.splice(0)) {
+      await enqueueNotification(notification);
+    }
+    if (!completed && isTerminalTurnStatus(turn.turn.status)) {
+      await enqueueNotification({
+        method: "turn/completed",
+        params: {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          turn: turn.turn as unknown as JsonObject,
+        },
+      });
+    }
+
+    activeSteeringQueue = createCodexSteeringQueue({
+      client,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      answerPendingUserInput: (text) =>
+        userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+      signal: runAbortController.signal,
+    });
+    steeringQueueRef.current = activeSteeringQueue;
+    handle = {
+      kind: "embedded" as const,
+      queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
+        activeSteeringQueue.queue(text, optionsLocal),
+      isStreaming: () => !completed && !runAbortController.signal.aborted,
+      isStopped: () => completed || timedOut || runAbortController.signal.aborted,
+      isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      cancel: () => runAbortController.abort("cancelled"),
+      abort: () => runAbortController.abort("aborted"),
+    };
     setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
     void mirrorPromptAtTurnStartBestEffort({
