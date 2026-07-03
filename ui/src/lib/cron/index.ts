@@ -1,4 +1,4 @@
-import type { RouteHookOptions } from "@openclaw/uirouter";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -13,26 +13,89 @@ import type {
   CronRunsStatusValue,
   CronSortDir,
   CronStatus,
+  CronPayload,
 } from "../../api/types.ts";
-// Cron page data, mutations, and loader.
 import { t } from "../../i18n/index.ts";
-import { loadChannels, type ChannelsState } from "../../lib/channels/index.ts";
-import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
-import { toNumber } from "../../lib/format.ts";
+import { resolveCronJobLastRunStatus } from "../cron-status.ts";
+import { toNumber } from "../format.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
-import {
-  controlUiNowMs,
-  recordControlUiPerformanceEvent,
-  roundedControlUiDurationMs,
-} from "../../ui/control-ui-performance.ts";
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { getCronJobPayload, hasCronJobPayload } from "./payload.ts";
-import { CRON_CHANNEL_LAST } from "./types.ts";
-import type { CronFormState } from "./types.ts";
+} from "../gateway-errors.ts";
+import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+
+export const CRON_CHANNEL_LAST = "last";
+
+export type CronFormState = {
+  name: string;
+  description: string;
+  agentId: string;
+  sessionKey: string;
+  clearAgent: boolean;
+  enabled: boolean;
+  deleteAfterRun: boolean;
+  // on-exit jobs are read-only because the form cannot edit a watched command.
+  // Preserve their schedule verbatim on save instead of rebuilding it.
+  scheduleKind: "at" | "every" | "cron" | "on-exit";
+  scheduleAt: string;
+  everyAmount: string;
+  everyUnit: "minutes" | "hours" | "days";
+  cronExpr: string;
+  cronTz: string;
+  scheduleExact: boolean;
+  staggerAmount: string;
+  staggerUnit: "seconds" | "minutes";
+  sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
+  wakeMode: "next-heartbeat" | "now";
+  payloadKind: "systemEvent" | "agentTurn";
+  payloadLocked: boolean;
+  payloadText: string;
+  payloadModel: string;
+  payloadThinking: string;
+  payloadLightContext: boolean;
+  deliveryMode: "none" | "announce" | "webhook";
+  deliveryChannel: string;
+  deliveryTo: string;
+  deliveryAccountId: string;
+  deliveryBestEffort: boolean;
+  failureAlertMode: "inherit" | "disabled" | "custom";
+  failureAlertAfter: string;
+  failureAlertCooldownSeconds: string;
+  failureAlertChannel: string;
+  failureAlertTo: string;
+  failureAlertDeliveryMode: "announce" | "webhook";
+  failureAlertAccountId: string;
+  timeoutSeconds: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
+}
+
+export function isCronPayload(value: unknown): value is CronPayload {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.kind === "systemEvent") {
+    return typeof value.text === "string";
+  }
+  if (value.kind === "agentTurn") {
+    return typeof value.message === "string";
+  }
+  if (value.kind === "command") {
+    return Array.isArray(value.argv) && value.argv.every((arg) => typeof arg === "string");
+  }
+  return false;
+}
+
+export function getCronJobPayload(job: CronJob): CronPayload | null {
+  const payload = (job as { payload?: unknown }).payload;
+  return isCronPayload(payload) ? payload : null;
+}
+
+export function hasCronJobPayload(job: CronJob): boolean {
+  return getCronJobPayload(job) !== null;
+}
 
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
@@ -98,9 +161,6 @@ export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
-  cronQuickCreateOpen: boolean;
-  cronQuickCreateStep: import("./quick-create.ts").CronQuickCreateStep;
-  cronQuickCreateDraft: import("./quick-create.ts").CronQuickCreateDraft | null;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
@@ -143,43 +203,48 @@ export type CronModelSuggestionsState = {
   cronModelSuggestions: string[];
 };
 
-type CronPageState = CronState &
-  ChannelsState & {
-    controlUiCronRefreshSeq?: number;
-    requestUpdate?: () => void;
+export function createInitialCronState(
+  snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
+): CronState {
+  return {
+    client: snapshot.client ?? null,
+    connected: snapshot.connected ?? false,
+    cronLoading: false,
+    cronJobsLoadingMore: false,
+    cronJobsReloadPending: false,
+    cronJobsReloadPendingTableFilters: false,
+    cronJobs: [],
+    cronJobsTotal: 0,
+    cronJobsHasMore: false,
+    cronJobsNextOffset: null,
+    cronJobsLimit: 50,
+    cronJobsQuery: "",
+    cronJobsEnabledFilter: "all",
+    cronJobsScheduleKindFilter: "all",
+    cronJobsLastStatusFilter: "all",
+    cronJobsSortBy: "nextRunAtMs",
+    cronJobsSortDir: "asc",
+    cronStatus: null,
+    cronError: null,
+    cronForm: { ...DEFAULT_CRON_FORM },
+    cronFormCollapsed: true,
+    cronFieldErrors: {},
+    cronEditingJobId: null,
+    cronRunsJobId: null,
+    cronRunsLoadingMore: false,
+    cronRuns: [],
+    cronRunsTotal: 0,
+    cronRunsHasMore: false,
+    cronRunsNextOffset: null,
+    cronRunsLimit: 50,
+    cronRunsScope: "all",
+    cronRunsStatuses: [],
+    cronRunsDeliveryStatuses: [],
+    cronRunsStatusFilter: "all",
+    cronRunsQuery: "",
+    cronRunsSortDir: "desc",
+    cronBusy: false,
   };
-
-export async function loadCronPage(state: CronPageState, routeOptions?: RouteHookOptions) {
-  const activeCronJobId = state.cronRunsScope === "job" ? state.cronRunsJobId : null;
-  const cronSeq = (state.controlUiCronRefreshSeq ?? 0) + 1;
-  state.controlUiCronRefreshSeq = cronSeq;
-  const isCurrentCronRefresh = () =>
-    state.controlUiCronRefreshSeq === cronSeq && !routeOptions?.signal.aborted;
-  const useTableFilters = routeOptions ? !routeOptions.signal.aborted : true;
-  const runsStartedAtMs = controlUiNowMs();
-  const runsRefresh = loadCronRuns(state, activeCronJobId)
-    .catch(() => "error" as const)
-    .then((status) => {
-      if (!isCurrentCronRefresh()) {
-        return;
-      }
-      recordControlUiPerformanceEvent(
-        state,
-        "control-ui.cron.runs",
-        {
-          phase: "end",
-          status,
-          durationMs: roundedControlUiDurationMs(controlUiNowMs() - runsStartedAtMs),
-        },
-        { console: false },
-      );
-    });
-  void runsRefresh;
-  await Promise.all([
-    loadChannels(state, false),
-    loadCronStatus(state),
-    loadCronJobsPage(state, { tableFilters: useTableFilters }),
-  ]);
 }
 
 function supportsAnnounceDelivery(
@@ -317,6 +382,75 @@ export async function loadCronModelSuggestions(state: CronModelSuggestionsState)
   } catch {
     state.cronModelSuggestions = [];
   }
+}
+
+function addModelId(target: Set<string>, value: unknown) {
+  if (typeof value !== "string") {
+    return;
+  }
+  const trimmed = value.trim();
+  if (trimmed) {
+    target.add(trimmed);
+  }
+}
+
+function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
+  if (!modelConfig) {
+    return;
+  }
+  if (typeof modelConfig === "string") {
+    addModelId(target, modelConfig);
+    return;
+  }
+  if (typeof modelConfig !== "object") {
+    return;
+  }
+  const record = modelConfig as Record<string, unknown>;
+  addModelId(target, record.primary);
+  addModelId(target, record.model);
+  addModelId(target, record.id);
+  addModelId(target, record.value);
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+    : Array.isArray(record.fallback)
+      ? record.fallback
+      : [];
+  for (const fallback of fallbacks) {
+    addModelId(target, fallback);
+  }
+}
+
+export function resolveConfiguredCronModelSuggestions(
+  configForm: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!configForm || typeof configForm !== "object") {
+    return [];
+  }
+  const agents = configForm.agents;
+  if (!agents || typeof agents !== "object") {
+    return [];
+  }
+  const out = new Set<string>();
+  const defaults = (agents as { defaults?: unknown }).defaults;
+  if (defaults && typeof defaults === "object") {
+    const defaultsRecord = defaults as Record<string, unknown>;
+    addModelConfigIds(out, defaultsRecord.model);
+    const defaultsModels = defaultsRecord.models;
+    if (defaultsModels && typeof defaultsModels === "object") {
+      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
+        addModelId(out, modelId);
+      }
+    }
+  }
+  const list = (agents as { list?: unknown }).list;
+  if (list && typeof list === "object") {
+    for (const entry of Object.values(list as Record<string, unknown>)) {
+      if (entry && typeof entry === "object") {
+        addModelConfigIds(out, (entry as Record<string, unknown>).model);
+      }
+    }
+  }
+  return sortUniqueStrings([...out]);
 }
 
 async function withCronBusy(

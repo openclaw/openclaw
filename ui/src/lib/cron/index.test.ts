@@ -1,6 +1,6 @@
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "./data.ts";
+import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -15,16 +15,13 @@ import {
   updateCronJobsFilter,
   validateCronForm,
   type CronState,
-} from "./data.ts";
+} from "../../lib/cron/index.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {
     client: null,
     connected: true,
     cronLoading: false,
-    cronQuickCreateOpen: false,
-    cronQuickCreateStep: "what",
-    cronQuickCreateDraft: null,
     cronJobsLoadingMore: false,
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,

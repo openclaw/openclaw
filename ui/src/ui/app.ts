@@ -43,6 +43,13 @@ import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
+import {
+  DEFAULT_CRON_FORM,
+  loadCronJobsPage,
+  loadCronRuns,
+  loadCronStatus,
+  type CronFormState,
+} from "../lib/cron/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import type {
   ClawHubSearchResult,
@@ -98,9 +105,6 @@ import {
 } from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { ChatSideResult } from "../pages/chat/side-result.ts";
-import { loadCronPage } from "../pages/cron/data.ts";
-import { DEFAULT_CRON_FORM } from "../pages/cron/data.ts";
-import type { CronFormState } from "../pages/cron/types.ts";
 import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
@@ -524,9 +528,10 @@ export class OpenClawApp extends LitElement {
 
   @state() cronLoading = false;
   @state() cronQuickCreateOpen = false;
-  @state() cronQuickCreateStep: import("./views/cron-quick-create.ts").CronQuickCreateStep = "what";
+  @state() cronQuickCreateStep: import("../pages/cron/quick-create.ts").CronQuickCreateStep =
+    "what";
   @state() cronQuickCreateDraft:
-    | import("./views/cron-quick-create.ts").CronQuickCreateDraft
+    | import("../pages/cron/quick-create.ts").CronQuickCreateDraft
     | null = null;
   @state() cronJobsLoadingMore = false;
   cronJobsReloadPending = false;
@@ -538,9 +543,9 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsLimit = 50;
   @state() cronJobsQuery = "";
   @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
-  @state() cronJobsScheduleKindFilter: import("../pages/cron/data.js").CronJobsScheduleKindFilter =
+  @state() cronJobsScheduleKindFilter: import("../lib/cron/index.js").CronJobsScheduleKindFilter =
     "all";
-  @state() cronJobsLastStatusFilter: import("../pages/cron/data.js").CronJobsLastStatusFilter =
+  @state() cronJobsLastStatusFilter: import("../lib/cron/index.js").CronJobsLastStatusFilter =
     "all";
   @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
@@ -548,7 +553,7 @@ export class OpenClawApp extends LitElement {
   @state() cronError: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
   @state() cronFormCollapsed = true;
-  @state() cronFieldErrors: import("../pages/cron/data.js").CronFieldErrors = {};
+  @state() cronFieldErrors: import("../lib/cron/index.js").CronFieldErrors = {};
   @state() cronEditingJobId: string | null = null;
   @state() cronRunsJobId: string | null = null;
   @state() cronRunsLoadingMore = false;
@@ -1079,7 +1084,13 @@ export class OpenClawApp extends LitElement {
   }
 
   async loadCron() {
-    await loadCronPage(this as unknown as Parameters<typeof loadCronPage>[0]);
+    const state = this as unknown as Parameters<typeof loadCronStatus>[0];
+    const activeCronJobId = this.cronRunsScope === "job" ? this.cronRunsJobId : null;
+    void loadCronRuns(state, activeCronJobId);
+    await Promise.all([
+      loadCronStatus(state),
+      loadCronJobsPage(state, { tableFilters: this.visibleRouteId === "cron" }),
+    ]);
   }
 
   async handleAbortChat(opts?: Parameters<typeof handleAbortChatInternal>[1]) {

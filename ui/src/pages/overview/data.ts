@@ -4,6 +4,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { loadChannels } from "../../lib/channels/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { loadCronJobsPage, loadCronStatus } from "../../lib/cron/index.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatusState } from "../../lib/model-auth.ts";
 import { loadSkills } from "../../lib/skills/index.ts";
 import {
@@ -11,7 +12,6 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
-import { loadCronJobsPage, loadCronStatus } from "../cron/data.ts";
 import { loadDebug } from "../debug/data.ts";
 import { loadPresence } from "../instances/data.ts";
 import { loadUsage } from "../usage/data.ts";

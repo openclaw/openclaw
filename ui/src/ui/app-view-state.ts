@@ -28,6 +28,7 @@ import type { ResolvedTheme, ThemeMode, ThemeName } from "../app/theme.ts";
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../lib/chat/tool-display.ts";
+import type { CronModelSuggestionsState, CronState } from "../lib/cron/index.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -49,7 +50,6 @@ import type { RealtimeTalkStatus } from "../pages/chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { ChatSideResult } from "../pages/chat/side-result.ts";
-import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";
@@ -365,9 +365,6 @@ export type AppViewState = {
 } & Pick<
   CronState,
   | "cronLoading"
-  | "cronQuickCreateOpen"
-  | "cronQuickCreateStep"
-  | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
   | "cronJobsReloadPending"
   | "cronJobsReloadPendingTableFilters"
@@ -404,6 +401,9 @@ export type AppViewState = {
   | "cronBusy"
 > &
   Pick<CronModelSuggestionsState, "cronModelSuggestions"> & {
+    cronQuickCreateOpen: boolean;
+    cronQuickCreateStep: import("../pages/cron/quick-create.ts").CronQuickCreateStep;
+    cronQuickCreateDraft: import("../pages/cron/quick-create.ts").CronQuickCreateDraft | null;
     skillsLoading: boolean;
     skillsAgentId: string | null;
     skillsAgentRevision: number;
