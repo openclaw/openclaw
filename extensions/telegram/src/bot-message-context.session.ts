@@ -195,6 +195,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  groupRequireMention: boolean;
   mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
   stickerCacheHit?: boolean;
@@ -245,6 +246,7 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    groupRequireMention,
     mentionFacts,
     hasControlCommand,
     stickerCacheHit,
@@ -602,6 +604,7 @@ export async function buildTelegramInboundContextPayload(params: {
       AmbientTranscriptPreviousMessageId: ambientTranscriptWatermark?.messageId,
       AmbientTranscriptPreviousTimestampMs: ambientTranscriptWatermark?.timestampMs,
       GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+      GroupRequireMention: isGroup ? groupRequireMention : undefined,
       ReplyChain: visibleReplyChain.length > 0 ? visibleReplyChain : undefined,
       ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
       ReplyToQuoteText: visibleReplyTarget?.quoteText,

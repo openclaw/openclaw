@@ -206,6 +206,9 @@ describe("gateway e2e", () => {
               },
             },
           },
+          // The request below runs sessionKey "agent:dev:mock-openai"; the
+          // gateway rejects session keys whose agent id is not declared.
+          list: [{ id: "dev", default: true }],
         },
         models: {
           mode: "replace",

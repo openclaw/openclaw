@@ -680,6 +680,39 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("does not abort a finalizing completed run when restart drain expires", async () => {
+    const controller = new AbortController();
+    const chatAbortControllers = new Map([
+      [
+        "run-finalizing",
+        {
+          controller,
+          sessionId: "run-finalizing",
+          sessionKey: "session-finalizing",
+          projectSessionActive: false,
+          isAbortable: () => false,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(controller.signal.aborted).toBe(false);
+    expect(chatAbortControllers.has("run-finalizing")).toBe(true);
+  });
+
   it("marks active main sessions for restart recovery before aborting restart-drained runs", async () => {
     const events: string[] = [];
     const controller = new AbortController();

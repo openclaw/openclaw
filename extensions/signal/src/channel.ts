@@ -25,6 +25,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
+import { listSignalAliasDirectoryEntries, resolveSignalTarget } from "./aliases.js";
 import {
   shouldSuppressLocalSignalExecApprovalPrompt,
   signalApprovalCapability,
@@ -72,6 +73,20 @@ async function resolveSignalSendContext(params: {
   return { send, maxBytes };
 }
 
+function resolveSignalSendTarget(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  accountId?: string;
+  to: string;
+}) {
+  return (
+    resolveSignalTarget({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      input: params.to,
+    })?.to ?? params.to.trim()
+  );
+}
+
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
@@ -83,7 +98,8 @@ async function sendSignalOutbound(params: {
   deps?: { [channelId: string]: unknown };
 }) {
   const { send, maxBytes } = await resolveSignalSendContext(params);
-  return await send(params.to, params.text, {
+  const to = resolveSignalSendTarget(params);
+  return await send(to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
     ...(params.mediaLocalRoots?.length ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
@@ -177,8 +193,9 @@ function resolveSignalOutboundSessionRoute(params: {
   agentId: string;
   accountId?: string | null;
   target: string;
+  resolvedTarget?: { to: string };
 }) {
-  const resolved = resolveSignalOutboundTarget(params.target);
+  const resolved = resolveSignalOutboundTarget(params.resolvedTarget?.to ?? params.target);
   if (!resolved) {
     return null;
   }
@@ -211,6 +228,11 @@ async function sendFormattedSignalText(ctx: {
   const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
     fallbackLimit: 4000,
   });
+  const to = resolveSignalSendTarget({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    to: ctx.to,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "signal",
@@ -226,7 +248,7 @@ async function sendFormattedSignalText(ctx: {
   const results = [];
   for (const chunk of chunks) {
     ctx.abortSignal?.throwIfAborted();
-    const result = await send(ctx.to, chunk.text, {
+    const result = await send(to, chunk.text, {
       cfg: ctx.cfg,
       maxBytes,
       accountId: ctx.accountId ?? undefined,
@@ -255,6 +277,11 @@ async function sendFormattedSignalMedia(ctx: {
     accountId: ctx.accountId ?? undefined,
     deps: ctx.deps,
   });
+  const to = resolveSignalSendTarget({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    to: ctx.to,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg: ctx.cfg,
     channel: "signal",
@@ -266,7 +293,7 @@ async function sendFormattedSignalMedia(ctx: {
     text: ctx.text,
     styles: [],
   };
-  const result = await send(ctx.to, formatted.text, {
+  const result = await send(to, formatted.text, {
     cfg: ctx.cfg,
     mediaUrl: ctx.mediaUrl,
     mediaLocalRoots: ctx.mediaLocalRoots,
@@ -357,7 +384,42 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         targetResolver: {
           looksLikeId: looksLikeSignalTargetId,
           hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
+          resolveTarget: async ({ cfg, accountId, input }) => {
+            let target: ReturnType<typeof resolveSignalTarget>;
+            try {
+              target = resolveSignalTarget({ cfg, accountId, input });
+            } catch {
+              return null;
+            }
+            if (!target) {
+              return null;
+            }
+            return {
+              to: target.to,
+              kind: target.kind,
+              display: target.source === "alias" ? target.alias : undefined,
+              source: target.source === "alias" ? "directory" : "normalized",
+            };
+          },
         },
+      },
+      directory: {
+        listPeers: async ({ cfg, accountId, query, limit }) =>
+          listSignalAliasDirectoryEntries({
+            cfg,
+            accountId,
+            query,
+            limit,
+            kind: "user",
+          }),
+        listGroups: async ({ cfg, accountId, query, limit }) =>
+          listSignalAliasDirectoryEntries({
+            cfg,
+            accountId,
+            query,
+            limit,
+            kind: "group",
+          }),
       },
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId }) => {
@@ -445,6 +507,34 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     outbound: {
       base: {
         deliveryMode: "direct",
+        resolveTarget: ({ cfg, to, accountId }) => {
+          const raw = to?.trim();
+          if (!raw) {
+            return { ok: false, error: new Error("Signal target is required") };
+          }
+          let target: ReturnType<typeof resolveSignalTarget>;
+          try {
+            target = resolveSignalTarget({
+              cfg: cfg ?? {},
+              accountId,
+              input: raw,
+            });
+          } catch (error) {
+            return {
+              ok: false,
+              error: error instanceof Error ? error : new Error(String(error)),
+            };
+          }
+          if (!target) {
+            return {
+              ok: false,
+              error: new Error(
+                `Unknown Signal alias or target "${raw}". Configure channels.signal.aliases.${raw.replace(/^signal:/i, "")} or use E.164, uuid:<id>, username:<name>, or group:<id>.`,
+              ),
+            };
+          }
+          return { ok: true, to: target.to };
+        },
         chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
