@@ -3,7 +3,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { GatewayHotReloadStatus } from "./config-reload.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service

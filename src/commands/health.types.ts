@@ -70,7 +70,7 @@ type ModelPricingHealthSummary =
 
 /** Config hot-reload watcher status, present only when a reloader is running. */
 export type ConfigReloadHealthSummary = {
-  hotReloadStatus: import("../gateway/config-reload.js").GatewayHotReloadStatus;
+  hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
 };
 
 /** Full gateway health payload consumed by `openclaw health`. */

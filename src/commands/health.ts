@@ -31,7 +31,7 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../gateway/channel-health-policy.js";
-import type { GatewayHotReloadStatus } from "../gateway/config-reload.js";
+import type { GatewayHotReloadStatus } from "../gateway/config-reload-status.types.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";

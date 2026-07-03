@@ -6,7 +6,7 @@ import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
-import type { GatewayHotReloadStatus } from "../config-reload.js";
+import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
