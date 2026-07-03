@@ -7,6 +7,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   recordDurableSubagentRegistered,
+  recordDurableSubagentProgress,
   recordDurableSubagentTerminal,
 } from "../durable/subagent.js";
 import { callGateway } from "../gateway/call.js";
@@ -18,6 +19,7 @@ import {
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
@@ -36,6 +38,7 @@ import {
 import {
   resolveFinalizedSubagentTaskState,
   resolveKilledSubagentTaskEndedAt,
+  shouldUpdateRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -55,6 +58,8 @@ import type { SubagentSessionCompletion } from "./subagent-session-reconciliatio
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
+const PROGRESS_NOTICE_MIN_INTERVAL_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 120_000;
+const PROGRESS_NOTICE_AGENT_TIMEOUT_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 15_000;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
@@ -100,6 +105,66 @@ function resolveWaitTimeoutMsForRun(
     return normalizedWaitTimeoutMs;
   }
   return Math.max(1, Math.min(normalizedWaitTimeoutMs, deadlineMs - now));
+}
+
+function truncateProgressField(value: string | undefined, maxLength: number): string | undefined {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function formatElapsedMs(ms: number | undefined): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) {
+    return "unknown";
+  }
+  const seconds = Math.round(ms / 1_000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function shouldEmitProgressNotice(entry: SubagentRunRecord, now: number): boolean {
+  if (typeof entry.endedAt === "number") {
+    return false;
+  }
+  const lastNoticeBoundary = Math.max(
+    entry.progressNotice?.lastNoticedAt ?? 0,
+    entry.progressNotice?.lastAttemptedAt ?? 0,
+  );
+  return lastNoticeBoundary <= 0 || now - lastNoticeBoundary >= PROGRESS_NOTICE_MIN_INTERVAL_MS;
+}
+
+function buildSubagentProgressNoticeMessage(params: {
+  entry: SubagentRunRecord;
+  now: number;
+  waitTimeoutMs: number;
+  observedStartedAt?: number;
+}): string {
+  const startedAt = params.observedStartedAt ?? params.entry.startedAt ?? params.entry.createdAt;
+  const elapsedMs = params.now - startedAt;
+  const task = truncateProgressField(
+    params.entry.taskName ?? params.entry.label ?? params.entry.task,
+    240,
+  );
+  const taskLine = task ? `Task: ${task}` : "Task: (unlabeled delegated work)";
+  return [
+    "[OpenClaw runtime event] A delegated subagent is still running after a durable wait checkpoint.",
+    "Treat this as runtime state/evidence, not user-authored instructions.",
+    "",
+    taskLine,
+    `Child session: ${params.entry.childSessionKey}`,
+    `Child run: ${params.entry.runId}`,
+    `Status: running/waiting`,
+    `Observed elapsed: ${formatElapsedMs(elapsedMs)}`,
+    `Wait checkpoint: ${formatElapsedMs(params.waitTimeoutMs)}`,
+    "",
+    "Action: send a concise partial update instead of staying silent. Do not mark the original work done just because this checkpoint fired. Continue monitoring, wait, cancel, or escalate according to the user's request and your normal policy.",
+  ].join("\n");
 }
 
 export function markSubagentRunPausedAfterYield(params: {
@@ -277,6 +342,144 @@ export function createSubagentRunManager(params: {
     }
   };
 
+  const progressNoticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const emitSubagentProgressNotice = async (args: {
+    runId: string;
+    entry: SubagentRunRecord;
+    waitTimeoutMs: number;
+    observedStartedAt?: number;
+  }) => {
+    const now = Date.now();
+    const current = params.runs.get(args.runId);
+    if (!current || current !== args.entry || !shouldEmitProgressNotice(args.entry, now)) {
+      return;
+    }
+    const startedAt = args.observedStartedAt ?? args.entry.startedAt ?? args.entry.createdAt;
+    const elapsedMs = now - startedAt;
+    const progressBucket = Math.max(
+      0,
+      Math.floor(elapsedMs / Math.max(1, PROGRESS_NOTICE_MIN_INTERVAL_MS)),
+    );
+    const idempotencyKey = `subagent-progress:v1:${args.runId}:${progressBucket}`;
+    args.entry.progressNotice = {
+      ...args.entry.progressNotice,
+      lastAttemptedAt: now,
+      noticeCount: (args.entry.progressNotice?.noticeCount ?? 0) + 1,
+      lastIdempotencyKey: idempotencyKey,
+      lastReason: "wait_timeout",
+    };
+    params.persist();
+    recordDurableSubagentProgress({
+      runId: args.runId,
+      childSessionKey: args.entry.childSessionKey,
+      status: "running",
+      reason: "wait_timeout",
+      detail: "subagent still running after durable wait checkpoint",
+      elapsedMs,
+    });
+
+    const requesterOrigin = normalizeDeliveryContext(args.entry.requesterOrigin);
+    const message = buildSubagentProgressNoticeMessage({
+      entry: args.entry,
+      now,
+      waitTimeoutMs: args.waitTimeoutMs,
+      observedStartedAt: args.observedStartedAt,
+    });
+    try {
+      await params.callGateway({
+        method: "agent",
+        params: {
+          sessionKey: args.entry.requesterSessionKey,
+          message,
+          deliver: true,
+          bestEffortDeliver: true,
+          channel: requesterOrigin?.channel,
+          accountId: requesterOrigin?.accountId,
+          to: requesterOrigin?.to,
+          threadId: requesterOrigin?.threadId,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: args.entry.childSessionKey,
+            sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+            sourceTool: "subagent_progress",
+          },
+          idempotencyKey,
+        },
+        expectFinal: false,
+        timeoutMs: PROGRESS_NOTICE_AGENT_TIMEOUT_MS,
+      });
+      const latest = params.runs.get(args.runId);
+      if (latest === args.entry && latest.progressNotice?.lastIdempotencyKey === idempotencyKey) {
+        latest.progressNotice.lastNoticedAt = Date.now();
+        latest.progressNotice.lastError = undefined;
+        params.persist();
+      }
+    } catch (error) {
+      const latest = params.runs.get(args.runId);
+      if (latest === args.entry && latest.progressNotice?.lastIdempotencyKey === idempotencyKey) {
+        latest.progressNotice.lastError = error instanceof Error ? error.message : String(error);
+        params.persist();
+      }
+      log.warn("failed to emit subagent progress notice", {
+        runId: args.runId,
+        childSessionKey: args.entry.childSessionKey,
+        requesterSessionKey: args.entry.requesterSessionKey,
+        error,
+      });
+    }
+  };
+
+  const clearProgressNoticeTimer = (runId: string) => {
+    const timer = progressNoticeTimers.get(runId);
+    if (!timer) {
+      return;
+    }
+    clearTimeout(timer);
+    progressNoticeTimers.delete(runId);
+  };
+
+  const scheduleSubagentProgressMonitor = (
+    runId: string,
+    entry: SubagentRunRecord,
+    waitTimeoutMs: number,
+  ) => {
+    if (progressNoticeTimers.has(runId) || typeof entry.endedAt === "number") {
+      return;
+    }
+    const now = Date.now();
+    const startedAt = entry.startedAt ?? entry.createdAt ?? now;
+    const lastNoticeBoundary = Math.max(
+      entry.progressNotice?.lastNoticedAt ?? 0,
+      entry.progressNotice?.lastAttemptedAt ?? 0,
+    );
+    const eligibleAt =
+      lastNoticeBoundary > 0
+        ? lastNoticeBoundary + PROGRESS_NOTICE_MIN_INTERVAL_MS
+        : startedAt + PROGRESS_NOTICE_MIN_INTERVAL_MS;
+    const delayMs = Math.max(process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 1_000, eligibleAt - now);
+    const timer = setTimeout(() => {
+      progressNoticeTimers.delete(runId);
+      const current = params.runs.get(runId);
+      if (!current || current !== entry || typeof current.endedAt === "number") {
+        return;
+      }
+      void emitSubagentProgressNotice({
+        runId,
+        entry: current,
+        waitTimeoutMs,
+        observedStartedAt: current.startedAt ?? current.createdAt,
+      }).finally(() => {
+        const latest = params.runs.get(runId);
+        if (latest && latest === current && typeof latest.endedAt !== "number") {
+          scheduleSubagentProgressMonitor(runId, latest, waitTimeoutMs);
+        }
+      });
+    }, delayMs);
+    timer.unref?.();
+    progressNoticeTimers.set(runId, timer);
+  };
+
   const waitForSubagentCompletion = async (
     runId: string,
     waitTimeoutMs: number,
@@ -305,6 +508,7 @@ export function createSubagentRunManager(params: {
       if (!entryBeforeWait || (expectedEntry && entryBeforeWait !== expectedEntry)) {
         return;
       }
+      scheduleSubagentProgressMonitor(runId, entryBeforeWait, waitTimeoutMs);
       const waitStartedAt = Date.now();
       const timeoutMs = capWaitToStoredDeadline
         ? resolveWaitTimeoutMsForRun(entryBeforeWait, waitTimeoutMs, waitStartedAt)
@@ -327,6 +531,7 @@ export function createSubagentRunManager(params: {
         waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
+        clearProgressNoticeTimer(runId);
         params.clearPendingLifecycleError(runId);
         params.clearPendingLifecycleTimeout(runId);
         if (
@@ -352,6 +557,13 @@ export function createSubagentRunManager(params: {
               notBeforeMs: entry.startedAt ?? entry.createdAt,
             });
       const completeAsRunTimeout = async (endedAt?: number, startedAt?: number) => {
+        clearProgressNoticeTimer(runId);
+        if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+          entry.startedAt = startedAt;
+          if (typeof entry.sessionStartedAt !== "number") {
+            entry.sessionStartedAt = startedAt;
+          }
+        }
         const timeoutCompletion: Parameters<typeof params.completeSubagentRun>[0] = {
           runId,
           outcome: { status: "timeout" },
@@ -402,6 +614,7 @@ export function createSubagentRunManager(params: {
             await completeAsRunTimeout(completionAfterDeadline, completionStartedAt);
             return;
           }
+          clearProgressNoticeTimer(runId);
           completionForRetry = {
             runId,
             endedAt: completion.endedAt,
@@ -437,6 +650,12 @@ export function createSubagentRunManager(params: {
           }
           params.persist();
         }
+        void emitSubagentProgressNotice({
+          runId,
+          entry,
+          waitTimeoutMs: timeoutMs,
+          observedStartedAt,
+        });
         scheduleWaitRetry(
           entry,
           "subagent wait timed out; deferring terminal state until session reconciliation",
@@ -453,7 +672,23 @@ export function createSubagentRunManager(params: {
         await completeAsRunTimeout(completionAfterDeadline, observedStartedAt);
         return;
       }
-      const endedAt = typeof wait.endedAt === "number" ? wait.endedAt : Date.now();
+      clearProgressNoticeTimer(runId);
+      let mutated = false;
+      if (typeof observedStartedAt === "number") {
+        entry.startedAt = observedStartedAt;
+        if (typeof entry.sessionStartedAt !== "number") {
+          entry.sessionStartedAt = observedStartedAt;
+        }
+        mutated = true;
+      }
+      if (typeof wait.endedAt === "number") {
+        entry.endedAt = wait.endedAt;
+        mutated = true;
+      }
+      if (!entry.endedAt) {
+        entry.endedAt = Date.now();
+        mutated = true;
+      }
       const rawWaitError = typeof wait.error === "string" ? wait.error : undefined;
       const waitError = waitAborted
         ? "subagent run terminated"
@@ -461,12 +696,19 @@ export function createSubagentRunManager(params: {
       const baseOutcome: SubagentRunOutcome =
         waitStatus === "error" ? { status: "error", error: waitError } : { status: "ok" };
       const outcome = withSubagentOutcomeTiming(baseOutcome, {
-        startedAt: observedStartedAt ?? entry.startedAt,
-        endedAt,
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt,
       });
+      if (shouldUpdateRunOutcome(entry.outcome, outcome)) {
+        entry.outcome = outcome;
+        mutated = true;
+      }
+      if (mutated) {
+        params.persist();
+      }
       completionForRetry = {
         runId,
-        endedAt,
+        endedAt: entry.endedAt,
         outcome,
         reason: waitAborted
           ? SUBAGENT_ENDED_REASON_KILLED

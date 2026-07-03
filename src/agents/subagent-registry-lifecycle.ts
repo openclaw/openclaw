@@ -635,7 +635,11 @@ export function createSubagentRegistryLifecycleController(params: {
     };
   };
 
-  const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+  const markPendingFinalDelivery = (args: {
+    entry: SubagentRunRecord;
+    error?: string;
+    countAttempt?: boolean;
+  }) => {
     const now = Date.now();
     const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
 
@@ -643,7 +647,9 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.status = "pending";
     delivery.createdAt ??= now;
     delivery.lastAttemptAt = now;
-    delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+    if (args.countAttempt !== false) {
+      delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
+    }
     delivery.lastError = args.error ?? null;
     delivery.payload = payload;
   };
@@ -1139,7 +1145,10 @@ export function createSubagentRegistryLifecycleController(params: {
 
     markPendingFinalDelivery({
       entry,
-      error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
+      error: didAnnounce
+        ? undefined
+        : (getDeliveryLastError(entry) ?? "announce deferred or direct delivery failed"),
+      countAttempt: deferredDecision.countAttempt,
     });
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);

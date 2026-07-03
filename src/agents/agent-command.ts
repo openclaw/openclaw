@@ -274,7 +274,7 @@ function resolveAgentRunLifecycleEndLogLevel(meta: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  if (!outcome.stopReason || outcome.stopReason === "end_turn") {
+  if (!outcome.stopReason || outcome.stopReason === "end_turn" || outcome.stopReason === "stop") {
     return undefined;
   }
   if (outcome.reason === "completed") {

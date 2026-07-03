@@ -11,10 +11,16 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordDurableSubagentTerminal } from "../durable/subagent.js";
 import { defaultRuntime } from "../runtime.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
-import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  getDeliveryAttemptCount,
+  getDeliveryLastError,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -256,7 +262,21 @@ function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
   }
 }
 
-/** Marks an orphaned registry run finished, cleans attachments, and removes it. */
+function shouldKeepOrphanForCompletionDelivery(entry: SubagentRunRecord): boolean {
+  if (entry.expectsCompletionMessage === false) {
+    return false;
+  }
+  if (typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
+  return true;
+}
+
+function hasTerminalOutcome(entry: SubagentRunRecord): boolean {
+  return typeof entry.endedAt === "number" && entry.outcome !== undefined;
+}
+
+/** Marks an orphaned registry run finished while preserving required parent-visible delivery. */
 export function reconcileOrphanedRun(params: {
   runId: string;
   entry: SubagentRunRecord;
@@ -266,6 +286,22 @@ export function reconcileOrphanedRun(params: {
   resumedRuns: Set<string>;
 }) {
   const now = Date.now();
+  const keepForDelivery = shouldKeepOrphanForCompletionDelivery(params.entry);
+  if (keepForDelivery && hasTerminalOutcome(params.entry)) {
+    const delivery = ensureDeliveryState(params.entry);
+    if (
+      delivery.status !== "delivered" &&
+      delivery.status !== "failed" &&
+      delivery.status !== "discarded" &&
+      delivery.status !== "suspended"
+    ) {
+      delivery.status = "pending";
+    }
+    params.entry.cleanupHandled = false;
+    params.resumedRuns.delete(params.runId);
+    return true;
+  }
+
   let changed = false;
   if (typeof params.entry.endedAt !== "number") {
     params.entry.endedAt = now;
@@ -289,6 +325,38 @@ export function reconcileOrphanedRun(params: {
     params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
     changed = true;
   }
+  params.entry.execution = {
+    ...params.entry.execution,
+    status: "terminal",
+    startedAt: params.entry.startedAt,
+    endedAt: params.entry.endedAt,
+    outcome: params.entry.outcome,
+  };
+  changed = true;
+
+  recordDurableSubagentTerminal({
+    runId: params.runId,
+    childSessionKey: params.entry.childSessionKey,
+    status: "lost",
+    error: orphanOutcome.error,
+  });
+
+  if (keepForDelivery) {
+    const completion = ensureCompletionState(params.entry);
+    completion.required = params.entry.expectsCompletionMessage !== false;
+    const delivery = ensureDeliveryState(params.entry);
+    delivery.status = "pending";
+    delivery.createdAt ??= now;
+    delivery.lastError = orphanOutcome.error;
+    params.entry.cleanupHandled = false;
+    params.entry.cleanupCompletedAt = undefined;
+    params.resumedRuns.delete(params.runId);
+    defaultRuntime.log(
+      `[warn] Subagent orphan run terminalized source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason} delivery=pending`,
+    );
+    return true;
+  }
+
   if (params.entry.cleanupHandled !== true) {
     params.entry.cleanupHandled = true;
     changed = true;

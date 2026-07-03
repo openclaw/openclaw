@@ -25,6 +25,7 @@ OPENCLAW_DURABLE_RUNTIME=1 openclaw durable timeline <runtimeRunId>
 OPENCLAW_DURABLE_RUNTIME=1 openclaw durable steps <runtimeRunId>
 OPENCLAW_DURABLE_RUNTIME=1 openclaw durable children <runtimeRunId>
 OPENCLAW_DURABLE_RUNTIME=1 openclaw durable parents <runtimeRunId>
+OPENCLAW_DURABLE_RUNTIME=1 openclaw durable why <runtimeRunId>
 OPENCLAW_DURABLE_RUNTIME=1 openclaw durable signals <runtimeRunId>
 OPENCLAW_DURABLE_RUNTIME=1 openclaw durable refs <runtimeRunId>
 OPENCLAW_DURABLE_RUNTIME=1 openclaw durable timers <runtimeRunId>
@@ -40,6 +41,8 @@ OPENCLAW_DURABLE_RUNTIME=1 openclaw durable coordination <runtimeRunId>
 - `steps`: show durable runtime steps for one run.
 - `children`: show child runtime links for one run.
 - `parents`: show parent runtime links for one run.
+- `why`: explain a run's current durable state, waiting reason, child counts,
+  recovery diagnostic, safe next inspection commands, and available controls.
 - `signals`: show pending and consumed signals for one run.
 - `refs`: show state refs recorded for one run.
 - `timers`: show timers for one run.

@@ -24,6 +24,7 @@ type DeferredCleanupDecision =
       kind: "retry";
       retryCount: number;
       resumeDelayMs?: number;
+      countAttempt?: boolean;
     };
 
 /** Resolve the lifecycle ended reason used when cleaning up a subagent run. */
@@ -35,6 +36,17 @@ export function resolveCleanupCompletionReason(
 
 function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
   return typeof entry.endedAt === "number" ? now - entry.endedAt : 0;
+}
+
+export function isRestartDrainingDeliveryError(error?: string | null): boolean {
+  if (!error) {
+    return false;
+  }
+  return (
+    error.includes("GatewayDrainingError") ||
+    error.includes("Gateway is draining for restart") ||
+    error.includes("gateway_draining")
+  );
 }
 
 /** Decide whether deferred subagent cleanup should retry, defer, or give up. */
@@ -59,10 +71,22 @@ export function resolveDeferredCleanupDecision(params: {
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
   }
 
-  const retryCount = getDeliveryAttemptCount(params.entry) + 1;
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
+  const currentRetryCount = getDeliveryAttemptCount(params.entry);
+  const transientRestartDelivery = isRestartDrainingDeliveryError(params.entry.delivery?.lastError);
+  if (transientRestartDelivery && !expiryExceeded) {
+    const retryCountForDelay = Math.max(1, currentRetryCount);
+    return {
+      kind: "retry",
+      retryCount: currentRetryCount,
+      resumeDelayMs: params.resolveAnnounceRetryDelayMs(retryCountForDelay),
+      countAttempt: false,
+    };
+  }
+
+  const retryCount = currentRetryCount + 1;
   if (retryCount >= params.maxAnnounceRetryCount || expiryExceeded) {
     return {
       kind: "give-up",
