@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { resolveGitHead, BUILD_STAMP_FILE } from "./lib/local-build-metadata.mjs";
+import { resolveGitHead, BUILD_STAMP_FILE, writeBuildStamp } from "./lib/local-build-metadata.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
@@ -344,6 +344,7 @@ export async function runWatchMain(params = {}) {
     let shutdownKillTimer = null;
     let pendingRestartCheckTimer = null;
     let restartDeferred = false;
+    let rebuildChildProcess = null;
 
     const signalWatchProcess = (child, signal) => {
       if (!child || typeof child.kill !== "function") {
@@ -561,18 +562,21 @@ export async function runWatchMain(params = {}) {
         }
         return;
       }
-      // Guard: do not restart into a half-built dist/. If the entrypoint is
-      // missing (mid-rebuild) or the build stamp git HEAD doesn't match the
-      // current checkout (new git pull), defer the restart and poll for fresh
-      // build output. Without this check, killing the current healthy process
-      // and restarting into an absent/outdated entry causes a crash-loop.
+      // Build-then-restart guard: if the entrypoint is missing (mid-rebuild) or
+      // the build stamp git HEAD doesn't match the current checkout (new git
+      // pull), trigger a background rebuild while the current healthy gateway
+      // stays alive. When the build completes, the deferred restart fires.
+      // Without this check and the rebuild trigger, killing the current healthy
+      // process and restarting into an absent/outdated entry causes a crash-loop.
       if (!isBuildReadyForRestart(deps.cwd, fs)) {
         if (!restartDeferred) {
           restartDeferred = true;
           logWatcher(
-            "Build output missing or stale for current checkout; deferring restart until fresh build completes.",
+            "Build output missing or stale for current checkout; triggering background " +
+              "rebuild while current gateway stays alive.",
             deps,
           );
+          triggerBackgroundRebuild(deps);
           pendingRestartCheckTimer = setTimeout(checkPendingRestart, PENDING_RESTART_CHECK_MS);
         }
         return;
@@ -605,6 +609,81 @@ export async function runWatchMain(params = {}) {
       if (typeof watchProcess.kill === "function") {
         signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
       }
+    };
+
+    /**
+     * Spawns the TypeScript compiler (`scripts/tsdown-build.mjs --no-clean`) in
+     * a background child process while the current healthy gateway stays alive.
+     * When the build completes successfully, writes the build stamp so the
+     * deferred restart (`checkPendingRestart`) proceeds. On failure, resets the
+     * deferred flag so the next file-change event retries.
+     */
+    const triggerBackgroundRebuild = (deps) => {
+      if (rebuildChildProcess !== null) {
+        return; // already rebuilding
+      }
+
+      const compilerArgs = ["scripts/tsdown-build.mjs", "--no-clean"];
+      logWatcher("Starting background TypeScript rebuild (tsdown-build.mjs --no-clean).", deps);
+
+      rebuildChildProcess = deps.spawn(deps.process.execPath, compilerArgs, {
+        cwd: deps.cwd,
+        env: childEnv,
+        stdio: ["inherit", "pipe", "pipe"],
+      });
+
+      // Pipe compiler stdout/stderr to our stderr so the user sees progress.
+      if (rebuildChildProcess.stdout) {
+        rebuildChildProcess.stdout.on("data", (d) => process.stderr.write(d));
+      }
+      if (rebuildChildProcess.stderr) {
+        rebuildChildProcess.stderr.on("data", (d) => process.stderr.write(d));
+      }
+
+      rebuildChildProcess.on("error", (err) => {
+        logWatcher(`Failed to start background rebuild: ${err?.message ?? "unknown error"}`, deps);
+        rebuildChildProcess = null;
+        restartDeferred = false;
+      });
+
+      rebuildChildProcess.on("exit", (code) => {
+        rebuildChildProcess = null;
+        if (code !== 0) {
+          logWatcher(
+            `Background rebuild failed (exit ${code ?? "unknown"}); will retry on next change.`,
+            deps,
+          );
+          restartDeferred = false;
+          return;
+        }
+
+        // Write the build stamp so isBuildReadyForRestart passes.
+        try {
+          writeBuildStamp({ cwd: deps.cwd, fs });
+          logWatcher("Background rebuild complete; build stamp updated.", deps);
+        } catch (err) {
+          logWatcher(
+            `Background rebuild succeeded but failed to write build stamp: ${err?.message ?? "unknown error"}`,
+            deps,
+          );
+          restartDeferred = false;
+          return;
+        }
+
+        // If still deferred, trigger the pending restart now.
+        if (restartDeferred) {
+          restartDeferred = false;
+          logWatcher("Triggering deferred restart after background rebuild.", deps);
+          if (!watchProcess) {
+            startRunner();
+            return;
+          }
+          restartRequested = true;
+          if (typeof watchProcess.kill === "function") {
+            signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
+          }
+        }
+      });
     };
 
     const attachWatcher = (createWatcher) => {

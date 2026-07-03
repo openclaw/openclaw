@@ -207,6 +207,104 @@ describe("watch-node deferred restart on missing dist/entry.js", () => {
     expect(child.signals).toEqual([]); // still deferred, no restart
   });
 
+  it("triggers background rebuild spawn when entry.js is missing", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
+
+    const spawnArgs: Array<{ execPath: string; args: string[] }> = [];
+    child = new FakeChild();
+    fakeProcess = new FakeProcess();
+    watcher = new FakeWatcher();
+
+    void runWatchMain({
+      args: ["gateway"],
+      cwd: tmpDir,
+      createWatcher: () => watcher as never,
+      lockDisabled: true,
+      process: fakeProcess as unknown as NodeJS.Process,
+      spawn: (execPath: string, args: string[]) => {
+        spawnArgs.push({ execPath, args });
+        return child as never;
+      },
+    });
+
+    // Initial startRunner spawn
+    expect(spawnArgs).toHaveLength(1);
+    expect(spawnArgs[0].args).toContain("scripts/run-node.mjs");
+
+    // File change with missing entry.js — triggers rebuild spawn
+    watcher.emit("change", "src/some-file.ts");
+    expect(spawnArgs).toHaveLength(2);
+    expect(spawnArgs[1].args).toEqual(["scripts/tsdown-build.mjs", "--no-clean"]);
+
+    // Clean up
+    fakeProcess.emit("SIGTERM");
+  });
+
+  it("triggers deferred restart when background rebuild completes", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
+
+    child = new FakeChild();
+    fakeProcess = new FakeProcess();
+    watcher = new FakeWatcher();
+
+    void runWatchMain({
+      args: ["gateway"],
+      cwd: tmpDir,
+      createWatcher: () => watcher as never,
+      lockDisabled: true,
+      process: fakeProcess as unknown as NodeJS.Process,
+      spawn: () => child as never,
+    });
+
+    // File change with missing entry — triggers rebuild
+    watcher.emit("change", "src/some-file.ts");
+    expect(child.signals).toEqual([]); // deferred
+
+    // Simulate rebuild child exiting with success (code 0)
+    // The rebuild child is the same FakeChild; emit exit with code 0
+    child.emit("exit", 0, null);
+
+    // Deferred restart should fire: SIGTERM to the current watch process
+    expect(child.signals).toEqual(["SIGTERM"]);
+
+    // Clean up
+    fakeProcess.emit("SIGTERM");
+  });
+
+  it("does not trigger rebuild twice for same stale build", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
+
+    const spawnCalls: number[] = [];
+    child = new FakeChild();
+    fakeProcess = new FakeProcess();
+    watcher = new FakeWatcher();
+
+    void runWatchMain({
+      args: ["gateway"],
+      cwd: tmpDir,
+      createWatcher: () => watcher as never,
+      lockDisabled: true,
+      process: fakeProcess as unknown as NodeJS.Process,
+      spawn: () => {
+        spawnCalls.push(1);
+        return child as never;
+      },
+    });
+
+    expect(spawnCalls).toHaveLength(1); // initial startRunner
+
+    // Two file changes while entry.js missing
+    watcher.emit("change", "src/some-file.ts");
+    expect(spawnCalls).toHaveLength(2); // 1 rebuild + 1 initial
+
+    watcher.emit("change", "src/another-file.ts");
+    // Should NOT trigger another rebuild — already in progress
+    expect(spawnCalls).toHaveLength(2);
+
+    // Clean up
+    fakeProcess.emit("SIGTERM");
+  });
+
   it("triggers deferred restart when entry.js and build stamp appear", async () => {
     vi.useFakeTimers();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "watch-node-test-"));
