@@ -1636,3 +1636,37 @@ export function discoverOpenClawPlugins(params: {
   addMissingRequiredPluginDiagnostics(result);
   return result;
 }
+
+/**
+ * Discover plugins from explicit config paths (plugins.load.paths) only.
+ *
+ * Unlike {@link discoverOpenClawPlugins}, this does NOT scan bundled, global,
+ * workspace, or installed roots — only the paths the user configured directly.
+ * Use this when the caller already has a known set of index records and merely
+ * needs to discover any additional config-origin candidates that the index may
+ * not have captured, without leaking bundled/global discovery diagnostics into
+ * the resulting validation surface.
+ */
+export function discoverFromConfigPaths(params: {
+  loadPaths: string[];
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginDiscoveryResult {
+  const env = params.env ?? process.env;
+  const result = createDiscoveryResult();
+  const seen = new Set<string>();
+  const realpathCache = new Map<string, string>();
+  for (const loadPath of params.loadPaths) {
+    discoverFromPath({
+      rawPath: loadPath,
+      origin: "config",
+      workspaceDir: params.workspaceDir,
+      env,
+      candidates: result.candidates,
+      diagnostics: result.diagnostics,
+      seen,
+      realpathCache,
+    });
+  }
+  return result;
+}
