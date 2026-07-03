@@ -1,6 +1,16 @@
 // Signal plugin module implements event handler behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  createStatusReactionController,
+  DEFAULT_EMOJIS,
+  DEFAULT_TIMING,
+  logAckFailure,
+  logTypingFailure,
+  resolveAckReaction,
+  shouldAckReaction,
+  type StatusReactionController,
+  type StatusReactionEmojis,
+} from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
   buildChannelInboundEventContext,
@@ -10,6 +20,7 @@ import {
   matchesMentionPatterns,
   resolveInboundMentionDecision,
   resolveEnvelopeFormatOptions,
+  hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -54,6 +65,12 @@ import {
   type SignalSender,
 } from "../identity.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
+import { resolveSignalReactionLevel } from "../reaction-level.js";
+import {
+  removeReactionSignal,
+  sendReactionSignal,
+  type SignalReactionOpts,
+} from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
@@ -102,6 +119,82 @@ function resolveSignalInboundRoute(params: {
   });
 }
 
+function resolveSignalStatusReactionTimestamp(params: {
+  timestamp?: number;
+  messageId?: string;
+}): number | null {
+  if (typeof params.timestamp === "number") {
+    return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
+  }
+  const parsed = Number(params.messageId);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+type SignalStatusDispatchResult = Awaited<ReturnType<typeof dispatchInboundMessage>>;
+
+function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
+  const failedCounts = result.failedCounts;
+  return (
+    (failedCounts?.tool ?? 0) > 0 ||
+    (failedCounts?.block ?? 0) > 0 ||
+    (failedCounts?.final ?? 0) > 0
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function resolveSignalStatusReactionEmojis(
+  emojis: StatusReactionEmojis | undefined,
+): StatusReactionEmojis | undefined {
+  if (emojis?.stallHard !== undefined) {
+    return emojis;
+  }
+  return {
+    ...emojis,
+    // Signal exposes one reaction slot on the source message. A warning emoji
+    // reads as terminal failure even when the turn is merely long-running.
+    stallHard: DEFAULT_EMOJIS.stallSoft,
+  };
+}
+
+async function finalizeSignalStatusReaction(params: {
+  controller: StatusReactionController;
+  outcome: "done" | "error";
+  hasFinalResponse: boolean;
+  removeAckAfterReply: boolean;
+  timing: typeof DEFAULT_TIMING;
+}): Promise<void> {
+  if (params.outcome === "done") {
+    await params.controller.setDone();
+    if (params.removeAckAfterReply) {
+      await delay(params.timing.doneHoldMs);
+      await params.controller.clear();
+    } else {
+      await params.controller.restoreInitial();
+    }
+    return;
+  }
+
+  await params.controller.setError();
+  if (params.hasFinalResponse) {
+    if (params.removeAckAfterReply) {
+      await delay(params.timing.errorHoldMs);
+      await params.controller.clear();
+    } else {
+      await params.controller.restoreInitial();
+    }
+    return;
+  }
+  if (params.removeAckAfterReply) {
+    await delay(params.timing.errorHoldMs);
+  }
+  await params.controller.restoreInitial();
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   type SignalInboundEntry = {
     senderName: string;
@@ -120,6 +213,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaPaths?: string[];
     mediaTypes?: string[];
     commandAuthorized: boolean;
+    canDetectMention?: boolean;
+    requireMention?: boolean;
     wasMentioned?: boolean;
     replyToBody?: string;
     replyToSender?: string;
@@ -267,6 +362,96 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
+    const statusReactionTimestamp = resolveSignalStatusReactionTimestamp(entry);
+    const statusReactionsConfig = deps.cfg.messages?.statusReactions;
+    const signalReactionLevel = resolveSignalReactionLevel({
+      cfg: deps.cfg,
+      accountId: route.accountId,
+    });
+    const ackReaction = resolveAckReaction(deps.cfg, route.agentId, {
+      channel: "signal",
+      accountId: route.accountId,
+    });
+    const shouldSendStatusReaction = Boolean(
+      ackReaction &&
+      shouldAckReaction({
+        scope: deps.cfg.messages?.ackReactionScope,
+        isDirect: !entry.isGroup,
+        isGroup: entry.isGroup,
+        isMentionableGroup: entry.isGroup,
+        requireMention: entry.requireMention === true,
+        canDetectMention: entry.canDetectMention === true,
+        effectiveWasMentioned: entry.wasMentioned === true,
+      }),
+    );
+    const statusReactionTarget = `${entry.groupId ?? entry.senderRecipient}/${
+      statusReactionTimestamp ?? "unknown"
+    }`;
+    const signalReactionOpts: SignalReactionOpts = {
+      cfg: deps.cfg,
+      ...(deps.baseUrl ? { baseUrl: deps.baseUrl } : {}),
+      ...(deps.account ? { account: deps.account } : {}),
+      ...(deps.accountId ? { accountId: deps.accountId } : {}),
+      ...(entry.isGroup && entry.groupId
+        ? {
+            groupId: entry.groupId,
+            targetAuthor: entry.senderRecipient,
+          }
+        : {}),
+    };
+    const statusReactionRecipient = entry.isGroup ? "" : entry.senderRecipient;
+    let currentStatusReactionEmoji = ackReaction;
+    const statusReactionController =
+      statusReactionsConfig?.enabled === true &&
+      signalReactionLevel.level !== "off" &&
+      shouldSendStatusReaction &&
+      statusReactionTimestamp
+        ? createStatusReactionController({
+            enabled: true,
+            adapter: {
+              setReaction: async (emoji) => {
+                await sendReactionSignal(
+                  statusReactionRecipient,
+                  statusReactionTimestamp,
+                  emoji,
+                  signalReactionOpts,
+                );
+                currentStatusReactionEmoji = emoji;
+              },
+              clearReaction: async () => {
+                if (!currentStatusReactionEmoji) {
+                  return;
+                }
+                await removeReactionSignal(
+                  statusReactionRecipient,
+                  statusReactionTimestamp,
+                  currentStatusReactionEmoji,
+                  signalReactionOpts,
+                );
+                currentStatusReactionEmoji = "";
+              },
+            },
+            initialEmoji: ackReaction,
+            emojis: resolveSignalStatusReactionEmojis(statusReactionsConfig.emojis),
+            timing: statusReactionsConfig.timing,
+            onError: (err) => {
+              logAckFailure({
+                log: logVerbose,
+                channel: "signal",
+                target: statusReactionTarget,
+                error: err,
+              });
+            },
+          })
+        : null;
+    const statusReactionTiming = {
+      ...DEFAULT_TIMING,
+      ...statusReactionsConfig?.timing,
+    };
+    if (statusReactionController) {
+      void statusReactionController.setQueued();
+    }
+
     const { onModelSelected, typingCallbacks, ...replyPipeline } =
       createChannelMessageReplyPipeline({
         cfg: deps.cfg,
@@ -388,6 +573,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             }),
           runDispatch: async () => {
             try {
+              if (statusReactionController) {
+                void statusReactionController.setThinking();
+              }
               return await dispatchInboundMessage({
                 ctx: ctxPayload,
                 cfg: deps.cfg,
@@ -396,6 +584,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                   ...replyOptions,
                   disableBlockStreaming:
                     typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+                  ...(statusReactionController
+                    ? {
+                        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+                        allowToolLifecycleWhenProgressHidden: true,
+                        onToolStart: async (payload: { name?: string }) => {
+                          const toolName = payload.name?.trim();
+                          if (toolName) {
+                            await statusReactionController.setTool(toolName);
+                          }
+                        },
+                        onCompactionStart: async () => {
+                          await statusReactionController.setCompacting();
+                        },
+                        onCompactionEnd: async () => {
+                          statusReactionController.cancelPending();
+                          await statusReactionController.setThinking();
+                        },
+                      }
+                    : {}),
                   onModelSelected,
                 },
               });
@@ -404,6 +611,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             }
           },
         }),
+        onFinalize: (result) => {
+          if (!statusReactionController) {
+            return;
+          }
+          const hasFinalResponse =
+            result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
+          const hasDeliveryFailure =
+            result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
+          void finalizeSignalStatusReaction({
+            controller: statusReactionController,
+            outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
+            hasFinalResponse,
+            removeAckAfterReply: deps.cfg.messages?.removeAckAfterReply ?? false,
+            timing: statusReactionTiming,
+          }).catch((err: unknown) => {
+            logVerbose(`signal: status reaction finalize failed: ${String(err)}`);
+          });
+        },
       },
     });
   }
@@ -886,15 +1111,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const receiptTimestamp =
+    const inboundTimestamp =
       typeof envelope.timestamp === "number"
         ? envelope.timestamp
         : typeof dataMessage.timestamp === "number"
           ? dataMessage.timestamp
           : undefined;
-    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && receiptTimestamp) {
+    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
       try {
-        await sendReadReceiptSignal(`signal:${senderRecipient}`, receiptTimestamp, {
+        await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
           cfg: deps.cfg,
           baseUrl: deps.baseUrl,
           account: deps.account,
@@ -907,14 +1132,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.sendReadReceipts &&
       !deps.readReceiptsViaDaemon &&
       !isGroup &&
-      !receiptTimestamp
+      !inboundTimestamp
     ) {
       logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId =
-      typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -925,13 +1149,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       isGroup,
       bodyText,
       commandBody: messageText,
-      timestamp: envelope.timestamp ?? undefined,
+      timestamp: inboundTimestamp,
       messageId,
       mediaPath,
       mediaType,
       mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
+      canDetectMention,
+      requireMention,
       wasMentioned: effectiveWasMentioned,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,

@@ -817,6 +817,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (behavior)
   - H2: Media + limits
   - H2: Typing + read receipts
+  - H2: Lifecycle status reactions
   - H2: Reactions (message tool)
   - H2: Approval reactions
   - H2: Delivery targets (CLI/cron)
