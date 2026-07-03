@@ -526,7 +526,12 @@ async function drainChildContinuationQueue(params: {
       // needs to advance the child chain state durably across fires (#1158).
       loadFreshChainState: loadFreshChildChainState,
       persistChainState: async (advanced) => {
-        await persistAdvancedChildChainState(advanced);
+        const persisted = await persistAdvancedChildChainState(advanced);
+        if (!persisted) {
+          throw new Error(
+            `advanced continuation chain state was not durably persisted for ${params.childSessionKey}`,
+          );
+        }
       },
       // Descendants of a silent/wake parent chain must stay internal even though
       // this drain runs before the later parentWasSilent chain-hop guards (#1158).

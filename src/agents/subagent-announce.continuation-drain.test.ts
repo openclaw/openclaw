@@ -537,6 +537,14 @@ describe("subagent-announce continuation drain (F7)", () => {
       currentChainCount: 2,
       accumulatedChainTokens: 4_000,
     });
+    updateSessionStoreMock.mockRejectedValueOnce(new Error("session store write failed"));
+    await expect(
+      call?.persistChainState?.({
+        currentChainCount: 3,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 4_500,
+      }),
+    ).rejects.toThrow("not durably persisted");
   });
 
   it("preserves post-bracket chain override for hedge-fired delayed tool drains (#1159)", async () => {
