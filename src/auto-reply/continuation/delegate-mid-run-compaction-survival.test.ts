@@ -114,7 +114,12 @@ describe("mid-run delegate survival under parent compaction (Q2 extension)", () 
     const spawnTasks = mockState.spawnSubagentDirect.mock.calls.map(
       (call) => (call[0] as { task: string }).task,
     );
-    expect(spawnTasks).toEqual(["rehydrate-from-stage-A", "rehydrate-from-stage-B"]);
+    expect(spawnTasks).toEqual([
+      expect.stringContaining("rehydrate-from-stage-A"),
+      expect.stringContaining("rehydrate-from-stage-B"),
+    ]);
+    expect(spawnTasks[0]).toContain("[continuation:chain-hop:1]");
+    expect(spawnTasks[1]).toContain("[continuation:chain-hop:2]");
 
     // (3) Each dispatch carries the canonical post-compaction flag set.
     for (const call of mockState.spawnSubagentDirect.mock.calls) {

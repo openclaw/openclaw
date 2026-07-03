@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 // regression that routes the tool path through NEW `continuation/delegate-
 // store.ts` while runner consume stays legacy (or vice versa).
 import {
+  cancelPendingDelegates,
   stagePostCompactionDelegate as toolStage,
   stagedPostCompactionDelegateCount as toolCount,
   consumeStagedPostCompactionDelegates as runnerConsume,
@@ -18,12 +19,13 @@ import {
 } from "./continuation-delegate-store.js";
 import * as toolStoreImport from "./continuation-delegate-store.js";
 import * as runnerStoreImport from "./continuation-delegate-store.js";
+import { hasRecoverablePendingDelegate } from "./continuation/delegate-store.js";
 
 describe("post-compaction substrate :: tool-stage and runner-consume share store", () => {
   const sessionKey = "post-compaction-substrate-test";
 
   beforeEach(() => {
-    runnerConsume(sessionKey);
+    cancelPendingDelegates(sessionKey);
   });
 
   it("tool-stage and runner-consume reference the same module instance", () => {
@@ -75,5 +77,19 @@ describe("post-compaction substrate :: tool-stage and runner-consume share store
 
     const drained = runnerConsume(sessionKey);
     expect(drained.map((d) => d.task)).toEqual(["stranding A", "stranding B"]);
+  });
+
+  it("cleanup predicate sees queued and running post-compaction delegates", () => {
+    toolStage(sessionKey, {
+      task: "cleanup gate queued",
+      createdAt: Date.now(),
+      silent: true,
+      silentWake: true,
+    });
+    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(true);
+
+    const claimed = runnerConsume(sessionKey);
+    expect(claimed).toHaveLength(1);
+    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(true);
   });
 });

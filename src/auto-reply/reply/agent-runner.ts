@@ -2964,12 +2964,23 @@ export async function runReplyAgent(replyParams: {
                   });
                 }
                 const spawnTraceparent = dispatchSpan?.traceparent?.() ?? outboundTraceparent;
+                const dispatchChainId =
+                  activeSessionEntry?.continuationChainId ?? generateChainId();
                 const spawnResult = await spawnSubagentDirect(
                   {
                     task: `[continuation:chain-hop:${plannedHop}] Delegated task (turn ${plannedHop}/${maxChainLength}): ${task}`,
                     ...(options?.silent ? { silentAnnounce: true } : {}),
                     ...(options?.silentWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),
                     drainsContinuationDelegateQueue: true,
+                    continuationChainState: {
+                      count: plannedHop,
+                      startedAt: options?.startedAt ?? chainStartedAt,
+                      tokens: Math.max(
+                        accumulatedChainTokens,
+                        activeSessionEntry?.continuationChainTokens ?? 0,
+                      ),
+                      chainId: dispatchChainId,
+                    },
                     ...(options?.targetSessionKey
                       ? { continuationTargetSessionKey: options.targetSessionKey }
                       : {}),
@@ -3001,6 +3012,7 @@ export async function runReplyAgent(replyParams: {
                       accumulatedChainTokens,
                       activeSessionEntry?.continuationChainTokens ?? 0,
                     ),
+                    chainId: dispatchChainId,
                   });
                   if (dispatchSpan) {
                     if (persistedChainId !== undefined) {

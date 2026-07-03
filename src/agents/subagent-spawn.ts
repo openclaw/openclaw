@@ -168,7 +168,14 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
-export type SpawnSubagentParams = {
+type ContinuationChainSpawnState = {
+  count: number;
+  startedAt: number;
+  tokens: number;
+  chainId?: string;
+};
+
+type SpawnSubagentBaseParams = {
   task: string;
   label?: string;
   agentId?: string;
@@ -198,9 +205,6 @@ export type SpawnSubagentParams = {
    *  enrichment is enqueued. Enables autonomous cognition loops where the agent
    *  acts on shard returns without external nudge. */
   wakeOnReturn?: boolean;
-  /** When true, the spawned sub-agent's run drains the continuation delegate queue,
-   *  enabling the continue_delegate tool for chain-hop delegates. */
-  drainsContinuationDelegateQueue?: boolean;
   /** Continuation return targeting for cross-session delegate enrichment. */
   continuationTargetSessionKey?: string;
   continuationTargetSessionKeys?: string[];
@@ -208,14 +212,23 @@ export type SpawnSubagentParams = {
   traceparent?: string;
   /** Durable continuation delegate flow id; used to derive idempotent child session/run keys. */
   continuationDelegateFlowId?: string;
-  /** Initial continuation chain basis for a child that can drain continuation delegates. */
-  continuationChainState?: {
-    count: number;
-    startedAt: number;
-    tokens: number;
-    chainId?: string;
-  };
 };
+
+type SpawnSubagentContinuationDrainParams = {
+  /** When true, the spawned sub-agent's run drains the continuation delegate queue,
+   *  enabling the continue_delegate tool for chain-hop delegates. */
+  drainsContinuationDelegateQueue: true;
+  /** Initial continuation chain basis for a child that can drain continuation delegates. */
+  continuationChainState: ContinuationChainSpawnState;
+};
+
+type SpawnSubagentNonContinuationDrainParams = {
+  drainsContinuationDelegateQueue?: false;
+  continuationChainState?: never;
+};
+
+export type SpawnSubagentParams = SpawnSubagentBaseParams &
+  (SpawnSubagentContinuationDrainParams | SpawnSubagentNonContinuationDrainParams);
 
 export type SpawnSubagentContext = {
   agentSessionKey?: string;
@@ -1287,6 +1300,12 @@ export async function spawnSubagentDirect(
     return {
       status: "forbidden",
       error: targetPolicy.error,
+    };
+  }
+  if (params.drainsContinuationDelegateQueue && !params.continuationChainState) {
+    return {
+      status: "error",
+      error: "continuationChainState is required when drainsContinuationDelegateQueue is true",
     };
   }
   const childSessionKey = params.continuationDelegateFlowId

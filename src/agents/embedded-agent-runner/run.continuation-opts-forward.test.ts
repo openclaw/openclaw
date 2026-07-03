@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -8,6 +8,16 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
+
+const resetContinueDelegateTurnBudgetMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../auto-reply/continuation/delegate-turn-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../auto-reply/continuation/delegate-turn-admission.js")
+  >()),
+  resetContinueDelegateTurnBudget: (sessionKey: string) =>
+    resetContinueDelegateTurnBudgetMock(sessionKey),
+}));
 
 // Regression coverage: runEmbeddedAgent must forward continueWorkOpts
 // and requestCompactionOpts into the attempt-layer params so that
@@ -30,8 +40,27 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    resetContinueDelegateTurnBudgetMock.mockReset();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
+  });
+
+  it("resets continue_delegate admission at the common embedded-run boundary", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-1159-budget-reset",
+      config: {
+        agents: { defaults: { continuation: { enabled: true } } },
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledOnce();
+    expect(resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("test-key");
   });
 
   it("forwards continueWorkOpts to runEmbeddedAttempt", async () => {

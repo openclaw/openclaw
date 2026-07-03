@@ -96,12 +96,10 @@ export async function releasePostCompactionLifecycle(
   }
 
   // 3. Release staged post-compaction delegates with the canonical flag set.
-  //    consumeStagedPostCompactionDelegates now claims the rows to `running`;
-  //    finalize only these claimed rows after dispatch completes so a crash in
-  //    between leaves recoverable substrate, and other running rows are never
-  //    touched (#1144).
+  //    consumeStagedPostCompactionDelegates claims rows to `running`; finalize
+  //    only rows whose spawn was accepted so transient spawn failures stay
+  //    recoverable on the next restart (#1144/#1158).
   const stagedDelegates = consumeStagedPostCompactionDelegates(sessionKey);
-  const claimedFlowIds = stagedDelegates.map((delegate) => delegate.flowId);
   let delegatesDispatched = 0;
   if (stagedDelegates.length > 0) {
     const { dispatchStagedPostCompactionDelegates } = await import("./delegate-dispatch.js");
@@ -127,7 +125,7 @@ export async function releasePostCompactionLifecycle(
       },
     );
     delegatesDispatched = result.dispatched;
-    finalizeStagedPostCompactionDelegates(claimedFlowIds);
+    finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
   }
 
   return { pressureFired, delegatesDispatched };

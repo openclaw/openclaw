@@ -27,6 +27,7 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "../config/sessions.js";
+import { generateChainId } from "../infra/secure-random.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -261,6 +262,7 @@ type SessionStoreUpdateModule = {
     mutator: (
       store: Record<string, ContinuationChainSource & Record<string, unknown>>,
     ) => Promise<T> | T,
+    options?: { requireWriteSuccess?: boolean },
   ) => Promise<T>;
   resolveStorePath: (store: unknown, options: { agentId: string }) => string;
   resolveAgentIdFromSessionKey: (sessionKey: string) => string;
@@ -356,6 +358,7 @@ async function drainChildContinuationQueue(params: {
    */
   inheritedSilent?: boolean;
   inheritedWake?: boolean;
+  chainStateOverride?: ContinuationChainState;
 }): Promise<void> {
   let cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
   try {
@@ -411,9 +414,9 @@ async function drainChildContinuationQueue(params: {
     // persist-failure fallback: it re-applies the run cost in memory here so the
     // cost cap still enforces this turn even when the durable write did not land
     // (fails closed). Normal path passes 0, so the two are never combined (#1144).
-    const baseChainState = loadContinuationChainState(childEntry);
+    const baseChainState = params.chainStateOverride ?? loadContinuationChainState(childEntry);
     const chainState =
-      params.additionalChainTokens && params.additionalChainTokens > 0
+      !params.chainStateOverride && params.additionalChainTokens && params.additionalChainTokens > 0
         ? {
             ...baseChainState,
             accumulatedChainTokens:
@@ -1133,17 +1136,21 @@ export async function runSubagentAnnounceFlow(params: {
         });
         try {
           let parentTokensPersisted = false;
-          await updateSessionStore(parentStorePath, (store) => {
-            const parentEntry = store[targetRequesterSessionKey];
-            if (parentEntry) {
-              const prev =
-                typeof parentEntry.continuationChainTokens === "number"
-                  ? parentEntry.continuationChainTokens
-                  : 0;
-              parentEntry.continuationChainTokens = prev + accumulatedChildTokens;
-              parentTokensPersisted = true;
-            }
-          });
+          await updateSessionStore(
+            parentStorePath,
+            (store) => {
+              const parentEntry = store[targetRequesterSessionKey];
+              if (parentEntry) {
+                const prev =
+                  typeof parentEntry.continuationChainTokens === "number"
+                    ? parentEntry.continuationChainTokens
+                    : 0;
+                parentEntry.continuationChainTokens = prev + accumulatedChildTokens;
+                parentTokensPersisted = true;
+              }
+            },
+            { requireWriteSuccess: true },
+          );
           if (!parentTokensPersisted) {
             throw new Error(`requester entry not found: ${targetRequesterSessionKey}`);
           }
@@ -1175,17 +1182,21 @@ export async function runSubagentAnnounceFlow(params: {
         });
         try {
           let childTokensPersisted = false;
-          await updateSessionStore(childStorePath, (store) => {
-            const childStoreEntry = store[params.childSessionKey];
-            if (childStoreEntry) {
-              const prev =
-                typeof childStoreEntry.continuationChainTokens === "number"
-                  ? childStoreEntry.continuationChainTokens
-                  : 0;
-              childStoreEntry.continuationChainTokens = prev + accumulatedChildTokens;
-              childTokensPersisted = true;
-            }
-          });
+          await updateSessionStore(
+            childStorePath,
+            (store) => {
+              const childStoreEntry = store[params.childSessionKey];
+              if (childStoreEntry) {
+                const prev =
+                  typeof childStoreEntry.continuationChainTokens === "number"
+                    ? childStoreEntry.continuationChainTokens
+                    : 0;
+                childStoreEntry.continuationChainTokens = prev + accumulatedChildTokens;
+                childTokensPersisted = true;
+              }
+            },
+            { requireWriteSuccess: true },
+          );
           if (!childTokensPersisted) {
             throw new Error(`child entry not found: ${params.childSessionKey}`);
           }
@@ -1211,6 +1222,28 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    let fallbackChildContinuationChainId: string | undefined;
+    const buildChildContinuationSpawnState = (
+      count: number,
+    ): {
+      count: number;
+      startedAt: number;
+      tokens: number;
+      chainId: string;
+    } => {
+      const childChainEntry = readSessionEntryByKey(params.childSessionKey) as
+        | ContinuationChainSource
+        | undefined;
+      return {
+        count,
+        startedAt: childChainEntry?.continuationChainStartedAt ?? Date.now(),
+        tokens: (childChainEntry?.continuationChainTokens ?? 0) + childChainTokensToFold,
+        chainId:
+          childChainEntry?.continuationChainId ??
+          (fallbackChildContinuationChainId ??= generateChainId()),
+      };
+    };
+
     // F7: drain the child session's continue_delegate queue now that the
     // subagent has settled. Delegates enqueued by the subagent during its turn
     // would otherwise stay orphaned in TaskFlow until the next inbound message
@@ -1225,17 +1258,23 @@ export async function runSubagentAnnounceFlow(params: {
     // recovery would rebuild their basis from the stale child entry and
     // under-enforce the cap (#1144).
     // RFC: docs/design/continue-work-signal-v2.md §3.2, §3.4.
-    await drainChildContinuationQueue({
-      childSessionKey: params.childSessionKey,
-      requesterOrigin: targetRequesterOrigin,
-      additionalChainTokens: childChainTokensToFold,
-      dispatchRegardlessOfDelay: childChainTokensToFold > 0,
-      // Inherit the settled parent's silent/wake policy so a default-mode
-      // delegate the child queued stays internal instead of announcing when this
-      // early drain consumes it (before the parentWasSilent chain-hop guards run).
-      inheritedSilent: params.silentAnnounce === true,
-      inheritedWake: params.wakeOnReturn === true,
-    });
+    const deferInitialChildToolDrain =
+      continuationEnabled &&
+      isContinuationChainDelegate &&
+      stripContinuationSignal(findings).signal?.kind === "delegate";
+    if (!deferInitialChildToolDrain) {
+      await drainChildContinuationQueue({
+        childSessionKey: params.childSessionKey,
+        requesterOrigin: targetRequesterOrigin,
+        additionalChainTokens: childChainTokensToFold,
+        dispatchRegardlessOfDelay: childChainTokensToFold > 0,
+        // Inherit the settled parent's silent/wake policy so a default-mode
+        // delegate the child queued stays internal instead of announcing when this
+        // early drain consumes it (before the parentWasSilent chain-hop guards run).
+        inheritedSilent: params.silentAnnounce === true,
+        inheritedWake: params.wakeOnReturn === true,
+      });
+    }
 
     // --- Consume tool-dispatched delegates from the completing subagent ---
     const toolDelegates =
@@ -1411,6 +1450,7 @@ export async function runSubagentAnnounceFlow(params: {
                       ? { continuationFanoutMode: chainSignal.fanoutMode }
                       : {}),
                     drainsContinuationDelegateQueue: true,
+                    continuationChainState: buildChildContinuationSpawnState(nextChainHop),
                     ...(chainSignal.model ? { model: chainSignal.model } : {}),
                   },
                   {
@@ -1521,6 +1561,7 @@ export async function runSubagentAnnounceFlow(params: {
       }
 
       // --- Tool-dispatched delegates from subagent (parallel to bracket delegates above) ---
+      let postBracketChildDrainArmed = false;
       if (toolDelegates.length > 0 && isContinuationChainDelegate) {
         const {
           maxChainLength: toolMaxChainLength,
@@ -1618,6 +1659,7 @@ export async function runSubagentAnnounceFlow(params: {
                     ? { continuationFanoutMode: toolDelegate.fanoutMode }
                     : {}),
                   drainsContinuationDelegateQueue: true,
+                  continuationChainState: buildChildContinuationSpawnState(nextToolHop),
                   ...(toolDelegate.flowId
                     ? { continuationDelegateFlowId: toolDelegate.flowId }
                     : {}),
@@ -1683,6 +1725,49 @@ export async function runSubagentAnnounceFlow(params: {
           toolHopBase = nextToolHop;
           toolDelegateIdx += 1;
         }
+        if (deferInitialChildToolDrain) {
+          const chainState = buildChildContinuationSpawnState(toolHopBase);
+          postBracketChildDrainArmed = true;
+          void drainChildContinuationQueue({
+            childSessionKey: params.childSessionKey,
+            requesterOrigin: targetRequesterOrigin,
+            chainStateOverride: {
+              currentChainCount: chainState.count,
+              chainStartedAt: chainState.startedAt,
+              accumulatedChainTokens: chainState.tokens,
+              chainId: chainState.chainId,
+            },
+            inheritedSilent: params.silentAnnounce === true,
+            inheritedWake: params.wakeOnReturn === true,
+          }).catch((err: unknown) => {
+            defaultRuntime.log(
+              `[subagent-chain-hop] Failed to arm post-bracket child delegate drain for ${params.childSessionKey}: ${String(err)}`,
+            );
+          });
+        }
+      }
+      if (deferInitialChildToolDrain && !postBracketChildDrainArmed) {
+        const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
+        const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
+        const chainState = buildChildContinuationSpawnState(
+          childChainHop + (bracketDelegateConsumed ? 1 : 0),
+        );
+        void drainChildContinuationQueue({
+          childSessionKey: params.childSessionKey,
+          requesterOrigin: targetRequesterOrigin,
+          chainStateOverride: {
+            currentChainCount: chainState.count,
+            chainStartedAt: chainState.startedAt,
+            accumulatedChainTokens: chainState.tokens,
+            chainId: chainState.chainId,
+          },
+          inheritedSilent: params.silentAnnounce === true,
+          inheritedWake: params.wakeOnReturn === true,
+        }).catch((err: unknown) => {
+          defaultRuntime.log(
+            `[subagent-chain-hop] Failed to arm post-bracket child delegate drain for ${params.childSessionKey}: ${String(err)}`,
+          );
+        });
       }
     }
 

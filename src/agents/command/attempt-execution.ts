@@ -5,7 +5,6 @@ import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
-import { resetContinueDelegateTurnBudget } from "../../auto-reply/continuation/delegate-turn-admission.js";
 import {
   computeRequestCompactionContextUsage,
   releaseQueuedCompactionTolerant,
@@ -894,10 +893,6 @@ export async function runAgentAttempt(params: {
         },
       }
     : undefined;
-
-  if (continuationEnabled && params.sessionKey) {
-    resetContinueDelegateTurnBudget(params.sessionKey);
-  }
 
   const embeddedRunResult = await runWithDiagnosticTraceparent(params.opts.traceparent, () =>
     runEmbeddedAgent({

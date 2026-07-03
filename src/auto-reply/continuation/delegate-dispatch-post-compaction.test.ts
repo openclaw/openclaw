@@ -92,12 +92,12 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
     mockState.spawnSubagentDirect.mockResolvedValueOnce({ status: "accepted" });
 
     const result = await dispatchStagedPostCompactionDelegates(
-      [{ task: SPOOFED_DELEGATE_TASK }],
+      [{ task: SPOOFED_DELEGATE_TASK, flowId: "pc-flow-1" }],
       sessionKey,
       spawnCtx,
     );
 
-    expect(result).toMatchObject({ dispatched: 1, failed: 0, dispatchedFlowIds: [] });
+    expect(result).toMatchObject({ dispatched: 1, failed: 0, dispatchedFlowIds: ["pc-flow-1"] });
     expect(mockState.spawnSubagentDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         task: expect.stringContaining(SPOOFED_DELEGATE_TASK),
@@ -105,6 +105,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
         wakeOnReturn: true,
         drainsContinuationDelegateQueue: true,
         continuationChainState: expect.objectContaining({ count: 1, tokens: 0 }),
+        continuationDelegateFlowId: "pc-flow-1",
       }),
       spawnCtx,
     );

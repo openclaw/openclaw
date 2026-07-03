@@ -49,7 +49,6 @@ const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
-  resetContinueDelegateTurnBudgetMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
@@ -199,11 +198,6 @@ vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),
   resolveSessionTranscriptPath: vi.fn(),
   updateSessionStore: state.updateSessionStoreMock,
-}));
-
-vi.mock("../continuation/delegate-turn-admission.js", () => ({
-  resetContinueDelegateTurnBudget: (sessionKey: string) =>
-    state.resetContinueDelegateTurnBudgetMock(sessionKey),
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -1290,7 +1284,6 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedAgentMock.mockReset();
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
-    state.resetContinueDelegateTurnBudgetMock.mockReset();
     state.isCliProviderMock.mockReset();
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
@@ -1406,20 +1399,6 @@ describe("runAgentTurnWithFallback", () => {
     expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
     expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
     expect(onAgentRunStart).toHaveBeenCalledOnce();
-  });
-
-  it("resets continue_delegate admission once per embedded model turn, not per assistant stream item", async () => {
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAssistantMessageStart?.();
-      await params.onAssistantMessageStart?.();
-      return { payloads: [{ text: "ok" }], meta: {} };
-    });
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
-
-    expect(state.resetContinueDelegateTurnBudgetMock).toHaveBeenCalledTimes(1);
-    expect(state.resetContinueDelegateTurnBudgetMock).toHaveBeenCalledWith("main");
   });
 
   it("forwards CLI harness execution phases into typing signals", async () => {

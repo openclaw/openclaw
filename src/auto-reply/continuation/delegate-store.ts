@@ -198,6 +198,13 @@ function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
   return isPendingDelegateFlow(flow) && (flow.status === "queued" || flow.status === "running");
 }
 
+function isRecoverableContinuationDelegateFlow(flow: TaskFlowRecord): boolean {
+  return (
+    (isPendingDelegateFlow(flow) || isPostCompactionDelegateFlow(flow)) &&
+    (flow.status === "queued" || flow.status === "running")
+  );
+}
+
 function listRecoverablePendingFlows(
   sessionKey: string,
   options: { includeRunning?: boolean; includeRunningUpdatedAtOrBefore?: number } = {},
@@ -659,8 +666,9 @@ export function pendingDelegateCount(sessionKey: string): number {
 }
 
 /**
- * True while this session still owns an in-flight continuation delegate — queued
- * OR already claimed to `running` (mid-dispatch, or awaiting restart recovery).
+ * True while this session still owns an in-flight continuation delegate —
+ * regular or post-compaction, queued OR already claimed to `running`
+ * (mid-dispatch, or awaiting restart recovery).
  * subagent-session cleanup uses this to defer deleting a child session whose
  * chain/requester state a delayed bracket/tool delegate still depends on:
  * {@link pendingDelegateCount} counts only queued flows, so it drops to 0 the
@@ -669,7 +677,7 @@ export function pendingDelegateCount(sessionKey: string): number {
  * child out from under the running delegate (#1144).
  */
 export function hasRecoverablePendingDelegate(sessionKey: string): boolean {
-  return listTaskFlowsForOwnerKey(sessionKey).some(isRecoverablePendingFlow);
+  return listTaskFlowsForOwnerKey(sessionKey).some(isRecoverableContinuationDelegateFlow);
 }
 
 /**

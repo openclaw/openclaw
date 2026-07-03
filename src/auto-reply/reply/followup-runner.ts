@@ -46,7 +46,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { resetContinueDelegateTurnBudget } from "../continuation/delegate-turn-admission.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import {
   getReplyPayloadMetadata,
@@ -1197,12 +1196,6 @@ export function createFollowupRunner(params: {
               });
               pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
-              if (
-                runtimeConfig?.agents?.defaults?.continuation?.enabled === true &&
-                replySessionKey
-              ) {
-                resetContinueDelegateTurnBudget(replySessionKey);
-              }
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 lifecycleGeneration,

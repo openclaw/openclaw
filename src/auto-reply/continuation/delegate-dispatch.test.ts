@@ -1818,6 +1818,32 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
   });
 
+  it("leaves pending delegates recoverable when the session store cannot load", async () => {
+    const sessionKey = "agent:main:store-load-fail";
+    enqueuePendingDelegate(sessionKey, { task: "queued remains recoverable" });
+    enqueuePendingDelegate(sessionKey, { task: "running remains recoverable" });
+    const runningFlow = mockFlows.get("flow-2");
+    expect(runningFlow).toBeDefined();
+    runningFlow!.status = "running";
+    runningFlow!.revision = 1;
+    loadSessionStoreForRecoveryMock.mockImplementation(() => {
+      throw new Error("permission denied");
+    });
+
+    const result = await recoverPendingContinuationDelegates({});
+
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "queued" });
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "running" });
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("leaving queued/running delegates recoverable"),
+      }),
+    );
+  });
+
   it("persists the folded chain state when a recovered delayed delegate's hedge fires (#1158)", async () => {
     // The finding: recovery opts into applyDelegateChainTokensFold but, for a
     // still-unmatured delayed delegate, only ARMS a hedge. Without a
@@ -2049,6 +2075,29 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     const stillRecoverable = listRecoverableStagedPostCompactionDelegates();
     expect(stillRecoverable).toHaveLength(1);
     expect(stillRecoverable[0]?.delegate).toMatchObject({ task: "rehydrate that fails" });
+  });
+
+  it("leaves staged post-compaction rows recoverable when the session store cannot load", async () => {
+    const sessionKey = "agent:main:subagent:pc-store-load-fail";
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate after failed load");
+    loadSessionStoreForRecoveryMock.mockImplementation(() => {
+      throw new Error("store unreadable");
+    });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(1);
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("leaving staged delegates recoverable"),
+      }),
+    );
   });
 
   it("does not touch queued (awaiting-seam) rows — only crash-orphaned running rows", async () => {

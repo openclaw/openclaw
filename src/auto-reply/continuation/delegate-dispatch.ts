@@ -617,6 +617,7 @@ export async function recoverPendingContinuationDelegates(
   const runtimeConfigSnapshot = getRuntimeConfig();
   let dispatched = 0;
   let rejected = 0;
+  let recoveredSessions = 0;
   for (const sessionKey of sessionKeys) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId;
     const storePath =
@@ -627,12 +628,13 @@ export async function recoverPendingContinuationDelegates(
         sessionStore = loadSessionStore(storePath);
       } catch (err) {
         log.warn(
-          `[continuation:delegate-recovery-store-load-failed] path=${storePath} falling back to zero chain state: ${formatErrorMessage(err)}`,
+          `[continuation:delegate-recovery-store-load-failed] path=${storePath} leaving queued/running delegates recoverable: ${formatErrorMessage(err)}`,
         );
-        sessionStore = {};
+        continue;
       }
       storeByPath.set(storePath, sessionStore);
     }
+    recoveredSessions++;
     // Persist the advanced chain state to BOTH the durable store and the
     // in-memory copy this recovery loop reads. The in-memory mirror keeps
     // `loadFreshChainState` fresh so sequential hedge fires for multiple delayed
@@ -692,7 +694,7 @@ export async function recoverPendingContinuationDelegates(
       }
     }
   }
-  return { sessions: sessionKeys.length, dispatched, rejected };
+  return { sessions: recoveredSessions, dispatched, rejected };
 }
 
 // ---------------------------------------------------------------------------
@@ -859,6 +861,7 @@ export async function dispatchStagedPostCompactionDelegates(
             tokens: accumulatedChainTokens,
             chainId: dispatchChainId,
           },
+          ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
           ...(delegate.model ? { model: delegate.model } : {}),
           ...(delegate.targetSessionKey
             ? { continuationTargetSessionKey: delegate.targetSessionKey }
@@ -959,6 +962,7 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
   const storeByPath = new Map<string, Record<string, SessionEntry>>();
   let dispatched = 0;
   let failed = 0;
+  let recoveredSessions = 0;
   for (const [sessionKey, delegates] of delegatesBySession) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId;
     const storePath = resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
@@ -968,12 +972,13 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         sessionStore = loadSessionStore(storePath);
       } catch (err) {
         postCompactionLog.warn(
-          `[continuation:post-compaction-recovery-store-load-failed] path=${storePath} falling back to zero chain state: ${formatErrorMessage(err)}`,
+          `[continuation:post-compaction-recovery-store-load-failed] path=${storePath} leaving staged delegates recoverable: ${formatErrorMessage(err)}`,
         );
-        sessionStore = {};
+        continue;
       }
       storeByPath.set(storePath, sessionStore);
     }
+    recoveredSessions++;
     const entry = sessionStore[sessionKey];
     const chainState = loadContinuationChainState(entry);
     const deliveryContext = entry?.deliveryContext;
@@ -1019,5 +1024,5 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
       finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
     }
   }
-  return { sessions: delegatesBySession.size, dispatched, failed };
+  return { sessions: recoveredSessions, dispatched, failed };
 }

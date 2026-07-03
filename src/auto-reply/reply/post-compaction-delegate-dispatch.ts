@@ -362,7 +362,7 @@ async function persistPostCompactionDelegateChainState(params: {
   startedAt: number;
   storePath?: string;
   tokens: number;
-}): Promise<void> {
+}): Promise<{ chainId: string }> {
   // Mint or reuse `continuationChainId` (UUID) so the post-compaction
   // handoff carries the same correlation key that
   // `agent-runner.ts:persistContinuationChainState` would have used
@@ -436,6 +436,7 @@ async function persistPostCompactionDelegateChainState(params: {
       throw err;
     }
   }
+  return { chainId };
 }
 
 function resolvePostCompactionDeliveryContext(
@@ -540,6 +541,7 @@ export async function deliverQueuedPostCompactionDelegate(
   }
 
   const nextCompactionChainCount = currentCompactionChainCount + 1;
+  const compactionChainStartedAt = sessionEntry?.continuationChainStartedAt ?? deps.now();
   deps.log(
     `Post-compaction delegate dispatch for session ${params.entry.sessionKey}: ${params.entry.task}`,
   );
@@ -562,13 +564,13 @@ export async function deliverQueuedPostCompactionDelegate(
   // The previous spawn-then-persist order had the opposite, unsafe failure: an
   // accepted spawn whose persist then threw left the queue entry pending, so the
   // next drain re-spawned the SAME delegate (duplicated work). See cmt451.
-  await persistPostCompactionDelegateChainState({
+  const persistedChain = await persistPostCompactionDelegateChainState({
     count: nextCompactionChainCount,
     log: (message) => deps.log(message),
     sessionEntry,
     sessionKey: params.entry.sessionKey,
     sessionStore,
-    startedAt: sessionEntry?.continuationChainStartedAt ?? deps.now(),
+    startedAt: compactionChainStartedAt,
     storePath,
     tokens: compactionChainTokens,
   });
@@ -589,6 +591,13 @@ export async function deliverQueuedPostCompactionDelegate(
         : {}),
       ...(params.entry.fanoutMode ? { continuationFanoutMode: params.entry.fanoutMode } : {}),
       drainsContinuationDelegateQueue: true,
+      continuationDelegateFlowId: params.entry.id,
+      continuationChainState: {
+        count: nextCompactionChainCount,
+        startedAt: compactionChainStartedAt,
+        tokens: compactionChainTokens,
+        chainId: persistedChain.chainId,
+      },
       ...(params.entry.model ? { model: params.entry.model } : {}),
       ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
     },
