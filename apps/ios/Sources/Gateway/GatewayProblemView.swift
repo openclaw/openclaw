@@ -113,6 +113,7 @@ struct GatewayProblemDetailsSheet: View {
                             Text("Copy request ID")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                     } header: {
                         Text("Request")
                             .font(OpenClawType.captionSemiBold)
@@ -131,6 +132,7 @@ struct GatewayProblemDetailsSheet: View {
                             Text("Copy command")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                     } header: {
                         Text("Gateway command")
                             .font(OpenClawType.captionSemiBold)
@@ -143,6 +145,7 @@ struct GatewayProblemDetailsSheet: View {
                             Label("Open docs", systemImage: "book")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                         Text(verbatim: docsURL.absoluteString)
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
@@ -176,6 +179,10 @@ struct GatewayProblemDetailsSheet: View {
             .navigationTitle("Connection problem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Connection problem")
+                        .font(OpenClawType.headline)
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     if let primaryActionTitle, let onPrimaryAction {
                         Button {
@@ -185,6 +192,7 @@ struct GatewayProblemDetailsSheet: View {
                             Text(primaryActionTitle)
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -194,6 +202,7 @@ struct GatewayProblemDetailsSheet: View {
                         Text("Done")
                             .font(OpenClawType.subheadSemiBold)
                     }
+                    .font(OpenClawType.subheadSemiBold)
                 }
             }
         }

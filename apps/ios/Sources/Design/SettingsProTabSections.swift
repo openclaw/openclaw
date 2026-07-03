@@ -252,34 +252,19 @@ extension SettingsProTab {
                     OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
             }
+            ToolbarItem(placement: .principal) {
+                Text(title(for: route))
+                    .font(OpenClawType.headline)
+                    .foregroundStyle(.primary)
+            }
         }
     }
 
     var gatewayDestination: some View {
         VStack(alignment: .leading, spacing: 14) {
-            self.detailStatusCard(
-                icon: "antenna.radiowaves.left.and.right",
-                title: "Gateway",
-                detail: self.gatewayStatusDetail,
-                value: self.gatewayStatusValue,
-                color: self.gatewayStatusColor)
-
-            self.detailListCard {
-                self.detailRow("Address", value: self.gatewayAddress)
-                Divider()
-                self.detailRow("Server", value: self.gatewayServer)
-                Divider()
-                self.detailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
-                Divider()
-                self.detailRow("Default Agent", value: self.appModel.activeAgentName)
-                Divider()
-                self.detailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
-            }
-
-            ProCard(radius: SettingsLayout.cardRadius) {
-                self.gatewayActions
-            }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
+            self.gatewayStatusCard
+            self.gatewayDetailsCard
+            self.gatewayActionsCard
 
             self.manualGatewayCard
             self.deviceIdentityCard
@@ -288,6 +273,7 @@ extension SettingsProTab {
             self.discoveredGatewaysCard
             self.gatewayAdvancedCard
         }
+        .font(OpenClawType.body)
     }
 
     var approvalsDestination: some View {
@@ -657,14 +643,77 @@ extension SettingsProTab {
                     .lineLimit(1)
                     .minimumScaleFactor(0.76)
             }
+            .font(OpenClawType.captionSemiBold)
             .frame(maxWidth: .infinity)
             .frame(height: 32)
         }
+        .font(OpenClawType.captionSemiBold)
         .buttonStyle(.bordered)
         .buttonBorderShape(.roundedRectangle(radius: 8))
         .tint(color)
         .controlSize(.small)
         .disabled(isBusy || isDisabled)
+    }
+
+    var gatewayStatusCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            HStack(spacing: 12) {
+                ProIconBadge(systemName: "antenna.radiowaves.left.and.right", color: self.gatewayStatusColor)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Gateway")
+                        .font(OpenClawType.headline)
+                    Text(self.gatewayStatusDetail)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                ProValuePill(value: self.gatewayStatusValue, color: self.gatewayStatusColor)
+            }
+            .font(OpenClawType.body)
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    var gatewayDetailsCard: some View {
+        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+            VStack(spacing: 0) {
+                self.gatewayDetailRow("Address", value: self.gatewayAddress)
+                Divider()
+                self.gatewayDetailRow("Server", value: self.gatewayServer)
+                Divider()
+                self.gatewayDetailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
+                Divider()
+                self.gatewayDetailRow("Default Agent", value: self.appModel.activeAgentName)
+                Divider()
+                self.gatewayDetailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    var gatewayActionsCard: some View {
+        ProCard(radius: SettingsLayout.cardRadius) {
+            self.gatewayActions
+                .font(OpenClawType.captionSemiBold)
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    func gatewayDetailRow(_ label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(OpenClawType.captionMedium)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(OpenClawType.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .font(OpenClawType.caption)
+        .padding(.horizontal, 14)
+        .frame(height: 42)
     }
 
     func toggleCard(
@@ -804,7 +853,7 @@ extension SettingsProTab {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Default Agent")
                     .font(OpenClawType.subheadSemiBold)
-                Picker("Agent", selection: self.$selectedAgentPickerId) {
+                Picker(selection: self.$selectedAgentPickerId) {
                     Text("Default")
                         .font(OpenClawType.subhead)
                         .tag("")
@@ -816,7 +865,11 @@ extension SettingsProTab {
                             .font(OpenClawType.subhead)
                             .tag(agent.id)
                     }
+                } label: {
+                    Text("Agent")
+                        .font(OpenClawType.subheadSemiBold)
                 }
+                .font(OpenClawType.subhead)
                 Text("Used for new Chat and Talk sessions.")
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
@@ -913,6 +966,7 @@ extension SettingsProTab {
                         .font(OpenClawType.captionSemiBold)
                 }
             }
+            .font(OpenClawType.captionSemiBold)
             .buttonStyle(.bordered)
             .disabled(self.connectingGatewayID != nil)
         }
@@ -921,7 +975,7 @@ extension SettingsProTab {
     var manualGatewayCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                self.settingsButtonToggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
+                self.gatewayButtonToggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
                 TextField("Host", text: self.$manualGatewayHost)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -931,7 +985,7 @@ extension SettingsProTab {
                     .keyboardType(.numberPad)
                     .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
-                self.settingsButtonToggle("Use TLS", isOn: self.$manualGatewayTLS)
+                self.gatewayButtonToggle("Use TLS", isOn: self.$manualGatewayTLS)
                 self.gatewayActionButton(
                     title: "Connect Manual",
                     icon: "network",
@@ -950,15 +1004,11 @@ extension SettingsProTab {
     var gatewayAdvancedCard: some View {
         ProCard(radius: SettingsLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
-                self.settingsButtonToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-                SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                self.gatewayButtonToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
+                self.gatewaySecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
-                SecureField("Gateway Password", text: self.$gatewayPassword)
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
+                self.gatewaySecureField("Gateway Password", text: self.$gatewayPassword)
                 Button(role: .destructive) {
                     self.showResetOnboardingAlert = true
                 } label: {
@@ -966,11 +1016,54 @@ extension SettingsProTab {
                         .font(OpenClawType.captionSemiBold)
                         .frame(maxWidth: .infinity)
                 }
+                .font(OpenClawType.captionSemiBold)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    func gatewayButtonToggle(
+        _ title: String,
+        isOn: Binding<Bool>,
+        onChange: ((Bool) -> Void)? = nil) -> some View
+    {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                Text(title)
+                    .font(OpenClawType.subheadSemiBold)
+                Spacer(minLength: 8)
+                self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
+            }
+            .font(OpenClawType.subheadSemiBold)
+            .contentShape(Rectangle())
+        }
+        .font(OpenClawType.subheadSemiBold)
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+        .onChange(of: isOn.wrappedValue) { _, enabled in
+            onChange?(enabled)
+        }
+    }
+
+    func gatewaySecureField(_ placeholder: String, text: Binding<String>) -> some View {
+        ZStack(alignment: .leading) {
+            SecureField("", text: text)
+                .font(OpenClawType.subhead)
+                .textFieldStyle(.roundedBorder)
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .font(OpenClawType.subhead)
     }
 
     var voiceFeatureCard: some View {
@@ -1115,7 +1208,7 @@ extension SettingsProTab {
                 TextField("Device Name", text: self.$displayName)
                     .font(OpenClawType.subhead)
                     .textFieldStyle(.roundedBorder)
-                self.detailRow("Instance ID", value: self.instanceId)
+                self.gatewayDetailRow("Instance ID", value: self.instanceId)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)

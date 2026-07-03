@@ -54,12 +54,15 @@ struct GatewayQuickSetupSheet: View {
                                 HStack(spacing: 8) {
                                     ProgressView().progressViewStyle(.circular)
                                     Text("Connecting…")
+                                        .font(OpenClawType.headline)
                                 }
                             } else {
                                 Text("Connect")
+                                    .font(OpenClawType.headline)
                             }
                         }
                     }
+                    .font(OpenClawType.headline)
                     .openClawPrimaryButton()
                     .disabled(self.connecting)
 
@@ -74,7 +77,9 @@ struct GatewayQuickSetupSheet: View {
                         self.dismiss()
                     } label: {
                         Text("Not now")
+                            .font(OpenClawType.headline)
                     }
+                    .font(OpenClawType.headline)
                     .openClawSecondaryButton()
                     .disabled(self.connecting)
 
@@ -82,6 +87,7 @@ struct GatewayQuickSetupSheet: View {
                         .padding(.top, 4)
                 } else {
                     Text("No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.")
+                        .font(OpenClawType.subhead)
                         .foregroundStyle(.secondary)
                 }
 
@@ -92,6 +98,10 @@ struct GatewayQuickSetupSheet: View {
             .navigationTitle("Quick Setup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Quick Setup")
+                        .font(OpenClawType.headline)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         self.quickSetupDismissed = true
@@ -100,6 +110,7 @@ struct GatewayQuickSetupSheet: View {
                         Text("Close")
                             .font(OpenClawType.subheadSemiBold)
                     }
+                    .font(OpenClawType.subheadSemiBold)
                 }
             }
         }
@@ -125,6 +136,7 @@ struct GatewayQuickSetupSheet: View {
             Text(title)
                 .font(OpenClawType.subhead)
         }
+        .font(OpenClawType.subhead)
         .contentShape(Rectangle())
         .overlay {
             // Keep Toggle semantics for accessibility while making the full visual row tappable.
@@ -135,6 +147,7 @@ struct GatewayQuickSetupSheet: View {
                     .fill(.clear)
                     .contentShape(Rectangle())
             }
+            .font(OpenClawType.subhead)
             .buttonStyle(.plain)
             .accessibilityHidden(true)
         }

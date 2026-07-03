@@ -144,6 +144,7 @@ struct OnboardingWizardView: View {
                             Label("Back", systemImage: "chevron.left")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                     } else if self.allowSkip {
                         Button {
                             self.onClose()
@@ -151,6 +152,7 @@ struct OnboardingWizardView: View {
                             Text("Close")
                                 .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                     }
                 }
                 ToolbarItemGroup(placement: .keyboard) {
@@ -165,6 +167,7 @@ struct OnboardingWizardView: View {
                         Text("Done")
                             .font(OpenClawType.subheadSemiBold)
                     }
+                    .font(OpenClawType.subheadSemiBold)
                 }
             }
         }
@@ -198,6 +201,10 @@ struct OnboardingWizardView: View {
                         .navigationTitle("Scan QR Code")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
+                            ToolbarItem(placement: .principal) {
+                                Text("Scan QR Code")
+                                    .font(OpenClawType.headline)
+                            }
                             ToolbarItem(placement: .topBarLeading) {
                                 Button {
                                     self.showQRScanner = false
@@ -205,12 +212,14 @@ struct OnboardingWizardView: View {
                                     Text("Cancel")
                                         .font(OpenClawType.subheadSemiBold)
                                 }
+                                .font(OpenClawType.subheadSemiBold)
                             }
                             ToolbarItem(placement: .topBarTrailing) {
                                 PhotosPicker(selection: self.$selectedPhoto, matching: .images) {
                                     Label("Photos", systemImage: "photo")
                                         .font(OpenClawType.subheadSemiBold)
                                 }
+                                .font(OpenClawType.subheadSemiBold)
                             }
                         }
                 }
@@ -368,6 +377,7 @@ struct OnboardingWizardView: View {
                 Text("Continue")
                     .font(OpenClawType.subheadSemiBold)
             }
+            .font(OpenClawType.subheadSemiBold)
             .disabled(self.selectedMode == nil)
         }
     }
@@ -398,6 +408,7 @@ struct OnboardingWizardView: View {
             }
             .contentShape(Rectangle())
         }
+        .font(OpenClawType.subhead)
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
@@ -439,6 +450,7 @@ struct OnboardingWizardView: View {
                     Text("Back to Mode Selection")
                         .font(OpenClawType.subheadSemiBold)
                 }
+                .font(OpenClawType.subheadSemiBold)
             }
         }
     }
@@ -479,6 +491,7 @@ struct OnboardingWizardView: View {
                                         .font(OpenClawType.subheadSemiBold)
                                 }
                             }
+                            .font(OpenClawType.subheadSemiBold)
                             .disabled(self.connectingGatewayID != nil || !hasHost)
                         }
                     }
@@ -490,6 +503,7 @@ struct OnboardingWizardView: View {
                     Text("Restart Discovery")
                         .font(OpenClawType.subheadSemiBold)
                 }
+                .font(OpenClawType.subheadSemiBold)
                 .disabled(self.connectingGatewayID != nil)
             } header: {
                 Text("Discovered Gateways")
@@ -566,6 +580,7 @@ struct OnboardingWizardView: View {
                         Label("Resume After Approval", systemImage: "arrow.clockwise")
                             .font(OpenClawType.subheadSemiBold)
                     }
+                    .font(OpenClawType.subheadSemiBold)
                     .disabled(self.connectingGatewayID != nil)
                 } header: {
                     Text("Pairing Approval")
@@ -595,6 +610,7 @@ struct OnboardingWizardView: View {
                     Label("Scan QR Code Again", systemImage: "qrcode.viewfinder")
                         .font(OpenClawType.subheadSemiBold)
                 }
+                .font(OpenClawType.subheadSemiBold)
                 .disabled(self.connectingGatewayID != nil)
 
                 Button {
@@ -608,6 +624,7 @@ struct OnboardingWizardView: View {
                             .font(OpenClawType.subheadSemiBold)
                     }
                 }
+                .font(OpenClawType.subheadSemiBold)
                 .disabled(self.connectingGatewayID != nil)
             }
         }
@@ -645,7 +662,9 @@ struct OnboardingWizardView: View {
                 self.onClose()
             } label: {
                 Text("Open OpenClaw")
+                    .font(OpenClawType.headline)
             }
+            .font(OpenClawType.headline)
             .openClawPrimaryButton()
             .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 48)
@@ -679,6 +698,7 @@ extension OnboardingWizardView {
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
+            .font(OpenClawType.subheadSemiBold)
             .disabled(
                 self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || self.connectingGatewayID != nil)
@@ -753,6 +773,7 @@ extension OnboardingWizardView {
                     .font(OpenClawType.subheadSemiBold)
             }
         }
+        .font(OpenClawType.subheadSemiBold)
         .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
     }
 

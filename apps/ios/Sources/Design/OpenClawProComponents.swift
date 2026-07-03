@@ -372,6 +372,7 @@ struct OpenClawNoticeBanner: View {
                                     Text(primaryActionTitle)
                                         .font(OpenClawType.captionSemiBold)
                                 }
+                                .font(OpenClawType.captionSemiBold)
                                 .openClawGlassButton(prominent: true)
                                 .controlSize(.small)
                             }
@@ -380,6 +381,7 @@ struct OpenClawNoticeBanner: View {
                                     Text(secondaryActionTitle)
                                         .font(OpenClawType.captionSemiBold)
                                 }
+                                .font(OpenClawType.captionSemiBold)
                                 .openClawGlassButton()
                                 .controlSize(.small)
                             }

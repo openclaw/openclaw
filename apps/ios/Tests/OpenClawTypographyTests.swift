@@ -94,6 +94,13 @@ struct OpenClawTypographyTests {
             contentsOf: Self.sourceURL("Design/OpenClawProComponents.swift"),
             encoding: .utf8)
         let quickSetup = try String(contentsOf: Self.sourceURL("Gateway/GatewayQuickSetupSheet.swift"), encoding: .utf8)
+        let gatewayProblem = try String(contentsOf: Self.sourceURL("Gateway/GatewayProblemView.swift"), encoding: .utf8)
+        let onboardingSteps = try String(
+            contentsOf: Self.sourceURL("Onboarding/OnboardingWizardSteps.swift"),
+            encoding: .utf8)
+        let onboardingWizard = try String(
+            contentsOf: Self.sourceURL("Onboarding/OnboardingWizardView.swift"),
+            encoding: .utf8)
         let settingsSections = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
             encoding: .utf8)
@@ -120,14 +127,44 @@ struct OpenClawTypographyTests {
         #expect(proComponents.contains("Text(secondaryActionTitle)"))
 
         #expect(!quickSetup.contains("Button(\"Close\")"))
+        #expect(quickSetup.contains("Text(\"Quick Setup\")"))
         #expect(quickSetup.contains("Text(\"Close\")"))
         #expect(quickSetup.contains(".font(OpenClawType.subheadSemiBold)"))
+
+        #expect(gatewayProblem.contains("Text(\"Connection problem\")"))
+        #expect(gatewayProblem.contains("Text(\"Copy request ID\")"))
+        #expect(gatewayProblem.contains("Text(\"Copy command\")"))
+        #expect(gatewayProblem.contains(".font(OpenClawType.subheadSemiBold)"))
+
+        #expect(onboardingSteps.contains("Text(\"Connect Gateway\")"))
+        #expect(onboardingSteps.contains("Label(\"Scan QR Code\", systemImage: \"qrcode\")"))
+        #expect(onboardingSteps.contains("Text(\"Set Up Manually\")"))
+        #expect(onboardingSteps.contains(".font(OpenClawType.headline)"))
+
+        #expect(onboardingWizard.contains("Text(\"Scan QR Code\")"))
+        #expect(onboardingWizard.contains("Label(\"Resume After Approval\", systemImage: \"arrow.clockwise\")"))
+        #expect(onboardingWizard.contains("Label(\"Scan QR Code Again\", systemImage: \"qrcode.viewfinder\")"))
+        #expect(onboardingWizard.contains("Text(\"Apply Setup Code\")"))
+        #expect(onboardingWizard.contains(".font(OpenClawType.subheadSemiBold)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
         #expect(settingsSections.contains("Toggle(isOn: self.$talkButtonEnabled)"))
         #expect(settingsSections.contains("Text(\"Show Talk Control\")"))
         #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
+        #expect(settingsSections.contains("var gatewayStatusCard"))
+        #expect(settingsSections.contains("var gatewayDetailsCard"))
+        #expect(settingsSections.contains("var gatewayActionsCard"))
+        #expect(settingsSections.contains("func gatewayDetailRow"))
+        #expect(settingsSections.contains("func gatewayButtonToggle"))
+        #expect(settingsSections.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(settingsSections.contains("Text(\"Use Manual Gateway\")")
+            || settingsSections.contains("\"Use Manual Gateway\""))
+        #expect(settingsSections.contains("func gatewaySecureField"))
+        #expect(settingsSections.contains("self.gatewaySecureField(\"Gateway Auth Token\""))
+        #expect(settingsSections.contains("self.gatewaySecureField(\"Gateway Password\""))
+        #expect(settingsSections.contains("Picker(selection: self.$selectedAgentPickerId)"))
+        #expect(settingsSections.contains("Text(\"Agent\")"))
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))

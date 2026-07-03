@@ -72,7 +72,9 @@ struct OnboardingIntroStep: View {
                 self.onContinue()
             } label: {
                 Text("Continue")
+                    .font(OpenClawType.headline)
             }
+            .font(OpenClawType.headline)
             .openClawPrimaryButton()
             .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 48)
@@ -133,14 +135,18 @@ struct OnboardingWelcomeStep: View {
                     self.onScanQRCode()
                 } label: {
                     Label("Scan QR Code", systemImage: "qrcode")
+                        .font(OpenClawType.headline)
                 }
+                .font(OpenClawType.headline)
                 .openClawPrimaryButton()
 
                 Button {
                     self.onManualSetup()
                 } label: {
                     Text("Set Up Manually")
+                        .font(OpenClawType.headline)
                 }
+                .font(OpenClawType.headline)
                 .openClawSecondaryButton()
             }
             .padding(.horizontal, OpenClawSpacing.space6)
@@ -178,6 +184,7 @@ struct OnboardingModeRow: View {
             }
             .contentShape(Rectangle())
         }
+        .font(OpenClawType.subhead)
         .buttonStyle(.plain)
     }
 }
