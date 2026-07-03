@@ -392,6 +392,51 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(controlApp.state, .runningForeground)
     }
 
+    func testManualAuthRetryUsesEditedToken() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_IOS_RETRY_E2E"] == "1",
+            "Set OPENCLAW_IOS_RETRY_E2E=1 with a local token-auth Gateway on port 18920")
+        let token = try XCTUnwrap(ProcessInfo.processInfo.environment["OPENCLAW_IOS_RETRY_TOKEN"])
+
+        let app = XCUIApplication()
+        addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        app.launchArguments += ["--openclaw-reset-onboarding"]
+        app.launch()
+        self.app = app
+
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
+        app.tap()
+        XCTAssertTrue(app.buttons["Set Up Manually"].waitForExistence(timeout: 8))
+        app.buttons["Set Up Manually"].tap()
+        let developerMode = app.buttons["Developer mode"]
+        if developerMode.value as? String != "On" {
+            developerMode.tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Same Machine (Dev)")).firstMatch.tap()
+        app.buttons["Continue"].tap()
+
+        let port = app.textFields["Port"]
+        XCTAssertTrue(port.waitForExistence(timeout: 5))
+        port.tap()
+        port.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 5) + "18920")
+        app.buttons["Connect"].tap()
+
+        let tokenField = app.secureTextFields["Gateway Auth Token"]
+        XCTAssertTrue(tokenField.waitForExistence(timeout: 20))
+        tokenField.tap()
+        tokenField.typeText(token)
+        app.buttons["Done"].tap()
+        app.buttons["Retry Connection"].tap()
+
+        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 30))
+        self.attachScreenshot(named: "manual-auth-retry-connected")
+    }
+
     private func launchApp(for target: ScreenshotTarget, appearance: String? = "dark") {
         self.app?.terminate()
 
