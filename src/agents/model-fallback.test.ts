@@ -3,6 +3,12 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
@@ -199,6 +205,7 @@ function resetModelFallbackTestState(): void {
   // Fallback state has process-level caches for skip markers, harnesses, auth,
   // and plugin normalization. Reset every surface between tests.
   resetFallbackSkipCacheForTest();
+  resetDiagnosticEventsForTest();
   clearAgentHarnesses();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
@@ -1956,6 +1963,52 @@ describe("runWithModelFallback", () => {
       model: "gpt-4.1-mini",
       firstError: Object.assign(new Error("nope"), { status: 401 }),
     });
+  });
+
+  it("emits model.failover diagnostics from the fallback owner with the selected target", async () => {
+    const cfg = makeCfg();
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("primary timed out", {
+          reason: "timeout",
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          sessionId: "session-1",
+          lane: "agent:default",
+        }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      sessionId: "session-1",
+      lane: "agent:default",
+      run,
+    });
+    await waitForDiagnosticEventsDrained();
+    stop();
+
+    expect(result.result).toBe("ok");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "model.failover",
+        sessionId: "session-1",
+        lane: "agent:default",
+        fromProvider: "openai",
+        fromModel: "gpt-4.1-mini",
+        toProvider: "anthropic",
+        toModel: "claude-haiku-3-5",
+        reason: "timeout",
+        suspended: false,
+      }),
+    );
   });
 
   it("puts configured fallbacks before the configured primary when an override model is requested", () => {

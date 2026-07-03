@@ -29,6 +29,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
@@ -3210,6 +3211,19 @@ async function runEmbeddedAgentInternal(
               promptFailoverDecision.action === "rotate_profile" &&
               (await advanceAttemptAuthProfile())
             ) {
+              const nextPromptProfileId = lastProfileId;
+              emitTrustedDiagnosticEvent({
+                type: "auth_profile.fallback",
+                provider,
+                model: modelId,
+                fromProfileIdHash: failedPromptProfileId
+                  ? redactIdentifier(failedPromptProfileId)
+                  : undefined,
+                toProfileIdHash: nextPromptProfileId
+                  ? redactIdentifier(nextPromptProfileId)
+                  : undefined,
+                reason: promptProfileFailureReason ?? promptFailoverReason ?? "unknown",
+              });
               if (failedPromptProfileId && promptProfileFailureReason) {
                 void maybeMarkAuthProfileFailure({
                   profileId: failedPromptProfileId,

@@ -216,6 +216,7 @@ on the public diagnostic event bus.
 - `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed response chunk payloads; high-frequency text, thinking, and tool-call deltas count only incremental `delta` bytes; no raw response content)
 - `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
 - `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
+- `openclaw.auth_profile.fallback` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.auth_profile.from_hash`, `openclaw.auth_profile.to_hash`, `openclaw.auth_profile.reason`)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
 
 ### Message flow
@@ -383,6 +384,11 @@ to them directly without OTLP export.
   session ids. `usage` is provider/turn accounting for cost and telemetry;
   `context.used` is the current prompt/context snapshot and can be lower than
   provider `usage.total` when cached input or tool-loop calls are involved.
+- `model.failover` - model fallback transition emitted by the fallback owner
+  after the failed provider/model and selected next provider/model are both
+  known.
+- `auth_profile.fallback` - auth profile rotation emitted after the next
+  profile is selected. Profile identifiers are exported only as bounded hashes.
 
 **Message flow**
 

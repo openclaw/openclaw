@@ -1801,6 +1801,20 @@ async function runWithModelFallbackInternal<T>(
       }
 
       lastError = isKnownFailover ? normalized : err;
+      const nextCandidate = candidates[i + 1];
+      if (nextCandidate) {
+        const failure = describeFailoverError(normalized);
+        emitFailoverEvent({
+          sessionId: params.sessionId,
+          lane: params.lane,
+          fromProvider: candidate.provider,
+          fromModel: candidate.model,
+          toProvider: nextCandidate.provider,
+          toModel: nextCandidate.model,
+          reason: failure.reason,
+          suspended: normalized instanceof FailoverError ? Boolean(normalized.suspend) : false,
+        });
+      }
       await observeFailedCandidate({
         attempts,
         candidate,
@@ -1812,7 +1826,7 @@ async function runWithModelFallbackInternal<T>(
         requestedModel: params.model,
         attempt: i + 1,
         total: candidates.length,
-        nextCandidate: candidates[i + 1],
+        nextCandidate,
         isPrimary,
         requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,

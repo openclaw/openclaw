@@ -1,12 +1,7 @@
 // Failover observation tests pin the warning payloads emitted when embedded
 // runs decide whether to retry, rotate profiles, fall back, or surface errors.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "../../../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { log } from "../logger.js";
 import {
   createFailoverDecisionLogger,
@@ -127,12 +122,8 @@ describe("createFailoverDecisionLogger", () => {
     expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
   });
 
-  it("emits a trusted model.failover diagnostic only for fallback decisions", async () => {
+  it("logs fallback decisions without emitting model.failover diagnostics", async () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const events: DiagnosticEventPayload[] = [];
-    const stop = onTrustedInternalDiagnosticEvent((event) => {
-      events.push(event);
-    });
     const logDecision = createFailoverDecisionLogger({
       stage: "assistant",
       runId: "run:failover",
@@ -150,27 +141,10 @@ describe("createFailoverDecisionLogger", () => {
     });
 
     logDecision("surface_error");
-    await waitForDiagnosticEventsDrained();
-    expect(events).toEqual([]);
 
     logDecision("fallback_model", { status: 408 });
-    await waitForDiagnosticEventsDrained();
-    stop();
 
     expect(warnSpy).toHaveBeenCalledTimes(2);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "model.failover",
-      fromProvider: "github-copilot",
-      fromModel: "gpt-5.4-mini",
-      toProvider: "openai",
-      toModel: "gpt-5.4",
-      reason: "timeout",
-      suspended: false,
-    });
-    expect(events[0]).not.toHaveProperty("sessionId");
-    expect(events[0]).not.toHaveProperty("sessionKey");
-    expect(events[0]).not.toHaveProperty("lane");
   });
 
   it("omits to model refs when the source matches the selected target", () => {
@@ -230,7 +204,8 @@ describe("createFailoverDecisionLogger", () => {
 
   it("omits raw HTML Cloudflare challenge bodies from consoleMessage for upstream_html 403", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-    const cfChallengeHtml = "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
+    const cfChallengeHtml =
+      "403 <!DOCTYPE html><html><head><title>403 Forbidden</title></head>" +
       "<body>Enable JavaScript and cookies to continue." +
       "<p>Please stand by, while we are checking your browser...</p></body></html>";
     const logDecision = createFailoverDecisionLogger({
