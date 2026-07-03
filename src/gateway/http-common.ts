@@ -134,13 +134,7 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
-/**
- * Tagged error placed in `AbortController.signal.reason` when an HTTP client
- * disconnects. Downstream layers (e.g. `model-fallback.ts`'s `isTerminalAbort`)
- * use this tag to recognize the abort as terminal — the run is over because
- * no caller is left to receive a response, so retrying with another model
- * would just waste tokens. See openclaw/openclaw#60388 for the broader pattern.
- */
+/** Abort reason used when the HTTP client disconnects before delivery. */
 export class ClientDisconnectError extends Error {
   constructor(message = "HTTP client disconnected") {
     super(message);

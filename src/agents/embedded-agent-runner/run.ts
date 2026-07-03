@@ -2325,11 +2325,6 @@ async function runEmbeddedAgentInternal(
             attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-          // Optional in the public harness SDK contract; default to false. The
-          // embedded runner sets this explicitly when its run-budget timer
-          // fires. Used below by the failover-policy and model-fallback layer
-          // to skip the fallback chain when the whole-run deadline has elapsed
-          // (no other model can help). Closes #60388.
           const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
           adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
@@ -2508,11 +2503,6 @@ async function runEmbeddedAgentInternal(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
-          // ── Timeout-triggered compaction ──────────────────────────────────
-          // When the LLM times out with high context usage, compact before
-          // retrying to break the death spiral of repeated timeouts. Skip when
-          // the run-budget timer fired (the whole-run deadline is already
-          // exhausted; compacting is wasted work). Closes #60388.
           if (
             timedOut &&
             !timedOutDuringCompaction &&
@@ -3254,6 +3244,7 @@ async function runEmbeddedAgentInternal(
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
               promptTimeoutFallbackSafe,
+              timedOutByRunBudget,
               profileRotated: false,
             });
             if (
@@ -3294,6 +3285,7 @@ async function runEmbeddedAgentInternal(
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
                 promptTimeoutFallbackSafe,
+                timedOutByRunBudget,
                 profileRotated: true,
               });
             }

@@ -95,6 +95,43 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces prompt run-budget timeouts instead of model fallback (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        promptTimeoutFallbackSafe: true,
+        timedOutByRunBudget: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("does not rotate prompt failures after the run budget is exhausted (#60388)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "rate_limit",
+        timedOutByRunBudget: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "rate_limit",
+    });
+  });
+
   it("surfaces deterministic prompt format failures instead of rotating or falling back", () => {
     expect(
       resolveRunFailoverDecision({

@@ -7,15 +7,7 @@ function getAbortReason(signal: AbortSignal): unknown {
   return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
 }
 
-/**
- * Marker placed on every error produced by `makeAbortError()` (i.e., every
- * rejection emitted by `abortable()` when its signal fires). Used by the model
- * fallback layer to positively identify "this AbortError wraps a signal that
- * fired from within the OpenClaw embedded runner" — vs. a provider/SDK that
- * happens to throw an `AbortError(cause: TimeoutError)` for its own per-request
- * timeout (which must remain retryable through the configured fallback chain).
- * See `src/agents/model-fallback.ts` `isTerminalAbortFromError`.
- */
+/** Marks AbortErrors produced by abortable() so provider aborts stay retryable. */
 export const OPENCLAW_ABORTABLE_WRAPPER = Symbol.for("openclaw.abortable.wrapper");
 
 export function isOpenClawAbortableWrapper(err: unknown): boolean {

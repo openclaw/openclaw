@@ -3426,37 +3426,23 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  describe("terminal abort propagation (closes #60388)", () => {
-    // The fallback layer should treat aborts with certain signal.reason markers
-    // as "terminal" — the run is over regardless of which model handles it,
-    // so retrying with a fallback model wastes API calls. Two terminal sources:
-    //   - run-budget timeout: scheduleAbortTimer in embedded-agent-runner fires
-    //     abortRun(true), which calls runAbortController.abort() with an Error
-    //     whose name is "TimeoutError"
-    //   - HTTP client disconnect: watchClientDisconnect in src/gateway/http-common.ts
-    //     calls abort(new ClientDisconnectError())
-    //
-    // These tests verify the contract via shape (name === "TimeoutError" /
-    // "ClientDisconnectError") rather than importing concrete classes — that
-    // way the contract is independent of class location.
-
+  describe("terminal abort propagation", () => {
     function makeAbortError(message = "aborted"): Error {
       const err = new Error(message);
       err.name = "AbortError";
       return err;
     }
 
-    // Construct the exact error shape that `embedded-agent-runner/run/abortable.ts`
-    // `makeAbortError(signal)` produces: an outer Error named "AbortError" whose
-    // `.cause` is the signal's reason AND which carries the
-    // `OPENCLAW_ABORTABLE_WRAPPER` symbol marker. The marker is what proves the
-    // wrapper originated from OpenClaw's terminal-signal abort path (vs. a
-    // provider/SDK that happens to throw `AbortError(cause: TimeoutError)` for
-    // its own per-request timeout, which must stay retryable).
     function makeAbortableWrapper(reason: Error): Error {
       const err = new Error(reason.message, { cause: reason });
       err.name = "AbortError";
       (err as Error & { [OPENCLAW_ABORTABLE_WRAPPER]?: true })[OPENCLAW_ABORTABLE_WRAPPER] = true;
+      return err;
+    }
+
+    function makeAbortWrapper(reason: Error): Error {
+      const err = new Error("aborted", { cause: reason });
+      err.name = "AbortError";
       return err;
     }
 
@@ -3485,7 +3471,6 @@ describe("runWithModelFallback", () => {
         }),
       ).rejects.toBe(runError);
 
-      // Critical assertion: only the FIRST candidate runs — no fallback retry.
       expect(run).toHaveBeenCalledTimes(1);
     });
 
@@ -3512,9 +3497,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("detects TimeoutError nested as cause of an outer Error", async () => {
-      // embedded-agent-runner's makeAbortError() wraps the original reason as
-      // an outer AbortError with .cause set. The terminal-abort check must
-      // walk up one level to find the TimeoutError.
       const cfg = makeCfg();
       const runError = makeAbortError("aborted");
       const run = vi.fn().mockRejectedValue(runError);
@@ -3538,20 +3520,12 @@ describe("runWithModelFallback", () => {
     });
 
     it("rethrows when thrown error has TimeoutError in cause chain (embedded run-budget timer)", async () => {
-      // The embedded runner aborts a *private* runAbortController on
-      // run-budget timeout — `params.abortSignal` (the caller signal) is
-      // never aborted. abortable() then wraps the rejection in an outer
-      // AbortError whose .cause is the TimeoutError. The fallback layer
-      // must inspect the thrown error's cause chain (not just the signal).
-      // Closes #60388.
       const cfg = makeCfg();
       const innerTimeout = new Error("request timed out");
       innerTimeout.name = "TimeoutError";
       const outerAbort = makeAbortableWrapper(innerTimeout);
       const run = vi.fn().mockRejectedValue(outerAbort);
 
-      // Note: NO abortSignal passed — caller signal is irrelevant for this
-      // path. The terminal classification must come from the thrown error.
       await expect(
         runWithModelFallback({
           cfg,
@@ -3565,10 +3539,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("rethrows when thrown error has ClientDisconnectError in cause chain", async () => {
-      // Parallel to the run-budget case: HTTP client disconnect can also
-      // surface as a wrapped AbortError whose .cause is a
-      // ClientDisconnectError. The fallback layer must recognize it via
-      // the thrown error even when params.abortSignal is unused.
       const cfg = makeCfg();
       const innerDisconnect = new Error("client disconnected");
       innerDisconnect.name = "ClientDisconnectError";
@@ -3587,21 +3557,70 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
     });
 
+    it("rethrows when thrown error has restart abort in cause chain", async () => {
+      const cfg = makeCfg();
+      const restartAbort = createAgentRunRestartAbortError();
+      const outerAbort = makeAbortableWrapper(restartAbort);
+      const run = vi.fn().mockRejectedValueOnce(outerAbort).mockResolvedValueOnce("ok");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when an unmarked AbortError wraps a restart abort", async () => {
+      const cfg = makeCfg();
+      const restartAbort = createAgentRunRestartAbortError();
+      const outerAbort = makeAbortWrapper(restartAbort);
+      const run = vi.fn().mockRejectedValueOnce(outerAbort).mockResolvedValueOnce("ok");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("discards deferred session suspension for private terminal abort wrappers", () => {
+      const timeout = new Error("request timed out");
+      timeout.name = "TimeoutError";
+      expect(
+        testing.shouldDiscardDeferredSessionSuspension({
+          error: makeAbortableWrapper(timeout),
+        }),
+      ).toBe(true);
+
+      expect(
+        testing.shouldDiscardDeferredSessionSuspension({
+          error: makeAbortWrapper(createAgentRunRestartAbortError()),
+        }),
+      ).toBe(true);
+
+      const providerTimeout = new Error("provider request timed out after 60s");
+      providerTimeout.name = "TimeoutError";
+      expect(
+        testing.shouldDiscardDeferredSessionSuspension({
+          error: makeAbortWrapper(providerTimeout),
+        }),
+      ).toBe(false);
+    });
+
     it("falls back normally when a provider wraps its own timeout as AbortError(cause: TimeoutError) WITHOUT the abortable() marker", async () => {
-      // Regression: clawsweeper flagged that a provider/SDK that throws an
-      // `AbortError` whose `.cause` is a `TimeoutError` (i.e., shape matches
-      // what `embedded-agent-runner/run/abortable.ts` produces, but is actually a
-      // per-request provider timeout) would be misclassified as terminal and
-      // would stop the configured fallback chain instead of cascading to the
-      // next candidate. The fix tags every error produced by `abortable()`
-      // with the `OPENCLAW_ABORTABLE_WRAPPER` symbol so `isTerminalAbortFromError`
-      // can require positive identification before short-circuiting.
       const cfg = makeCfg();
       const providerInnerTimeout = new Error("provider request timed out after 60s");
       providerInnerTimeout.name = "TimeoutError";
-      // Construct the exact shape `abortable()` produces — name=AbortError +
-      // cause=TimeoutError — but DELIBERATELY OMIT the marker. This is the
-      // hypothetical provider/SDK pattern the bot warned about.
       const unmarkedAbortError = new Error("aborted", { cause: providerInnerTimeout });
       unmarkedAbortError.name = "AbortError";
       const run = vi.fn().mockRejectedValueOnce(unmarkedAbortError).mockResolvedValueOnce("ok");
@@ -3613,19 +3632,11 @@ describe("runWithModelFallback", () => {
         run,
       });
 
-      // Cascaded successfully — without the marker, the AbortError(cause: TimeoutError)
-      // is treated as a retryable per-provider timeout (NOT a terminal run abort).
       expect(result.result).toBe("ok");
       expect(run).toHaveBeenCalledTimes(2);
     });
 
     it("falls back normally when a top-level provider TimeoutError is thrown (not an AbortError wrapper)", async () => {
-      // Regression: clawsweeper flagged that an earlier version of
-      // isTerminalAbortFromError treated the thrown error itself as a candidate.
-      // That meant a direct provider/SDK TimeoutError (top-level name="TimeoutError",
-      // not wrapped in an AbortError) was misclassified as terminal and rethrown,
-      // breaking pre-existing retryable-timeout fallback semantics. The fix
-      // restricts terminal-from-error detection to AbortError wrappers.
       const cfg = makeCfg();
       const directProviderTimeout = new Error("provider request timed out after 60s");
       directProviderTimeout.name = "TimeoutError";
@@ -3638,15 +3649,11 @@ describe("runWithModelFallback", () => {
         run,
       });
 
-      // Cascaded successfully — the second candidate served the response.
       expect(result.result).toBe("ok");
       expect(run).toHaveBeenCalledTimes(2);
     });
 
     it("falls back normally when thrown error is generic AbortError without terminal cause", async () => {
-      // Sanity: a generic AbortError (e.g. user pressed Esc but signal not
-      // tagged) should NOT trigger terminal-from-error detection — it falls
-      // through to the existing fallback path.
       const cfg = makeCfg();
       const run = vi
         .fn()
@@ -3665,12 +3672,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("skips fallback when the caller signal is aborted, even with a non-terminal reason", async () => {
-      // Reconciled with current main: `isCallerAbortSignal` owns caller-abort
-      // handling — once the caller's signal is aborted nobody is waiting on the
-      // result, so fallback is skipped regardless of whether the reason is
-      // classified terminal. #60388's terminal classification is load-bearing for
-      // the *internal* run-budget abort path (`isTerminalAbortFromError`, see the
-      // abortable-wrapper tests above), not the caller signal.
       const cfg = makeCfg();
       const run = vi
         .fn()
@@ -3694,8 +3695,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("falls back normally when no abortSignal is passed (back-compat)", async () => {
-      // Existing callers that don't pass abortSignal must continue to behave
-      // as before — fallback chain runs on errors.
       const cfg = makeCfg();
       const run = vi
         .fn()
@@ -3714,7 +3713,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("falls back normally when signal is provided but not aborted", async () => {
-      // A live signal that hasn't fired yet must not block fallback.
       const cfg = makeCfg();
       const run = vi
         .fn()
@@ -3735,18 +3733,8 @@ describe("runWithModelFallback", () => {
     });
 
     it("rethrows terminal abort even when error resembles a failover-normalizable error", async () => {
-      // Edge case flagged by greptile review on openclaw/openclaw#62682:
-      // If the signal is aborted with a terminal reason (run-budget timeout)
-      // BUT the thrown error also looks like a rate-limit error that
-      // coerceToFailoverError would normalize (e.g. Google Vertex RESOURCE_EXHAUSTED
-      // abort racing with the run-budget timer), the old `shouldRethrowAbort && !normalizedFailover`
-      // guard would fall through and try the next candidate. Fix: check isTerminalAbort
-      // BEFORE coerceToFailoverError.
       const cfg = makeCfg();
 
-      // Construct an error that coerceToFailoverError may recognize as a
-      // retryable FailoverError (rate-limit shape). We use a generic error
-      // with a 429 status property, which matches multiple provider coercions.
       const rateLimitLikeError = Object.assign(new Error("RESOURCE_EXHAUSTED: quota exceeded"), {
         status: 429,
         name: "AbortError",
@@ -3769,16 +3757,10 @@ describe("runWithModelFallback", () => {
         }),
       ).rejects.toBe(rateLimitLikeError);
 
-      // Critical: only the first candidate should run. The terminal signal
-      // must override the failover normalization.
       expect(run).toHaveBeenCalledTimes(1);
     });
 
     it("treats cron timeout string reason as terminal (covers plain-string abort)", async () => {
-      // Flagged by codex review on openclaw/openclaw#62682: `src/cron/service/timer.ts:90`
-      // calls `runAbortController.abort(timeoutErrorMessage())` with a plain
-      // string, not an Error. `isTerminalAbort` must handle this shape or
-      // cron timeouts will silently waste fallback attempts.
       const cfg = makeCfg();
       const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
 
@@ -3799,11 +3781,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("treats phase-suffixed cron timeout reason as terminal (covers `(last phase: ...)` variant)", async () => {
-      // Flagged by clawsweeper review on openclaw/openclaw#62682:
-      // `src/cron/service/timer.ts:367` emits `cron: job execution timed out
-      // (last phase: <name>)` when the watchdog has recorded the active phase.
-      // An exact-string Set match misses this variant; prefix matching catches
-      // both the bare and suffixed forms.
       const cfg = makeCfg();
       const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
 
@@ -3824,9 +3801,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("treats isolated-agent setup-timeout (and phase suffix) as terminal", async () => {
-      // `src/cron/service/timer.ts:373/375` emits two more prefixes for the
-      // setup-phase timeout (before the runner has started). Both variants
-      // must short-circuit fallback.
       const cfg = makeCfg();
       const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
 
@@ -3849,10 +3823,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("treats isolated-agent pre-execution stall (and phase suffix) as terminal", async () => {
-      // `src/cron/service/timer.ts:381/383` (`preExecutionTimeoutErrorMessage`)
-      // emits the pre-execution watchdog reason after setup completes but the
-      // runner never starts consuming the run budget. Bare and phase-suffixed
-      // variants must both short-circuit fallback.
       const cfg = makeCfg();
       const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
 
@@ -3875,7 +3845,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("treats bare isolated-agent pre-execution stall as terminal", async () => {
-      // Bare form (no phase suffix) of `preExecutionTimeoutErrorMessage`.
       const cfg = makeCfg();
       const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
 
@@ -3896,9 +3865,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("treats an Error whose .message matches a known terminal string as terminal", async () => {
-      // Defensive: if a caller wraps `timeoutErrorMessage()` in `new Error(...)`
-      // before passing it to `abort()`, the outer `name` will be generic
-      // ("Error") but the `.message` will carry the known terminal marker.
       const cfg = makeCfg();
       const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
 
@@ -3920,10 +3886,6 @@ describe("runWithModelFallback", () => {
     });
 
     it("does not classify an unrelated string reason as terminal (caller-abort still skips fallback)", async () => {
-      // The string is NOT a terminal reason, so `isTerminalAbort` returns false —
-      // but the caller signal is aborted, so current main's `isCallerAbortSignal`
-      // still skips fallback. (Pre-reconciliation this asserted a second attempt;
-      // main now short-circuits all caller aborts.)
       const cfg = makeCfg();
       const run = vi
         .fn()
