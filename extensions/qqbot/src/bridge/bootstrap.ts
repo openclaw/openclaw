@@ -23,7 +23,6 @@
  * vitest (which resolves bare specifiers via `resolve.alias`, not Node CJS).
  */
 
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
@@ -39,9 +38,13 @@ import {
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
-const loadMediaRuntimeModule = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/media-runtime"),
-);
+let mediaRuntimeModulePromise: Promise<typeof import("openclaw/plugin-sdk/media-runtime")> | null =
+  null;
+
+const loadMediaRuntimeModule = async () => {
+  mediaRuntimeModulePromise ??= import("openclaw/plugin-sdk/media-runtime");
+  return await mediaRuntimeModulePromise;
+};
 
 function createBuiltinAdapter(): PlatformAdapter {
   return {

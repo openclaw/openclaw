@@ -58,7 +58,6 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
-    @State var isShowingAppearanceDialog = false
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
@@ -121,6 +120,9 @@ struct SettingsProTab: View {
                 ToolbarItem(placement: .topBarLeading) {
                     OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                self.appearanceMenu
             }
         }
         .navigationDestination(for: SettingsRoute.self) { route in

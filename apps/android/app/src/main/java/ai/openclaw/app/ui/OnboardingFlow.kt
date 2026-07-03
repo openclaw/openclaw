@@ -151,9 +151,6 @@ fun OnboardingFlow(
     val gateways by viewModel.gateways.collectAsState()
     val discoveryStatusText by viewModel.discoveryStatusText.collectAsState()
     val savedToken by viewModel.gatewayToken.collectAsState()
-    val savedManualHost by viewModel.manualHost.collectAsState()
-    val savedManualPort by viewModel.manualPort.collectAsState()
-    val savedManualTls by viewModel.manualTls.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     val ready =
@@ -189,21 +186,29 @@ fun OnboardingFlow(
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
 
-    fun connectToGatewayPlan(plan: GatewayConnectPlan) {
+    fun connectToGatewayConfig(
+      config: GatewayConnectConfig,
+      resetSetupAuth: Boolean,
+    ) {
       setupError = null
       attemptedGatewayName = null
       attemptedConnect = true
       connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-      viewModel.saveGatewayConfigAndConnect(plan)
+      viewModel.saveGatewayConfigAndConnect(
+        host = config.host,
+        port = config.port,
+        tls = config.tls,
+        token = config.token,
+        bootstrapToken = config.bootstrapToken,
+        password = config.password,
+        resetSetupAuth = resetSetupAuth,
+      )
       step = OnboardingStep.Recovery
     }
 
-    fun resolveCurrentGatewayPlan(setupCodeValue: String = setupCode): GatewayConnectPlan? =
-      resolveOnboardingGatewayConnectPlan(
+    fun resolveCurrentGatewayConfig(setupCodeValue: String = setupCode): GatewayConnectConfig? =
+      resolveOnboardingGatewayConnectConfig(
         setupCode = setupCodeValue,
-        savedManualHost = savedManualHost,
-        savedManualPort = savedManualPort.toString(),
-        savedManualTls = savedManualTls,
         manualHost = manualHost,
         manualPort = manualPort,
         manualTls = manualTls,
@@ -315,8 +320,8 @@ fun OnboardingFlow(
                     )
                   return@addOnSuccessListener
                 }
-                val plan = resolveCurrentGatewayPlan(setupCodeValue = scannedSetupCode)
-                if (plan == null) {
+                val config = resolveCurrentGatewayConfig(setupCodeValue = scannedSetupCode)
+                if (config == null) {
                   setupError =
                     gatewayEndpointValidationMessage(
                       GatewayEndpointValidationError.INVALID_URL,
@@ -325,7 +330,7 @@ fun OnboardingFlow(
                   return@addOnSuccessListener
                 }
                 setupCode = scannedSetupCode
-                connectToGatewayPlan(plan)
+                connectToGatewayConfig(config, resetSetupAuth = true)
               }.addOnFailureListener { setupError = "Could not open the scanner." }
           },
           onSetupCodeChange = {
@@ -352,12 +357,12 @@ fun OnboardingFlow(
             step = OnboardingStep.Recovery
           },
           onPair = {
-            val plan = resolveCurrentGatewayPlan()
-            if (plan == null) {
+            val config = resolveCurrentGatewayConfig()
+            if (config == null) {
               setupError = "Enter a setup code or a valid gateway URL."
               return@GatewaySetupScreen
             }
-            connectToGatewayPlan(plan)
+            connectToGatewayConfig(config, resetSetupAuth = true)
           },
         )
       OnboardingStep.Recovery ->
@@ -373,8 +378,8 @@ fun OnboardingFlow(
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onBack = { step = OnboardingStep.Gateway },
           onRetry = {
-            val plan = resolveCurrentGatewayPlan() ?: return@GatewayRecoveryScreen
-            connectToGatewayPlan(plan.copy(savedAuthAction = GatewaySavedAuthAction.PRESERVE))
+            val config = resolveCurrentGatewayConfig() ?: return@GatewayRecoveryScreen
+            connectToGatewayConfig(config, resetSetupAuth = false)
           },
           onEdit = { step = OnboardingStep.Gateway },
           onContinue = { step = OnboardingStep.Permissions },
@@ -1173,30 +1178,27 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-/** Resolves onboarding setup-code or manual fields into the gateway plan used for connect. */
-internal fun resolveOnboardingGatewayConnectPlan(
+/** Resolves onboarding setup-code or manual fields into the gateway config used for connect. */
+internal fun resolveOnboardingGatewayConnectConfig(
   setupCode: String,
-  savedManualHost: String,
-  savedManualPort: String,
-  savedManualTls: Boolean,
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
   token: String,
   password: String,
-): GatewayConnectPlan? =
-  resolveGatewayConnectPlan(
+): GatewayConnectConfig? =
+  resolveGatewayConnectConfig(
     useSetupCode = setupCode.isNotBlank(),
     setupCode = setupCode,
-    savedManualHost = savedManualHost,
-    savedManualPort = savedManualPort,
-    savedManualTls = savedManualTls,
+    savedManualHost = manualHost,
+    savedManualPort = manualPort,
+    savedManualTls = manualTls,
     manualHostInput = manualHost,
     manualPortInput = manualPort,
     manualTlsInput = manualTls,
-    bootstrapTokenInput = "",
-    tokenInput = token,
-    passwordInput = password,
+    fallbackBootstrapToken = "",
+    fallbackToken = token,
+    fallbackPassword = password,
   )
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
@@ -1368,9 +1370,6 @@ internal fun canFinishOnboarding(
       -> true
     }
 
-private val requiredContactPermissions = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
-private val requiredCalendarPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
-
 /** Builds permission rows and applies granted feature toggles after onboarding. */
 @Composable
 private fun rememberPermissionState(
@@ -1384,12 +1383,8 @@ private fun rememberPermissionState(
   }
   val photosPermissions = photoReadPermissionsForRequest()
   var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
-  var contactsGranted by rememberSaveable {
-    mutableStateOf(requiredContactPermissions.all { permission -> hasPermission(context, permission) })
-  }
-  var calendarGranted by rememberSaveable {
-    mutableStateOf(requiredCalendarPermissions.all { permission -> hasPermission(context, permission) })
-  }
+  var contactsGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_CONTACTS)) }
+  var calendarGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_CALENDAR)) }
   var notificationsGranted by rememberSaveable {
     mutableStateOf(Build.VERSION.SDK_INT < 33 || hasPermission(context, Manifest.permission.POST_NOTIFICATIONS))
   }
@@ -1435,18 +1430,8 @@ private fun rememberPermissionState(
         permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
         locationGranted
       photosGranted = hasPhotoReadPermission(context) || photosPermissions.any { permissions[it] == true }
-      contactsGranted =
-        mergedRequiredPermissionGrantState(
-          permissions = permissions,
-          requiredPermissions = requiredContactPermissions,
-          currentlyGranted = { permission -> hasPermission(context, permission) },
-        )
-      calendarGranted =
-        mergedRequiredPermissionGrantState(
-          permissions = permissions,
-          requiredPermissions = requiredCalendarPermissions,
-          currentlyGranted = { permission -> hasPermission(context, permission) },
-        )
+      contactsGranted = permissions[Manifest.permission.READ_CONTACTS] ?: contactsGranted
+      calendarGranted = permissions[Manifest.permission.READ_CALENDAR] ?: calendarGranted
       notificationsGranted =
         if (Build.VERSION.SDK_INT >= 33) {
           permissions[Manifest.permission.POST_NOTIFICATIONS] ?: notificationsGranted
@@ -1455,11 +1440,8 @@ private fun rememberPermissionState(
         }
       motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
       smsGranted =
-        mergedRequiredPermissionGrantState(
-          permissions = permissions,
-          requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
-          currentlyGranted = { permission -> hasPermission(context, permission) },
-        )
+        (permissions[Manifest.permission.SEND_SMS] ?: smsGranted) &&
+        (permissions[Manifest.permission.READ_SMS] ?: smsGranted)
       callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
     }
 
@@ -1486,10 +1468,10 @@ private fun rememberPermissionState(
         null
       },
       PermissionRowModel("Contacts", "Read contacts securely", Icons.Default.Person, contactsGranted) {
-        request(*requiredContactPermissions.toTypedArray())
+        request(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
       },
       PermissionRowModel("Calendar", "Read events and schedules", Icons.Default.CalendarMonth, calendarGranted) {
-        request(*requiredCalendarPermissions.toTypedArray())
+        request(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
       },
       PermissionRowModel("Notifications", "Send important alerts", Icons.Default.Notifications, notificationsGranted) {
         if (Build.VERSION.SDK_INT >= 33) request(Manifest.permission.POST_NOTIFICATIONS)
@@ -1529,13 +1511,6 @@ private fun rememberPermissionState(
     },
   )
 }
-
-/** RequestMultiplePermissions only reports launched permissions, so omitted entries use current system state. */
-internal fun mergedRequiredPermissionGrantState(
-  permissions: Map<String, Boolean>,
-  requiredPermissions: List<String>,
-  currentlyGranted: (String) -> Boolean,
-): Boolean = requiredPermissions.all { permission -> permissions[permission] ?: currentlyGranted(permission) }
 
 private fun hasPermission(
   context: Context,

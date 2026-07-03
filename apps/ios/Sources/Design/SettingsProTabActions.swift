@@ -80,9 +80,6 @@ extension SettingsProTab {
                     detail: self.appModel.voiceWake.statusText,
                     value: self.voiceWakeEnabled ? "on" : "off",
                     color: self.voiceWakeEnabled ? OpenClawBrand.ok : .secondary)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("diagnostics-voice-wake-status")
-                    .accessibilityValue(self.appModel.voiceWake.statusText)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -484,7 +481,6 @@ extension SettingsProTab {
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
-        case .licenses: "Licenses"
         case .about: "About"
         }
     }

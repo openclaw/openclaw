@@ -16,7 +16,6 @@ import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -51,21 +50,42 @@ type GatewayMemoryStartupPolicy =
   | { mode: "immediate" }
   | { mode: "idle"; delayMs: number };
 
-const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
-  () => import("../agents/main-session-restart-recovery.js"),
-);
+let mainSessionRestartRecoveryModulePromise: Promise<
+  typeof import("../agents/main-session-restart-recovery.js")
+> | null = null;
+let agentDefaultsModulePromise: Promise<typeof import("../agents/defaults.js")> | null = null;
+let agentModelSelectionModulePromise: Promise<
+  typeof import("../agents/model-selection.js")
+> | null = null;
+let internalHooksModulePromise: Promise<typeof import("../hooks/internal-hooks.js")> | null = null;
+let gatewayRestartSentinelModulePromise: Promise<
+  typeof import("./server-restart-sentinel.js")
+> | null = null;
 
-const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
+const loadMainSessionRestartRecoveryModule = async () => {
+  mainSessionRestartRecoveryModulePromise ??= import("../agents/main-session-restart-recovery.js");
+  return await mainSessionRestartRecoveryModulePromise;
+};
 
-const loadAgentModelSelectionModule = createLazyRuntimeModule(
-  () => import("../agents/model-selection.js"),
-);
+const loadAgentDefaultsModule = async () => {
+  agentDefaultsModulePromise ??= import("../agents/defaults.js");
+  return await agentDefaultsModulePromise;
+};
 
-const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
+const loadAgentModelSelectionModule = async () => {
+  agentModelSelectionModulePromise ??= import("../agents/model-selection.js");
+  return await agentModelSelectionModulePromise;
+};
 
-const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
-  () => import("./server-restart-sentinel.js"),
-);
+const loadInternalHooksModule = async () => {
+  internalHooksModulePromise ??= import("../hooks/internal-hooks.js");
+  return await internalHooksModulePromise;
+};
+
+const loadGatewayRestartSentinelModule = async () => {
+  gatewayRestartSentinelModulePromise ??= import("./server-restart-sentinel.js");
+  return await gatewayRestartSentinelModulePromise;
+};
 
 export type GatewayPostReadySidecarHandle = {
   stop: () => Awaitable<void>;

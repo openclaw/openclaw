@@ -36,19 +36,6 @@ internal data class GatewayConnectConfig(
   val password: String,
 )
 
-/** How a connection attempt may update credentials already owned by the runtime. */
-internal enum class GatewaySavedAuthAction {
-  PRESERVE,
-  REPLACE_ENDPOINT,
-  REPLACE_SETUP,
-}
-
-/** Endpoint plus the credential ownership decision applied by MainViewModel. */
-internal data class GatewayConnectPlan(
-  val config: GatewayConnectConfig,
-  val savedAuthAction: GatewaySavedAuthAction,
-)
-
 /** Validation reason used by setup, QR, and manual endpoint copy. */
 internal enum class GatewayEndpointValidationError {
   INVALID_URL,
@@ -80,38 +67,37 @@ private const val remoteGatewaySecurityRule =
 private const val remoteGatewaySecurityFix =
   "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access."
 
-/** Resolves setup-code or manual UI fields without reading stored credentials. */
+/** Resolves setup-code or manual UI fields into a connection config. */
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
   setupCode: String,
+  savedManualHost: String,
+  savedManualPort: String,
+  savedManualTls: Boolean,
   manualHostInput: String,
   manualPortInput: String,
   manualTlsInput: Boolean,
-  bootstrapTokenInput: String,
-  tokenInput: String,
-  passwordInput: String,
+  fallbackBootstrapToken: String,
+  fallbackToken: String,
+  fallbackPassword: String,
 ): GatewayConnectConfig? {
   if (useSetupCode) {
     val setup = decodeGatewaySetupCode(setupCode) ?: return null
     val parsed = parseGatewayEndpointResult(setup.url).config ?: return null
-    val setupBootstrapToken =
-      setup.bootstrapToken
-        ?.trim()
-        .orEmpty()
-        .ifEmpty { bootstrapTokenInput.trim() }
+    val setupBootstrapToken = setup.bootstrapToken?.trim().orEmpty()
     // Bootstrap setup codes intentionally suppress stale shared credentials;
     // the bootstrap token owns the first authenticated pairing exchange.
     val sharedToken =
       when {
         !setup.token.isNullOrBlank() -> setup.token.trim()
         setupBootstrapToken.isNotEmpty() -> ""
-        else -> tokenInput.trim()
+        else -> fallbackToken.trim()
       }
     val sharedPassword =
       when {
         !setup.password.isNullOrBlank() -> setup.password.trim()
-        setupBootstrapToken.isNotEmpty() || sharedToken.isNotEmpty() -> ""
-        else -> passwordInput.trim()
+        setupBootstrapToken.isNotEmpty() -> ""
+        else -> fallbackPassword.trim()
       }
     return GatewayConnectConfig(
       host = parsed.host,
@@ -125,69 +111,25 @@ internal fun resolveGatewayConnectConfig(
 
   val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput) ?: return null
   val parsed = parseGatewayEndpointResult(manualUrl).config ?: return null
-  val token = tokenInput.trim()
-  val bootstrapToken = bootstrapTokenInput.trim().takeIf { token.isEmpty() }.orEmpty()
-  val password = passwordInput.trim().takeIf { token.isEmpty() && bootstrapToken.isEmpty() }.orEmpty()
+  val savedManualEndpoint =
+    composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
+      ?.let { parseGatewayEndpointResult(it).config }
+  val preserveBootstrapToken =
+    savedManualEndpoint != null &&
+      savedManualEndpoint.host == parsed.host &&
+      savedManualEndpoint.port == parsed.port &&
+      savedManualEndpoint.tls == parsed.tls &&
+      fallbackToken.isBlank() &&
+      fallbackPassword.isBlank()
   return GatewayConnectConfig(
     host = parsed.host,
     port = parsed.port,
     tls = parsed.tls,
-    bootstrapToken = bootstrapToken,
-    token = token,
-    password = password,
+    bootstrapToken = if (preserveBootstrapToken) fallbackBootstrapToken.trim() else "",
+    token = fallbackToken.trim(),
+    password = fallbackPassword.trim(),
   )
 }
-
-/**
- * Produces one closed endpoint/auth plan. Blank auth fields preserve secrets
- * only for the saved endpoint; neither Compose nor this resolver reads them.
- */
-internal fun resolveGatewayConnectPlan(
-  useSetupCode: Boolean,
-  setupCode: String,
-  savedManualHost: String,
-  savedManualPort: String,
-  savedManualTls: Boolean,
-  manualHostInput: String,
-  manualPortInput: String,
-  manualTlsInput: Boolean,
-  tokenInput: String,
-  bootstrapTokenInput: String,
-  passwordInput: String,
-): GatewayConnectPlan? {
-  val config =
-    resolveGatewayConnectConfig(
-      useSetupCode = useSetupCode,
-      setupCode = setupCode,
-      manualHostInput = manualHostInput,
-      manualPortInput = manualPortInput,
-      manualTlsInput = manualTlsInput,
-      tokenInput = tokenInput,
-      bootstrapTokenInput = bootstrapTokenInput,
-      passwordInput = passwordInput,
-    ) ?: return null
-  if (useSetupCode) {
-    return GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP)
-  }
-  if (config.bootstrapToken.isNotEmpty()) {
-    // Bootstrap auth requests a fresh pairing exchange. Retained role tokens
-    // would otherwise win before the bootstrap credential is attempted.
-    return GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP)
-  }
-
-  val savedManualEndpoint =
-    composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
-      ?.let { parseGatewayEndpointResult(it).config }
-  val action =
-    if (savedManualEndpoint?.sameEndpoint(config) == true) {
-      GatewaySavedAuthAction.PRESERVE
-    } else {
-      GatewaySavedAuthAction.REPLACE_ENDPOINT
-    }
-  return GatewayConnectPlan(config, action)
-}
-
-private fun GatewayEndpointConfig.sameEndpoint(config: GatewayConnectConfig): Boolean = host.equals(config.host, ignoreCase = true) && port == config.port && tls == config.tls
 
 /** Parses an endpoint string and returns only the valid connection config. */
 internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? = parseGatewayEndpointResult(rawInput).config
@@ -222,7 +164,7 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   }
   val defaultPort = if (tls) 443 else 18789
   val displayPort = if (tls) 443 else 80
-  val port = gatewayPort(uri.port, defaultPort) ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
   val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =
     if (port == displayPort && defaultPort == displayPort) {
@@ -302,16 +244,6 @@ internal fun gatewayEndpointValidationMessage(
       }
   }
 
-private fun gatewayPort(
-  port: Int,
-  defaultPort: Int,
-): Int? =
-  when {
-    port == -1 -> defaultPort
-    port in 1..65535 -> port
-    else -> null
-  }
-
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
   hostInput: String,
@@ -320,14 +252,6 @@ internal fun composeGatewayManualUrl(
 ): String? {
   val host = hostInput.trim()
   if (host.isEmpty()) return null
-  // A pasted endpoint is already a complete authority; its scheme and port
-  // must not be silently replaced by stale values from the separate controls.
-  if (host.contains("://")) {
-    val parsed = parseGatewayEndpointResult(host)
-    return host.takeUnless { parsed.error == GatewayEndpointValidationError.INVALID_URL }
-  }
-  val bareHost = host.trimEnd('/')
-  if (bareHost.isEmpty() || bareHost.contains('/')) return null
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
@@ -337,7 +261,7 @@ internal fun composeGatewayManualUrl(
     }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
-  return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
+  return "$scheme://$host:$port"
 }
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()

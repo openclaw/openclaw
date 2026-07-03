@@ -162,7 +162,10 @@ function buildAutoReplySystemPrompt(params: {
       : "",
     params.includeGroupIntro
       ? buildGroupIntro({
+          cfg: {} as OpenClawConfig,
+          sessionCtx: params.sessionCtx,
           defaultActivation: "mention",
+          silentToken: SILENT_REPLY_TOKEN,
         })
       : "",
     params.groupSystemPrompt?.trim() ?? "",

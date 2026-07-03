@@ -5,7 +5,6 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -21,9 +20,14 @@ export type ConfigurablePlugin = {
   jsonSchema?: JsonSchemaObject;
 };
 
-const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
-  () => import("../plugins/plugin-metadata-snapshot.js"),
-);
+type PluginMetadataSnapshotModule = typeof import("../plugins/plugin-metadata-snapshot.js");
+
+let pluginMetadataSnapshotModulePromise: Promise<PluginMetadataSnapshotModule> | undefined;
+
+function loadPluginMetadataSnapshotModule(): Promise<PluginMetadataSnapshotModule> {
+  pluginMetadataSnapshotModulePromise ??= import("../plugins/plugin-metadata-snapshot.js");
+  return pluginMetadataSnapshotModulePromise;
+}
 
 type JsonSchemaProperty = {
   type?: string;

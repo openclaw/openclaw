@@ -1,6 +1,5 @@
 // Discord plugin module implements model picker.state behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
@@ -106,9 +105,14 @@ export type DiscordModelPickerModelPage = DiscordModelPickerPage<string> & {
   provider: string;
 };
 
-const loadModelsProviderRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/models-provider-runtime"),
-);
+let modelsProviderRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/models-provider-runtime")>
+  | undefined;
+
+async function loadModelsProviderRuntime() {
+  modelsProviderRuntimePromise ??= import("openclaw/plugin-sdk/models-provider-runtime");
+  return await modelsProviderRuntimePromise;
+}
 
 function encodeCustomIdValue(value: string): string {
   return encodeURIComponent(value);

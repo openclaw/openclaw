@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Msteams plugin module implements sdk proactive behavior.
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import {
@@ -70,9 +69,12 @@ type MSTeamsProactiveOptions = {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 };
 
-const loadMSTeamsApiModule = createLazyRuntimeModule(
-  () => import("@microsoft/teams.api") as unknown as Promise<MSTeamsApiModule>,
-);
+let apiModulePromise: Promise<MSTeamsApiModule> | null = null;
+
+async function loadMSTeamsApiModule(): Promise<MSTeamsApiModule> {
+  apiModulePromise ??= import("@microsoft/teams.api") as unknown as Promise<MSTeamsApiModule>;
+  return apiModulePromise;
+}
 
 function resolveThreadedConversationId(conversationId: string, threadActivityId?: string): string {
   if (!threadActivityId) {

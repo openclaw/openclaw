@@ -5,7 +5,6 @@ import {
   type OutboundSendDeps,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 
@@ -20,7 +19,12 @@ type DiscordFormattingOptions = {
   chunkMode?: NonNullable<Parameters<DiscordSendFn>[2]>["chunkMode"];
 };
 
-export const loadDiscordSendRuntime = createLazyRuntimeModule(() => import("./send.js"));
+let discordSendRuntimePromise: Promise<DiscordSendRuntime> | undefined;
+
+export async function loadDiscordSendRuntime(): Promise<DiscordSendRuntime> {
+  discordSendRuntimePromise ??= import("./send.js");
+  return await discordSendRuntimePromise;
+}
 
 export function resolveDiscordOutboundTarget(params: {
   to: string;

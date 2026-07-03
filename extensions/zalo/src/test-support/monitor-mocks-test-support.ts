@@ -1,6 +1,5 @@
 // Zalo plugin module implements monitor mocks test support behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
@@ -24,6 +23,7 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const loadedMonitorModules = new Set<MonitorModule>();
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
+let cachedWebhookModule: Promise<WebhookModule> | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -102,9 +102,10 @@ async function importSecretInputModule(cacheBust: string): Promise<SecretInputMo
   )) as SecretInputModule;
 }
 
-const importCachedWebhookModule = createLazyRuntimeModule(
-  () => import(webhookModuleUrl) as Promise<WebhookModule>,
-);
+async function importCachedWebhookModule(): Promise<WebhookModule> {
+  cachedWebhookModule ??= import(webhookModuleUrl) as Promise<WebhookModule>;
+  return await cachedWebhookModule;
+}
 
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();

@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
@@ -37,7 +36,7 @@ type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution
   remoteJid: string;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+let resolverRuntimePromise: Promise<typeof import("./approval-resolver.js")> | undefined;
 
 const whatsappApprovalReactionTargets =
   createApprovalReactionTargetStore<WhatsAppApprovalReactionTarget>({
@@ -49,7 +48,10 @@ const whatsappApprovalReactionTargets =
     readPersistedTarget,
   });
 
-const loadApprovalResolver = resolverRuntimeLoader;
+function loadApprovalResolver(): Promise<typeof import("./approval-resolver.js")> {
+  resolverRuntimePromise ??= import("./approval-resolver.js");
+  return resolverRuntimePromise;
+}
 
 function buildReactionTargetKey(params: {
   accountId: string;
@@ -396,5 +398,5 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
 
 export function clearWhatsAppApprovalReactionTargetsForTest(): void {
   whatsappApprovalReactionTargets.clearForTest();
-  resolverRuntimeLoader.clear();
+  resolverRuntimePromise = undefined;
 }

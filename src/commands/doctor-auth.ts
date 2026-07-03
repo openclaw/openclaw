@@ -24,7 +24,6 @@ import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/path-resolve.js";
@@ -239,14 +238,11 @@ export function formatOAuthRefreshFailureDoctorLine(params: {
   const provider = rawProvider
     ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
     : null;
-  const command = buildOAuthRefreshFailureLoginCommand(provider, {
-    profileId: provider === rawProvider ? params.profileId : undefined,
-  });
-  const commandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(command);
+  const command = buildOAuthRefreshFailureLoginCommand(provider);
   if (classified.reason) {
-    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run ${commandMarkdown}.`;
+    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
   }
-  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run ${commandMarkdown}.`;
+  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
 }
 
 async function resolveAuthIssueHint(

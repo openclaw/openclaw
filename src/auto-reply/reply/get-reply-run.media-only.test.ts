@@ -37,11 +37,6 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const updateSessionStore = vi.hoisted(() => vi.fn());
-const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
-
-vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
-  updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
-}));
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
@@ -161,9 +156,6 @@ async function loadFreshGetReplyRunModuleForTest() {
     `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
   );
 }
-
-const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
-  "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -301,7 +293,6 @@ describe("runPreparedReply media-only handling", () => {
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
-    updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
     replyRunTesting.resetReplyRunRegistry();
   });
@@ -511,6 +502,7 @@ describe("runPreparedReply media-only handling", () => {
         ThreadStarterBody: undefined,
       },
       expect.anything(),
+      { sourceReplyDeliveryMode: "message_tool_only" },
     );
   });
 
@@ -2020,50 +2012,26 @@ describe("runPreparedReply media-only handling", () => {
           MediaType: "audio/ogg",
           MessageSid: "35676",
           SenderName: "Keśava",
-          AmbientTranscriptWatermarkKey: '["telegram","","-100123",""]',
-          AmbientTranscriptMessageId: "35676",
-          AmbientTranscriptTimestampMs: 1_710_000_000_000,
         },
-        storePath: "/tmp/openclaw-session-store.json",
       }),
     );
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.commandBody).toBe("[OpenClaw room event]");
-    expect(call?.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
+    expect(call?.transcriptCommandBody).toBe("");
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
-    expect(call?.followupRun.transcriptPrompt).toBe("#35676 Keśava: No wtf");
+    expect(call?.followupRun.transcriptPrompt).toBe("");
     expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call?.followupRun.currentInboundAudio).toBe(true);
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
-    expect(call?.followupRun.run.suppressTranscriptOnlyAssistantPersistence).toBe(true);
-    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toEqual({
-      role: "user",
-      content: "#35676 Keśava: No wtf",
-      timestamp: expect.any(Number),
-      __openclaw: { senderIsOwner: false },
-    });
-    call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
-      role: "user",
-      content: "#35676 Keśava: No wtf",
-      timestamp: 1_710_000_000_000,
-    });
-    expect(updateAmbientTranscriptWatermarkMock).toHaveBeenCalledWith({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "session-key",
-      key: '["telegram","","-100123",""]',
-      messageId: "35676",
-      timestampMs: 1_710_000_000_000,
-    });
+    expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",
     );
     expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
-      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+      "visible_reply_contract: message_tool_only",
     );
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "Current event:\n#35676 Keśava: No wtf",
     );
@@ -2303,9 +2271,8 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
-      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+      "visible_reply_contract: message_tool_only",
     );
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
   });
 
   it("keeps webchat room events on automatic source delivery", async () => {
@@ -2370,9 +2337,8 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.currentInboundContext?.text).toContain(
-      ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE,
+      "visible_reply_contract: message_tool_only",
     );
-    expect(call?.followupRun.currentInboundContext?.text).not.toContain("visible_reply_contract:");
   });
 
   it("keeps webchat direct replies automatic when message-tool mode is requested", async () => {
@@ -2403,8 +2369,10 @@ describe("runPreparedReply media-only handling", () => {
       vi.mocked(buildDirectChatContext),
       "direct chat context",
     ) as { sourceReplyDeliveryMode?: string };
+    const inboundPrefixCall = vi.mocked(buildInboundUserContextPrefix).mock.calls.at(-1);
     const call = requireLastRunReplyAgentCall();
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(inboundPrefixCall?.[2]).toEqual({ sourceReplyDeliveryMode: "message_tool_only" });
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 

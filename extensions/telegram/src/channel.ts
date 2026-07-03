@@ -27,7 +27,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -77,7 +76,6 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
-import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
@@ -94,6 +92,7 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -104,10 +103,14 @@ import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
+type TelegramUpdateOffsetRuntime = typeof import("../update-offset-runtime-api.js");
 
-const loadTelegramUpdateOffsetRuntime = createLazyRuntimeModule(
-  () => import("../update-offset-runtime-api.js"),
-);
+let telegramUpdateOffsetRuntimePromise: Promise<TelegramUpdateOffsetRuntime> | undefined;
+
+async function loadTelegramUpdateOffsetRuntime() {
+  telegramUpdateOffsetRuntimePromise ??= import("../update-offset-runtime-api.js");
+  return await telegramUpdateOffsetRuntimePromise;
+}
 
 function resolveTelegramProbe() {
   return (

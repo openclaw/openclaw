@@ -168,7 +168,6 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_NAS_HOST",
   "UV_PYTHON",
-  "ZALO_API_URL",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.

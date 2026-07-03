@@ -1,10 +1,11 @@
 // Discord tests cover send.webhook.proxy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordError, RateLimitError } from "./internal/rest-errors.js";
 import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const makeProxyFetchMock = vi.hoisted(() => vi.fn());
+
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
     "openclaw/plugin-sdk/fetch-runtime",
@@ -39,13 +40,8 @@ function cancelTrackedResponse(
 
 describe("sendWebhookMessageDiscord proxy support", () => {
   beforeEach(() => {
-    vi.unstubAllEnvs();
     makeProxyFetchMock.mockReset();
     vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
   });
 
   it("falls back to global fetch when the Discord proxy URL is invalid", async () => {
@@ -105,38 +101,10 @@ describe("sendWebhookMessageDiscord proxy support", () => {
     expect(proxiedFetch).toHaveBeenCalledOnce();
   });
 
-  it("uses proxy fetch when the Discord proxy is a DNS host", async () => {
-    const proxiedFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ id: "msg-dns" }), { status: 200 }));
-    makeProxyFetchMock.mockReturnValue(proxiedFetch);
-
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://mitm-proxy:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    await sendWebhookMessageDiscord("hello", {
-      cfg,
-      accountId: "default",
-      webhookId: "123",
-      webhookToken: "abc",
-      wait: true,
-    });
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://mitm-proxy:8080");
-    expect(proxiedFetch).toHaveBeenCalledOnce();
-  });
-
-  it("uses proxy fetch when the Discord proxy URL is arbitrary DNS", async () => {
-    const proxiedFetch = vi
-      .fn()
+  it("uses global fetch when the Discord proxy URL is remote", async () => {
+    const globalFetchMock = vi
+      .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
-    makeProxyFetchMock.mockReturnValue(proxiedFetch);
 
     const cfg = {
       channels: {
@@ -155,35 +123,9 @@ describe("sendWebhookMessageDiscord proxy support", () => {
       wait: true,
     });
 
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(proxiedFetch).toHaveBeenCalledOnce();
-  });
-
-  it("uses proxy fetch when the Discord proxy URL is a non-loopback IP", async () => {
-    const proxiedFetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ id: "msg-remote" }), { status: 200 }));
-    makeProxyFetchMock.mockReturnValue(proxiedFetch);
-
-    const cfg = {
-      channels: {
-        discord: {
-          token: "Bot test-token",
-          proxy: "http://10.0.0.10:8080",
-        },
-      },
-    } as OpenClawConfig;
-
-    await sendWebhookMessageDiscord("hello", {
-      cfg,
-      accountId: "default",
-      webhookId: "123",
-      webhookToken: "abc",
-      wait: true,
-    });
-
-    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://10.0.0.10:8080");
-    expect(proxiedFetch).toHaveBeenCalledOnce();
+    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(globalFetchMock).toHaveBeenCalled();
+    globalFetchMock.mockRestore();
   });
 
   it("uses global fetch when no proxy is configured", async () => {

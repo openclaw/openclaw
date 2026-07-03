@@ -24,7 +24,6 @@ import {
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
@@ -44,18 +43,37 @@ import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
 
+type AuthChoiceModule = typeof import("../commands/auth-choice.js");
+type ConfigLoggingModule = typeof import("../config/logging.js");
+type ModelPickerModule = typeof import("../commands/model-picker.js");
+type OnboardConfigModule = typeof import("../commands/onboard-config.js");
 type KeepCurrentAuthChoice =
   typeof import("../commands/auth-choice-prompt.js").KEEP_CURRENT_AUTH_CHOICE;
 
-const loadAuthChoiceModule = createLazyRuntimeModule(() => import("../commands/auth-choice.js"));
+let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
+let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
+let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
+let onboardConfigModulePromise: Promise<OnboardConfigModule> | undefined;
 
-const loadConfigLoggingModule = createLazyRuntimeModule(() => import("../config/logging.js"));
+function loadAuthChoiceModule(): Promise<AuthChoiceModule> {
+  authChoiceModulePromise ??= import("../commands/auth-choice.js");
+  return authChoiceModulePromise;
+}
 
-const loadModelPickerModule = createLazyRuntimeModule(() => import("../commands/model-picker.js"));
+function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
+  configLoggingModulePromise ??= import("../config/logging.js");
+  return configLoggingModulePromise;
+}
 
-const loadOnboardConfigModule = createLazyRuntimeModule(
-  () => import("../commands/onboard-config.js"),
-);
+function loadModelPickerModule(): Promise<ModelPickerModule> {
+  modelPickerModulePromise ??= import("../commands/model-picker.js");
+  return modelPickerModulePromise;
+}
+
+function loadOnboardConfigModule(): Promise<OnboardConfigModule> {
+  onboardConfigModulePromise ??= import("../commands/onboard-config.js");
+  return onboardConfigModulePromise;
+}
 
 async function writeWizardConfigFile(
   configInput: OpenClawConfig,

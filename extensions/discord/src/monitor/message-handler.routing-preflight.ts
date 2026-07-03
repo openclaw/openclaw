@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Discord plugin module implements message handler.routing preflight behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -11,9 +10,14 @@ import {
   shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
 
-const loadConversationRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/conversation-binding-runtime"),
-);
+let conversationRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
+  | undefined;
+
+async function loadConversationRuntime() {
+  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-binding-runtime");
+  return await conversationRuntimePromise;
+}
 
 export async function resolveDiscordPreflightRoute(params: {
   preflight: DiscordMessagePreflightParams;

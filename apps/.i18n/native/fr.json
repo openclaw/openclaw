@@ -589,9 +589,9 @@
       "translated": "Activez cette option pour Tailscale ou les hôtes publics. Le ws:// du réseau LAN privé reste pris en charge."
     },
     {
-      "id": "native.android.d56dcd9606f37263",
-      "source": "Leave blank to keep saved token",
-      "translated": "Laissez vide pour conserver le jeton enregistré"
+      "id": "native.android.60da1ba96bf1ed31",
+      "source": "token",
+      "translated": "token"
     },
     {
       "id": "native.android.8123f2cfbe415437",
@@ -857,6 +857,11 @@
       "id": "native.android.c8ce503b95d13058",
       "source": "Linked phones and node hosts will appear here after pairing.",
       "translated": "Les téléphones liés et les hôtes de nœud apparaîtront ici après l’association."
+    },
+    {
+      "id": "native.android.3df83311891719d9",
+      "source": "Device pairing admin needs elevated access. Connected nodes still work.",
+      "translated": "L’administration de l’association des appareils nécessite un accès élevé. Les nœuds connectés continuent de fonctionner."
     },
     {
       "id": "native.android.70b6f8fccd67f4ce",
@@ -1619,21 +1624,6 @@
       "translated": "Lors de l’utilisation"
     },
     {
-      "id": "native.android.f3d5fd047bfdb023",
-      "source": "Replace gateway setup?",
-      "translated": "Remplacer la configuration de la Gateway ?"
-    },
-    {
-      "id": "native.android.869c8be127ce5282",
-      "source": "Replace setup",
-      "translated": "Remplacer la configuration"
-    },
-    {
-      "id": "native.android.c6c8e0c4b8a9a7cf",
-      "source": "Cancel",
-      "translated": "Annuler"
-    },
-    {
       "id": "native.android.718cb50d1bff3e32",
       "source": "Connected",
       "translated": "Connecté"
@@ -1762,26 +1752,6 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Mettre à jour"
-    },
-    {
-      "id": "native.android.13f70e22b5648308",
-      "source": "Licenses",
-      "translated": "Licences"
-    },
-    {
-      "id": "native.android.996367534eb94cc2",
-      "source": "OpenClaw appreciates its partners in the open-source community.",
-      "translated": "OpenClaw remercie ses partenaires de la communauté open source."
-    },
-    {
-      "id": "native.android.24da1d2eb750ba07",
-      "source": "No license notices are packaged in this build.",
-      "translated": "Aucun avis de licence n’est inclus dans cette version."
-    },
-    {
-      "id": "native.android.933e72cac84c571e",
-      "source": "Open ${license.title}",
-      "translated": "Ouvrir ${license.title}"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -5264,14 +5234,14 @@
       "translated": "OpenClaw ne peut pas déterminer l’état actuel de l’autorisation de notification."
     },
     {
-      "id": "native.apple.cfec8b4d042a8066",
-      "source": "Choose system, light, or dark appearance",
-      "translated": "Choisissez l’apparence système, claire ou sombre"
-    },
-    {
       "id": "native.apple.747143c7ef879774",
       "source": "Appearance",
       "translated": "Apparence"
+    },
+    {
+      "id": "native.apple.80fade864c8ad242",
+      "source": "Choose system, light, or dark appearance",
+      "translated": "Choisir l’apparence système, claire ou sombre"
     },
     {
       "id": "native.apple.0b50dca4526336be",
@@ -5312,11 +5282,6 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "À propos"
-    },
-    {
-      "id": "native.apple.529c06f7f7f6e428",
-      "source": "Licenses",
-      "translated": "Licences"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5497,21 +5462,6 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
-    },
-    {
-      "id": "native.apple.5abfcc15e933c483",
-      "source": "No licenses bundled",
-      "translated": "Aucune licence incluse"
-    },
-    {
-      "id": "native.apple.af22fba4150f2c1d",
-      "source": "License files are not available in this build.",
-      "translated": "Les fichiers de licence ne sont pas disponibles dans cette version."
-    },
-    {
-      "id": "native.apple.a82dc4a746268028",
-      "source": "OpenClaw appreciates its partners in the open-source community.",
-      "translated": "OpenClaw remercie ses partenaires de la communauté open source."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -7124,16 +7074,6 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
-      "id": "native.apple.c09f4e3bbef8177a",
-      "source": "Offline",
-      "translated": "Hors ligne"
-    },
-    {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "Prêt"
-    },
-    {
       "id": "native.apple.794c5c98f3a4238d",
       "source": "Listening",
       "translated": "Écoute"
@@ -7162,6 +7102,16 @@
       "id": "native.apple.b0eb8a8cad908166",
       "source": "Native WebRTC",
       "translated": "WebRTC natif"
+    },
+    {
+      "id": "native.apple.c09f4e3bbef8177a",
+      "source": "Offline",
+      "translated": "Hors ligne"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "Prêt"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -7232,16 +7182,6 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "Mise à jour d’OpenClaw"
-    },
-    {
-      "id": "native.apple.b6bc54876f20104f",
-      "source": "Off",
-      "translated": "Désactivé"
-    },
-    {
-      "id": "native.apple.5590d661cdc81fbf",
-      "source": "Paused",
-      "translated": "En pause"
     },
     {
       "id": "native.apple.732051c3e897a9f1",

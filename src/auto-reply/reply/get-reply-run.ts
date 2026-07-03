@@ -20,7 +20,6 @@ import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/open
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
@@ -171,27 +170,6 @@ function normalizeMessageTimestampMs(value: unknown): number | undefined {
   const timestampMs =
     timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
   return asDateTimestampMs(timestampMs);
-}
-
-async function updateRoomEventAmbientTranscriptWatermark(params: {
-  sessionCtx: TemplateContext;
-  storePath?: string;
-  sessionKey?: string;
-}): Promise<void> {
-  const key = normalizeOptionalString(params.sessionCtx.AmbientTranscriptWatermarkKey);
-  const messageId = normalizeOptionalString(params.sessionCtx.AmbientTranscriptMessageId);
-  if (!params.storePath || !params.sessionKey || !key || !messageId) {
-    return;
-  }
-  // Advance only after the transcript row exists; Telegram windows exclude
-  // everything at or before this durable boundary on later turns.
-  await updateAmbientTranscriptWatermark({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    key,
-    messageId,
-    timestampMs: params.sessionCtx.AmbientTranscriptTimestampMs,
-  });
 }
 
 function isSlackDirectRoutedThreadTurn(ctx: MsgContext): boolean {
@@ -629,8 +607,12 @@ export async function runPreparedReply(
   // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
+        cfg,
+        sessionCtx: promptSessionCtx,
         sessionEntry,
         defaultActivation,
+        silentToken: SILENT_REPLY_TOKEN,
+        silentReplyPolicy: silentReplySettings.policy,
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
@@ -756,6 +738,7 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
+    { sourceReplyDeliveryMode },
   );
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
@@ -1304,14 +1287,6 @@ export async function runPreparedReply(
           }),
           errorContext: "reply user turn transcript",
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-          onMessagePersisted: isRoomEvent
-            ? async () =>
-                await updateRoomEventAmbientTranscriptWatermark({
-                  sessionCtx,
-                  storePath,
-                  sessionKey: sessionKey ?? preparedSessionState.sessionId,
-                })
-            : undefined,
         })
       : undefined);
   const replyRoute = resolveEffectiveReplyRoute({
@@ -1454,6 +1429,7 @@ export async function runPreparedReply(
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      suppressNextUserMessagePersistence: isRoomEvent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {

@@ -1,4 +1,4 @@
-/** E2E tests for auto-reply trigger and command handling. */
+/** E2E tests for native /stop targeting the active auto-reply session. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -604,7 +604,10 @@ describe("trigger handling", () => {
       const cfg = makeCfg(home);
       cfg.session = { ...cfg.session, store: join(home, "native-stop.sessions.json") };
       getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
-      const storePath = requireSessionStorePath(cfg);
+      const storePath = cfg.session?.store;
+      if (!storePath) {
+        throw new Error("missing session store path");
+      }
       const targetSessionKey = "agent:main:telegram:group:123";
       const targetSessionId = "session-target";
       await saveSessionStore(
@@ -661,7 +664,8 @@ describe("trigger handling", () => {
         cfg,
       );
 
-      expect(maybeReplyText(res)).toBe("⚙️ Agent was aborted.");
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("⚙️ Agent was aborted.");
       expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
       const store = loadSessionStore(storePath);
       expect(store[targetSessionKey]?.abortedLastRun).toBe(true);

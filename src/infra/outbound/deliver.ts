@@ -41,7 +41,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -124,16 +123,25 @@ export type OutboundDurableDeliverySupport =
     };
 
 const log = createSubsystemLogger("outbound/deliver");
+let transcriptRuntimePromise:
+  | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
+  | undefined;
 
-// Transcript writes are optional side effects; keep this lazy for import-only
-// delivery policy checks and tests.
-const loadTranscriptRuntime = createLazyRuntimeModule(
-  () => import("../../config/sessions/transcript.runtime.js"),
-);
+async function loadTranscriptRuntime() {
+  // Transcript writes are optional side effects; keep this lazy for import-only
+  // delivery policy checks and tests.
+  transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
+  return await transcriptRuntimePromise;
+}
 
-const loadChannelBootstrapRuntime = createLazyRuntimeModule(
-  () => import("./channel-bootstrap.runtime.js"),
-);
+let channelBootstrapRuntimePromise:
+  | Promise<typeof import("./channel-bootstrap.runtime.js")>
+  | undefined;
+
+async function loadChannelBootstrapRuntime() {
+  channelBootstrapRuntimePromise ??= import("./channel-bootstrap.runtime.js");
+  return await channelBootstrapRuntimePromise;
+}
 
 type ChannelHandler = {
   chunker: ChannelOutboundAdapter["chunker"] | null;

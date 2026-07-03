@@ -32,7 +32,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRuns",
   "goal",
   "sessionStartedAt",
-  "ambientTranscriptWatermarks",
   "lastInteractionAt",
   "startedAt",
   "endedAt",

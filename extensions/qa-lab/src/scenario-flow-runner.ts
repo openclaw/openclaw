@@ -161,12 +161,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     }
     return;
   }
-  for (const name of [
-    "sendInbound",
-    "sendNativeCommand",
-    "waitForOutbound",
-    "waitForNoOutbound",
-  ] as const) {
+  for (const name of ["sendInbound", "waitForOutbound", "waitForNoOutbound"] as const) {
     if (name in action) {
       const callable = resolveCallable(`transport.${name}`, api, vars);
       const result = await callable(await resolveValue(action[name], api, vars));

@@ -36,7 +36,6 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -60,7 +59,14 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.runtime-state.js";
 
-const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
+// Import lazily after test env/home setup so config/session paths resolve to test dirs.
+// Keep one cached module per worker for speed.
+let serverModulePromise: Promise<typeof import("./server.js")> | undefined;
+
+async function getServerModule() {
+  serverModulePromise ??= import("./server.js");
+  return await serverModulePromise;
+}
 
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",

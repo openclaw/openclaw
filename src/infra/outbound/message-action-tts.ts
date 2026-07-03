@@ -5,13 +5,15 @@ import { resolveStorePath } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 
-// Keep the TTS runtime lazy so ordinary message sends do not pay the provider import cost.
-const loadMessageActionTtsRuntime = createLazyRuntimeModule(
-  () => import("../../tts/tts.runtime.js"),
-);
+let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | null = null;
+
+function loadMessageActionTtsRuntime() {
+  // Keep the TTS runtime lazy so ordinary message sends do not pay the provider import cost.
+  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return ttsRuntimePromise;
+}
 
 /** Reads the session-level TTS auto mode for a message-action send. */
 export function resolveMessageActionSessionTtsAuto(params: {

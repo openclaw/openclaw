@@ -743,11 +743,10 @@ public actor GatewayChannelActor {
         if scheme == "wss" {
             return true
         }
-        guard scheme == "ws", let host = self.url.host else { return false }
-        // Setup codes intentionally allow plaintext WebSocket bootstrap on local networks
-        // for QR pairing. Persist the resulting bounded device token so reconnects do not
-        // fall back to auth=none after the single-use bootstrap token is cleared.
-        return LoopbackHost.isLocalNetworkHost(host)
+        if let host = self.url.host, LoopbackHost.isLoopback(host) {
+            return true
+        }
+        return false
     }
 
     private func filteredBootstrapHandoffScopes(role: String, scopes: [String]) -> [String]? {

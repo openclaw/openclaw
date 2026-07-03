@@ -38,17 +38,6 @@ private final class AudioBufferQueue: @unchecked Sendable {
     }
 }
 
-private enum VoiceWakeAudioError: LocalizedError {
-    case invalidInputFormat
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidInputFormat:
-            "Microphone input format unavailable"
-        }
-    }
-}
-
 extension AVAudioPCMBuffer {
     fileprivate func deepCopy() -> AVAudioPCMBuffer? {
         let format = self.format
@@ -104,25 +93,13 @@ final class VoiceWakeManager: NSObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapQueue: AudioBufferQueue?
     private var tapDrainTask: Task<Void, Never>?
-    private var scheduledStartTask: Task<Void, Never>?
-    private var isStarting: Bool = false
-    private var isSuspendedForExternalAudio: Bool = false
 
     private var lastDispatched: String?
     private var onCommand: (@Sendable (String) async -> Void)?
     private var userDefaultsObserver: NSObjectProtocol?
     private var suppressedByTalk: Bool = false
 
-    private let externalAudioResumeDelayNs: UInt64
-    private let recognitionErrorRestartDelayNs: UInt64
-
-    override convenience init() {
-        self.init(externalAudioResumeDelayNs: 350_000_000, recognitionErrorRestartDelayNs: 700_000_000)
-    }
-
-    private init(externalAudioResumeDelayNs: UInt64, recognitionErrorRestartDelayNs: UInt64) {
-        self.externalAudioResumeDelayNs = externalAudioResumeDelayNs
-        self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
+    override init() {
         super.init()
         self.triggerWords = VoiceWakePreferences.loadTriggerWords()
         self.userDefaultsObserver = NotificationCenter.default.addObserver(
@@ -160,7 +137,7 @@ final class VoiceWakeManager: NSObject {
     func setEnabled(_ enabled: Bool) {
         self.isEnabled = enabled
         if enabled {
-            self.scheduleStart()
+            Task { await self.start() }
         } else {
             self.stop()
         }
@@ -169,51 +146,20 @@ final class VoiceWakeManager: NSObject {
     func setSuppressedByTalk(_ suppressed: Bool) {
         self.suppressedByTalk = suppressed
         if suppressed {
-            self.cancelScheduledStart()
-            if self.isListening {
-                self.isListening = false
-                self.tearDownRecognitionPipeline()
-            }
+            _ = self.suspendForExternalAudioCapture()
             if self.isEnabled {
                 self.statusText = "Paused"
             }
-        } else if self.isEnabled {
-            self.scheduleStart()
-        }
-    }
-
-    private func scheduleStart(after delayNs: UInt64 = 0) {
-        guard self.isEnabled else { return }
-
-        self.scheduledStartTask?.cancel()
-        self.scheduledStartTask = Task { [weak self] in
-            if delayNs > 0 {
-                try? await Task.sleep(nanoseconds: delayNs)
+        } else {
+            if self.isEnabled {
+                Task { await self.start() }
             }
-            guard !Task.isCancelled else { return }
-            self?.scheduledStartTask = nil
-            await self?.start()
         }
-    }
-
-    private func cancelScheduledStart() {
-        self.scheduledStartTask?.cancel()
-        self.scheduledStartTask = nil
     }
 
     func start() async {
         guard self.isEnabled else { return }
         if self.isListening { return }
-        if self.isStarting { return }
-        guard !self.isSuspendedForExternalAudio else {
-            self.isListening = false
-            self.statusText = "Paused"
-            return
-        }
-
-        self.isStarting = true
-        defer { self.isStarting = false }
-
         guard !self.suppressedByTalk else {
             self.isListening = false
             self.statusText = "Paused"
@@ -255,12 +201,6 @@ final class VoiceWakeManager: NSObject {
             return
         }
 
-        guard self.isEnabled, !self.suppressedByTalk, !self.isSuspendedForExternalAudio else {
-            self.isListening = false
-            self.statusText = self.isEnabled ? "Paused" : "Off"
-            return
-        }
-
         do {
             try Self.configureAudioSession()
             try self.startRecognition()
@@ -268,7 +208,6 @@ final class VoiceWakeManager: NSObject {
             self.statusText = "Listening"
         } catch {
             self.isListening = false
-            self.tearDownRecognitionPipeline()
             self.statusText = "Start failed: \(error.localizedDescription)"
         }
     }
@@ -277,19 +216,14 @@ final class VoiceWakeManager: NSObject {
         self.isEnabled = false
         self.isListening = false
         self.statusText = "Off"
-        self.isSuspendedForExternalAudio = false
-        self.cancelScheduledStart()
         self.tearDownRecognitionPipeline()
     }
 
     /// Temporarily releases the microphone so other subsystems (e.g. camera video capture) can record audio.
-    /// Returns `true` when listening, starting, or a pending restart was active and was suspended.
+    /// Returns `true` when listening was active and was suspended.
     func suspendForExternalAudioCapture() -> Bool {
-        let hadPendingStart = self.scheduledStartTask != nil
-        self.cancelScheduledStart()
-        guard self.isEnabled, self.isListening || self.isStarting || hadPendingStart else { return false }
+        guard self.isEnabled, self.isListening else { return false }
 
-        self.isSuspendedForExternalAudio = true
         self.isListening = false
         self.statusText = "Paused"
         self.tearDownRecognitionPipeline()
@@ -298,13 +232,10 @@ final class VoiceWakeManager: NSObject {
 
     func resumeAfterExternalAudioCapture(wasSuspended: Bool) {
         guard wasSuspended else { return }
-        self.isSuspendedForExternalAudio = false
-        self.scheduleStart(after: self.externalAudioResumeDelayNs)
+        Task { await self.start() }
     }
 
     private func startRecognition() throws {
-        guard self.isEnabled, !self.suppressedByTalk, !self.isSuspendedForExternalAudio else { return }
-
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.tapDrainTask?.cancel()
@@ -320,9 +251,6 @@ final class VoiceWakeManager: NSObject {
         inputNode.removeTap(onBus: 0)
 
         let recordingFormat = inputNode.outputFormat(forBus: 0)
-        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
-            throw VoiceWakeAudioError.invalidInputFormat
-        }
 
         let queue = AudioBufferQueue()
         self.tapQueue = queue
@@ -364,9 +292,8 @@ final class VoiceWakeManager: NSObject {
 
         if self.audioEngine.isRunning {
             self.audioEngine.stop()
+            self.audioEngine.inputNode.removeTap(onBus: 0)
         }
-        // A tap can be installed before AVAudioEngine.start() throws.
-        self.audioEngine.inputNode.removeTap(onBus: 0)
 
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -390,7 +317,13 @@ final class VoiceWakeManager: NSObject {
             self.statusText = "Recognizer error: \(errorText)"
             self.isListening = false
 
-            self.scheduleStart(after: self.recognitionErrorRestartDelayNs)
+            let shouldRestart = self.isEnabled
+            if shouldRestart {
+                Task {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    await self.start()
+                }
+            }
             return
         }
 
@@ -410,7 +343,10 @@ final class VoiceWakeManager: NSObject {
     }
 
     private func startIfEnabled() async {
-        self.scheduleStart()
+        let shouldRestart = self.isEnabled
+        if shouldRestart {
+            await self.start()
+        }
     }
 
     private func extractCommand(from transcript: String, segments: [WakeWordSegment]) -> String? {
@@ -533,21 +469,8 @@ final class VoiceWakeManager: NSObject {
 
 #if DEBUG
 extension VoiceWakeManager {
-    static func _test_withoutRestartDelays() -> VoiceWakeManager {
-        VoiceWakeManager(externalAudioResumeDelayNs: 0, recognitionErrorRestartDelayNs: 0)
-    }
-
     func _test_handleRecognitionCallback(transcript: String?, segments: [WakeWordSegment], errorText: String?) {
         self.handleRecognitionCallback(transcript: transcript, segments: segments, errorText: errorText)
-    }
-
-    func _test_setStartInFlight(_ isStarting: Bool) {
-        self.isStarting = isStarting
-    }
-
-    func _test_waitForScheduledStart() async {
-        let task = self.scheduledStartTask
-        await task?.value
     }
 }
 #endif

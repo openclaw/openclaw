@@ -31,7 +31,6 @@ struct TalkRealtimeToolCallResponse: Decodable {
 
 struct TalkRealtimeServerEvent: Decodable {
     let type: String
-    let error: TalkRealtimeServerError?
     let itemId: String?
     let item: TalkRealtimeServerItem?
     let callId: String?
@@ -43,7 +42,6 @@ struct TalkRealtimeServerEvent: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case type
-        case error
         case itemId = "item_id"
         case item
         case callId = "call_id"
@@ -69,15 +67,6 @@ struct TalkRealtimeServerEvent: Decodable {
     var resolvedArguments: String? {
         self.arguments ?? self.item?.arguments
     }
-
-    var isMaximumDurationError: Bool {
-        guard self.type == "error", let message = self.error?.message?.lowercased() else { return false }
-        return message.contains("session") && message.contains("maximum duration")
-    }
-}
-
-struct TalkRealtimeServerError: Decodable {
-    let message: String?
 }
 
 struct TalkRealtimeServerItem: Decodable {

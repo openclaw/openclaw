@@ -40,28 +40,12 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
   return buffer.toString("utf8");
 }
 
-function isEmptyExistingSourcePage(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    ((error as NodeJS.ErrnoException).code === "ENOENT" ||
-      (error as NodeJS.ErrnoException).code === "EISDIR")
-  );
-}
-
 async function readExistingSourcePage(pagePath: string): Promise<string> {
-  let readError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await fs.readFile(pagePath, "utf8");
-    } catch (error) {
-      readError = error;
-    }
+  try {
+    return await fs.readFile(pagePath, "utf8");
+  } catch {
+    return await fs.readFile(pagePath, "utf8");
   }
-  if (isEmptyExistingSourcePage(readError)) {
-    return "";
-  }
-  throw readError;
 }
 
 export async function ingestMemoryWikiSource(params: {

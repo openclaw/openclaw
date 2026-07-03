@@ -10,7 +10,6 @@ import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import {
   connectOk,
@@ -22,13 +21,20 @@ import {
   writeSessionStore,
 } from "../test-helpers.js";
 
-export const getSessionManagerModule = createLazyRuntimeModule(
-  () => import("../../agents/sessions/index.js"),
-);
+let sessionManagerModulePromise:
+  | Promise<typeof import("../../agents/sessions/index.js")>
+  | undefined;
+let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
-export const getGatewayConfigModule = createLazyRuntimeModule(
-  () => import("../../config/config.js"),
-);
+export async function getSessionManagerModule() {
+  sessionManagerModulePromise ??= import("../../agents/sessions/index.js");
+  return await sessionManagerModulePromise;
+}
+
+export async function getGatewayConfigModule() {
+  gatewayConfigModulePromise ??= import("../../config/config.js");
+  return await gatewayConfigModulePromise;
+}
 
 export async function getSessionsHandlers() {
   return (await import("../server-methods/sessions.js")).sessionsHandlers;

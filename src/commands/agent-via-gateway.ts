@@ -37,7 +37,6 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 
 type AgentGatewayResult = {
@@ -105,7 +104,9 @@ type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
   "clientName" | "mode" | "scopes"
 >;
+type EmbeddedAgentCommandModule = typeof import("./agent.js");
 type AgentSessionModule = typeof import("./agent/session.js");
+type RuntimeConfigModule = typeof import("../config/io.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
 
 const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
@@ -117,50 +118,53 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
 };
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
+let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
+let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
+let runtimeConfigModulePromise: Promise<RuntimeConfigModule> | undefined;
+let replyPayloadModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/reply-payload")>
+  | undefined;
 const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
   import("./agent/session.js");
 let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
-const embeddedAgentCommandLoader = createLazyPromiseLoader(
-  () => import("./agent.js").then((module) => module.agentCommand),
-  { cacheRejections: true },
-);
-const agentSessionModuleCache = createLazyPromiseLoader(() => agentSessionModuleLoader(), {
-  cacheRejections: true,
-});
-const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
-  cacheRejections: true,
-});
-const replyPayloadModuleLoader = createLazyPromiseLoader(
-  () => import("openclaw/plugin-sdk/reply-payload"),
-  { cacheRejections: true },
-);
 let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
 
 function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
   return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
 }
 
-const loadEmbeddedAgentCommand = embeddedAgentCommandLoader.load;
-const loadAgentSessionModule = agentSessionModuleCache.load;
+function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCommand"]> {
+  embeddedAgentCommandPromise ??= import("./agent.js").then((module) => module.agentCommand);
+  return embeddedAgentCommandPromise;
+}
+
+function loadAgentSessionModule(): Promise<AgentSessionModule> {
+  agentSessionModulePromise ??= agentSessionModuleLoader();
+  return agentSessionModulePromise;
+}
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
-  const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
+  runtimeConfigModulePromise ??= import("../config/io.js");
+  const { getRuntimeConfig } = await runtimeConfigModulePromise;
   return getRuntimeConfig();
 }
 
-const loadReplyPayloadModule = replyPayloadModuleLoader.load;
+function loadReplyPayloadModule() {
+  replyPayloadModulePromise ??= import("openclaw/plugin-sdk/reply-payload");
+  return replyPayloadModulePromise;
+}
 
 /** Test-only hooks for resetting lazy imports and shortening retry timing. */
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
-    embeddedAgentCommandLoader.clear();
-    agentSessionModuleCache.clear();
-    runtimeConfigModuleLoader.clear();
-    replyPayloadModuleLoader.clear();
+    embeddedAgentCommandPromise = undefined;
+    agentSessionModulePromise = undefined;
+    runtimeConfigModulePromise = undefined;
+    replyPayloadModulePromise = undefined;
     agentSessionModuleLoader = defaultAgentSessionModuleLoader;
   },
   setAgentSessionModuleLoaderForTests(loader: AgentSessionModuleLoader): void {
-    agentSessionModuleCache.clear();
+    agentSessionModulePromise = undefined;
     agentSessionModuleLoader = loader;
   },
   resolveGatewayAgentTimeoutMs,

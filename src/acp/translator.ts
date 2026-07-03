@@ -47,7 +47,6 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   createInMemoryAcpEventLedger,
@@ -128,16 +127,18 @@ function isTerminalChatSendAckSuccess(status: unknown): boolean {
   return normalizedChatSendAckStatus(status) === "ok";
 }
 
-const loadAcpCommandsModule = createLazyRuntimeModule(() => import("./commands.js"));
-const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
+let acpCommandsModulePromise: Promise<typeof import("./commands.js")> | undefined;
+let acpSdkModulePromise: Promise<typeof import("@agentclientprotocol/sdk")> | undefined;
 
 async function getAvailableCommandsForAcp() {
-  const { getAvailableCommands } = await loadAcpCommandsModule();
+  acpCommandsModulePromise ??= import("./commands.js");
+  const { getAvailableCommands } = await acpCommandsModulePromise;
   return getAvailableCommands();
 }
 
 async function getAcpProtocolVersion() {
-  const { PROTOCOL_VERSION } = await loadAcpSdkModule();
+  acpSdkModulePromise ??= import("@agentclientprotocol/sdk");
+  const { PROTOCOL_VERSION } = await acpSdkModulePromise;
   return PROTOCOL_VERSION;
 }
 

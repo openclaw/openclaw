@@ -1,12 +1,16 @@
 // Matrix plugin module implements plugin entry behavior.
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
 
-const loadMatrixVerificationRuntime = createLazyRuntimeModule(
-  () => import("./matrix/actions/verification.js"),
-);
+type MatrixVerificationRuntime = typeof import("./matrix/actions/verification.js");
+
+let matrixVerificationRuntimePromise: Promise<MatrixVerificationRuntime> | undefined;
+
+function loadMatrixVerificationRuntime(): Promise<MatrixVerificationRuntime> {
+  matrixVerificationRuntimePromise ??= import("./matrix/actions/verification.js");
+  return matrixVerificationRuntimePromise;
+}
 
 function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unknown) {
   respond(false, { error: formatMatrixErrorMessage(err) });

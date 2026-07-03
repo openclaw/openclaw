@@ -1,11 +1,5 @@
 // Narrow session-store helpers for channel hot paths.
 
-import {
-  readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
-  resolveAmbientTranscriptWatermarkKey,
-  updateAmbientTranscriptWatermark,
-  type AmbientTranscriptWatermarkScope,
-} from "../config/sessions/ambient-transcript-watermark.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -20,7 +14,7 @@ import {
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
-import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 
 type SessionStoreReadParams = {
   agentId?: string;
@@ -56,10 +50,6 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
 };
 
 type ReadSessionUpdatedAtParams = SessionStoreReadParams;
-
-type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
-  key: string;
-};
 
 type UpdateSessionStoreEntryParams = {
   storePath: string;
@@ -151,15 +141,6 @@ export async function patchSessionEntry(
 /** Reads the last activity timestamp for one session entry. */
 export function readSessionUpdatedAt(params: ReadSessionUpdatedAtParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
-}
-
-export { resolveAmbientTranscriptWatermarkKey, updateAmbientTranscriptWatermark };
-export type { AmbientTranscriptWatermarkScope };
-
-export function readAmbientTranscriptWatermark(
-  params: ReadAmbientTranscriptWatermarkParams,
-): AmbientTranscriptWatermark | undefined {
-  return readAmbientTranscriptWatermarkFromEntry(getSessionEntry(params), params.key);
 }
 
 /** Updates an existing session entry by store path and session key. */

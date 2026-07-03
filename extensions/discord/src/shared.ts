@@ -5,7 +5,6 @@ import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   isDiscordAccountEnabledForRuntime,
@@ -38,12 +37,19 @@ import { discordSecurityAdapter } from "./security.js";
 import { deriveLegacySessionChatType } from "./session-contract.js";
 
 const DISCORD_CHANNEL = "discord" as const;
+
+type DiscordDoctorModule = typeof import("./doctor.js");
 type DiscordConfigAccessorAccount = {
   allowFrom: string[] | undefined;
   defaultTo: string | undefined;
 };
 
-const loadDiscordDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
+let discordDoctorModulePromise: Promise<DiscordDoctorModule> | undefined;
+
+async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
+  discordDoctorModulePromise ??= import("./doctor.js");
+  return await discordDoctorModulePromise;
+}
 
 const discordDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOnly",

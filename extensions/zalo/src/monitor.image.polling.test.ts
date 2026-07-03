@@ -68,9 +68,6 @@ describe("Zalo polling image handling", () => {
       finalizeInboundContextMock,
       recordInboundSessionMock,
     });
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ Timestamp: 1774084566880 }),
-    );
 
     abort.abort();
     await run;

@@ -60,7 +60,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     });
   });
 
-  it("reports approval availability and DM routing from the relevant delivery surface", () => {
+  it("reports initiating-surface state and DM routing from configured approvers", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
       channel: "telegram",
       channelLabel: "Telegram",
@@ -117,14 +117,6 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       }),
     ).toEqual({ kind: "enabled" });
     expect(
-      getActionAvailabilityState({
-        cfg: {} as never,
-        accountId: "disabled",
-        action: "approve",
-        approvalKind: "plugin",
-      }),
-    ).toEqual({ kind: "enabled" });
-    expect(
       getExecInitiatingSurfaceState({
         cfg: {} as never,
         accountId: "disabled",
@@ -141,7 +133,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     });
   });
 
-  it("keeps plugin availability approver-based when native delivery is off", () => {
+  it("reports enabled when approvers exist even if native delivery is off (#59620)", () => {
     const adapter = createApproverRestrictedNativeApprovalAdapter({
       channel: "telegram",
       channelLabel: "Telegram",
@@ -162,14 +154,6 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
         cfg: {} as never,
         accountId: "default",
         action: "approve",
-      }),
-    ).toEqual({ kind: "enabled" });
-    expect(
-      getActionAvailabilityState({
-        cfg: {} as never,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "plugin",
       }),
     ).toEqual({ kind: "enabled" });
     expect(
@@ -328,13 +312,6 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     ).toBe("Matrix:matrix:ops:setup");
     expect(
-      capability.describePluginApprovalSetup?.({
-        channel: "matrix",
-        channelLabel: "Matrix",
-        accountId: "ops",
-      }),
-    ).toBeUndefined();
-    expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,
         accountId: "work",
@@ -425,10 +402,8 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     );
     expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
-    expect(split.describePluginApprovalSetup).toBeUndefined();
     expect(split.nativeRuntime).toBe(nativeRuntime);
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
-    expect(legacy.describePluginApprovalSetup).toBeUndefined();
   });
 });
 
@@ -470,7 +445,6 @@ describe("createChannelApprovalCapability", () => {
       getExecInitiatingSurfaceState: undefined,
       resolveApproveCommandBehavior: undefined,
       describeExecApprovalSetup: undefined,
-      describePluginApprovalSetup: undefined,
       delivery,
       nativeRuntime,
       render,
@@ -491,7 +465,6 @@ describe("createChannelApprovalCapability", () => {
       getExecInitiatingSurfaceState: undefined,
       resolveApproveCommandBehavior: undefined,
       describeExecApprovalSetup: undefined,
-      describePluginApprovalSetup: undefined,
       delivery,
       nativeRuntime: undefined,
       render: undefined,

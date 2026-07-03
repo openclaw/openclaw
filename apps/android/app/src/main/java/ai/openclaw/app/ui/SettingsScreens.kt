@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
@@ -15,12 +14,10 @@ import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.hasPhotoReadPermission
-import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
-import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -45,7 +42,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -89,13 +85,11 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -108,8 +102,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -141,7 +133,6 @@ internal enum class SettingsRoute {
   Appearance,
   Health,
   About,
-  Licenses,
 }
 
 /**
@@ -173,7 +164,6 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Licenses -> LicensesSettingsScreen(onBack = onBack)
   }
 }
 
@@ -904,6 +894,8 @@ private fun GatewaySettingsScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val savedBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
+  val savedGatewayToken by viewModel.gatewayToken.collectAsState()
   var setupCode by remember { mutableStateOf("") }
   var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
@@ -913,42 +905,6 @@ private fun GatewaySettingsScreen(
   var passwordInput by remember { mutableStateOf("") }
   var validationText by remember { mutableStateOf<String?>(null) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
-  var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
-
-  fun saveAndConnect(plan: GatewayConnectPlan) {
-    validationText = null
-    viewModel.saveGatewayConfigAndConnect(plan)
-  }
-
-  pendingSetupResetPlan?.let { plan ->
-    AlertDialog(
-      onDismissRequest = { pendingSetupResetPlan = null },
-      title = { Text("Replace gateway setup?") },
-      text = {
-        Text(
-          gatewaySettingsSetupResetConfirmationText(),
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.text,
-        )
-      },
-      confirmButton = {
-        TextButton(
-          onClick = {
-            pendingSetupResetPlan = null
-            saveAndConnect(plan)
-          },
-        ) {
-          Text("Replace setup")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingSetupResetPlan = null }) {
-          Text("Cancel")
-        }
-      },
-      containerColor = ClawTheme.colors.surface,
-    )
-  }
 
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
@@ -1009,29 +965,45 @@ private fun GatewaySettingsScreen(
         ClawPrimaryButton(
           text = "Save & Connect",
           onClick = {
-            val plan =
-              resolveGatewayConnectPlan(
-                useSetupCode = setupCode.isNotBlank(),
-                setupCode = setupCode,
-                savedManualHost = manualHost,
-                savedManualPort = manualPort.toString(),
-                savedManualTls = manualTls,
-                manualHostInput = hostInput,
-                manualPortInput = portInput,
-                manualTlsInput = tlsInput,
-                tokenInput = tokenInput,
-                bootstrapTokenInput = bootstrapTokenInput,
-                passwordInput = passwordInput,
-              )
-            if (plan == null) {
+            val setup = setupCode.trim().takeIf { it.isNotEmpty() }?.let(::decodeGatewaySetupCode)
+            val endpointConfig =
+              if (setup != null) {
+                parseGatewayEndpointResult(setup.url).config
+              } else {
+                composeGatewayManualUrl(hostInput, portInput, tlsInput)?.let { parseGatewayEndpointResult(it).config }
+              }
+            if (endpointConfig == null) {
               validationText = "Enter a valid setup code or gateway address."
               return@ClawPrimaryButton
             }
-            if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
-              pendingSetupResetPlan = plan
-            } else {
-              saveAndConnect(plan)
-            }
+            val bootstrapToken =
+              setup
+                ?.bootstrapToken
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { bootstrapTokenInput.trim().ifEmpty { savedBootstrapToken } }
+            val token =
+              setup
+                ?.token
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { tokenInput.trim().ifEmpty { if (bootstrapToken.isBlank()) savedGatewayToken else "" } }
+            val password =
+              setup
+                ?.password
+                ?.trim()
+                .orEmpty()
+                .ifEmpty { passwordInput.trim() }
+            validationText = null
+            viewModel.saveGatewayConfigAndConnect(
+              host = endpointConfig.host,
+              port = endpointConfig.port,
+              tls = endpointConfig.tls,
+              token = token,
+              bootstrapToken = bootstrapToken,
+              password = password,
+              resetSetupAuth = setup != null,
+            )
           },
           modifier = Modifier.fillMaxWidth(),
         )
@@ -1139,68 +1111,6 @@ private fun AboutSettingsScreen(
   }
 }
 
-@Composable
-private fun LicensesSettingsScreen(onBack: () -> Unit) {
-  val context = LocalContext.current
-  val licenses = remember(context) { loadAndroidLicenseNotices(context.assets) }
-  var selectedLicense by remember { mutableStateOf<AndroidLicenseNotice?>(null) }
-  val backToListOrSettings = {
-    if (selectedLicense == null) {
-      onBack()
-    } else {
-      selectedLicense = null
-    }
-  }
-
-  BackHandler(enabled = selectedLicense != null) {
-    selectedLicense = null
-  }
-
-  SettingsDetailFrame(
-    title = "Licenses",
-    subtitle = if (selectedLicense == null) "OpenClaw appreciates its partners in the open-source community." else "",
-    subtitleTextAlign = TextAlign.Center,
-    icon = Icons.Default.Info,
-    onBack = backToListOrSettings,
-  ) {
-    val selected = selectedLicense
-    if (selected == null) {
-      if (licenses.isEmpty()) {
-        ClawPanel {
-          Text(text = "No license notices are packaged in this build.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      } else {
-        ClawListPanel(items = licenses) { license ->
-          LicenseListRow(license = license, onClick = { selectedLicense = license })
-        }
-      }
-    } else {
-      ClawPanel {
-        Text(text = selected.text, style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace), color = ClawTheme.colors.textMuted)
-      }
-    }
-  }
-}
-
-@Composable
-private fun LicenseListRow(
-  license: AndroidLicenseNotice,
-  onClick: () -> Unit,
-) {
-  ClawListItem(
-    title = license.title,
-    onClick = onClick,
-    trailing = {
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = "Open ${license.title}",
-        modifier = Modifier.size(20.dp),
-        tint = ClawTheme.colors.text,
-      )
-    },
-  )
-}
-
 internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
   when (flavor.trim()) {
     "play" -> "Play"
@@ -1208,10 +1118,6 @@ internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): St
     "" -> "Unknown"
     else -> flavor.trim()
   }
-
-internal fun gatewaySettingsSetupResetConfirmationText(): String =
-  "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. " +
-    "This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code."
 
 @Composable
 private fun AboutStatusRow(
@@ -1249,7 +1155,6 @@ internal fun SettingsDetailFrame(
   subtitle: String,
   icon: ImageVector,
   onBack: () -> Unit,
-  subtitleTextAlign: TextAlign = TextAlign.Start,
   content: @Composable () -> Unit,
 ) {
   ClawScaffold(
@@ -1268,16 +1173,8 @@ internal fun SettingsDetailFrame(
           SettingsIconMark(icon = icon)
         }
       }
-      if (subtitle.isNotBlank()) {
-        item {
-          Text(
-            text = subtitle,
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = subtitleTextAlign,
-          )
-        }
+      item {
+        Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
       item {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

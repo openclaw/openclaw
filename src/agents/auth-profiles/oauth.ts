@@ -28,7 +28,10 @@ import {
   resolveTokenExpiryState,
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import {
+  readExternalCliBootstrapCredential,
+  readExternalCliFallbackCredential,
+} from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -231,12 +234,19 @@ export async function refreshOAuthCredentialForRuntime(params: {
 const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
-  readBootstrapCredential: ({ store, profileId, credential }) =>
+  readBootstrapCredential: ({ profileId, credential }) =>
     readExternalCliBootstrapCredential({
-      store,
       profileId,
       credential,
     }),
+  readFallbackCredential: ({ profileId, credential }) =>
+    credential.provider === "openai"
+      ? readExternalCliFallbackCredential({
+          profileId,
+          credential,
+          allowKeychainPrompt: false,
+        })
+      : null,
   isRefreshTokenReusedError,
 });
 
@@ -511,7 +521,6 @@ export async function resolveApiKeyForProfile(
     });
     throw new OAuthRefreshFailureError({
       provider: cred.provider,
-      profileId,
       message:
         `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
         "Please try again or re-authenticate." +

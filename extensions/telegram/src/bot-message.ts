@@ -89,14 +89,8 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
       : {}),
-    ...(telegramDeps.readAmbientTranscriptWatermark
-      ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }
-      : {}),
     ...(telegramDeps.recordInboundSession
       ? { recordInboundSession: telegramDeps.recordInboundSession }
-      : {}),
-    ...(telegramDeps.resolveAmbientTranscriptWatermarkKey
-      ? { resolveAmbientTranscriptWatermarkKey: telegramDeps.resolveAmbientTranscriptWatermarkKey }
       : {}),
     ...(telegramDeps.resolveInboundLastRouteSessionKey
       ? { resolveInboundLastRouteSessionKey: telegramDeps.resolveInboundLastRouteSessionKey }

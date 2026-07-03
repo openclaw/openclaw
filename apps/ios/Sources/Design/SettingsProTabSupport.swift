@@ -12,7 +12,6 @@ enum SettingsRoute: Hashable {
     case diagnostics
     case privacy
     case notifications
-    case licenses
     case about
 }
 

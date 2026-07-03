@@ -6,7 +6,6 @@ import type {
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
@@ -32,11 +31,16 @@ export type {
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
 
-// ACP dispatch pulls in session/media/manager code; keep it lazy so
-// startup-loaded plugin surfaces stay light and concurrent hooks share one load.
-const loadDispatchAcpRuntime = createLazyRuntimeModule(
-  () => import("../auto-reply/reply/dispatch-acp.runtime.js"),
-);
+let dispatchAcpRuntimePromise: Promise<
+  typeof import("../auto-reply/reply/dispatch-acp.runtime.js")
+> | null = null;
+
+function loadDispatchAcpRuntime() {
+  // ACP dispatch pulls in session/media/manager code; cache the dynamic import so
+  // startup-loaded plugin surfaces stay light and concurrent hooks share one load.
+  dispatchAcpRuntimePromise ??= import("../auto-reply/reply/dispatch-acp.runtime.js");
+  return dispatchAcpRuntimePromise;
+}
 
 /**
  * Dispatch a plugin reply hook through ACP when the event targets an ACP-bound session.

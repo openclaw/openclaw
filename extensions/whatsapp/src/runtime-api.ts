@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Whatsapp API module exposes the plugin public contract.
 export { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 export { buildChannelConfigSchema, WhatsAppConfigSchema } from "../config-api.js";
@@ -46,7 +45,12 @@ export type { WhatsAppAccountConfig } from "./account-types.js";
 
 type MonitorWebChannel = typeof import("./channel.runtime.js").monitorWebChannel;
 
-const loadChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+let channelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
+
+function loadChannelRuntime() {
+  channelRuntimePromise ??= import("./channel.runtime.js");
+  return channelRuntimePromise;
+}
 
 export async function monitorWebChannel(
   ...args: Parameters<MonitorWebChannel>

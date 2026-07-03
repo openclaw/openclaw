@@ -1,5 +1,4 @@
 // Matrix plugin module implements crypto facade behavior.
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { EncryptedFile } from "./types.js";
@@ -68,18 +67,15 @@ export type MatrixCryptoFacade = {
 };
 
 type MatrixCryptoNodeRuntime = typeof import("./crypto-node.runtime.js");
-const matrixCryptoNodeRuntimeLoader = createLazyRuntimeModule(
-  () => import("./crypto-node.runtime.js"),
-);
+let matrixCryptoNodeRuntimePromise: Promise<MatrixCryptoNodeRuntime> | null = null;
 
 async function loadMatrixCryptoNodeRuntime(): Promise<MatrixCryptoNodeRuntime> {
   // Keep the native crypto package out of the main CLI startup graph.
-  try {
-    return await matrixCryptoNodeRuntimeLoader();
-  } catch (error) {
-    matrixCryptoNodeRuntimeLoader.clear();
+  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js").catch((error: unknown) => {
+    matrixCryptoNodeRuntimePromise = null;
     throw error;
-  }
+  });
+  return await matrixCryptoNodeRuntimePromise;
 }
 
 async function loadMatrixCryptoNodeBindings() {

@@ -1,10 +1,14 @@
 // Feishu API module exposes the plugin public contract.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
-const loadFeishuSubagentHooksModule = createLazyRuntimeModule(
-  () => import("./src/subagent-hooks.js"),
-);
+type FeishuSubagentHooksModule = typeof import("./src/subagent-hooks.js");
+
+let feishuSubagentHooksPromise: Promise<FeishuSubagentHooksModule> | null = null;
+
+function loadFeishuSubagentHooksModule() {
+  feishuSubagentHooksPromise ??= import("./src/subagent-hooks.js");
+  return feishuSubagentHooksPromise;
+}
 
 export function registerFeishuSubagentHooks(api: OpenClawPluginApi): void {
   api.on("subagent_delivery_target", async (event) => {

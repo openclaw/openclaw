@@ -10,7 +10,6 @@ import {
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
@@ -76,6 +75,8 @@ import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 let slackBoltInterop: SlackBoltResolvedExports | undefined;
+type SlackRelaySourceModule = typeof import("./relay-source.js");
+let slackRelaySourcePromise: Promise<SlackRelaySourceModule> | undefined;
 
 async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   if (!slackBoltInterop) {
@@ -88,7 +89,10 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
   return slackBoltInterop;
 }
 
-const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));
+function loadSlackRelaySource(): Promise<SlackRelaySourceModule> {
+  slackRelaySourcePromise ??= import("./relay-source.js");
+  return slackRelaySourcePromise;
+}
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;

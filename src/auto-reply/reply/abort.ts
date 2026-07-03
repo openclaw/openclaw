@@ -112,17 +112,12 @@ export const testing = {
   },
 };
 
-export function abortSessionRunTargetWithOutcome(params: { key?: string; sessionId?: string }): {
-  active: boolean;
-  aborted: boolean;
-} {
+export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
   const sessionIds = new Set<string>();
   const key = normalizeOptionalString(params.key);
-  let active = key ? replyRunRegistry.isActive(key) : false;
   if (key) {
     const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(key);
     if (activeSessionId) {
-      active = true;
       sessionIds.add(activeSessionId);
     }
   }
@@ -135,25 +130,10 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   for (const sessionId of sessionIds) {
     aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
   }
-  return { active, aborted };
+  return aborted;
 }
 
-export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
-  return abortSessionRunTargetWithOutcome(params).aborted;
-}
-
-export function formatAbortReplyText(
-  stoppedSubagents?: number,
-  rejectionReason?: "finalizing",
-): string {
-  if (rejectionReason === "finalizing") {
-    const base = "Agent reply is already finalizing and can no longer be aborted.";
-    if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
-      return base;
-    }
-    const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-    return `${base} Stopped ${stoppedSubagents} ${label}.`;
-  }
+export function formatAbortReplyText(stoppedSubagents?: number): string {
   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
     return "⚙️ Agent was aborted.";
   }
@@ -278,23 +258,15 @@ export function stopSubagentsForRequester(params: {
           sessionKey: childKey,
           storePath,
         })?.sessionId;
-      const abortOutcome = abortSessionRunTargetWithOutcome({ key: childKey, sessionId });
-      const abortRejected = abortOutcome.active && !abortOutcome.aborted;
-      const markedTerminated = abortRejected
-        ? false
-        : abortDeps.markSubagentRunTerminated({
-            runId: run.runId,
-            childSessionKey: childKey,
-            reason: "killed",
-          }) > 0;
+      const aborted = abortSessionRunTarget({ key: childKey, sessionId });
+      const markedTerminated =
+        abortDeps.markSubagentRunTerminated({
+          runId: run.runId,
+          childSessionKey: childKey,
+          reason: "killed",
+        }) > 0;
 
-      if (
-        !abortRejected &&
-        (markedTerminated ||
-          abortOutcome.aborted ||
-          cleared.followupCleared > 0 ||
-          cleared.laneCleared > 0)
-      ) {
+      if (markedTerminated || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
         stopped += 1;
       }
     }
@@ -316,12 +288,7 @@ export function stopSubagentsForRequester(params: {
 export async function tryFastAbortFromMessage(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
-}): Promise<{
-  handled: boolean;
-  aborted: boolean;
-  rejectionReason?: "finalizing";
-  stoppedSubagents?: number;
-}> {
+}): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
   const commandSessionKey =
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.ParentSessionKey);
@@ -434,26 +401,20 @@ export async function tryFastAbortFromMessage(params: {
       ]),
     );
     let aborted = false;
-    let activeAbortRejected = false;
     for (const abortTargetKey of abortTargetKeys) {
-      const outcome = abortSessionRunTargetWithOutcome({
-        key: abortTargetKey,
-        sessionId: sessionIdsByKey.get(abortTargetKey),
-      });
-      activeAbortRejected ||= outcome.active && !outcome.aborted;
-      aborted = outcome.aborted || aborted;
+      aborted =
+        abortSessionRunTarget({
+          key: abortTargetKey,
+          sessionId: sessionIdsByKey.get(abortTargetKey),
+        }) || aborted;
     }
     const sourceSessionId = sourceAbortKey
       ? (replyRunRegistry.resolveSessionId(sourceAbortKey) ??
         resolveStoredSessionId({ cfg, sessionKey: sourceAbortKey }))
       : undefined;
     if (sourceAbortKey) {
-      const outcome = abortSessionRunTargetWithOutcome({
-        key: sourceAbortKey,
-        sessionId: sourceSessionId,
-      });
-      activeAbortRejected ||= outcome.active && !outcome.aborted;
-      aborted = outcome.aborted || aborted;
+      aborted =
+        abortSessionRunTarget({ key: sourceAbortKey, sessionId: sourceSessionId }) || aborted;
     }
     const cleared = clearSessionQueues(
       abortTargetKeys
@@ -466,14 +427,6 @@ export async function tryFastAbortFromMessage(params: {
       );
     }
     const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
-    if (activeAbortRejected && !aborted) {
-      return {
-        handled: true,
-        aborted: false,
-        rejectionReason: "finalizing",
-        stoppedSubagents: stopped,
-      };
-    }
     let persistedAbortTarget: SessionAbortTargetResult | null = null;
     try {
       persistedAbortTarget = await abortDeps.markSessionAbortTarget({

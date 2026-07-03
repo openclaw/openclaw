@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Zalouser plugin module implements zca client behavior.
 import {
   LoginQRCallbackEventType,
@@ -11,12 +10,14 @@ import {
 type ZcaJsRuntime = {
   Zalo: unknown;
 };
+let zcaJsRuntimePromise: Promise<ZcaJsRuntime> | null = null;
 
-// Keep zca-js behind a runtime boundary so bundled metadata/contracts can load
-// without resolving its optional WebSocket dependency tree.
-const loadZcaJsRuntime = createLazyRuntimeModule(() =>
-  import("zca-js").then((mod) => mod as unknown as ZcaJsRuntime),
-);
+async function loadZcaJsRuntime(): Promise<ZcaJsRuntime> {
+  // Keep zca-js behind a runtime boundary so bundled metadata/contracts can load
+  // without resolving its optional WebSocket dependency tree.
+  zcaJsRuntimePromise ??= import("zca-js").then((mod) => mod as unknown as ZcaJsRuntime);
+  return await zcaJsRuntimePromise;
+}
 
 export { LoginQRCallbackEventType, Reactions, TextStyle, ThreadType };
 export type { Style };

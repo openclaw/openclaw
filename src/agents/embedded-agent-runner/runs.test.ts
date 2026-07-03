@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
   createReplyOperation,
-  isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import {
@@ -46,7 +45,6 @@ type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 function createRunHandle(
   overrides: {
     abort?: () => void;
-    isAbortable?: boolean;
     isCompacting?: boolean;
     isStreaming?: boolean;
     isStopped?: () => boolean;
@@ -64,9 +62,6 @@ function createRunHandle(
     queueMessage: overrides.queueMessage ?? (async () => {}),
     isStreaming: () => overrides.isStreaming ?? true,
     ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
-    ...(overrides.isAbortable !== undefined
-      ? { isAbortable: () => overrides.isAbortable !== false }
-      : {}),
     isCompacting: () => overrides.isCompacting ?? false,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
@@ -127,70 +122,6 @@ describe("embedded-agent runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps finalizing runs active while rejecting abort requests", () => {
-    const abort = vi.fn();
-    const handle = createRunHandle({ abort, isAbortable: false });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:finalizing",
-      sessionId: "session-finalizing",
-      resetTriggered: false,
-    });
-    const replyBackend = {
-      kind: "embedded" as const,
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-    };
-    operation.setPhase("running");
-    operation.attachBackend(replyBackend);
-    setActiveEmbeddedRun("session-finalizing", handle);
-
-    expect(abortEmbeddedAgentRun("session-finalizing")).toBe(false);
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all" })).toBe(false);
-    expect(isEmbeddedAgentRunAbortableForCompaction("session-finalizing")).toBe(true);
-    expect(isEmbeddedAgentRunHandleActive("session-finalizing")).toBe(true);
-    expect(operation.result).toBeNull();
-    expect(abort).not.toHaveBeenCalled();
-
-    clearActiveEmbeddedRun("session-finalizing", handle);
-    operation.detachBackend(replyBackend);
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all" })).toBe(true);
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    operation.complete();
-    expect(isEmbeddedAgentRunHandleActive("session-finalizing")).toBe(false);
-  });
-
-  it("keeps frozen run ownership through forced in-process restart", () => {
-    const abort = vi.fn();
-    const handle = createRunHandle({ abort, isAbortable: false });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:restart-finalizing",
-      sessionId: "session-restart-finalizing",
-      resetTriggered: false,
-    });
-    const replyBackend = {
-      kind: "embedded" as const,
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-    };
-    operation.setPhase("running");
-    operation.attachBackend(replyBackend);
-    setActiveEmbeddedRun("session-restart-finalizing", handle);
-
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(false);
-    expect(isEmbeddedAgentRunHandleActive("session-restart-finalizing")).toBe(true);
-    expect(isReplyRunActiveForSessionId("session-restart-finalizing")).toBe(true);
-    expect(operation.result).toBeNull();
-    expect(abort).not.toHaveBeenCalled();
-
-    clearActiveEmbeddedRun("session-restart-finalizing", handle);
-    operation.detachBackend(replyBackend);
-    operation.complete();
-    expect(isEmbeddedAgentRunHandleActive("session-restart-finalizing")).toBe(false);
-    expect(isReplyRunActiveForSessionId("session-restart-finalizing")).toBe(false);
   });
 
   it("passes restart ownership to every aborted run", () => {

@@ -24,19 +24,23 @@ import {
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
+type ExecApprovalCommandSpansRuntime =
+  typeof import("./bash-tools.exec-approval-request.runtime.js");
+
+let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
 const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
-const loadExecApprovalCommandSpansRuntime = createLazyPromise(
-  () => import("./bash-tools.exec-approval-request.runtime.js"),
-  { cacheRejections: true },
-);
+function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
+  execApprovalCommandSpansRuntimePromise ??=
+    import("./bash-tools.exec-approval-request.runtime.js");
+  return execApprovalCommandSpansRuntimePromise;
+}
 
 /** Gateway payload fields used to register or wait for an exec approval decision. */
 type RequestExecApprovalDecisionParams = {

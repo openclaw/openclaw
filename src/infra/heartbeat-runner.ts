@@ -106,7 +106,6 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -173,10 +172,13 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
+let heartbeatRunnerRuntimePromise: Promise<typeof import("./heartbeat-runner.runtime.js")> | null =
+  null;
 
-const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
-  () => import("./heartbeat-runner.runtime.js"),
-);
+function loadHeartbeatRunnerRuntime() {
+  heartbeatRunnerRuntimePromise ??= import("./heartbeat-runner.runtime.js");
+  return heartbeatRunnerRuntimePromise;
+}
 
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;

@@ -6,7 +6,6 @@ import type { FinalizedMsgContext } from "../templating.js";
 type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
-  rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
 
@@ -17,7 +16,4 @@ export type TryFastAbortFromMessage = (params: {
 }) => Promise<FastAbortResult>;
 
 /** Formats the user-visible abort acknowledgement text. */
-export type FormatAbortReplyText = (
-  stoppedSubagents?: number,
-  rejectionReason?: FastAbortResult["rejectionReason"],
-) => string;
+export type FormatAbortReplyText = (stoppedSubagents?: number) => string;

@@ -13,7 +13,9 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -734,14 +736,35 @@ class TalkModeManager internal constructor(
       }
     realtimeCaptureJob =
       scope.launch(Dispatchers.IO) {
-        var audioInput: AndroidAudioInputSession? = null
+        var audioRecord: AudioRecord? = null
         try {
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
-          audioInput = AndroidAudioInputSession.open(context, realtimeSampleRateHz, frameBytes)
+          val minBuffer =
+            AudioRecord.getMinBufferSize(
+              realtimeSampleRateHz,
+              AudioFormat.CHANNEL_IN_MONO,
+              AudioFormat.ENCODING_PCM_16BIT,
+            )
+          if (minBuffer <= 0) {
+            throw IllegalStateException("AudioRecord buffer unavailable")
+          }
+          audioRecord =
+            AudioRecord
+              .Builder()
+              .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+              .setAudioFormat(
+                AudioFormat
+                  .Builder()
+                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                  .setSampleRate(realtimeSampleRateHz)
+                  .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                  .build(),
+              ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
+              .build()
           val buffer = ByteArray(frameBytes)
-          audioInput.startRecording()
+          audioRecord.startRecording()
           while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
-            val read = audioInput.read(buffer, 0, buffer.size)
+            val read = audioRecord.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             if (!shouldAppendRealtimeCapturedFrame(read)) continue
             audioFrames.trySend(buffer.copyOf(read))
@@ -752,7 +775,13 @@ class TalkModeManager internal constructor(
           failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
         } finally {
           audioFrames.close()
-          audioInput?.close()
+          audioRecord?.let { record ->
+            try {
+              record.stop()
+            } catch (_: Throwable) {
+            }
+            record.release()
+          }
         }
       }
   }

@@ -118,7 +118,6 @@ export function createQaBusState() {
     threadTitle?: string;
     replyToId?: string;
     attachments?: QaBusAttachment[];
-    nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
     toolCalls?: QaBusToolCall[];
   }): QaBusMessage => {
     const conversation = ensureConversation(params.conversation);
@@ -136,7 +135,6 @@ export function createQaBusState() {
       threadTitle: params.threadTitle,
       replyToId: params.replyToId,
       attachments: params.attachments?.map((attachment) => ({ ...attachment })) ?? [],
-      ...(params.nativeCommand ? { nativeCommand: { ...params.nativeCommand } } : {}),
       ...(toolCalls ? { toolCalls } : {}),
       reactions: [],
     };
@@ -177,7 +175,6 @@ export function createQaBusState() {
         threadTitle: input.threadTitle,
         replyToId: input.replyToId,
         attachments: input.attachments,
-        nativeCommand: input.nativeCommand,
         toolCalls: input.toolCalls,
       });
       pushEvent({

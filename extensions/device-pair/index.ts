@@ -2,24 +2,42 @@
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildDevicePairPairingQrChannelData } from "./pairing-qr-channel-data.js";
+
+type DevicePairApiModule = typeof import("./api.js");
 type NotifyModule = typeof import("./notify.js");
+type PairCommandApproveModule = typeof import("./pair-command-approve.js");
+type PairCommandAuthModule = typeof import("./pair-command-auth.js");
 
-const loadDevicePairApiModule = createLazyRuntimeModule(() => import("./api.js"));
+let devicePairApiModulePromise: Promise<DevicePairApiModule> | undefined;
+let notifyModulePromise: Promise<NotifyModule> | undefined;
+let pairCommandApproveModulePromise: Promise<PairCommandApproveModule> | undefined;
+let pairCommandAuthModulePromise: Promise<PairCommandAuthModule> | undefined;
 
-const loadNotifyModule = createLazyRuntimeModule(() => import("./notify.js"));
+function loadDevicePairApiModule(): Promise<DevicePairApiModule> {
+  devicePairApiModulePromise ??= import("./api.js");
+  return devicePairApiModulePromise;
+}
 
-const loadPairCommandApproveModule = createLazyRuntimeModule(
-  () => import("./pair-command-approve.js"),
-);
+function loadNotifyModule(): Promise<NotifyModule> {
+  notifyModulePromise ??= import("./notify.js");
+  return notifyModulePromise;
+}
 
-const loadPairCommandAuthModule = createLazyRuntimeModule(() => import("./pair-command-auth.js"));
+function loadPairCommandApproveModule(): Promise<PairCommandApproveModule> {
+  pairCommandApproveModulePromise ??= import("./pair-command-approve.js");
+  return pairCommandApproveModulePromise;
+}
+
+function loadPairCommandAuthModule(): Promise<PairCommandAuthModule> {
+  pairCommandAuthModulePromise ??= import("./pair-command-auth.js");
+  return pairCommandAuthModulePromise;
+}
 
 function formatDurationMinutes(expiresAtMs: number): string {
   const msRemaining = Math.max(0, expiresAtMs - Date.now());

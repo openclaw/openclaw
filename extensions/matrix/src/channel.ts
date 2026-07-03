@@ -21,10 +21,7 @@ import {
   createResolvedDirectoryEntriesLister,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
-import {
-  createLazyRuntimeNamedExport,
-  createLazyRuntimeModule,
-} from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -92,8 +89,12 @@ const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "matrixChannelRuntime",
 );
+let matrixDoctorModulePromise: Promise<typeof import("./doctor.js")> | null = null;
 
-const loadMatrixDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
+const loadMatrixDoctorModule = async () => {
+  matrixDoctorModulePromise ??= import("./doctor.js");
+  return await matrixDoctorModulePromise;
+};
 
 const meta = {
   id: "matrix",

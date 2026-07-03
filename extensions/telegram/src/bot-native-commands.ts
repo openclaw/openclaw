@@ -31,7 +31,6 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -107,7 +106,6 @@ import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
-
 export {
   buildTelegramNativeCommandCallbackData,
   parseTelegramNativeCommandCallbackData,
@@ -200,13 +198,24 @@ function buildTelegramCommandMenuModelContext(params: {
   };
 }
 
-const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.delivery.runtime.js"),
-);
+let telegramNativeCommandDeliveryRuntimePromise:
+  | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
+  | undefined;
 
-const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.runtime.js"),
-);
+async function loadTelegramNativeCommandDeliveryRuntime() {
+  telegramNativeCommandDeliveryRuntimePromise ??=
+    import("./bot-native-commands.delivery.runtime.js");
+  return await telegramNativeCommandDeliveryRuntimePromise;
+}
+
+let telegramNativeCommandRuntimePromise:
+  | Promise<typeof import("./bot-native-commands.runtime.js")>
+  | undefined;
+
+async function loadTelegramNativeCommandRuntime() {
+  telegramNativeCommandRuntimePromise ??= import("./bot-native-commands.runtime.js");
+  return await telegramNativeCommandRuntimePromise;
+}
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 

@@ -4,14 +4,17 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
-// Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
-// message runtime internals into registration/discovery-only paths.
-const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
-  () => import("../channels/message/runtime.js"),
-);
+type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
+
+let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
+
+const loadChannelMessageRuntimeModule = async () => {
+  // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
+  // message runtime internals into registration/discovery-only paths.
+  channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
+  return await channelMessageRuntimeModulePromise;
+};
 
 export type {
   DurableInboundReplyDeliveryOptions,

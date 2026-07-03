@@ -1,8 +1,6 @@
 // Telegram plugin module implements audit behavior.
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-
 export type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,
@@ -54,9 +52,13 @@ export function collectTelegramUnmentionedGroupIds(
   return { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups };
 }
 
-const loadAuditMembershipRuntime = createLazyRuntimeModule(
-  () => import("./audit-membership-runtime.js"),
-);
+let auditMembershipRuntimePromise: Promise<typeof import("./audit-membership-runtime.js")> | null =
+  null;
+
+function loadAuditMembershipRuntime() {
+  auditMembershipRuntimePromise ??= import("./audit-membership-runtime.js");
+  return auditMembershipRuntimePromise;
+}
 
 export async function auditTelegramGroupMembership(
   params: AuditTelegramGroupMembershipParams,

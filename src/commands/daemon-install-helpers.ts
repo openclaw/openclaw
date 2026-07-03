@@ -43,7 +43,6 @@ import {
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -61,6 +60,13 @@ type GatewayInstallPlan = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
+let daemonInstallAuthProfileSourceRuntimePromise:
+  | Promise<typeof import("./daemon-install-auth-profiles-source.runtime.js")>
+  | undefined;
+let daemonInstallAuthProfileStoreRuntimePromise:
+  | Promise<typeof import("./daemon-install-auth-profiles-store.runtime.js")>
+  | undefined;
+
 const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
@@ -77,15 +83,17 @@ function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
   return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
 }
 
-const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-source.runtime.js"),
-  { cacheRejections: true },
-);
+function loadDaemonInstallAuthProfileSourceRuntime() {
+  daemonInstallAuthProfileSourceRuntimePromise ??=
+    import("./daemon-install-auth-profiles-source.runtime.js");
+  return daemonInstallAuthProfileSourceRuntimePromise;
+}
 
-const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-store.runtime.js"),
-  { cacheRejections: true },
-);
+function loadDaemonInstallAuthProfileStoreRuntime() {
+  daemonInstallAuthProfileStoreRuntimePromise ??=
+    import("./daemon-install-auth-profiles-store.runtime.js");
+  return daemonInstallAuthProfileStoreRuntimePromise;
+}
 
 async function resolveAuthProfileStoreForServiceEnv(
   authStore: AuthProfileStore | undefined,

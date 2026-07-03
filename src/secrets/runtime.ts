@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
   canUseSecretsRuntimeFastPath,
@@ -42,13 +41,18 @@ export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
 registerSecretsRuntimeStateClearHook(clearRuntimeAuthProfileStoreSnapshots);
 
-const loadRuntimeManifestHelpers = createLazyRuntimeModule(
-  () => import("./runtime-manifest.runtime.js"),
-);
+let runtimeManifestPromise: Promise<typeof import("./runtime-manifest.runtime.js")> | null = null;
+let runtimePreparePromise: Promise<typeof import("./runtime-prepare.runtime.js")> | null = null;
 
-const loadRuntimePrepareHelpers = createLazyRuntimeModule(
-  () => import("./runtime-prepare.runtime.js"),
-);
+function loadRuntimeManifestHelpers() {
+  runtimeManifestPromise ??= import("./runtime-manifest.runtime.js");
+  return runtimeManifestPromise;
+}
+
+function loadRuntimePrepareHelpers() {
+  runtimePreparePromise ??= import("./runtime-prepare.runtime.js");
+  return runtimePreparePromise;
+}
 
 async function resolveLoadablePluginOrigins(params: {
   config: OpenClawConfig;

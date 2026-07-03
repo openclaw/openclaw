@@ -13,7 +13,6 @@ import {
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   normalizeNullableString,
@@ -295,13 +294,15 @@ export type MatrixOwnDeviceDeleteResult = {
 type MatrixCryptoRuntime = typeof import("./sdk/crypto-runtime.js");
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
+let matrixCryptoRuntimePromise: Promise<MatrixCryptoRuntime> | null = null;
 
-const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
-  import("./sdk/crypto-runtime.js").then((runtime) => {
+async function loadMatrixCryptoRuntime(): Promise<MatrixCryptoRuntime> {
+  matrixCryptoRuntimePromise ??= import("./sdk/crypto-runtime.js").then((runtime) => {
     loadedMatrixCryptoRuntime = runtime;
     return runtime;
-  }),
-);
+  });
+  return await matrixCryptoRuntimePromise;
+}
 
 const normalizeOptionalString = normalizeNullableString;
 

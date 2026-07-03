@@ -10,7 +10,6 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -66,7 +65,6 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
-
 export { diagnosticLogger, logLaneDequeue, logLaneEnqueue } from "./diagnostic-runtime.js";
 
 const webhookStats = {
@@ -86,9 +84,12 @@ const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
 const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
-const loadStuckSessionRecoveryRuntime = createLazyRuntimeModule(
-  () => import("./diagnostic-stuck-session-recovery.runtime.js"),
-);
+let commandPollBackoffRuntimePromise: Promise<
+  typeof import("../agents/command-poll-backoff.runtime.js")
+> | null = null;
+let stuckSessionRecoveryRuntimePromise: Promise<
+  typeof import("./diagnostic-stuck-session-recovery.runtime.js")
+> | null = null;
 
 type EmitDiagnosticMemorySample = typeof emitDiagnosticMemorySample;
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
@@ -152,14 +153,16 @@ let lastDiagnosticLivenessEventLoopUtilization: EventLoopUtilization | null = nu
 let lastDiagnosticLivenessEventAt = 0;
 let lastDiagnosticLivenessWarnAt = 0;
 
-const loadCommandPollBackoffRuntime = createLazyRuntimeModule(
-  () => import("../agents/command-poll-backoff.runtime.js"),
-);
+function loadCommandPollBackoffRuntime() {
+  commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
+  return commandPollBackoffRuntimePromise;
+}
 
 async function recoverStuckSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
-  return loadStuckSessionRecoveryRuntime()
+  stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
+  return stuckSessionRecoveryRuntimePromise
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
     .catch((err: unknown) => {
       diag.warn(`stuck session recovery unavailable: ${String(err)}`);

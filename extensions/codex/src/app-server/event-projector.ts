@@ -150,9 +150,6 @@ export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
-  private latestCompletedItemId: string | undefined;
-  private latestCompletedTerminalAssistantItemId: string | undefined;
-  private pendingRawTerminalAssistantEchoItemId: string | undefined;
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
@@ -223,31 +220,8 @@ export class CodexAppServerEventProjector {
   }
 
   hasCompletedTerminalAssistantText(): boolean {
-    const latestCompletedItemId = this.latestCompletedTerminalAssistantItemId;
-    if (!latestCompletedItemId) {
-      return false;
-    }
     const finalItem = this.resolveFinalAssistantTextItem();
-    return (
-      this.latestCompletedItemId === latestCompletedItemId &&
-      finalItem?.itemId === latestCompletedItemId &&
-      this.completedItemIds.has(latestCompletedItemId)
-    );
-  }
-
-  /** Restores a completed final item after only the enclosing turn timeout fired. */
-  recoverCompletedTerminalAssistantAfterTurnWatchTimeout(): boolean {
-    if (
-      !this.aborted ||
-      this.promptError !== "codex app-server attempt timed out" ||
-      !this.hasCompletedTerminalAssistantText()
-    ) {
-      return false;
-    }
-    this.aborted = false;
-    this.promptError = undefined;
-    this.promptErrorSource = null;
-    return true;
+    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
   }
 
   /** Resolves the shared model-order position for a native tool item. */
@@ -662,9 +636,6 @@ export class CodexAppServerEventProjector {
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
-    if (itemId && itemId !== this.pendingRawTerminalAssistantEchoItemId) {
-      this.pendingRawTerminalAssistantEchoItemId = undefined;
-    }
     this.rememberAssistantPhase(item);
     if (itemId) {
       this.activeItemIds.add(itemId);
@@ -713,19 +684,11 @@ export class CodexAppServerEventProjector {
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
-    if (itemId && itemId !== this.pendingRawTerminalAssistantEchoItemId) {
-      this.pendingRawTerminalAssistantEchoItemId = undefined;
-    }
     if (itemId) {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
-      this.latestCompletedItemId = itemId;
     }
     this.rememberAssistantPhase(item);
-    if (item?.type === "agentMessage" && !this.isCommentaryAssistantItem(item.id)) {
-      this.latestCompletedTerminalAssistantItemId = item.id;
-      this.pendingRawTerminalAssistantEchoItemId = item.id;
-    }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
@@ -990,34 +953,15 @@ export class CodexAppServerEventProjector {
       return;
     }
     await this.recordRawGeneratedImageMedia(item);
-    const role = readString(item, "role");
-    const phase = readString(item, "phase");
-    const isPendingTerminalAssistantEcho =
-      role === "assistant" &&
-      phase !== "commentary" &&
-      this.pendingRawTerminalAssistantEchoItemId !== undefined;
-    if (!isPendingTerminalAssistantEcho) {
-      this.latestCompletedItemId = undefined;
-    }
-    if (role !== "assistant") {
+    if (readString(item, "role") !== "assistant") {
       return;
     }
+    const phase = readString(item, "phase");
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
     const text = extractRawAssistantText(item);
-    if (phase !== "commentary" && this.pendingRawTerminalAssistantEchoItemId) {
-      const typedItemId = this.pendingRawTerminalAssistantEchoItemId;
-      this.pendingRawTerminalAssistantEchoItemId = undefined;
-      // Contributors may rewrite the typed completion without rewriting its raw echo.
-      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
-        return;
-      }
-      this.rememberAssistantItem(typedItemId);
-      this.assistantTextByItem.set(typedItemId, text);
-      return;
-    }
     if (!text) {
       return;
     }

@@ -11,8 +11,6 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
-import ai.openclaw.app.ui.GatewayConnectPlan
-import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -281,6 +279,10 @@ class MainViewModel(
     prefs.setManualTls(value)
   }
 
+  fun setGatewayToken(value: String) {
+    prefs.setGatewayToken(value)
+  }
+
   fun setGatewayBootstrapToken(value: String) {
     prefs.setGatewayBootstrapToken(value)
   }
@@ -302,44 +304,37 @@ class MainViewModel(
     deviceAuthStore.clearToken(deviceId, "operator")
   }
 
-  internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
+  fun saveGatewayConfigAndConnect(
+    host: String,
+    port: Int,
+    tls: Boolean,
+    token: String,
+    bootstrapToken: String,
+    password: String,
+    resetSetupAuth: Boolean,
+  ) {
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
     viewModelScope.launch(Dispatchers.Default) {
-      val config = plan.config
-      val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE
-      val hasExplicitAuth =
-        config.token.isNotEmpty() || config.bootstrapToken.isNotEmpty() || config.password.isNotEmpty()
-      if (replacesSavedAuth) {
+      if (resetSetupAuth) {
         resetGatewaySetupAuth()
       }
       prefs.setManualEnabled(true)
-      prefs.setManualHost(config.host)
-      prefs.setManualPort(config.port)
-      prefs.setManualTls(config.tls)
-
-      // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
-      // including password-only setups that Compose deliberately cannot read back.
-      if (replacesSavedAuth || hasExplicitAuth) {
-        prefs.setGatewayBootstrapToken(config.bootstrapToken)
-        prefs.setGatewayToken(config.token)
-        prefs.setGatewayPassword(config.password)
-      }
-
-      val runtime = ensureRuntime()
-      val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
-      if (replacesSavedAuth || hasExplicitAuth) {
-        runtime.connect(
-          endpoint,
+      prefs.setManualHost(host)
+      prefs.setManualPort(port)
+      prefs.setManualTls(tls)
+      prefs.setGatewayBootstrapToken(bootstrapToken)
+      prefs.setGatewayToken(token)
+      prefs.setGatewayPassword(password)
+      ensureRuntime()
+        .connect(
+          GatewayEndpoint.manual(host = host, port = port),
           NodeRuntime.GatewayConnectAuth(
-            token = config.token.ifEmpty { null },
-            bootstrapToken = config.bootstrapToken.ifEmpty { null },
-            password = config.password.ifEmpty { null },
+            token = token.ifEmpty { null },
+            bootstrapToken = bootstrapToken.ifEmpty { null },
+            password = password.ifEmpty { null },
           ),
         )
-      } else {
-        runtime.connect(endpoint)
-      }
     }
   }
 

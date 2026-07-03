@@ -25,7 +25,6 @@ import type {
   MigrationProviderPlugin,
 } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
@@ -69,15 +68,27 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
 ] as const;
 const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
 
-const loadMigrationProviderRuntimeModule = createLazyRuntimeModule(
-  () => import("../plugins/migration-provider-runtime.js"),
-);
+let migrationProviderRuntimeModulePromise: Promise<
+  typeof import("../plugins/migration-provider-runtime.js")
+> | null = null;
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
 
-const loadMigrationContextModule = createLazyRuntimeModule(
-  () => import("../commands/migrate/context.js"),
-);
+const loadMigrationProviderRuntimeModule = async () => {
+  migrationProviderRuntimeModulePromise ??= import("../plugins/migration-provider-runtime.js");
+  return await migrationProviderRuntimeModulePromise;
+};
 
-const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
+};
 
 async function exists(candidate: string): Promise<boolean> {
   try {

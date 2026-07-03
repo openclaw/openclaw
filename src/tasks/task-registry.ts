@@ -15,7 +15,6 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
@@ -92,24 +91,9 @@ type TaskRegistryGlobalWithRuntimeOverrides = typeof globalThis & {
   [TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY]?: TaskRegistryDeliveryRuntime | null;
   [TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY]?: TaskRegistryControlRuntime | null;
 };
-const deliveryRuntimeLoader = createLazyPromiseLoader(
-  () => import("./task-registry-delivery-runtime.js"),
-  { cacheRejections: true },
-);
-const controlRuntimeLoader = createLazyPromiseLoader(
-  () =>
-    Promise.resolve().then(() => {
-      for (const candidate of TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES) {
-        try {
-          return require(candidate) as TaskRegistryControlRuntime;
-        } catch {
-          // Try runtime/source candidates in order.
-        }
-      }
-      throw new Error("Failed to load task registry control runtime.");
-    }),
-  { cacheRejections: true },
-);
+let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
+  null;
+let controlRuntimePromise: Promise<TaskRegistryControlRuntime> | null = null;
 
 type TaskDeliveryOwner = {
   sessionKey?: string;
@@ -583,7 +567,8 @@ function loadTaskRegistryDeliveryRuntime() {
   if (deliveryRuntimeOverride) {
     return Promise.resolve(deliveryRuntimeOverride);
   }
-  return deliveryRuntimeLoader.load();
+  deliveryRuntimePromise ??= import("./task-registry-delivery-runtime.js");
+  return deliveryRuntimePromise;
 }
 
 function loadTaskRegistryControlRuntime() {
@@ -595,7 +580,17 @@ function loadTaskRegistryControlRuntime() {
   }
   // Registry reads happen far more often than task cancellation, so keep the ACP/subagent
   // control graph off the default import path until a cancellation flow actually needs it.
-  return controlRuntimeLoader.load();
+  controlRuntimePromise ??= Promise.resolve().then(() => {
+    for (const candidate of TASK_REGISTRY_CONTROL_RUNTIME_CANDIDATES) {
+      try {
+        return require(candidate) as TaskRegistryControlRuntime;
+      } catch {
+        // Try runtime/source candidates in order.
+      }
+    }
+    throw new Error("Failed to load task registry control runtime.");
+  });
+  return controlRuntimePromise;
 }
 
 function addRunIdIndex(taskId: string, runId?: string) {
@@ -2408,8 +2403,8 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
     listenerStop = null;
   }
   listenerStarted = false;
-  deliveryRuntimeLoader.clear();
-  controlRuntimeLoader.clear();
+  deliveryRuntimePromise = null;
+  controlRuntimePromise = null;
   if (opts?.persist !== false) {
     persistTaskRegistry();
   }
@@ -2422,26 +2417,26 @@ export function resetTaskRegistryDeliveryRuntimeForTests() {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = null;
-  deliveryRuntimeLoader.clear();
+  deliveryRuntimePromise = null;
 }
 
 export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
   ] = runtime;
-  deliveryRuntimeLoader.clear();
+  deliveryRuntimePromise = null;
 }
 
 export function resetTaskRegistryControlRuntimeForTests() {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = null;
-  controlRuntimeLoader.clear();
+  controlRuntimePromise = null;
 }
 
 export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
   (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
     TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
   ] = runtime;
-  controlRuntimeLoader.clear();
+  controlRuntimePromise = null;
 }

@@ -8,7 +8,6 @@ import {
 } from "../plugin-sdk/migration.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
 export type PostInstallMigrationOptions = {
@@ -35,11 +34,19 @@ type ResolvedProviderCandidate = {
   source?: string;
 };
 
-const loadMigrationContextModule = createLazyRuntimeModule(
-  () => import("../commands/migrate/context.js"),
-);
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
 
-const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
+};
 
 async function resolveCandidates(params: {
   config: OpenClawConfig;

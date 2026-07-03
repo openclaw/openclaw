@@ -31,7 +31,7 @@ import okhttp3.WebSocketListener
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Identity advertised during gateway connect; these fields become the device row users approve.
@@ -116,16 +116,6 @@ private data class SelectedConnectAuth(
 private class GatewayConnectFailure(
   val gatewayError: GatewaySession.ErrorShape,
 ) : IllegalStateException(gatewayError.message)
-
-private class GatewayRequestNotEnqueued(
-  message: String,
-) : IllegalStateException(message)
-
-internal enum class NodeEventSendOutcome {
-  COMPLETED,
-  DISCONNECTED,
-  FAILED,
-}
 
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
@@ -273,33 +263,22 @@ class GatewaySession(
     currentConnection?.closeQuietly()
   }
 
-  private fun readyConnection(): Connection? = currentConnection?.takeIf { it.isReady() }
-
-  internal fun isReady(): Boolean = readyConnection() != null
-
   /** Sends a best-effort node.event and returns false instead of throwing on failure. */
   suspend fun sendNodeEvent(
     event: String,
     payloadJson: String?,
-  ): Boolean = sendNodeEventWithOutcome(event, payloadJson) == NodeEventSendOutcome.COMPLETED
-
-  internal suspend fun sendNodeEventWithOutcome(
-    event: String,
-    payloadJson: String?,
-  ): NodeEventSendOutcome {
-    val conn = readyConnection() ?: return NodeEventSendOutcome.DISCONNECTED
+  ): Boolean {
+    val conn = currentConnection ?: return false
     return try {
       conn.request(
         "node.event",
         buildNodeEventParams(event = event, payloadJson = payloadJson),
         timeoutMs = 8_000,
       )
-      NodeEventSendOutcome.COMPLETED
-    } catch (_: GatewayRequestNotEnqueued) {
-      NodeEventSendOutcome.DISCONNECTED
+      true
     } catch (err: Throwable) {
       Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
-      NodeEventSendOutcome.FAILED
+      false
     }
   }
 
@@ -310,7 +289,7 @@ class GatewaySession(
     timeoutMs: Long = 8_000,
   ): RpcResult {
     val conn =
-      readyConnection()
+      currentConnection
         ?: return RpcResult(
           ok = false,
           payloadJson = null,
@@ -358,7 +337,7 @@ class GatewaySession(
     paramsJson: String?,
     timeoutMs: Long = 15_000,
   ): RpcResult {
-    val conn = readyConnection() ?: throw IllegalStateException("not connected")
+    val conn = currentConnection ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -376,7 +355,7 @@ class GatewaySession(
     timeoutMs: Long = 15_000,
     onError: (ErrorShape) -> Unit = {},
   ) {
-    val conn = readyConnection() ?: throw IllegalStateException("not connected")
+    val conn = currentConnection ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -393,18 +372,6 @@ class GatewaySession(
     val error: ErrorShape?,
   )
 
-  private data class ConnectedGateway(
-    val pluginSurfaceUrls: Map<String, String>,
-    val mainSessionKey: String?,
-    val hello: GatewayHelloSummary,
-  )
-
-  private enum class ConnectionState {
-    CONNECTING,
-    READY,
-    CLOSED,
-  }
-
   private inner class Connection(
     val endpoint: GatewayEndpoint,
     private val token: String?,
@@ -413,9 +380,9 @@ class GatewaySession(
     private val options: GatewayConnectOptions,
     val tls: GatewayTlsParams?,
   ) {
-    private val state = AtomicReference(ConnectionState.CONNECTING)
-    private val connectDeferred = CompletableDeferred<ConnectedGateway>()
+    private val connectDeferred = CompletableDeferred<Unit>()
     private val closedDeferred = CompletableDeferred<Unit>()
+    private val isClosed = AtomicBoolean(false)
     private val connectNonceDeferred = CompletableDeferred<String>()
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
@@ -444,11 +411,15 @@ class GatewaySession(
 
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
-    suspend fun connect(): ConnectedGateway {
+    suspend fun connect() {
       val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
-      return connectDeferred.await()
+      try {
+        connectDeferred.await()
+      } catch (err: Throwable) {
+        throw err
+      }
     }
 
     suspend fun request(
@@ -506,9 +477,7 @@ class GatewaySession(
       val deferred = CompletableDeferred<RpcResponse>()
       // Registration and the close drain are one lifecycle decision; no waiter may slip between them.
       synchronized(pendingLock) {
-        if (state.get() == ConnectionState.CLOSED) {
-          throw GatewayRequestNotEnqueued("Gateway closed")
-        }
+        if (isClosed.get()) throw IllegalStateException("Gateway closed")
         pending[id] = deferred
       }
       return deferred
@@ -518,8 +487,7 @@ class GatewaySession(
       val jsonString = obj.toString()
       writeLock.withLock {
         if (socket?.send(jsonString) != true) {
-          // OkHttp returning false means this frame never entered its outgoing queue.
-          throw GatewayRequestNotEnqueued("gateway send failed")
+          throw IllegalStateException("gateway send failed")
         }
       }
     }
@@ -538,12 +506,8 @@ class GatewaySession(
 
     suspend fun awaitClose() = closedDeferred.await()
 
-    fun isReady(): Boolean = state.get() == ConnectionState.READY
-
-    fun markReady(): Boolean = state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)
-
     fun closeQuietly() {
-      if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
+      if (isClosed.compareAndSet(false, true)) {
         incomingMessages.close()
         messagePumpJob.cancel()
         if (!connectDeferred.isCompleted) {
@@ -605,7 +569,7 @@ class GatewaySession(
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(t)
         }
-        if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
+        if (isClosed.compareAndSet(false, true)) {
           incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
@@ -621,7 +585,7 @@ class GatewaySession(
         if (!connectDeferred.isCompleted) {
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
         }
-        if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
+        if (isClosed.compareAndSet(false, true)) {
           incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
@@ -677,8 +641,8 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
-      connectDeferred.complete(connected)
+      handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      connectDeferred.complete(Unit)
     }
 
     private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
@@ -730,11 +694,11 @@ class GatewaySession(
       deviceAuthStore.saveToken(deviceId, role, token, scopes)
     }
 
-    private fun parseConnectSuccess(
+    private fun handleConnectSuccess(
       res: RpcResponse,
       deviceId: String,
       authSource: GatewayConnectAuthSource,
-    ): ConnectedGateway {
+    ) {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       pendingDeviceTokenRetry = false
@@ -781,24 +745,21 @@ class GatewaySession(
           normalizeCanvasHostUrl(value.asStringOrNull(), endpoint, isTlsConnection = tls != null)
             ?.let { normalized -> surface to normalized }
         } ?: emptyList()
-      val nextPluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
+      pluginSurfaceUrls = normalizedPluginSurfaceUrls.toMap()
       val snapshot = obj["snapshot"].asObjectOrNull()
       val sessionDefaults =
         snapshot
           ?.get("sessionDefaults")
           .asObjectOrNull()
-      val nextMainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
-      return ConnectedGateway(
-        pluginSurfaceUrls = nextPluginSurfaceUrls,
-        mainSessionKey = nextMainSessionKey,
-        hello =
-          GatewayHelloSummary(
-            serverName = serverName,
-            remoteAddress = remoteAddress,
-            serverVersion = serverVersion,
-            mainSessionKey = nextMainSessionKey,
-            updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
-          ),
+      mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
+      onConnected(
+        GatewayHelloSummary(
+          serverName = serverName,
+          remoteAddress = remoteAddress,
+          serverVersion = serverVersion,
+          mainSessionKey = mainSessionKey,
+          updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+        ),
       )
     }
 
@@ -1124,47 +1085,15 @@ class GatewaySession(
           target.options,
           target.tls,
         )
-      val shouldConnect =
-        synchronized(lifecycleLock) {
-          if (desired === target) {
-            currentConnection = conn
-            true
-          } else {
-            false
-          }
-        }
-      if (!shouldConnect) {
-        conn.closeQuietly()
-        return@withContext
-      }
+      currentConnection = conn
       try {
-        val connected = conn.connect()
-        val published =
-          synchronized(lifecycleLock) {
-            if (currentConnection !== conn || desired !== target || !conn.markReady()) {
-              false
-            } else {
-              // Readiness and its metadata must become visible before callbacks flush queued events.
-              pluginSurfaceUrls = connected.pluginSurfaceUrls
-              mainSessionKey = connected.mainSessionKey
-              onConnected(connected.hello)
-              true
-            }
-          }
-        if (!published) {
-          conn.closeQuietly()
-          return@withContext
-        }
+        conn.connect()
         conn.awaitClose()
       } finally {
-        // Callback failures and cancellation must close this socket before the loop replaces it.
-        conn.closeQuietly()
-        synchronized(lifecycleLock) {
-          if (currentConnection === conn) {
-            currentConnection = null
-            pluginSurfaceUrls = emptyMap()
-            mainSessionKey = null
-          }
+        if (currentConnection === conn) {
+          currentConnection = null
+          pluginSurfaceUrls = emptyMap()
+          mainSessionKey = null
         }
       }
     }

@@ -11,7 +11,6 @@ import {
   type InteractiveReply,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -33,7 +32,12 @@ import { resolveSlackThreadTsValue } from "./thread-ts.js";
 const SLACK_MAX_BLOCKS = 50;
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
-const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
+let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
+
+async function loadSlackSendRuntime() {
+  slackSendRuntimePromise ??= import("./send.runtime.js");
+  return await slackSendRuntimePromise;
+}
 
 function resolveRenderedInteractiveBlocks(
   interactive?: InteractiveReply,

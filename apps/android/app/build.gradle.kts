@@ -3,7 +3,6 @@ import java.util.Properties
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
-val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
@@ -77,7 +76,6 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
-      assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
 
@@ -247,33 +245,6 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
-}
-
-val validateThirdPartyLicenseAssets =
-  tasks.register("validateThirdPartyLicenseAssets") {
-    inputs.dir(thirdPartyLicensesDir)
-    doLast {
-      if (!thirdPartyLicensesDir.isDirectory) {
-        error("Missing Android third-party license directory: ${thirdPartyLicensesDir.relativeTo(rootProject.projectDir)}")
-      }
-      val invalidFiles =
-        thirdPartyLicensesDir
-          .walkTopDown()
-          .filter { file -> file.isFile && file.extension.lowercase() != "txt" }
-          .map { file -> file.relativeTo(thirdPartyLicensesDir).path }
-          .toList()
-
-      if (invalidFiles.isNotEmpty()) {
-        error(
-          "Android third-party license assets must be .txt files:\n" +
-            invalidFiles.joinToString(separator = "\n") { path -> "- $path" },
-        )
-      }
-    }
-  }
-
-tasks.matching { task -> task.name == "preBuild" }.configureEach {
-  dependsOn(validateThirdPartyLicenseAssets)
 }
 
 androidComponents {

@@ -43,7 +43,6 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -66,7 +65,20 @@ import type {
 } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
+type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
+type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
+
+let cachedModelAuth: {
+  resolveApiKeyForProvider: ResolveApiKeyForProvider;
+  requireApiKey: RequireApiKey;
+  isProviderAuthError: IsProviderAuthError;
+} | null = null;
+
+async function loadModelAuth() {
+  cachedModelAuth ??= await import("../agents/model-auth.js");
+  return cachedModelAuth;
+}
 
 function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;

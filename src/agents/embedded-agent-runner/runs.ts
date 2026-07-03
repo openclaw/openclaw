@@ -347,20 +347,6 @@ function isEmbeddedQueueHandleMessageInjectable(
   }
 }
 
-function isEmbeddedRunHandleAbortable(
-  sessionId: string,
-  handle: EmbeddedAgentQueueHandle,
-): boolean {
-  try {
-    return handle.isAbortable?.() !== false;
-  } catch (err) {
-    diag.warn(
-      `abort failed: sessionId=${sessionId} reason=abortable_check_failed err=${String(err)}`,
-    );
-    return false;
-  }
-}
-
 export async function queueEmbeddedAgentMessageWithOutcomeAsync(
   sessionId: string,
   text: string,
@@ -479,10 +465,6 @@ export function abortEmbeddedAgentRun(
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
       return false;
     }
-    if (!isEmbeddedRunHandleAbortable(sessionId, handle)) {
-      diag.debug(`abort failed: sessionId=${sessionId} reason=not_abortable`);
-      return false;
-    }
     diag.debug(`aborting run: sessionId=${sessionId}`);
     try {
       handle.abort(opts?.reason);
@@ -500,9 +482,6 @@ export function abortEmbeddedAgentRun(
     let aborted = false;
     for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
       if (!params.shouldAbort(handle)) {
-        continue;
-      }
-      if (!isEmbeddedRunHandleAbortable(id, handle)) {
         continue;
       }
       diag.debug(params.formatDebugMessage(id));
@@ -553,10 +532,9 @@ export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
 }
 
 export function isEmbeddedAgentRunAbortableForCompaction(sessionId: string): boolean {
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  const active = handle ? true : isReplyRunAbortableForCompaction(sessionId);
+  const active = ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunAbortableForCompaction(sessionId);
   if (active) {
-    diag.debug(`run compact coordination check: sessionId=${sessionId} active=true`);
+    diag.debug(`run compact abort check: sessionId=${sessionId} active=true`);
   }
   return active;
 }
@@ -767,7 +745,6 @@ export function clearActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   sessionKey?: string,
   sessionFile?: string,
-  reason = "run_completed",
 ) {
   const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (activeHandle === undefined) {
@@ -783,7 +760,7 @@ export function clearActiveEmbeddedRun(
       sessionKey,
       sessionFile,
       state: "idle",
-      reason,
+      reason: "run_completed",
     });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {

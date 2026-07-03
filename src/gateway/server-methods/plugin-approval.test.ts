@@ -374,7 +374,6 @@ describe("createPluginApprovalHandlers", () => {
 
         const requestPromise = handlers["plugin.approval.request"](opts);
         const approvalId = await waitForAcceptedApproval(respond);
-        expect(acceptedResult(respond).deliveryRoute).toBe("turn-source");
         manager.resolve(approvalId, "allow-once");
 
         await requestPromise;

@@ -1,30 +1,16 @@
 // Lazy promise tests cover single-flight loading and error reuse behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  createLazyImportLoader,
-  createLazyPromise,
-  createLazyPromiseLoader,
-} from "./lazy-promise.js";
-
-describe("createLazyPromise", () => {
-  it("returns a reusable single-flight loader", async () => {
-    let calls = 0;
-    const load = createLazyPromise(async () => `loaded-${++calls}`);
-
-    await expect(Promise.all([load(), load()])).resolves.toEqual(["loaded-1", "loaded-1"]);
-    await expect(load()).resolves.toBe("loaded-1");
-    expect(calls).toBe(1);
-  });
-});
+import { createLazyImportLoader, createLazyPromiseLoader } from "./lazy-promise.js";
 
 describe("createLazyPromiseLoader", () => {
   it("dedupes concurrent loads and reuses the resolved value", async () => {
     let calls = 0;
     const loader = createLazyPromiseLoader(async () => `loaded-${++calls}`);
-    const first = loader.load();
 
-    expect(loader.load()).toBe(first);
-    await expect(first).resolves.toBe("loaded-1");
+    await expect(Promise.all([loader.load(), loader.load()])).resolves.toEqual([
+      "loaded-1",
+      "loaded-1",
+    ]);
     await expect(loader.load()).resolves.toBe("loaded-1");
     expect(calls).toBe(1);
   });
@@ -59,11 +45,8 @@ describe("createLazyPromiseLoader", () => {
     let calls = 0;
     const loader = createLazyPromiseLoader(() => `loaded-${++calls}`);
 
-    expect(loader.peek()).toBeUndefined();
     await expect(loader.load()).resolves.toBe("loaded-1");
-    await expect(loader.peek()).resolves.toBe("loaded-1");
     loader.clear();
-    expect(loader.peek()).toBeUndefined();
     await expect(loader.load()).resolves.toBe("loaded-2");
   });
 });

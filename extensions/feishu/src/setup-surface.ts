@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Feishu plugin module implements setup surface behavior.
 import {
   DEFAULT_ACCOUNT_ID,
@@ -249,7 +248,16 @@ function applyNewAppSecurityPolicy(
   return next;
 }
 
-const loadAppRegistrationModule = createLazyRuntimeModule(() => import("./app-registration.js"));
+// ---------------------------------------------------------------------------
+// Scan-to-create flow
+// ---------------------------------------------------------------------------
+
+let appRegistrationModulePromise: Promise<typeof import("./app-registration.js")> | null = null;
+
+const loadAppRegistrationModule = async () => {
+  appRegistrationModulePromise ??= import("./app-registration.js");
+  return await appRegistrationModulePromise;
+};
 
 async function promptFeishuDomain(params: {
   prompter: WizardPrompter;

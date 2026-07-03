@@ -26,7 +26,6 @@ import {
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -77,7 +76,12 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/reply-runtime"));
+let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
+
+async function loadReplyRuntime() {
+  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
+  return await replyRuntimePromise;
+}
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);

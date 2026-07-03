@@ -10,7 +10,6 @@ import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
 type TtsCoreModule = typeof import("openclaw/plugin-sdk/speech-core");
@@ -22,7 +21,9 @@ const speechCoreRuntimeApiModuleId = resolveWorkspacePackagePublicModuleUrl({
 });
 
 let ttsRuntime: TtsRuntimeModule;
+let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
+let ttsCorePromise: Promise<TtsCoreModule> | null = null;
 let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
 let prepareSimpleCompletionModelMock: SummarizeTextDeps["prepareSimpleCompletionModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
@@ -412,11 +413,15 @@ function buildTestGoogleSpeechProvider(): SpeechProviderPlugin {
   };
 }
 
-const loadTtsRuntime = createLazyRuntimeModule(
-  () => import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>,
-);
+async function loadTtsRuntime(): Promise<TtsRuntimeModule> {
+  ttsRuntimePromise ??= import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>;
+  return await ttsRuntimePromise;
+}
 
-const loadTtsCore = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/speech-core"));
+async function loadTtsCore(): Promise<TtsCoreModule> {
+  ttsCorePromise ??= import("openclaw/plugin-sdk/speech-core");
+  return await ttsCorePromise;
+}
 
 function createPrepareSimpleCompletionModelMock(): SummarizeTextDeps["prepareSimpleCompletionModel"] {
   return vi.fn(async ({ provider, modelId }) => ({

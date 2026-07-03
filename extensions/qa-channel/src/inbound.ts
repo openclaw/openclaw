@@ -1,6 +1,5 @@
 // Qa Channel plugin module implements inbound behavior.
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
@@ -180,26 +179,15 @@ export async function handleQaInbound(params: {
     body: inbound.text,
   });
   const mediaPayload = await resolveQaInboundMediaPayload(inbound.attachments);
-  const nativeCommand = inbound.nativeCommand;
-  const commandTargets = nativeCommand
-    ? resolveNativeCommandSessionTargets({
-        agentId: route.agentId,
-        sessionPrefix: "qa-channel:slash",
-        userId: inbound.senderId,
-        targetSessionKey: route.sessionKey,
-      })
-    : undefined;
-  const commandBody = nativeCommand ? `/${nativeCommand.name}` : inbound.text;
 
   const ctxPayload = runtime.channel.reply.finalizeInboundContext({
     Body: body,
     BodyForAgent: inbound.text,
     RawBody: inbound.text,
-    CommandBody: commandBody,
+    CommandBody: inbound.text,
     From: target,
     To: target,
-    SessionKey: commandTargets?.sessionKey ?? route.sessionKey,
-    CommandTargetSessionKey: commandTargets?.commandTargetSessionKey,
+    SessionKey: route.sessionKey,
     AccountId: route.accountId ?? params.account.accountId,
     ChatType: inbound.conversation.kind === "direct" ? "direct" : "group",
     WasMentioned: wasMentioned,
@@ -227,15 +215,6 @@ export async function handleQaInbound(params: {
     OriginatingChannel: params.channelId,
     OriginatingTo: target,
     CommandAuthorized: true,
-    CommandSource: nativeCommand ? "native" : undefined,
-    CommandTurn: nativeCommand
-      ? {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          body: commandBody,
-        }
-      : undefined,
     ...mediaPayload,
   });
 

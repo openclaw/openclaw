@@ -3,7 +3,6 @@ import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/model-session-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -91,13 +90,23 @@ type TelegramPollingSessionInstance = InstanceType<
   TelegramMonitorPollingRuntime["TelegramPollingSession"]
 >;
 
-const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
-  () => import("./monitor-polling.runtime.js"),
-);
+let telegramMonitorPollingRuntimePromise:
+  | Promise<typeof import("./monitor-polling.runtime.js")>
+  | undefined;
 
-const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
-  () => import("./monitor-webhook.runtime.js"),
-);
+async function loadTelegramMonitorPollingRuntime() {
+  telegramMonitorPollingRuntimePromise ??= import("./monitor-polling.runtime.js");
+  return await telegramMonitorPollingRuntimePromise;
+}
+
+let telegramMonitorWebhookRuntimePromise:
+  | Promise<typeof import("./monitor-webhook.runtime.js")>
+  | undefined;
+
+async function loadTelegramMonitorWebhookRuntime() {
+  telegramMonitorWebhookRuntimePromise ??= import("./monitor-webhook.runtime.js");
+  return await telegramMonitorWebhookRuntimePromise;
+}
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);

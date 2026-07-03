@@ -2,7 +2,6 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalState
-import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -58,62 +57,6 @@ class OnboardingFlowLogicTest {
   @Test
   fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
     assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported))
-  }
-
-  @Test
-  fun splitSmsPermissionCallbacksMergePerPermissionGrantState() {
-    val requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
-    val afterSendOnly =
-      mergedRequiredPermissionGrantState(
-        permissions = mapOf(Manifest.permission.SEND_SMS to true),
-        requiredPermissions = requiredPermissions,
-        currentlyGranted = { false },
-      )
-    assertFalse(afterSendOnly)
-
-    val afterReadOnly =
-      mergedRequiredPermissionGrantState(
-        permissions = mapOf(Manifest.permission.READ_SMS to true),
-        requiredPermissions = requiredPermissions,
-        currentlyGranted = { permission -> permission == Manifest.permission.SEND_SMS },
-      )
-    assertTrue(afterReadOnly)
-
-    val deniedRead =
-      mergedRequiredPermissionGrantState(
-        permissions = mapOf(Manifest.permission.READ_SMS to false),
-        requiredPermissions = requiredPermissions,
-        currentlyGranted = { true },
-      )
-    assertFalse(deniedRead)
-  }
-
-  @Test
-  fun contactAndCalendarPermissionGroupsRequireBothGrants() {
-    val permissionGroups =
-      listOf(
-        listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
-        listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
-      )
-
-    for (requiredPermissions in permissionGroups) {
-      val readPermission = requiredPermissions.first()
-      val writePermission = requiredPermissions.last()
-      assertFalse(
-        mergedRequiredPermissionGrantState(
-          permissions = mapOf(readPermission to true),
-          requiredPermissions = requiredPermissions,
-          currentlyGranted = { false },
-        ),
-      )
-      assertTrue(
-        mergedRequiredPermissionGrantState(
-          permissions = mapOf(writePermission to true),
-          requiredPermissions = requiredPermissions,
-          currentlyGranted = { permission -> permission == readPermission },
-        ),
-      )
-    }
   }
 
   @Test
@@ -498,12 +441,9 @@ class OnboardingFlowLogicTest {
       encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
     val scanned = resolveScannedSetupCodeResult(setupCode)
 
-    val plan =
-      resolveOnboardingGatewayConnectPlan(
+    val resolved =
+      resolveOnboardingGatewayConnectConfig(
         setupCode = requireNotNull(scanned.setupCode),
-        savedManualHost = "127.0.0.1",
-        savedManualPort = "18789",
-        savedManualTls = false,
         manualHost = "127.0.0.1",
         manualPort = "18789",
         manualTls = false,
@@ -511,24 +451,20 @@ class OnboardingFlowLogicTest {
         password = "stale-shared-password",
       )
 
-    assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
-    assertEquals("10.0.2.2", plan?.config?.host)
-    assertEquals(18789, plan?.config?.port)
-    assertEquals(false, plan?.config?.tls)
-    assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
-    assertEquals("", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
+    assertEquals("10.0.2.2", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
     assertNull(scanned.error)
   }
 
   @Test
   fun resolvesOnboardingManualConnectConfigWhenSetupCodeIsBlank() {
-    val plan =
-      resolveOnboardingGatewayConnectPlan(
+    val resolved =
+      resolveOnboardingGatewayConnectConfig(
         setupCode = "",
-        savedManualHost = "127.0.0.1",
-        savedManualPort = "18789",
-        savedManualTls = false,
         manualHost = "127.0.0.1",
         manualPort = "18789",
         manualTls = false,
@@ -536,33 +472,12 @@ class OnboardingFlowLogicTest {
         password = "shared-password",
       )
 
-    assertEquals(GatewaySavedAuthAction.PRESERVE, plan?.savedAuthAction)
-    assertEquals("127.0.0.1", plan?.config?.host)
-    assertEquals(18789, plan?.config?.port)
-    assertEquals(false, plan?.config?.tls)
-    assertEquals("", plan?.config?.bootstrapToken)
-    assertEquals("shared-token", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
-  }
-
-  @Test
-  fun onboardingManualEndpointChangeReplacesSavedGatewayAuth() {
-    val plan =
-      resolveOnboardingGatewayConnectPlan(
-        setupCode = "",
-        savedManualHost = "127.0.0.1",
-        savedManualPort = "18789",
-        savedManualTls = false,
-        manualHost = "10.0.2.2",
-        manualPort = "18790",
-        manualTls = false,
-        token = "replacement-token",
-        password = "",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
-    assertEquals("10.0.2.2", plan?.config?.host)
-    assertEquals("replacement-token", plan?.config?.token)
+    assertEquals("127.0.0.1", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("shared-token", resolved?.token)
+    assertEquals("shared-password", resolved?.password)
   }
 
   private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))

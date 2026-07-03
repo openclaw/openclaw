@@ -21,8 +21,6 @@ describe("channel message flows QA e2e", () => {
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
-      finalizeToPreview: vi.fn(async () => undefined),
-      rotateToNewMessageDeferringDelete: vi.fn(() => undefined),
     };
   }
 
@@ -42,8 +40,6 @@ describe("channel message flows QA e2e", () => {
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
-      finalizeToPreview: vi.fn(async () => undefined),
-      rotateToNewMessageDeferringDelete: vi.fn(() => undefined),
     };
     const sendFinal = vi.fn(async () => {
       events.push("final");
@@ -92,8 +88,6 @@ describe("channel message flows QA e2e", () => {
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
-      finalizeToPreview: vi.fn(async () => undefined),
-      rotateToNewMessageDeferringDelete: vi.fn(() => undefined),
     };
     const sendFinal = vi.fn(async () => ({ messageId: "99", chatId: "123" }));
 
@@ -126,8 +120,6 @@ describe("channel message flows QA e2e", () => {
       stop: vi.fn(async () => {}),
       messageId: vi.fn(() => 17),
       forceNewMessage: vi.fn(),
-      finalizeToPreview: vi.fn(async () => undefined),
-      rotateToNewMessageDeferringDelete: vi.fn(() => undefined),
     };
 
     await expect(

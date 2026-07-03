@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 /**
  * Built-in stateful binding target registration.
  *
@@ -6,11 +5,15 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
  */
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
 
-let builtinsRegisteredPromise: Promise<void> | null = null;
+type AcpStatefulTargetDriverModule = typeof import("./acp-stateful-target-driver.js");
 
-const loadAcpStatefulTargetDriverModule = createLazyRuntimeModule(
-  () => import("./acp-stateful-target-driver.js"),
-);
+let builtinsRegisteredPromise: Promise<void> | null = null;
+let acpDriverModulePromise: Promise<AcpStatefulTargetDriverModule> | undefined;
+
+function loadAcpStatefulTargetDriverModule(): Promise<AcpStatefulTargetDriverModule> {
+  acpDriverModulePromise ??= import("./acp-stateful-target-driver.js");
+  return acpDriverModulePromise;
+}
 
 export function isStatefulTargetBuiltinDriverId(id: string): boolean {
   return id.trim() === "acp";
