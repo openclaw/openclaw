@@ -20,7 +20,7 @@ describe("runware provider plugin", () => {
 
   it("returns null from catalog.run without a configured API key", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    const result = await provider.catalog.run({
+    const result = await provider.catalog?.run({
       config: {},
       resolveProviderApiKey: () => ({ apiKey: undefined }),
     } as never);
@@ -50,7 +50,7 @@ describe("runware provider plugin", () => {
     );
 
     const provider = await registerSingleProviderPlugin(plugin);
-    const result = await provider.catalog.run({
+    const result = await provider.catalog?.run({
       config: {},
       resolveProviderApiKey: () => ({ apiKey: "rw_test_key" }),
     } as never);
