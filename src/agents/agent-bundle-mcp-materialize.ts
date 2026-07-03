@@ -154,6 +154,8 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+const MAX_GLOB_WILDCARD_SEGMENTS = 32;
+
 function escapeRegex(value: string): string {
   return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
 }
@@ -161,6 +163,9 @@ function escapeRegex(value: string): string {
 function globMatches(pattern: string, value: string): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {
+    return false;
+  }
+  if (trimmed.split("*").length > MAX_GLOB_WILDCARD_SEGMENTS + 1) {
     return false;
   }
   if (!trimmed.includes("*")) {

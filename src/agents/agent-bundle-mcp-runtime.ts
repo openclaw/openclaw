@@ -315,9 +315,14 @@ function escapeRegex(value: string): string {
   return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
 }
 
+const MAX_GLOB_WILDCARD_SEGMENTS = 32;
+
 function globMatches(pattern: string, value: string): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {
+    return false;
+  }
+  if (trimmed.split("*").length > MAX_GLOB_WILDCARD_SEGMENTS + 1) {
     return false;
   }
   if (!trimmed.includes("*")) {
