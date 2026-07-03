@@ -115,6 +115,25 @@ vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
   };
 });
 
+function mockPrompter(confirmValue = true) {
+  return {
+    confirm: vi.fn(async () => confirmValue),
+    confirmAutoFix: vi.fn(async () => confirmValue),
+    confirmAggressiveAutoFix: vi.fn(async () => confirmValue),
+    confirmRuntimeRepair: vi.fn(async () => confirmValue),
+    select: vi.fn(async (_params, fallback) => fallback),
+    shouldRepair: true,
+    shouldForce: false,
+    repairMode: {
+      shouldRepair: true,
+      shouldForce: false,
+      nonInteractive: false,
+      canPrompt: true,
+      updateInProgress: false,
+    },
+  } as never;
+}
+
 describe("doctorShellCompletion", () => {
   beforeEach(() => {
     installCompletionMock.mockReset();
@@ -147,11 +166,7 @@ describe("doctorShellCompletion", () => {
 
     const noteSpy = vi.spyOn(noteModule, "note");
 
-    await expect(
-      doctorShellCompletion({} as never, {
-        confirm: async () => true,
-      }),
-    ).resolves.not.toThrow();
+    await expect(doctorShellCompletion({} as never, mockPrompter())).resolves.not.toThrow();
 
     expect(noteSpy).toHaveBeenCalledWith(
       expect.stringContaining("Shell completion not upgraded"),
@@ -190,10 +205,6 @@ describe("doctorShellCompletion", () => {
     enospcError.code = "ENOSPC";
     installCompletionMock.mockRejectedValue(enospcError);
 
-    await expect(
-      doctorShellCompletion({} as never, {
-        confirm: async () => true,
-      }),
-    ).rejects.toThrow("ENOSPC");
+    await expect(doctorShellCompletion({} as never, mockPrompter())).rejects.toThrow("ENOSPC");
   });
 });
