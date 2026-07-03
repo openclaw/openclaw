@@ -1342,7 +1342,7 @@ export const vi: TranslationMap = {
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "Tất cả phiên",
     },
     welcome: {
       ready: "Ready to chat",

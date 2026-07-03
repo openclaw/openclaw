@@ -779,6 +779,51 @@
       "translated": "कनेक्ट करने के लिए एक मान्य मैनुअल एंडपॉइंट दर्ज करें।"
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "सेटअप कोड समाप्त हो गया"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway टोकन आवश्यक है"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway टोकन कॉन्फ़िगर नहीं किया गया"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway पासवर्ड आवश्यक है"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway पासवर्ड अमान्य है"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway पासवर्ड कॉन्फ़िगर नहीं किया गया"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway एक्सेस की समीक्षा आवश्यक है"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "सहेजा गया प्रमाणीकरण अमान्य है"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "डिवाइस पहचान आवश्यक है"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Gateway डायग्नोस्टिक्स कॉपी किए गए"
@@ -929,6 +974,16 @@
       "translated": "पेयरिंग के बाद लिंक किए गए फ़ोन और नोड होस्ट यहाँ दिखाई देंगे।"
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "नोड अनुमोदन आवश्यक है"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Gateway होस्ट पर चलाएँ:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "लंबित अनुरोध"
@@ -1064,11 +1119,6 @@
       "translated": "पिछला gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "कनेक्शन फिर से आज़माएँ"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "कनेक्शन संपादित करें"
@@ -1129,9 +1179,24 @@
       "translated": "जारी रखें"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "नया सेटअप कोड स्कैन करें"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "कनेक्शन फिर से आज़माएँ"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "सेटअप कोड की समय-सीमा समाप्त हो गई है। नया सेटअप QR स्कैन करें।"
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Gateway एक्सेस की समीक्षा आवश्यक है। Gateway प्रमाणीकरण स्कोप जाँचें, फिर पुनः प्रयास करें।"
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "सहेजा गया प्रमाणीकरण अमान्य है। फिर से प्रमाणित करें या इस gateway कनेक्शन को रीसेट करें।"
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Gateway प्रमाणीकरण कॉन्फ़िगर नहीं किया गया है। इस कनेक्शन को संपादित करें और फिर से प्रयास करें।"
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Gateway प्रमाणीकरण कॉन्फ़िगर नहीं किया गया है। इसे gateway होस्ट पर कॉन्फ़िगर करें, फिर पुनः प्रयास करें।"
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

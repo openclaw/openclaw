@@ -1356,7 +1356,7 @@ export const tr: TranslationMap = {
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "Tüm oturumlar",
     },
     welcome: {
       ready: "Ready to chat",

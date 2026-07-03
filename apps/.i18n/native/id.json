@@ -779,6 +779,51 @@
       "translated": "Masukkan endpoint manual yang valid untuk terhubung."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Kode penyiapan kedaluwarsa"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Token Gateway diperlukan"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Token Gateway belum dikonfigurasi"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Kata sandi Gateway diperlukan"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Kata sandi Gateway tidak valid"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Kata sandi Gateway belum dikonfigurasi"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Akses Gateway perlu ditinjau"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Autentikasi yang disimpan tidak valid"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Identitas perangkat diperlukan"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Diagnostik gateway disalin"
@@ -929,6 +974,16 @@
       "translated": "Ponsel tertaut dan host node akan muncul di sini setelah dipasangkan."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Persetujuan node diperlukan"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Jalankan di host Gateway:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "Permintaan Tertunda"
@@ -1064,11 +1119,6 @@
       "translated": "Gateway terakhir"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Coba lagi koneksi"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Edit koneksi"
@@ -1129,9 +1179,24 @@
       "translated": "Lanjutkan"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Pindai kode penyiapan baru"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Coba lagi koneksi"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "Kode penyiapan kedaluwarsa. Pindai QR penyiapan baru."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Akses Gateway perlu ditinjau. Periksa cakupan autentikasi gateway, lalu coba lagi."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "Autentikasi tersimpan tidak valid. Autentikasi ulang atau reset koneksi gateway ini."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Autentikasi Gateway belum dikonfigurasi. Edit koneksi ini dan coba lagi."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Autentikasi Gateway belum dikonfigurasi. Konfigurasikan di host gateway, lalu coba lagi."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

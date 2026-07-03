@@ -779,6 +779,51 @@
       "translated": "Nhập endpoint thủ công hợp lệ để kết nối."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Mã thiết lập đã hết hạn"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Cần mã thông báo Gateway"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Mã thông báo Gateway chưa được cấu hình"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Cần mật khẩu Gateway"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Mật khẩu Gateway không hợp lệ"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Mật khẩu Gateway chưa được cấu hình"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Quyền truy cập Gateway cần được xem xét"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Xác thực đã lưu không hợp lệ"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Cần danh tính thiết bị"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Đã sao chép chẩn đoán gateway"
@@ -929,6 +974,16 @@
       "translated": "Điện thoại đã liên kết và máy chủ nút sẽ xuất hiện ở đây sau khi ghép đôi."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Cần phê duyệt nút"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Chạy trên máy chủ Gateway:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "Yêu cầu đang chờ"
@@ -1064,11 +1119,6 @@
       "translated": "Gateway gần nhất"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Thử kết nối lại"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Chỉnh sửa kết nối"
@@ -1129,9 +1179,24 @@
       "translated": "Tiếp tục"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Quét mã thiết lập mới"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Thử kết nối lại"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "Mã thiết lập đã hết hạn. Hãy quét mã QR thiết lập mới."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Quyền truy cập Gateway cần được xem xét. Kiểm tra phạm vi xác thực gateway, rồi thử lại."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "Xác thực đã lưu không hợp lệ. Xác thực lại hoặc đặt lại kết nối gateway này."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Chưa cấu hình xác thực Gateway. Chỉnh sửa kết nối này rồi thử lại."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Xác thực Gateway chưa được cấu hình. Hãy cấu hình trên máy chủ gateway, rồi thử lại."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

@@ -779,6 +779,51 @@
       "translated": "أدخل نقطة نهاية يدوية صالحة للاتصال."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "انتهت صلاحية رمز الإعداد"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "رمز Gateway مطلوب"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "رمز Gateway غير مكوّن"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "كلمة مرور Gateway مطلوبة"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "كلمة مرور Gateway غير صالحة"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "كلمة مرور Gateway غير مكوّنة"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "يتطلب الوصول إلى Gateway المراجعة"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "المصادقة المحفوظة غير صالحة"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "هوية الجهاز مطلوبة"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "تم نسخ تشخيصات Gateway"
@@ -929,6 +974,16 @@
       "translated": "ستظهر الهواتف المرتبطة ومضيفو العُقد هنا بعد الاقتران."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "موافقة العقدة مطلوبة"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "شغّل على مضيف Gateway:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "الطلبات المعلّقة"
@@ -1064,11 +1119,6 @@
       "translated": "آخر Gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "إعادة محاولة الاتصال"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "تعديل الاتصال"
@@ -1129,9 +1179,24 @@
       "translated": "متابعة"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "امسح رمز إعداد جديدًا"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "إعادة محاولة الاتصال"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "انتهت صلاحية رمز الإعداد. امسح رمز QR جديدًا للإعداد."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "يتطلب الوصول إلى Gateway المراجعة. تحقّق من نطاقات مصادقة Gateway، ثم أعد المحاولة."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "المصادقة المحفوظة غير صالحة. أعد المصادقة أو أعد ضبط اتصال هذا Gateway."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "لم يتم تكوين مصادقة Gateway. عدّل هذا الاتصال وحاول مرة أخرى."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "مصادقة Gateway غير مكوّنة. قم بتكوينها على مضيف Gateway، ثم أعد المحاولة."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

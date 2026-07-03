@@ -779,6 +779,51 @@
       "translated": "Ange en giltig manuell slutpunkt för att ansluta."
     },
     {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Konfigurationskoden har gått ut"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway-token krävs"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway-token är inte konfigurerad"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway-lösenord krävs"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway-lösenordet är ogiltigt"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway-lösenord är inte konfigurerat"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway-åtkomst behöver granskas"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Sparad autentisering är ogiltig"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Enhetsidentitet krävs"
+    },
+    {
       "id": "native.android.b44fc3039e0fb9fa",
       "source": "Copied gateway diagnostics",
       "translated": "Gateway-diagnostik kopierad"
@@ -929,6 +974,16 @@
       "translated": "Länkade telefoner och nodvärdar visas här efter parkoppling."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Nodgodkännande krävs"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Kör på Gateway-värden:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "Väntande förfrågningar"
@@ -1064,11 +1119,6 @@
       "translated": "Senaste gateway"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Försök ansluta igen"
-    },
-    {
       "id": "native.android.e0e5d2bb055863fb",
       "source": "Edit connection",
       "translated": "Redigera anslutning"
@@ -1129,9 +1179,24 @@
       "translated": "Fortsätt"
     },
     {
+      "id": "native.android.547f11a819721ffb",
+      "source": "Scan fresh setup code",
+      "translated": "Skanna en ny konfigurationskod"
+    },
+    {
+      "id": "native.android.3b169db8b57795b5",
+      "source": "Retry connection",
+      "translated": "Försök ansluta igen"
+    },
+    {
       "id": "native.android.e44224ed4df1700f",
       "source": "Setup code expired. Scan a fresh setup QR.",
       "translated": "Konfigurationskoden har gått ut. Skanna en ny konfigurations-QR."
+    },
+    {
+      "id": "native.android.e03bb4ea463ba7a5",
+      "source": "Gateway access needs review. Check gateway authentication scopes, then retry.",
+      "translated": "Gateway-åtkomst behöver granskas. Kontrollera autentiseringsomfång för Gateway och försök sedan igen."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1159,9 +1224,9 @@
       "translated": "Sparad autentisering är ogiltig. Autentisera igen eller återställ den här Gateway-anslutningen."
     },
     {
-      "id": "native.android.214b03b4cd2199b1",
-      "source": "Gateway authentication is not configured. Edit this connection and try again.",
-      "translated": "Gateway-autentisering är inte konfigurerad. Redigera den här anslutningen och försök igen."
+      "id": "native.android.3f61f2c34784ed0f",
+      "source": "Gateway authentication is not configured. Configure it on the gateway host, then retry.",
+      "translated": "Gateway-autentisering är inte konfigurerad. Konfigurera den på Gateway-värden och försök sedan igen."
     },
     {
       "id": "native.android.1ccbb6f3911e7219",

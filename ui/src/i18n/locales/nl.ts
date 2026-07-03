@@ -1356,7 +1356,7 @@ export const nl: TranslationMap = {
     dismissUpdateBanner: "Updatebanner sluiten",
     switchedSession: "Overgeschakeld naar {session}",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "Alle sessies",
     },
     welcome: {
       ready: "Ready to chat",

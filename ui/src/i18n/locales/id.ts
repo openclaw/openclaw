@@ -1350,7 +1350,7 @@ export const id: TranslationMap = {
     dismissUpdateBanner: "Tutup banner pembaruan",
     switchedSession: "Beralih ke {session}",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "Semua sesi",
     },
     welcome: {
       ready: "Ready to chat",

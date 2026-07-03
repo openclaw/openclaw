@@ -1354,7 +1354,7 @@ export const uk: TranslationMap = {
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
     sidebar: {
-      allSessions: "All sessions",
+      allSessions: "Усі сеанси",
     },
     welcome: {
       ready: "Ready to chat",
