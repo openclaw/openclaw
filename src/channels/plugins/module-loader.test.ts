@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
@@ -101,6 +102,10 @@ describe("channel plugin module loader helpers", () => {
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
+    const expectedJitiTarget =
+      process.platform === "win32"
+        ? pathToFileURL(modulePath).href
+        : fs.realpathSync.native(modulePath);
 
     try {
       expect(
@@ -110,13 +115,13 @@ describe("channel plugin module loader helpers", () => {
         }),
       ).toEqual({
         loadedBy: "jiti",
-        target: fs.realpathSync.native(modulePath),
+        target: expectedJitiTarget,
       });
       expect(createJiti).toHaveBeenCalledOnce();
       const [loaderFilename, loaderOptions] = requireCreateJitiCall(createJiti);
       expect(loaderFilename).toContain("module-loader.ts");
       expect(loaderOptions.tryNative).toBe(false);
-      expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
+      expect(loadWithJiti).toHaveBeenCalledWith(expectedJitiTarget);
     } finally {
       for (const [extension, hook] of sourceHooks) {
         if (hook) {

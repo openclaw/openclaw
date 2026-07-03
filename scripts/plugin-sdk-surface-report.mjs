@@ -242,17 +242,37 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
+function toRepoRelativePath(fileName) {
+  return path.relative(repoRoot, fileName).split(path.sep).join(path.posix.sep);
+}
+
+function getExportDeclaration(checker, symbol) {
+  const target = unwrapAlias(checker, symbol);
+  return target.valueDeclaration ?? target.declarations?.[0];
+}
+
 const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
 
 function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
   if (!generatedLlmCoreValidatorExports.has(exportName)) {
     return false;
   }
-  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
-  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  const relativePath = toRepoRelativePath(declaration.getSourceFile().fileName);
   // Build artifacts can make agent-core's package-name validator reexports look
   // newly callable. Keep this source report independent of generated dist state.
-  return relativePath.includes("llm-core/dist/validation.d.");
+  return (
+    /\.d\.[cm]?ts$/u.test(relativePath) &&
+    (relativePath.includes("llm-core/dist/validation.d.") ||
+      relativePath.includes("dist/plugin-sdk/packages/llm-core/src/validation.d.") ||
+      relativePath.includes("packages/plugin-sdk/dist/packages/llm-core/src/validation.d."))
+  );
+}
+
+function shouldSkipGeneratedLlmCoreValidatorExport(checker, symbol) {
+  const declaration = getExportDeclaration(checker, symbol);
+  return declaration
+    ? isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)
+    : false;
 }
 
 function isCallableExport(checker, symbol, sourceFile) {
@@ -314,12 +334,17 @@ function collectExportStats(entrypoints) {
     }
     const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
     const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    let exports = 0;
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
     const deprecatedEntrypoint = deprecatedPublicEntrypointSet.has(entrypoint);
     for (const symbol of symbols) {
+      if (shouldSkipGeneratedLlmCoreValidatorExport(checker, symbol)) {
+        continue;
+      }
       const exportName = `${entrypoint}:${symbol.getName()}`;
+      exports += 1;
       uniqueNames.add(exportName);
       const callable = isCallableExport(checker, symbol, sourceFile);
       const deprecated =
@@ -338,7 +363,7 @@ function collectExportStats(entrypoints) {
       }
     }
     byEntrypoint.set(entrypoint, {
-      exports: symbols.length,
+      exports,
       callableExports,
       deprecatedExports,
       deprecatedCallableExports,

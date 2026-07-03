@@ -34,6 +34,10 @@ function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfi
   return plugins.map((entry) => entry.id);
 }
 
+function normalizeModulePathForTest(modulePath: string): string {
+  return modulePath.replace(/\\/g, "/");
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -547,8 +551,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       moduleLoaderParams.some(
         (entry) =>
           entry.tryNative === true &&
-          (entry.modulePath.endsWith("/plugins/loader.js") ||
-            entry.modulePath.endsWith("/plugins/loader.ts")),
+          (normalizeModulePathForTest(entry.modulePath).endsWith("/plugins/loader.js") ||
+            normalizeModulePathForTest(entry.modulePath).endsWith("/plugins/loader.ts")),
       ),
     ).toBe(true);
   });
