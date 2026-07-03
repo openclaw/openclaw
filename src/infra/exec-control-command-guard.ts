@@ -265,6 +265,10 @@ function isCwdChangingCommandContext(context: string): boolean {
   return context === "top-level" || context === "wrapper-payload";
 }
 
+function controlFlowUnknownWorkdir(): string {
+  return resolveRequiredHomeDir();
+}
+
 function resolveCdWorkdir(argv: readonly string[], currentWorkdir: string): string | null {
   if (normalizeCommandBaseName(argv[0]) !== "cd") {
     return null;
@@ -523,16 +527,18 @@ function createCommandPayloads(rawCommand: string, workdir?: string): Promise<Co
           for (const payload of payloadsFromArgv(step.argv, stepWorkdir, { stdinFromPipe })) {
             pushUniquePayload(parsedCandidates, seen, payload);
           }
-          if (
-            stepWorkdir &&
-            isCwdChangingCommandContext(step.context) &&
-            !isInsideShellControlFlowBody(rawCommand, step.span.startIndex) &&
-            !isConditionallyExecutedShellCommand(rawCommand, step.span.startIndex)
-          ) {
-            currentWorkdirBySubshellScope.set(
-              subshellScope,
-              resolveCdWorkdir(step.argv, stepWorkdir) ?? stepWorkdir,
-            );
+          if (stepWorkdir && isCwdChangingCommandContext(step.context)) {
+            const nextWorkdir = resolveCdWorkdir(step.argv, stepWorkdir);
+            if (nextWorkdir && isInsideShellControlFlowBody(rawCommand, step.span.startIndex)) {
+              currentWorkdirBySubshellScope.set(subshellScope, controlFlowUnknownWorkdir());
+            } else if (
+              nextWorkdir &&
+              !isConditionallyExecutedShellCommand(rawCommand, step.span.startIndex)
+            ) {
+              currentWorkdirBySubshellScope.set(subshellScope, nextWorkdir);
+            } else if (!nextWorkdir) {
+              currentWorkdirBySubshellScope.set(subshellScope, stepWorkdir);
+            }
           }
         }
         return parsedCandidates.length > 0 ? parsedCandidates : fallbackCandidates;
@@ -693,12 +699,18 @@ function resolveSearchTargetPath(searchPath: string, workdir: string): string | 
 
 function expandShellHomePrefix(input: string): string {
   const shellHome = process.env.HOME || os.homedir();
-  return shellHome
+  const openClawStateDir = process.env.OPENCLAW_STATE_DIR;
+  const expandedHome = shellHome
     ? input
         .replace(/^~(?=$|[\\/])/u, shellHome)
         .replace(/^\$HOME(?=$|[\\/])/u, shellHome)
         .replace(/^\$\{HOME\}(?=$|[\\/])/u, shellHome)
     : input;
+  return openClawStateDir
+    ? expandedHome
+        .replace(/^\$OPENCLAW_STATE_DIR(?=$|[\\/])/u, openClawStateDir)
+        .replace(/^\$\{OPENCLAW_STATE_DIR\}(?=$|[\\/])/u, openClawStateDir)
+    : expandedHome;
 }
 
 function maybeRealpath(targetPath: string): string | null {
@@ -726,12 +738,16 @@ function protectedRootForResolvedPath(resolved: string): string | null {
   if (matchedHomeRoot) {
     return matchedHomeRoot;
   }
-  const stateProtectedRoots = homeDirs.flatMap((homeDir) => [
-    path.join(homeDir, ".codex"),
-    path.join(homeDir, ".codex", "sessions"),
-    path.join(homeDir, ".codex", "archived_sessions"),
-    path.join(homeDir, ".openclaw"),
-  ]);
+  const configuredOpenClawStateRoots = normalizeStringEntries([process.env.OPENCLAW_STATE_DIR]);
+  const stateProtectedRoots = [
+    ...homeDirs.flatMap((homeDir) => [
+      path.join(homeDir, ".codex"),
+      path.join(homeDir, ".codex", "sessions"),
+      path.join(homeDir, ".codex", "archived_sessions"),
+      path.join(homeDir, ".openclaw"),
+    ]),
+    ...configuredOpenClawStateRoots,
+  ];
   stateProtectedRoots.sort((left, right) => right.length - left.length);
   const matchedStateRoot = stateProtectedRoots.find((root) => {
     const candidates = [path.resolve(root), maybeRealpath(root)].filter(

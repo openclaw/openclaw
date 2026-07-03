@@ -275,6 +275,19 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("fails closed after cwd changes inside shell control flow", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "if true; then cd ~; fi; rg timeout",
+        workdir: "/Volumes/LEXAR/repos/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("does not apply cd from short-circuit shell branches", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -552,6 +565,40 @@ describe("exec broad search command guard", () => {
       executable: "rg",
       protectedRoot: path.join(homeDir, ".openclaw"),
     });
+  });
+
+  it("protects configured OpenClaw state roots", async () => {
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-root-"));
+    try {
+      fs.mkdirSync(path.join(stateDir, "sessions"), { recursive: true });
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: "rg timeout $OPENCLAW_STATE_DIR/sessions",
+          workdir: "/tmp",
+        }),
+      ).resolves.toMatchObject({
+        executable: "rg",
+        protectedRoot: stateDir,
+      });
+      await expect(
+        detectUnsafeExecBroadSearchShellCommand({
+          command: `find ${stateDir} -name '*.jsonl'`,
+          workdir: "/tmp",
+        }),
+      ).resolves.toMatchObject({
+        executable: "find",
+        protectedRoot: stateDir,
+      });
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("does not treat piped rg filters as filesystem searches", async () => {
