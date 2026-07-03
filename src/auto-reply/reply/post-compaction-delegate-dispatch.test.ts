@@ -1159,8 +1159,8 @@ describe("post-compaction delegate dispatch extraction", () => {
     // so it lands in the preserve list, and the session-store re-stage then
     // throws. The dispatch must re-stage the preserved delegate as a fresh
     // queued TaskFlow row AND finalize the claimed rows — leaving them `running`
-    // would let recoverStagedPostCompactionDelegates replay already-delivered /
-    // re-staged delegates as duplicates on the next gateway startup.
+    // would let listRecoverableStagedPostCompactionDelegates replay
+    // already-delivered / re-staged delegates as duplicates on the next startup.
     const staged: SessionPostCompactionDelegate[] = [
       { ...delegate("staged one"), flowId: "flow-1" },
       { ...delegate("staged two"), flowId: "flow-2" },

@@ -3,17 +3,18 @@ import {
   cancelPendingDelegates,
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
-  recoverStagedPostCompactionDelegates,
+  listRecoverableStagedPostCompactionDelegates,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
 } from "../continuation-delegate-store.js";
 
-// #1144 (r3507184780): staged post-compaction delegates must stay non-terminal
-// until the durable handoff (session-delivery enqueue / session-store persist)
-// succeeds. consumeStagedPostCompactionDelegates now claims the TaskFlow row to
-// `running`; finalizeStagedPostCompactionDelegates finishes it only after the
-// handoff, and recoverStagedPostCompactionDelegates resets crash-orphaned
-// `running` rows to `queued`.
+// #1144/#1158 (r3507184780 / r3517437265): staged post-compaction delegates must
+// stay non-terminal until the durable handoff (session-delivery enqueue /
+// session-store persist) succeeds. consumeStagedPostCompactionDelegates claims
+// the TaskFlow row to `running`; finalizeStagedPostCompactionDelegates finishes
+// it only after the handoff, and listRecoverableStagedPostCompactionDelegates
+// surfaces crash-orphaned `running` rows for startup re-dispatch (without
+// terminalizing or requeuing them — see recoverAndReleaseStagedPostCompactionDelegates).
 
 const sessionKey = "post-compaction-durable-handoff-test";
 
@@ -47,15 +48,16 @@ describe("post-compaction durable handoff (#1144)", () => {
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
 
     // Simulate a crash between release and durable handoff: finalize never runs.
-    // Restart recovery must resurrect the claimed row instead of losing it.
-    const recovered = recoverStagedPostCompactionDelegates();
-    expect(recovered).toBeGreaterThanOrEqual(1);
-    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
-
-    // The recovered row is queued again and re-consumable at the next seam.
-    const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
-    expect(rereleased).toHaveLength(1);
-    expect(rereleased[0]).toMatchObject({ task: "evacuate context" });
+    // Startup recovery must surface the claimed `running` row for re-dispatch
+    // (it stays `running` — never terminalized, never requeued behind an
+    // awaiting-seam row) so it can be handed off without a new compaction.
+    const recoverable = listRecoverableStagedPostCompactionDelegates();
+    expect(recoverable).toHaveLength(1);
+    expect(recoverable[0]?.sessionKey).toBe(sessionKey);
+    expect(recoverable[0]?.delegate).toMatchObject({ task: "evacuate context" });
+    expect(recoverable[0]?.delegate.flowId).toBeDefined();
+    // The row stays `running` (not flipped back to a queued awaiting-seam row).
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
   });
 
   it("finalize after handoff terminalizes the row so recovery cannot replay it", () => {
@@ -67,8 +69,8 @@ describe("post-compaction durable handoff (#1144)", () => {
     const finalized = finalizeStagedPostCompactionDelegates(released.map((d) => d.flowId));
     expect(finalized).toBe(1);
 
-    // No running rows remain, so recovery is a no-op and nothing re-queues.
-    expect(recoverStagedPostCompactionDelegates()).toBe(0);
+    // No running rows remain, so recovery surfaces nothing to re-dispatch.
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
     expect(consumeStagedPostCompactionDelegates(sessionKey)).toHaveLength(0);
   });
@@ -89,10 +91,11 @@ describe("post-compaction durable handoff (#1144)", () => {
     const finalized = finalizeStagedPostCompactionDelegates(firstRelease.map((d) => d.flowId));
     expect(finalized).toBe(1);
 
-    // The second (independently-claimed) row is untouched and still recoverable.
-    expect(recoverStagedPostCompactionDelegates()).toBeGreaterThanOrEqual(1);
-    const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
-    expect(rereleased.map((d) => d.task)).toContain("second");
+    // The second (independently-claimed) row is untouched and still recoverable:
+    // startup recovery surfaces only the `running` "second" row for re-dispatch.
+    const recoverable = listRecoverableStagedPostCompactionDelegates();
+    expect(recoverable.map((r) => r.delegate.task)).toContain("second");
+    expect(recoverable.map((r) => r.delegate.task)).not.toContain("first");
   });
 
   it("re-staging before finalize preserves a delegate when the durable persist fails", () => {
@@ -111,17 +114,17 @@ describe("post-compaction durable handoff (#1144)", () => {
     expect(finalized).toBe(1);
 
     // The re-staged queued row survives; the old claimed row is terminal, so
-    // recovery finds nothing to reset and the delegate is not duplicated.
+    // recovery finds no running row to re-dispatch and the delegate is not duplicated.
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
-    expect(recoverStagedPostCompactionDelegates()).toBe(0);
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
     const rereleased = consumeStagedPostCompactionDelegates(sessionKey);
     expect(rereleased.map((d) => d.task)).toContain("evacuate context");
   });
 
   it("startup recovery boot cutoff skips rows claimed by live traffic after process start (#1144)", () => {
     // A row claimed to `running` AFTER the boot cutoff is a live release, not a
-    // crash-orphaned row. Startup recovery must not flip it back to `queued`
-    // (which would make the live finalizer skip it and release it twice).
+    // crash-orphaned row. Startup recovery must not surface it for re-dispatch
+    // (which would race the live finalizer and release the delegate twice).
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_100_000);
     stage("evacuate context");
@@ -132,13 +135,16 @@ describe("post-compaction durable handoff (#1144)", () => {
     expect(released).toHaveLength(1);
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
 
-    // Bounded recovery leaves the live row `running` (not requeued).
-    expect(recoverStagedPostCompactionDelegates({ runningUpdatedAtOrBefore: bootCutoff })).toBe(0);
-    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
+    // Bounded recovery excludes the live row (updatedAt after the cutoff).
+    expect(
+      listRecoverableStagedPostCompactionDelegates({ runningUpdatedAtOrBefore: bootCutoff }),
+    ).toHaveLength(0);
 
-    // A crash-orphaned row (updated at/before the cutoff) is still recovered when
-    // recovery runs without a cutoff.
-    expect(recoverStagedPostCompactionDelegates()).toBeGreaterThanOrEqual(1);
-    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+    // A crash-orphaned row (updated at/before the cutoff) is still surfaced when
+    // recovery runs without a cutoff; the row stays `running` until re-dispatched.
+    const recoverable = listRecoverableStagedPostCompactionDelegates();
+    expect(recoverable).toHaveLength(1);
+    expect(recoverable[0]?.delegate).toMatchObject({ task: "evacuate context" });
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
   });
 });
