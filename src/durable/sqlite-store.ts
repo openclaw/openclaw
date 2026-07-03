@@ -339,6 +339,13 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnDefinition: str
   }
 }
 
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
+  return row?.name === tableName;
+}
+
 function ensureDurableSchemaMigrationTable(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS durable_schema_migrations (
@@ -350,9 +357,33 @@ function ensureDurableSchemaMigrationTable(db: DatabaseSync): void {
   `);
 }
 
+function ensureDurableRuntimeCompatibilityColumns(db: DatabaseSync): void {
+  if (tableExists(db, "durable_runtime_runs")) {
+    for (const column of [
+      "parent_runtime_run_id TEXT",
+      "parent_step_id TEXT",
+      "message_id TEXT",
+      "turn_id TEXT",
+      "work_unit_id TEXT",
+      "report_route_id TEXT",
+      "claimed_by TEXT",
+      "claim_expires_at INTEGER",
+      "heartbeat_at INTEGER",
+    ]) {
+      ensureColumn(db, "durable_runtime_runs", column);
+    }
+  }
+  if (tableExists(db, "durable_runtime_steps")) {
+    for (const column of ["claimed_by TEXT", "claim_expires_at INTEGER", "heartbeat_at INTEGER"]) {
+      ensureColumn(db, "durable_runtime_steps", column);
+    }
+  }
+}
+
 function ensureDurableRuntimeSchema(db: DatabaseSync): void {
   ensureDurableSchemaMigrationTable(db);
   assertDurableRuntimeSchemaVersionSupported(db);
+  ensureDurableRuntimeCompatibilityColumns(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS durable_runtime_runs (
       runtime_run_id TEXT NOT NULL PRIMARY KEY,
