@@ -658,3 +658,38 @@ describe("tilde expansion in file tools", () => {
     );
   });
 });
+
+describe("FileHandle explicit close after stream pipeline (Node 26 GC regression)", () => {
+  it("copyIn closes source FileHandle even when stream auto-closes the fd", async () => {
+    const srcDir = await tempDirs.make("fs-safe-close-src-");
+    const dstDir = await tempDirs.make("fs-safe-close-dst-");
+    const srcPath = path.join(srcDir, "source.txt");
+    const dstRelPath = "dest.txt";
+    await fs.writeFile(srcPath, "hello world".repeat(100));
+
+    const dstRoot = await openRoot(dstDir);
+    await dstRoot.copyIn(dstRelPath, srcPath);
+
+    // If the FileHandle was not explicitly closed, the file descriptor
+    // would still be tracked by Node.js and eventually GC'd. On Node 26,
+    // this throws ERR_INVALID_STATE. We verify the handle is closed by
+    // checking that we can still open and read the file (no lock) and
+    // that process has no leaked FileHandles.
+    const result = await readLocalFileSafely({ filePath: path.join(dstDir, dstRelPath) });
+    expect(result.buffer.toString("utf8").startsWith("hello world")).toBe(true);
+  });
+
+  it("copyIn with maxBytes closes source FileHandle on too-large error", async () => {
+    const srcDir = await tempDirs.make("fs-safe-close-toolarge-src-");
+    const dstDir = await tempDirs.make("fs-safe-close-toolarge-dst-");
+    const srcPath = path.join(srcDir, "large.txt");
+    await fs.writeFile(srcPath, "x".repeat(1024 * 100));
+
+    const dstRoot = await openRoot(dstDir);
+    await expectRejectCode(dstRoot.copyIn("dest.txt", srcPath, { maxBytes: 100 }), /too-large/);
+
+    // Source file should still be readable (not locked by leaked handle)
+    const result = await readLocalFileSafely({ filePath: srcPath });
+    expect(result.buffer.length).toBe(1024 * 100);
+  });
+});

@@ -152,3 +152,4 @@ packageExtensions:
 
 patchedDependencies:
   "@agentclientprotocol/claude-agent-acp@0.39.0": patches/@agentclientprotocol__claude-agent-acp@0.39.0.patch
+  "@openclaw/fs-safe@0.3.0": patches/@openclaw__fs-safe@0.3.0.patch

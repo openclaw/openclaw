@@ -1,0 +1,78 @@
+diff --git a/dist/archive.js b/dist/archive.js
+index 8b7c4a0..1a2b3c4 100644
+--- a/dist/archive.js
++++ b/dist/archive.js
+@@ -164,10 +164,7 @@
+                     throw createPipelineTimeoutError(err, params.deadline);
+                 }
+                 params.deadline.check();
+-                if (!handleClosedByStream) {
+-                    await tempHandle.close().catch(() => undefined);
+-                    handleClosedByStream = true;
+-                }
++                await tempHandle.close().catch(() => undefined);
+                 tempHandle = null;
+                 return destinationPath;
+             },
+@@ -181,7 +178,7 @@
+     }
+     finally {
+         const openTempHandle = tempHandle;
+-        if (openTempHandle && !handleClosedByStream) {
++        if (openTempHandle) {
+             await openTempHandle.close().catch(() => undefined);
+         }
+     }
+diff --git a/dist/file-store-boundary.js b/dist/file-store-boundary.js
+index 3d2e1a0..5b6c7d8 100644
+--- a/dist/file-store-boundary.js
++++ b/dist/file-store-boundary.js
+@@ -87,9 +87,7 @@
+         else {
+             await pipeline(params.stream, writable);
+         }
+-        if (!handleClosedByStream) {
+-            await handle.close().catch(() => undefined);
+-        }
++        await handle.close().catch(() => undefined);
+         await fs.chmod(filePath, params.mode).catch(() => undefined);
+         return {
+             path: filePath,
+@@ -99,7 +97,7 @@
+         };
+     }
+     catch (err) {
+-        if (handle && !handleClosedByStream) {
++        if (handle) {
+             await handle.close().catch(() => undefined);
+         }
+         await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+diff --git a/dist/root-impl.js b/dist/root-impl.js
+index 7a1b2c0..9d3e4f5 100644
+--- a/dist/root-impl.js
++++ b/dist/root-impl.js
+@@ -1198,10 +1198,7 @@
+         });
+         await pipeline(sourceStream, targetStream);
+         const writtenStat = await fs.stat(tempPath);
+-        if (!tempClosedByStream) {
+-            await tempHandle.close().catch(() => { });
+-            tempClosedByStream = true;
+-        }
++        await tempHandle.close().catch(() => { });
+         tempHandle = null;
+         const commitTempPath = tempPath;
+         await withAsyncDirectoryGuards([destinationGuard], async () => {
+@@ -1229,10 +1226,8 @@
+         throw err;
+     }
+     finally {
+-        if (!sourceClosedByStream) {
+-            await source.handle.close().catch(() => { });
+-        }
+-        if (tempHandle && !tempClosedByStream) {
++        await source.handle.close().catch(() => { });
++        if (tempHandle) {
+             await tempHandle.close().catch(() => { });
+         }
+         if (tempPath) {
