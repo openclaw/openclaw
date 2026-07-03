@@ -15,6 +15,7 @@ import {
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
@@ -530,6 +531,83 @@ describe("delivery-queue recovery", () => {
     expect(order).toEqual(["deliver", "commit-after-ack"]);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
+  });
+
+  it("records a failed diagnostic when a recovered send commit hook fails after ack", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      tmpDir(),
+    );
+    const result = attachOutboundDeliveryCommitHook(
+      { channel: "demo-channel-a", messageId: "m1" },
+      async () => {
+        throw new Error("commit hook offline");
+      },
+    );
+    const deliver = vi.fn().mockResolvedValue([result]);
+
+    const { result: summary } = await runRecovery({ deliver });
+
+    expect(summary).toEqual({
+      recovered: 1,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    const failedEntry = readQueuedEntry(tmpDir(), id);
+    expect(failedEntry.recoveryState).toBe("unknown_after_send");
+    expect(failedEntry.lastError).toContain("post-send commit hook failed");
+    expect(failedEntry.lastError).toContain("commit hook offline");
+  });
+
+  it("does not leave a sent recovery replay pending when post-send state marking fails", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      tmpDir(),
+    );
+    vi.resetModules();
+    vi.doMock("./delivery-queue-storage.js", async () => {
+      const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
+        "./delivery-queue-storage.js",
+      );
+      return {
+        ...actual,
+        markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
+          throw new Error("state db locked");
+        }),
+      };
+    });
+
+    try {
+      const { recoverPendingDeliveries: recoverWithMarkFailure } =
+        await import("./delivery-queue-recovery.js");
+      const summary = await recoverWithMarkFailure({
+        deliver: asDeliverFn(
+          vi.fn().mockResolvedValue([{ channel: "demo-channel-a", messageId: "m1" }]),
+        ),
+        log: createRecoveryLog(),
+        cfg: baseCfg,
+        stateDir: tmpDir(),
+      });
+
+      expect(summary).toEqual({
+        recovered: 0,
+        failed: 1,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+      const failedEntry = readQueuedEntry(tmpDir(), id);
+      expect(failedEntry.recoveryState).toBe("unknown_after_send");
+      expect(failedEntry.lastError).toContain("failed to mark recovered delivery post-send state");
+      expect(failedEntry.lastError).toContain("state db locked");
+    } finally {
+      vi.doUnmock("./delivery-queue-storage.js");
+      vi.resetModules();
+    }
   });
 
   it("replays stored delivery options during recovery", async () => {
