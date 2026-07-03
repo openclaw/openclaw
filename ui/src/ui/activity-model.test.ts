@@ -39,4 +39,15 @@ describe("activity model output preview redaction", () => {
     expect(preview).not.toContain("visible-leaked-value-1234567890");
     expect(preview).not.toContain("visible-db-password-1234567890");
   });
+
+  it("redacts dotted API keys in object-shaped tool results", () => {
+    const preview = buildResultPreview({
+      "app.api.key": "visible secret with spaces",
+      "server.port": 8080,
+    });
+
+    expect(preview).toContain('"app.api.key": "[redacted]"');
+    expect(preview).toContain('"server.port": 8080');
+    expect(preview).not.toContain("visible secret with spaces");
+  });
 });
