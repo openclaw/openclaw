@@ -618,7 +618,7 @@ describe("Feishu streaming card oversized response rejection", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects oversized token responses and cancels the stream", async () => {
+  it("rejects oversized token responses, releases the fetch, and cancels the stream", async () => {
     let canceled = false;
     const ONE_MIB = 1024 * 1024;
     const body = new ReadableStream<Uint8Array>({
@@ -633,12 +633,13 @@ describe("Feishu streaming card oversized response rejection", () => {
       },
     });
 
+    const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(body, {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
-      release: vi.fn(async () => {}),
+      release,
     });
 
     const client = { im: { message: { create: vi.fn() } } } as never;
@@ -651,5 +652,59 @@ describe("Feishu streaming card oversized response rejection", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("feishu.streamingCard.token");
     expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects oversized create-card responses, releases the fetch, and cancels the stream", async () => {
+    const releaseToken = vi.fn(async () => {});
+    // Token succeeds normally
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      release: releaseToken,
+    });
+
+    let canceled = false;
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 18; i++) {
+          controller.enqueue(new Uint8Array(ONE_MIB));
+        }
+        controller.close();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+
+    const releaseCreate = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      release: releaseCreate,
+    });
+
+    const client = { im: { message: { create: vi.fn() } } } as never;
+    const session = new FeishuStreamingSession(client, {
+      appId: "test-id",
+      appSecret: "test-secret",
+    });
+    const error = await session.start("chat_id", "open_id").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("feishu.streamingCard.createCard");
+    expect(canceled).toBe(true);
+    expect(releaseToken).toHaveBeenCalledOnce();
+    expect(releaseCreate).toHaveBeenCalledOnce();
   });
 });

@@ -118,13 +118,22 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = await readProviderJsonResponse<{
+  let data: {
     code: number;
     msg: string;
     tenant_access_token?: string;
     expire?: number;
-  }>(response, "feishu.streamingCard.token");
-  await release();
+  };
+  try {
+    data = await readProviderJsonResponse<{
+      code: number;
+      msg: string;
+      tenant_access_token?: string;
+      expire?: number;
+    }>(response, "feishu.streamingCard.token");
+  } finally {
+    await release();
+  }
   if (data.code !== 0 || !data.tenant_access_token) {
     throw new Error(`Token error: ${data.msg}`);
   }
@@ -281,12 +290,20 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = await readProviderJsonResponse<{
+    let createData: {
       code: number;
       msg: string;
       data?: { card_id: string };
-    }>(createRes, "feishu.streamingCard.createCard");
-    await releaseCreate();
+    };
+    try {
+      createData = await readProviderJsonResponse<{
+        code: number;
+        msg: string;
+        data?: { card_id: string };
+      }>(createRes, "feishu.streamingCard.createCard");
+    } finally {
+      await releaseCreate();
+    }
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
