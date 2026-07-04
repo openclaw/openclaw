@@ -25,15 +25,30 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 
 ## Quick start (pair + connect)
 
-1. Start the Gateway:
+1. Start an authenticated Gateway with a route your phone can reach. Tailscale
+   Serve is the recommended remote path:
 
 ```bash
-openclaw gateway --port 18789
+openclaw gateway --port 18789 --tailscale serve
 ```
 
-2. In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
+For a trusted same-LAN setup, use an authenticated `gateway.bind: "lan"`
+instead. The default loopback bind is not reachable from a phone. If the
+Gateway has not been configured yet, run `openclaw onboard` first so setup-code
+creation has a token or password auth path.
 
-3. Approve the pairing request on the gateway host:
+2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
+   **Pair mobile device** in the **Devices** card.
+
+3. In the iOS app, open **Settings** → **Gateway**, scan the QR code (or paste
+   the setup code), and connect.
+
+4. The official app connects automatically. If **Devices** shows a pending
+   request, review its role and scopes before approving it.
+
+The Control UI button requires an already paired session with `operator.admin`.
+As a terminal fallback, pick a discovered gateway in the iOS app (or enable
+Manual Host and enter host/port), then approve the request on the Gateway host:
 
 ```bash
 openclaw devices list
@@ -63,7 +78,7 @@ This is disabled by default. It applies only to fresh `role: node` pairing with
 no requested scopes. Operator/browser pairing and any role, scope, metadata, or
 public-key change still require manual approval.
 
-4. Verify connection:
+5. Verify connection:
 
 ```bash
 openclaw nodes status

@@ -609,6 +609,60 @@ describe("cli session history", () => {
     });
   });
 
+  it("drops empty legacy reseed text while preserving sibling native content", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const caption = { type: "text", text: "real caption" };
+      const image = {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "x" },
+      };
+      const document = { type: "document", source: { type: "text", data: "notes" } };
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "legacy-empty-reseed",
+          message: {
+            role: "user",
+            content: [
+              caption,
+              { type: "text", text: buildLegacyReseedPrompt("") },
+              image,
+              document,
+            ],
+          },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(1);
+      expect(readRecord(messages[0]).content).toEqual([caption, image, document]);
+    });
+  });
+
+  it.each([
+    ["string", buildLegacyReseedPrompt("")],
+    ["single text block", [{ type: "text", text: buildLegacyReseedPrompt("") }]],
+  ])("drops empty legacy reseed rows in %s form", async (_label, content) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({
+          type: "user",
+          uuid: "legacy-empty-reseed",
+          message: { role: "user", content },
+        })}\n`,
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toEqual([]);
+    });
+  });
+
   it("fails open when the first user row does not match the reseed receipt", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const expectedPrompt = "expected synthetic prompt";

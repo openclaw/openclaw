@@ -76,11 +76,9 @@ export type {
   UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
-// Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 5:
-// recorded zero costs for known-priced token usage are recomputed, and unpriced
-// zero-cost usage counts toward missingCostEntries.
-const USAGE_COST_CACHE_VERSION = 5;
+// Bump when the durable cache schema or the meaning of cached totals changes, so
+// older builds are rebuilt instead of served stale.
+const USAGE_COST_CACHE_VERSION = 6;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -126,23 +124,21 @@ type UsageCostCachedTranscriptEntry = {
 };
 
 type UsageCostCacheFileEntry = {
-  filePath: string;
   size: number;
   mtimeMs: number;
-  pricingFingerprint: string;
   scannedAt: number;
   parsedRecords: number;
   countedRecords: number;
   usageEntries: UsageCostCachedUsageEntry[];
   transcriptEntries?: UsageCostCachedTranscriptEntry[];
   totals: CostUsageTotals;
-  sessionId?: string;
   sessionSummary?: SessionCostSummary;
 };
 
 type UsageCostCacheFile = {
   version: number;
   updatedAt: number;
+  pricingFingerprint: string;
   files: Record<string, UsageCostCacheFileEntry>;
 };
 
@@ -306,31 +302,41 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
   }
 }
 
-function normalizeUsageCostCache(raw: unknown): UsageCostCacheFile {
+function createEmptyUsageCostCache(pricingFingerprint: string): UsageCostCacheFile {
+  return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, pricingFingerprint, files: {} };
+}
+
+function normalizeUsageCostCache(raw: unknown, pricingFingerprint: string): UsageCostCacheFile {
   if (!raw || typeof raw !== "object") {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return createEmptyUsageCostCache(pricingFingerprint);
   }
   const record = raw as Record<string, unknown>;
   if (
     record.version !== USAGE_COST_CACHE_VERSION ||
+    typeof record.pricingFingerprint !== "string" ||
+    record.pricingFingerprint !== pricingFingerprint ||
     !record.files ||
     typeof record.files !== "object"
   ) {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return createEmptyUsageCostCache(pricingFingerprint);
   }
   return {
     version: USAGE_COST_CACHE_VERSION,
     updatedAt: asFiniteNumber(record.updatedAt) ?? 0,
+    pricingFingerprint: record.pricingFingerprint,
     files: record.files as Record<string, UsageCostCacheFileEntry>,
   };
 }
 
-async function readUsageCostCache(cachePath: string): Promise<UsageCostCacheFile> {
+async function readUsageCostCache(
+  cachePath: string,
+  pricingFingerprint: string,
+): Promise<UsageCostCacheFile> {
   try {
     const raw = await fs.promises.readFile(cachePath, "utf-8");
-    return normalizeUsageCostCache(JSON.parse(raw));
+    return normalizeUsageCostCache(JSON.parse(raw), pricingFingerprint);
   } catch {
-    return { version: USAGE_COST_CACHE_VERSION, updatedAt: 0, files: {} };
+    return createEmptyUsageCostCache(pricingFingerprint);
   }
 }
 
@@ -410,14 +416,12 @@ async function listUsageCountedTranscriptFiles(
 function isUsageCostCacheEntryFresh(params: {
   entry: UsageCostCacheFileEntry | undefined;
   file: UsageCostTranscriptFile;
-  pricingFingerprint: string;
   requireSessionSummary?: boolean;
 }): boolean {
   return Boolean(
     params.entry &&
     params.entry.size === params.file.size &&
     params.entry.mtimeMs === params.file.mtimeMs &&
-    params.entry.pricingFingerprint === params.pricingFingerprint &&
     (!params.requireSessionSummary || params.entry.sessionSummary),
   );
 }
@@ -425,24 +429,20 @@ function isUsageCostCacheEntryFresh(params: {
 function canUseUsageCostCacheEntryForPartial(params: {
   entry: UsageCostCacheFileEntry | undefined;
   file: UsageCostTranscriptFile;
-  pricingFingerprint: string;
 }): params is {
   entry: UsageCostCacheFileEntry;
   file: UsageCostTranscriptFile;
-  pricingFingerprint: string;
 } {
   return Boolean(
     params.entry &&
     params.entry.size <= params.file.size &&
-    params.entry.mtimeMs <= params.file.mtimeMs &&
-    params.entry.pricingFingerprint === params.pricingFingerprint,
+    params.entry.mtimeMs <= params.file.mtimeMs,
   );
 }
 
 function getUsageCostStaleFiles(params: {
   cache: UsageCostCacheFile;
   files: UsageCostTranscriptFile[];
-  pricingFingerprint: string;
   sessionSummaryFiles?: Set<string>;
 }): UsageCostTranscriptFile[] {
   const sessionSummaryFiles = params.sessionSummaryFiles ?? new Set<string>();
@@ -451,7 +451,6 @@ function getUsageCostStaleFiles(params: {
       !isUsageCostCacheEntryFresh({
         entry: params.cache.files[file.filePath],
         file,
-        pricingFingerprint: params.pricingFingerprint,
         requireSessionSummary: sessionSummaryFiles.has(file.filePath),
       }),
   );
@@ -460,7 +459,6 @@ function getUsageCostStaleFiles(params: {
 function countUsableUsageCostCacheFiles(params: {
   cache: UsageCostCacheFile;
   files: UsageCostTranscriptFile[];
-  pricingFingerprint: string;
 }): number {
   const filesByPath = new Map(params.files.map((file) => [file.filePath, file]));
   let cachedFiles = 0;
@@ -471,7 +469,6 @@ function countUsableUsageCostCacheFiles(params: {
       canUseUsageCostCacheEntryForPartial({
         entry,
         file,
-        pricingFingerprint: params.pricingFingerprint,
       })
     ) {
       cachedFiles += 1;
@@ -485,7 +482,6 @@ function buildCostUsageSummaryFromCache(params: {
   files: UsageCostTranscriptFile[];
   startMs: number;
   endMs: number;
-  pricingFingerprint: string;
   refreshing: boolean;
 }): CostUsageSummary {
   const dailyMap = new Map<string, CostUsageTotals>();
@@ -494,12 +490,10 @@ function buildCostUsageSummaryFromCache(params: {
   const staleFiles = getUsageCostStaleFiles({
     cache: params.cache,
     files: params.files,
-    pricingFingerprint: params.pricingFingerprint,
   });
   const cachedFiles = countUsableUsageCostCacheFiles({
     cache: params.cache,
     files: params.files,
-    pricingFingerprint: params.pricingFingerprint,
   });
 
   for (const [filePath, entry] of Object.entries(params.cache.files)) {
@@ -509,7 +503,6 @@ function buildCostUsageSummaryFromCache(params: {
       !canUseUsageCostCacheEntryForPartial({
         entry,
         file,
-        pricingFingerprint: params.pricingFingerprint,
       })
     ) {
       continue;
@@ -1511,13 +1504,10 @@ async function scanUsageFileForCache(params: {
   previous?: UsageCostCacheFileEntry;
   includeSessionSummary?: boolean;
 }): Promise<UsageCostCacheFileEntry> {
-  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   const appendOnlyPreviousCandidate =
     params.previous &&
-    params.previous.filePath === params.file.filePath &&
     params.previous.size > 0 &&
     params.previous.size < params.file.size &&
-    params.previous.pricingFingerprint === pricingFingerprint &&
     params.previous.mtimeMs <= params.file.mtimeMs
       ? params.previous
       : undefined;
@@ -1599,17 +1589,14 @@ async function scanUsageFileForCache(params: {
     (params.includeSessionSummary || appendOnlyPrevious?.sessionSummary)
       ? (buildSessionCostSummaryFromCacheEntry({
           entry: {
-            filePath: params.file.filePath,
             size: params.file.size,
             mtimeMs: params.file.mtimeMs,
-            pricingFingerprint,
             scannedAt: Date.now(),
             parsedRecords,
             countedRecords,
             usageEntries,
             transcriptEntries: combinedTranscriptEntries,
             totals,
-            sessionId,
           },
           sessionId,
           sessionFile: params.file.filePath,
@@ -1625,7 +1612,6 @@ async function scanUsageFileForCache(params: {
       ...appendOnlyPrevious,
       size: params.file.size,
       mtimeMs: params.file.mtimeMs,
-      pricingFingerprint,
       scannedAt: Date.now(),
       parsedRecords: appendOnlyPrevious.parsedRecords + parsedRecords,
       countedRecords: appendOnlyPrevious.countedRecords + countedRecords,
@@ -1637,17 +1623,14 @@ async function scanUsageFileForCache(params: {
   }
 
   return {
-    filePath: params.file.filePath,
     size: params.file.size,
     mtimeMs: params.file.mtimeMs,
-    pricingFingerprint,
     scannedAt: Date.now(),
     parsedRecords,
     countedRecords,
     usageEntries,
     transcriptEntries: combinedTranscriptEntries,
     totals,
-    sessionId,
     sessionSummary,
   };
 }
@@ -1669,10 +1652,13 @@ async function refreshCostUsageCacheForPath(params?: {
   try {
     await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
-    const cache = await readUsageCostCache(cachePath);
+    const cache = await readUsageCostCache(cachePath, pricingFingerprint);
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
     });
+    // Empty caches come from missing/corrupt files and version/pricing mismatches.
+    // Persist the empty current-shape cache even when this refresh scans no files.
+    let cacheMutated = cache.updatedAt === 0;
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
     const refreshStartMs = params?.startMs;
     const refreshFiles =
@@ -1682,7 +1668,6 @@ async function refreshCostUsageCacheForPath(params?: {
           ? files
           : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
-    let cacheMutated = false;
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
         delete cache.files[filePath];
@@ -1697,7 +1682,6 @@ async function refreshCostUsageCacheForPath(params?: {
     const staleFiles = getUsageCostStaleFiles({
       cache,
       files: refreshFiles,
-      pricingFingerprint,
       sessionSummaryFiles,
     })
       .toSorted((a, b) => {
@@ -1769,19 +1753,17 @@ export async function loadCostUsageSummaryFromCache(params: {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   let [cache, files] = await Promise.all([
-    readUsageCostCache(cachePath),
+    readUsageCostCache(cachePath, pricingFingerprint),
     listUsageCountedTranscriptFiles(params.agentId),
   ]);
   const staleFiles = getUsageCostStaleFiles({
     cache,
     files,
-    pricingFingerprint,
   });
   if (params.requestRefresh !== false && staleFiles.length > 0) {
     const cachedFiles = countUsableUsageCostCacheFiles({
       cache,
       files,
-      pricingFingerprint,
     });
     if (params.refreshMode === "sync-when-empty" && cachedFiles === 0) {
       const result = await refreshCostUsageCache({
@@ -1790,14 +1772,13 @@ export async function loadCostUsageSummaryFromCache(params: {
         startMs: params.startMs,
       });
       [cache, files] = await Promise.all([
-        readUsageCostCache(cachePath),
+        readUsageCostCache(cachePath, pricingFingerprint),
         listUsageCountedTranscriptFiles(params.agentId),
       ]);
       if (result === "refreshed") {
         const remainingStaleFiles = getUsageCostStaleFiles({
           cache,
           files,
-          pricingFingerprint,
         });
         if (remainingStaleFiles.length > 0) {
           requestCostUsageCacheRefresh({ config: params.config, agentId: params.agentId });
@@ -1813,7 +1794,6 @@ export async function loadCostUsageSummaryFromCache(params: {
     files,
     startMs: params.startMs,
     endMs: params.endMs,
-    pricingFingerprint,
     refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }
@@ -1832,7 +1812,7 @@ export async function loadSessionCostSummaryFromCache(params: {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
   let [cache, stats] = await Promise.all([
-    readUsageCostCache(cachePath),
+    readUsageCostCache(cachePath, pricingFingerprint),
     fs.promises.stat(params.sessionFile).catch(() => null),
   ]);
   let file = stats
@@ -1844,7 +1824,6 @@ export async function loadSessionCostSummaryFromCache(params: {
     !isUsageCostCacheEntryFresh({
       entry,
       file,
-      pricingFingerprint,
       requireSessionSummary: true,
     });
   let refreshRequested = false;
@@ -1857,7 +1836,7 @@ export async function loadSessionCostSummaryFromCache(params: {
       });
       if (result === "refreshed") {
         [cache, stats] = await Promise.all([
-          readUsageCostCache(cachePath),
+          readUsageCostCache(cachePath, pricingFingerprint),
           fs.promises.stat(params.sessionFile).catch(() => null),
         ]);
         file = stats
@@ -1869,7 +1848,6 @@ export async function loadSessionCostSummaryFromCache(params: {
           !isUsageCostCacheEntryFresh({
             entry,
             file,
-            pricingFingerprint,
             requireSessionSummary: true,
           });
       } else {
@@ -1965,7 +1943,7 @@ export async function loadSessionCostSummariesFromCache(params: {
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   }).then(({ results }) => results);
   const [cache, stats, refreshRunning] = await Promise.all([
-    readUsageCostCache(cachePath),
+    readUsageCostCache(cachePath, pricingFingerprint),
     statsPromise,
     isUsageCostCacheRefreshRunning(cachePath),
   ]);
@@ -1982,7 +1960,6 @@ export async function loadSessionCostSummariesFromCache(params: {
       !isUsageCostCacheEntryFresh({
         entry,
         file,
-        pricingFingerprint,
         requireSessionSummary: true,
       });
     if (stale) {

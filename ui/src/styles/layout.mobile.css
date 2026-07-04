@@ -98,6 +98,10 @@
     grid-template-areas:
       "topbar"
       "content";
+    /* The nav collapses to an overlay drawer here, so it no longer reserves a
+       column. Zero the width the docked terminal reads or it would leave a
+       258px gap and waste most of a phone viewport. */
+    --shell-nav-width: 0px;
   }
 
   .shell-nav,
@@ -279,9 +283,9 @@
     padding: 12px 8px 0;
   }
 
-  .sidebar--collapsed .sidebar-version {
+  .sidebar--collapsed .sidebar-status {
     width: auto;
-    min-height: 40px;
+    min-height: 32px;
     padding: 0 12px;
   }
 
@@ -289,9 +293,9 @@
     padding: 8px 0 2px;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-version {
+  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-status {
     width: 44px;
-    min-height: 44px;
+    min-height: 36px;
     padding: 0;
     justify-content: center;
   }
@@ -694,17 +698,6 @@
     border-radius: var(--radius-md);
   }
 
-  .chat-compose {
-    gap: 8px;
-  }
-
-  .chat-compose__field textarea {
-    min-height: 60px;
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
-  }
-
   .agent-chat__input {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
@@ -857,12 +850,6 @@
 
   .chat-bubble {
     padding: 8px 10px;
-  }
-
-  .chat-compose__field textarea {
-    min-height: 52px;
-    padding: 8px 10px;
-    font-size: 13px;
   }
 
   .btn {

@@ -523,6 +523,7 @@ export async function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
@@ -563,6 +564,12 @@ export async function runAgentAttempt(params: {
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+  if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
+    params.fallbackRuntimeState.originRuntime =
+      !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
+  }
+  const shouldForwardImagesToEmbedded =
+    !params.isFallbackRetry || params.fallbackRuntimeState?.originRuntime === "cli";
   const allowCliAuthProfileForwarding =
     isCliExecutionProvider &&
     cliBackendAcceptsAuthProfileForwarding({
@@ -708,8 +715,12 @@ export async function runAgentAttempt(params: {
           authProfileId,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
-          images: params.isFallbackRetry ? undefined : params.opts.images,
-          imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+          // Image discovery must use the original turn, before retry/history decoration.
+          imagePrompt: params.body,
+          // Fallback prompts repeat the current task, so prompt-local images must
+          // accompany every CLI process. Native dedupe requires a runtime receipt.
+          images: params.opts.images,
+          imageOrder: params.opts.imageOrder,
           skillsSnapshot: params.skillsSnapshot,
           messageChannel: params.messageChannel,
           streamParams: params.opts.streamParams,
@@ -935,8 +946,10 @@ export async function runAgentAttempt(params: {
       skillsSnapshot: params.skillsSnapshot,
       prompt: effectivePrompt,
       transcriptPrompt: params.transcriptBody,
-      images: params.isFallbackRetry ? undefined : params.opts.images,
-      imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+      // CLI-origin retries cannot rely on transcript replay: orphan-user repair
+      // removes the persisted CLI turn before the embedded prompt is submitted.
+      images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
+      imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
       clientTools: params.opts.clientTools,
       provider: embeddedAgentProvider,
       model: params.modelOverride,

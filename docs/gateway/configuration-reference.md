@@ -543,6 +543,10 @@ See [Inferred commitments](/concepts/commitments).
       // allowInsecureAuth: false,
       // dangerouslyDisableDeviceAuth: false,
     },
+    terminal: {
+      enabled: false,
+      // shell: "/bin/zsh",
+    },
     remote: {
       url: "ws://127.0.0.1:18789",
       transport: "ssh", // ssh | direct
@@ -610,6 +614,8 @@ See [Inferred commitments](/concepts/commitments).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
+- `terminal.enabled`: opt in to the admin-scoped operator terminal. Default: `false`. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Enable it only for trusted operator deployments; changing it restarts the Gateway and updates the Control UI content security policy.
+- `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
 - `remote.sshHostKeyPolicy`: macOS SSH tunnel host-key policy. `strict` is the default and requires an already trusted key. `openssh` is an explicit opt-in to the effective OpenSSH configuration for managed aliases; review matching user and system SSH settings before using it. The macOS app and `configure-remote` reset this policy to `strict` when changing targets unless explicitly opted in again.
@@ -1163,7 +1169,7 @@ Notes:
 ```json5
 {
   update: {
-    channel: "stable", // stable | beta | dev
+    channel: "stable", // stable | extended-stable | beta | dev
     checkOnStart: true,
 
     auto: {
@@ -1176,7 +1182,9 @@ Notes:
 }
 ```
 
-- `channel`: release channel for npm/git installs - `"stable"`, `"beta"`, or `"dev"`.
+- `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or
+  `"dev"`. Extended-stable is a package-only, foreground/on-demand channel; it
+  is skipped by startup checks and background auto-update.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
 - `auto.enabled`: enable background auto-update for package installs (default: `false`).
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).

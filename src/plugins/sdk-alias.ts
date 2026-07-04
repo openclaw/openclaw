@@ -750,13 +750,6 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     distFile: "read-byte-stream-with-limit.mjs",
   },
   {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "read-response-with-limit",
-    srcFile: "read-response-with-limit.ts",
-    distFile: "read-response-with-limit.mjs",
-  },
-  {
     packageName: "@openclaw/normalization-core",
     packageDir: "normalization-core",
     subpath: "",
@@ -769,6 +762,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     subpath: "boolean-coercion",
     srcFile: "boolean-coercion.ts",
     distFile: "boolean-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "error-coercion",
+    srcFile: "error-coercion.ts",
+    distFile: "error-coercion.mjs",
   },
   {
     packageName: "@openclaw/normalization-core",

@@ -1,4 +1,5 @@
 // Tests follow-up runner delivery, transcript persistence, and no-reply contracts.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -54,6 +55,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
   }
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
+const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -144,7 +146,10 @@ function registerFollowupTestSessionStore(
   storePath: string,
   sessionStore: Record<string, SessionEntry>,
 ): void {
+  fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
+  fsSync.writeFileSync(storePath, JSON.stringify(sessionStore));
   FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+  FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 }
 
 async function incrementRunCompactionCountForFollowupTest(
@@ -382,8 +387,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
       run.queuedLifecycle?.onComplete?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
-    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal">) =>
-      run.abortSignal?.aborted === true,
+    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
+      run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
   }));
   vi.doMock("./session-run-accounting.js", () => ({
@@ -581,6 +586,10 @@ afterEach(() => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  for (const storePath of FOLLOWUP_TEST_SESSION_STORE_PATHS) {
+    fsSync.rmSync(storePath, { force: true });
+  }
+  FOLLOWUP_TEST_SESSION_STORE_PATHS.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
   clearSessionStoreCacheForTest();
@@ -3356,6 +3365,60 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
+  it("keeps internal tool lifecycle events out of queued channel progress", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "wait",
+            hideFromChannelProgress: true,
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: {
+            phase: "start",
+            itemId: "tool:wait-1",
+            title: "wait",
+            hideFromChannelProgress: true,
+          },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+  });
+
   it("keeps queued follow-up progress quiet when verbose state is missing", async () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
@@ -4252,6 +4315,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     persistSpy.mockImplementationOnce(async (params) => {
       const nextEntry: SessionEntry = {
@@ -4309,6 +4373,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
 
     const cfg = {
       messages: {
@@ -4491,6 +4556,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -4556,7 +4622,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       totalTokensFresh: true,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "internal announce complete" }],

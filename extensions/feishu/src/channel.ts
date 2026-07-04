@@ -183,7 +183,18 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       if (!sendText) {
         throw new Error("Feishu text sending is not available.");
       }
-      return toFeishuMessageSendResult(await sendText(ctx), "text");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendText({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "text"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "text");
     },
     media: async (ctx) => {
       const runtime = await loadFeishuChannelRuntime();
@@ -191,7 +202,18 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       if (!sendMedia) {
         throw new Error("Feishu media sending is not available.");
       }
-      return toFeishuMessageSendResult(await sendMedia(ctx), "media");
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendMedia({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "media"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "media");
     },
   },
 });

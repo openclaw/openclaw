@@ -2150,6 +2150,7 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
             chatId: params.chatId,

@@ -479,6 +479,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
+      // Kill any PTY shells this connection owned; an operator's terminals must
+      // not outlive the socket that opened them.
+      context.terminalSessions?.closeForConn(connId);
       let currentDisconnectedNodeId: string | null = null;
       if (client?.connect?.role === "node") {
         currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);

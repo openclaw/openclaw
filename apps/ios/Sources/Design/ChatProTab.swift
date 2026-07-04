@@ -97,6 +97,8 @@ struct ChatProTab: View {
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected,
                 messagePlaceholder: self.messagePlaceholder,
+                emptyAssistantIntro: String(localized: "What would you like to work on?"),
+                emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: self.talkControl)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                     .environment(\.openClawAssistantBubblesInCleanChrome, true)
@@ -270,7 +272,7 @@ struct ChatProTab: View {
     private var agentBadge: String {
         if let identity = activeAgent?.identity,
            let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = normalized(emoji)
+           let normalizedEmoji = Self.normalizedBadgeEmoji(emoji)
         {
             return normalizedEmoji
         }
@@ -283,6 +285,27 @@ struct ChatProTab: View {
         }
         return "OC"
     }
+
+    nonisolated static func normalizedBadgeEmoji(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty || normalized == "?" ? nil : normalized
+    }
+
+    nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
+        OpenClawChatView.StarterPrompt(
+            id: "summarize-status",
+            title: String(localized: "Check OpenClaw status"),
+            prompt: String(localized: "Summarize the current OpenClaw status and tell me what needs attention.")),
+        OpenClawChatView.StarterPrompt(
+            id: "show-controls",
+            title: String(localized: "What can I control here?"),
+            prompt: String(localized: "Show me which phone controls and device capabilities are available right now.")),
+        OpenClawChatView.StarterPrompt(
+            id: "start-voice",
+            title: String(localized: "Help me start voice chat"),
+            prompt: String(localized: "Help me start a realtime voice session from this phone.")),
+    ]
 
     private func normalized(_ value: String?) -> String? {
         guard let value else { return nil }

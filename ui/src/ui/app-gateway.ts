@@ -19,6 +19,7 @@ import {
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import { switchChatSession } from "./app-render.helpers.ts";
 import {
   applySettings,
   loadCron,
@@ -54,7 +55,7 @@ import {
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
-import { loadDevices, type DevicesState } from "./controllers/devices.ts";
+import { closeDevicePairSetup, loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   clearResolvedExecApprovalPrompt,
@@ -107,12 +108,10 @@ function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
 
-type GatewayHost = {
+type GatewayHost = DevicesState & {
   settings: UiSettings;
   password: string;
   clientInstanceId: string;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -555,6 +554,31 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   });
 }
 
+function resolveDeletedSessionFallback(
+  host: GatewayHost,
+  deletedSession: { key: string; agentId?: string },
+): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const defaults = snapshot?.sessionDefaults;
+  const configuredMainKey = defaults?.mainKey?.trim() || host.agentsList?.mainKey?.trim();
+  const parsedConfiguredMainKey = parseAgentSessionKey(configuredMainKey ?? "");
+  const parsedSelectedKey = parseAgentSessionKey(host.sessionKey);
+  const parsedDeletedKey = parseAgentSessionKey(deletedSession.key);
+  return buildAgentMainSessionKey({
+    agentId:
+      parsedSelectedKey?.agentId ??
+      parsedDeletedKey?.agentId ??
+      deletedSession.agentId ??
+      resolveDefaultAgentId(host),
+    mainKey:
+      parsedConfiguredMainKey?.rest ??
+      configuredMainKey ??
+      parseAgentSessionKey(defaults?.mainSessionKey ?? "")?.rest,
+  });
+}
+
 function resolveDefaultAgentId(host: GatewayHost): string {
   return resolveUiDefaultAgentId(host);
 }
@@ -787,6 +811,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.chatError = null;
   host.hello = null;
   host.connected = false;
+  closeDevicePairSetup(host);
   if (reconnectReason === "seq-gap") {
     host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
     clearPendingQueueItemsForRun(
@@ -921,6 +946,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      closeDevicePairSetup(host);
       const currentSessionId =
         typeof host.currentSessionId === "string" ? host.currentSessionId.trim() : "";
       if (currentSessionId) {
@@ -1386,6 +1412,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
             | { clientRunId?: unknown; runId?: unknown; sessionKey?: unknown }
             | undefined,
           runIdBeforeApply,
+        );
+      }
+      if (result.deletedSession?.selected) {
+        switchChatSession(
+          host as unknown as Parameters<typeof switchChatSession>[0],
+          resolveDeletedSessionFallback(host, result.deletedSession),
         );
       }
       return;

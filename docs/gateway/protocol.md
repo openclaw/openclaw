@@ -379,6 +379,14 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   </Accordion>
 
+  <Accordion title="Operator terminal">
+    - `terminal.open` starts a host PTY for an explicit `agentId` or the default agent and returns the resolved agent, working directory, shell, and confinement state.
+    - `terminal.input`, `terminal.resize`, and `terminal.close` operate only on sessions owned by the calling connection.
+    - `terminal.data` and `terminal.exit` events stream only to the connection that opened the session.
+    - Every terminal method requires `operator.admin`; `gateway.terminal.enabled` must be explicitly true. Fully sandboxed agents are refused, and an agent policy change closes existing and in-flight PTYs.
+
+  </Accordion>
+
   <Accordion title="Talk and TTS">
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes canonical provider ids, registry aliases, labels, configured state, an optional group-level `ready` result, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config. Current Gateways set `ready` after applying runtime provider selection; clients should treat its absence as unverified for compatibility with older Gateways.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
@@ -455,9 +463,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Device pairing and device tokens">
     - `device.pair.list` returns pending and approved paired devices.
+    - `device.pair.setupCode` creates a mobile setup code and, by default, a PNG QR data URL. It requires `operator.admin` and is intentionally omitted from advertised discovery. The result includes `setupCode`, optional `qrDataUrl`, `gatewayUrl`, the non-secret `auth` label, and `urlSource`.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
     - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+
+    The setup code embeds a short-lived bootstrap credential. Clients must not
+    log or persist it beyond the pairing flow.
 
   </Accordion>
 

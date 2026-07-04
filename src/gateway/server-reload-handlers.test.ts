@@ -1348,6 +1348,8 @@ describe("gateway Gmail hot reload handlers", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -1458,6 +1460,8 @@ describe("gateway Gmail hot reload handlers", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {
@@ -1567,6 +1571,8 @@ describe("gateway Gmail hot reload handlers", () => {
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       clients: [],
+      reconcileTerminalSessions: vi.fn(),
+      commitTerminalConfig: vi.fn(),
     });
     const registeredWriteListener = writeListenerRef.current;
     if (!registeredWriteListener) {

@@ -102,6 +102,12 @@ function cloneJsonValue<T>(value: T): T {
   return structuredClone(value);
 }
 
+function removeContentBlock<T>(content: T[], blockIndex: number): T[] | null {
+  const nextContent = cloneJsonValue(content);
+  nextContent.splice(blockIndex, 1);
+  return nextContent.length > 0 ? nextContent : null;
+}
+
 function normalizeClaudeCliContent(
   content: string | unknown[],
   toolNameRegistry: ToolNameRegistry,
@@ -305,9 +311,8 @@ function parseClaudeCliHistoryEntry(
           }
           // The receipt proves only the matching text block is synthetic.
           // Preserve sibling images or other native content that has no local duplicate proof.
-          const nextContent = cloneJsonValue(content);
-          nextContent.splice(candidate.blockIndex, 1);
-          if (nextContent.length === 0) {
+          const nextContent = removeContentBlock(content, candidate.blockIndex);
+          if (!nextContent) {
             return null;
           }
           content = nextContent;
@@ -316,12 +321,20 @@ function parseClaudeCliHistoryEntry(
         for (const candidate of promptTextCandidates) {
           const reseedPrompt = parseCliReseedPrompt(candidate.text);
           if (reseedPrompt.kind === "legacy") {
-            if (!reseedPrompt.userMessage) {
-              return null;
-            }
             if (candidate.blockIndex === undefined) {
+              if (!reseedPrompt.userMessage) {
+                return null;
+              }
               content = reseedPrompt.userMessage;
             } else if (Array.isArray(content)) {
+              if (!reseedPrompt.userMessage) {
+                const contentWithoutReseed = removeContentBlock(content, candidate.blockIndex);
+                if (!contentWithoutReseed) {
+                  return null;
+                }
+                content = contentWithoutReseed;
+                break;
+              }
               const nextContent = cloneJsonValue(content);
               const block = nextContent[candidate.blockIndex];
               if (block && typeof block === "object") {

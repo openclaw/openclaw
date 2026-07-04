@@ -1478,6 +1478,8 @@ export async function runReplyAgent(replyParams: {
     const admission = await admitReplyTurn({
       sessionId: followupRun.run.sessionId,
       sessionKey: replySessionKey ?? "",
+      expectedSessionId: activeSessionEntry?.sessionId,
+      storePath,
       kind: replyTurnKind,
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,

@@ -555,9 +555,93 @@ describe("patchSession", () => {
       agentId: "work",
     });
   });
+
+  it("keeps non-Sessions patch refreshes active-only after enabling archived view", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const state = createState(request, {
+      tab: "overview",
+      sessionsShowArchived: true,
+    });
+
+    await patchSession(state, "agent:main:main", { fastMode: true });
+
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
 });
 
 describe("loadSessions", () => {
+  it("records the loaded archive scope separately from the Sessions view preference", async () => {
+    const request = vi.fn(async () => ({
+      ts: 1,
+      path: "(multiple)",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
+    }));
+    const state = createState(request, { tab: "sessions", sessionsShowArchived: true });
+
+    await loadSessions(state, { showArchived: false });
+
+    expect(state.sessionsResultShowArchived).toBe(false);
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("reconciles the current chat without replacing the Sessions view result", async () => {
+    const request = vi.fn(async () => ({
+      ts: 2,
+      path: "(multiple)",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:active",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          status: "done",
+        },
+      ],
+    }));
+    const archivedResult = {
+      ts: 1,
+      path: "(multiple)",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:archived",
+          kind: "direct" as const,
+          updatedAt: 1,
+          archived: true,
+        },
+      ],
+    };
+    const state = createState(request, {
+      tab: "sessions",
+      sessionKey: "agent:main:active",
+      chatRunId: "run-active",
+      sessionsShowArchived: true,
+      sessionsResultShowArchived: true,
+      sessionsResult: archivedResult,
+    });
+
+    await loadSessions(state, {
+      showArchived: false,
+      preserveSessionsViewResult: true,
+    });
+
+    expect(state.sessionsResult).toBe(archivedResult);
+    expect(state.chatRunId).toBeNull();
+  });
+
   it("hides explicitly archived sessions by default", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -590,7 +674,7 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(1);
   });
 
-  it("includes explicitly archived sessions when explicitly shown", async () => {
+  it("shows only archived sessions in the archived view", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`unexpected method: ${method}`);
@@ -612,15 +696,14 @@ describe("loadSessions", () => {
         ],
       };
     });
-    const state = createState(request, { sessionsShowArchived: true });
+    const state = createState(request, { tab: "sessions", sessionsShowArchived: true });
 
     await loadSessions(state);
 
     expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
-      "agent:main:main",
       "agent:main:subagent:archived",
     ]);
-    expect(state.sessionsResult?.count).toBe(2);
+    expect(state.sessionsResult?.count).toBe(1);
   });
 
   it("keeps terminal non-archived sessions visible by default", async () => {
@@ -654,6 +737,29 @@ describe("loadSessions", () => {
     ]);
     expect(state.sessionsResult?.count).toBe(2);
   });
+
+  it.each(["overview", "workboard"])(
+    "keeps %s loads active-only after the Sessions archived filter was enabled",
+    async (tab) => {
+      const request = vi.fn(async () => ({
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: {},
+        sessions: [],
+      }));
+      const state = createState(request, { tab, sessionsShowArchived: true });
+
+      await loadSessions(state);
+
+      expect(request).toHaveBeenCalledWith("sessions.list", {
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+      });
+      expect(state.sessionsResultShowArchived).toBe(false);
+    },
+  );
 
   it("keeps local run tracking while the session list reports an active terminal snapshot", async () => {
     vi.useFakeTimers();
@@ -791,6 +897,7 @@ describe("loadSessions", () => {
       };
     });
     const state = createState(request, {
+      tab: "sessions",
       sessionsFilterActive: "120",
       sessionsFilterLimit: "50",
       sessionsShowArchived: true,
@@ -803,6 +910,7 @@ describe("loadSessions", () => {
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
+      archived: true,
     });
   });
 
@@ -1225,6 +1333,63 @@ describe("loadSessions", () => {
 });
 
 describe("applySessionsChangedEvent", () => {
+  it.each([
+    { archived: true, previousArchived: false },
+    { archived: false, previousArchived: true },
+  ])(
+    "tracks selected chat archive state when a remote event sets archived=$archived",
+    ({ archived, previousArchived }) => {
+      const key = "agent:main:review";
+      const state = createState(async () => undefined, {
+        sessionKey: key,
+        selectedChatSessionArchived: previousArchived,
+        sessionsResultShowArchived: previousArchived,
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key, kind: "direct", updatedAt: 1, archived: previousArchived }],
+        },
+      });
+
+      const applied = applySessionsChangedEvent(state, {
+        sessionKey: key,
+        sessionId: "sess-review",
+        archived,
+        ts: 2,
+      });
+
+      expect(applied).toEqual({ applied: true, change: "deleted" });
+      expect(state.selectedChatSessionArchived).toBe(archived);
+    },
+  );
+
+  it("reconciles against the loaded active scope after leaving archived view enabled", () => {
+    const state = createState(async () => undefined, {
+      sessionsShowArchived: true,
+      sessionsResultShowArchived: false,
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:review", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:review",
+      sessionId: "sess-review",
+      status: "done",
+      archived: false,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions).toHaveLength(1);
+  });
+
   it("replaces stale effective fast metadata from session change events", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -1284,7 +1449,11 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "deleted" });
+    expect(applied).toEqual({
+      applied: true,
+      change: "deleted",
+      deletedSession: { key: "agent:main:old", agentId: "main", selected: false },
+    });
     expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
       "agent:main:main",
     ]);
@@ -1314,13 +1483,88 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "deleted" });
+    expect(applied).toEqual({
+      applied: true,
+      change: "deleted",
+      deletedSession: {
+        key: "agent:work:dashboard:deleted",
+        agentId: "work",
+        selected: false,
+      },
+    });
     expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
       "agent:main:main",
     ]);
     expect(state.chatAgentSessionRowsByAgent?.work?.map((session) => session.key)).toEqual([
       "agent:work:main",
     ]);
+  });
+
+  it("reports deletion of the selected chat even when its row is not cached", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:main:archived",
+      selectedChatSessionArchived: true,
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:archived",
+      reason: "delete",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "deleted",
+      deletedSession: { key: "agent:main:archived", agentId: "main", selected: true },
+    });
+  });
+
+  it("reports deletion of the selected chat before a session list is loaded", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:ops:archived",
+      selectedChatSessionArchived: true,
+      sessionsResult: null,
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:ops:archived",
+      reason: "delete",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "deleted",
+      deletedSession: { key: "agent:ops:archived", agentId: "ops", selected: true },
+    });
+  });
+
+  it("matches canonical global deletion events to the selected agent alias", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:work:main",
+      selectedChatSessionArchived: true,
+      sessionsResult: null,
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "global",
+      agentId: "work",
+      reason: "delete",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "deleted",
+      deletedSession: { key: "global", agentId: "work", selected: true },
+    });
   });
 
   it("keeps out-of-scope session events out of scoped results", () => {
@@ -1551,6 +1795,38 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: true, change: "deleted" });
     expect(state.sessionsResult?.sessions).toStrictEqual([]);
+  });
+
+  it("clears pin timestamps from unpin events", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:project",
+            kind: "direct",
+            updatedAt: 1,
+            pinned: true,
+            pinnedAt: 2,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:project",
+      sessionId: "sess-project",
+      pinned: false,
+      pinnedAt: null,
+      ts: 3,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({ pinned: false });
+    expect(state.sessionsResult?.sessions[0]?.pinnedAt).toBeUndefined();
   });
 
   it("keeps terminal status updates visible while archived sessions are hidden", () => {
@@ -2167,6 +2443,33 @@ describe("applySessionsChangedEvent", () => {
       totalTokensFresh: true,
       contextTokens: 200_000,
     });
+  });
+
+  it("retains selected chat archive status outside active-only results", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:main:archived",
+      sessionsResultShowArchived: false,
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:archived",
+      kind: "direct",
+      updatedAt: 1,
+      archived: true,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(false);
+    expect(state.selectedChatSessionArchived).toBe(true);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("does not create visible rows from synthetic chat history session info", () => {

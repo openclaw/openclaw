@@ -229,6 +229,10 @@ describe("CLI attempt execution", () => {
     runId?: string;
     body?: string;
     transcriptBody?: string;
+    providerOverride?: string;
+    modelOverride?: string;
+    isFallbackRetry?: boolean;
+    fallbackRuntimeState?: RunAgentAttemptParams["fallbackRuntimeState"];
     userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
@@ -242,11 +246,12 @@ describe("CLI attempt execution", () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedAgentRunResult);
+    const providerOverride = overrides?.providerOverride ?? "openai";
 
     await runAgentAttempt({
-      providerOverride: "openai",
+      providerOverride,
       originalProvider: "openai",
-      modelOverride: "gpt-5.4",
+      modelOverride: overrides?.modelOverride ?? "gpt-5.4",
       cfg: {} as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
@@ -256,7 +261,8 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       body: overrides?.body ?? "stream gate",
       transcriptBody: overrides?.transcriptBody,
-      isFallbackRetry: false,
+      isFallbackRetry: overrides?.isFallbackRetry ?? false,
+      fallbackRuntimeState: overrides?.fallbackRuntimeState,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId,
@@ -271,14 +277,14 @@ describe("CLI attempt execution", () => {
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
-      authProfileProvider: "openai",
+      authProfileProvider: providerOverride,
       sessionStore,
       storePath,
       sessionHasHistory: false,
       userTurnTranscriptRecorder: overrides?.userTurnTranscriptRecorder,
     });
 
-    return firstEmbeddedAgentArg();
+    return firstEmbeddedAgentArg(runEmbeddedAgentMock.mock.calls.length - 1);
   }
 
   beforeEach(async () => {
@@ -2028,7 +2034,6 @@ describe("CLI attempt execution", () => {
         cwd: tmpDir,
       },
     });
-
     await runAgentAttempt({
       providerOverride: "claude-cli",
       originalProvider: "claude-cli",
@@ -2064,6 +2069,7 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
       transcriptPrompt: "canonical timestamp question",
+      imagePrompt: "what time is it?",
       userTurnTranscriptRecorder,
       suppressNextUserMessagePersistence: false,
     });
@@ -2078,6 +2084,9 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
+    const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
 
     await runAgentAttempt({
       providerOverride: "anthropic",
@@ -2099,11 +2108,11 @@ describe("CLI attempt execution", () => {
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "route this",
-      isFallbackRetry: false,
+      isFallbackRetry: true,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-canonical-claude-cli",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: { images, imageOrder } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
@@ -2115,13 +2124,26 @@ describe("CLI attempt execution", () => {
       sessionStore,
       storePath,
       sessionHasHistory: false,
+      fallbackRuntimeState,
     });
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       model: "claude-opus-4-7",
+      imagePrompt: "route this",
+      images,
+      imageOrder,
     });
+    expect(fallbackRuntimeState.originRuntime).toBe("cli");
+
+    const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "run-canonical-claude-cli-fallback",
+      isFallbackRetry: true,
+      fallbackRuntimeState,
+      opts: { images },
+    });
+    expect(fallbackArg.images).toEqual(images);
   });
 
   it("routes provider-qualified Anthropic shorthand through the configured Claude CLI runtime", async () => {
@@ -2307,6 +2329,52 @@ describe("CLI attempt execution", () => {
       userTurnTranscriptRecorder: recorder,
       suppressNextUserMessagePersistence: false,
     });
+  });
+
+  it.each([
+    { originRuntime: undefined, retry: false, expectedImages: true },
+    { originRuntime: "cli" as const, retry: true, expectedImages: true },
+    { originRuntime: "embedded" as const, retry: true, expectedImages: false },
+  ])(
+    "forwards embedded images for originRuntime=$originRuntime retry=$retry",
+    async ({ originRuntime, retry, expectedImages }) => {
+      const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+      const imageOrder = ["inline" as const];
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        runId: `embedded-image-fallback-${originRuntime ?? "unset"}-${retry}`,
+        isFallbackRetry: retry,
+        fallbackRuntimeState: originRuntime === undefined ? undefined : { originRuntime },
+        opts: { images, imageOrder },
+      });
+
+      expect(embeddedArg.images).toEqual(expectedImages ? images : undefined);
+      expect(embeddedArg.imageOrder).toEqual(expectedImages ? imageOrder : undefined);
+    },
+  );
+
+  it("records raw CLI-shaped model runs as embedded origins", async () => {
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+
+    const firstArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "raw-cli-shaped-origin",
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-7",
+      fallbackRuntimeState,
+      opts: { modelRun: true, images },
+    });
+    expect(fallbackRuntimeState.originRuntime).toBe("embedded");
+    expect(firstArg.images).toEqual(images);
+
+    const retryArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "raw-cli-shaped-origin-retry",
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-7",
+      isFallbackRetry: true,
+      fallbackRuntimeState,
+      opts: { modelRun: true, images },
+    });
+    expect(retryArg.images).toBeUndefined();
   });
 
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {

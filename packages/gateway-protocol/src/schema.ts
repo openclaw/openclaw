@@ -26,6 +26,7 @@ export * from "./schema/secrets.js";
 export * from "./schema/sessions.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/tasks.js";
+export * from "./schema/terminal.js";
 export * from "./schema/types.js";
 export * from "./schema/plugin-approvals.js";
 export * from "./schema/plugins.js";

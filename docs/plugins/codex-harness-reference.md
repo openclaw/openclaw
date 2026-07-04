@@ -88,6 +88,7 @@ Supported `appServer` fields:
 | Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                                        |
+| `homeScope`                                   | `"agent"`                                              | `"agent"` isolates Codex state per OpenClaw agent. `"user"` shares the native `$CODEX_HOME` or `~/.codex`, uses native auth, and enables owner-only thread management. User scope requires stdio.                                                                                                                                                                                               |
 | `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                          |
 | `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
 | `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
@@ -265,7 +266,7 @@ that combination.
 
 ## Auth and environment isolation
 
-Auth is selected in this order:
+In the default per-agent home, auth is selected in this order:
 
 1. An explicit OpenClaw Codex auth profile for the agent.
 2. The app-server's existing account in that agent's Codex home.
@@ -289,6 +290,14 @@ per-agent directory under that agent's OpenClaw state. That keeps Codex config,
 accounts, plugin cache/data, and thread state scoped to the OpenClaw agent
 instead of leaking in from the operator's personal `~/.codex` home.
 
+Set `appServer.homeScope: "user"` to share native Codex state with Codex
+Desktop and the CLI. This local-stdio-only mode uses `$CODEX_HOME` when set and
+`~/.codex` otherwise, including native auth, config, plugins, and threads.
+OpenClaw skips its auth-profile bridge for the app-server. Verified owner turns
+can use `codex_threads` to list, search, read, fork, rename, archive, and restore
+those threads. Fork a thread before continuing it in OpenClaw; independent
+Codex processes do not coordinate concurrent writers for the same thread.
+
 OpenClaw does not rewrite `HOME` for normal local app-server launches. Codex-run
 subprocesses such as `openclaw`, `gh`, `git`, cloud CLIs, and shell commands see
 the normal process home and can find user-home config and tokens. Codex may also
@@ -296,10 +305,11 @@ discover `$HOME/.agents/skills` and `$HOME/.agents/plugins/marketplace.json`;
 that `.agents` discovery is intentionally shared with the operator home and is
 separate from isolated `~/.codex` state.
 
-OpenClaw plugins and OpenClaw skill snapshots still flow through OpenClaw's own
-plugin registry and skill loader. Personal Codex `~/.codex` assets do not. If
-you have useful Codex CLI skills or plugins from a Codex home that should become
-part of an OpenClaw agent, inventory them explicitly:
+In the default agent scope, OpenClaw plugins and OpenClaw skill snapshots still
+flow through OpenClaw's own plugin registry and skill loader; personal Codex
+`~/.codex` assets do not. If you have useful Codex CLI skills or plugins from a
+Codex home that should become part of an isolated OpenClaw agent, inventory
+them explicitly:
 
 ```bash
 openclaw migrate codex --dry-run
@@ -328,8 +338,8 @@ If a deployment needs additional environment isolation, add those variables to
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
 OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
-normalization: `CODEX_HOME` stays per-agent, and `HOME` stays inherited so
-subprocesses can use normal user-home state.
+normalization: `CODEX_HOME` stays pointed at the selected agent or user scope,
+and `HOME` stays inherited so subprocesses can use normal user-home state.
 
 ## Dynamic tools
 
@@ -431,24 +441,15 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.5
 - GPT-5.4 mini
 
-The current bundled harness is `@openai/codex` `0.142.4`. A `model/list` probe
-against that bundled app-server in a GPT-5.6-enabled workspace returned these
-public picker rows:
+The current bundled harness is `@openai/codex` `0.142.5`. A `model/list` probe
+against that bundled app-server returned these public picker rows:
 
-| Model id              | Input modalities | Reasoning efforts                    |
-| --------------------- | ---------------- | ------------------------------------ |
-| `gpt-5.6-sol`         | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-terra`       | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-luna`        | text, image      | low, medium, high, xhigh, max        |
-| `gpt-5.5`             | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4`             | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-mini`        | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-pro`         | text, image      | medium, high, xhigh                  |
-| `gpt-5.3-codex-spark` | text             | low, medium, high, xhigh             |
-
-GPT-5.6 access is account-scoped during the limited preview. `max` is a model
-reasoning effort. `ultra` is separate Codex multi-agent orchestration metadata,
-not a standard OpenAI reasoning effort.
+| Model id              | Input modalities | Reasoning efforts        |
+| --------------------- | ---------------- | ------------------------ |
+| `gpt-5.5`             | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`             | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`        | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex-spark` | text             | low, medium, high, xhigh |
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.

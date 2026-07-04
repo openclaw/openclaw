@@ -992,27 +992,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
-      sandboxToolPolicy: sandbox?.tools,
-      sessionKey: sandboxSessionKey,
-      // Intentionally omit explicit agentId: the core tools just built with
-      // createOpenClawCodingTools(...) also omit it, so both paths resolve
-      // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
-      // Passing effectiveSkillAgentId here would diverge from the core-tool
-      // policy for legacy/non-agent session keys where the two sources fall
-      // back to different ids.
-      modelProvider: model.provider,
-      modelId,
-      messageProvider: resolvedMessageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
+      // The same profile constructed the core tool set above, so core and
+      // bundled tools cannot disagree about policy inputs (agentId included:
+      // both resolve it from the session key inside the profile).
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
