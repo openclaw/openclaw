@@ -108,6 +108,48 @@ describe("huggingface models", () => {
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
+  it("reads and parses model discovery response via readProviderJsonResponse", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    stubAbortSignalTimeout();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ data: [{ id: "custom-model-a" }, { id: "custom-model-b" }] }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+    expect(models).toHaveLength(2);
+    expect(models[0].id).toBe("custom-model-a");
+    expect(models[1].id).toBe("custom-model-b");
+  });
+
+  it("falls back to static catalog on malformed JSON response", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    stubAbortSignalTimeout();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("not-json-at-all", {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      ),
+    );
+
+    const result = await discoverHuggingfaceModels("hf_test_token");
+    // readProviderJsonResponse throws "malformed JSON" -> outer catch returns static catalog
+    expect(result).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
+    expect(result.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+  });
+
   describe("isHuggingfacePolicyLocked", () => {
     it("returns true for :cheapest and :fastest refs", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1:cheapest")).toBe(true);

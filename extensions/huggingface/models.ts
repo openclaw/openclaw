@@ -6,6 +6,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
@@ -165,7 +166,10 @@ export async function discoverHuggingfaceModels(
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = await readProviderJsonResponse<OpenAIListModelsResponse>(
+        response,
+        "huggingface-model-discovery",
+      );
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
