@@ -7,12 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import {
-  resolveGitHead,
-  BUILD_STAMP_FILE,
-  writeBuildStamp,
-  writeRuntimePostBuildStamp,
-} from "./lib/local-build-metadata.mjs";
+import { resolveGitHead, BUILD_STAMP_FILE, writeBuildStamp } from "./lib/local-build-metadata.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
@@ -662,16 +657,16 @@ export async function runWatchMain(params = {}) {
           return;
         }
 
-        // Write stamps so isBuildReadyForRestart passes.
-        // Note: we also write the runtime postbuild stamp to keep the two stamps
-        // consistent — the canonical run-node path writes both after a full build.
+        // Write the build stamp so isBuildReadyForRestart passes.
+        // We intentionally do NOT write the runtime postbuild stamp here:
+        // updating it without actually syncing runtime artifacts would create
+        // a false positive — run-node resolves runtime postbuild on next start.
         try {
           writeBuildStamp({ cwd: deps.cwd, fs });
-          writeRuntimePostBuildStamp({ cwd: deps.cwd, fs });
           logWatcher("Background rebuild complete; build stamp updated.", deps);
         } catch (err) {
           logWatcher(
-            `Background rebuild succeeded but failed to write stamps: ${err?.message ?? "unknown error"}`,
+            `Background rebuild succeeded but failed to write build stamp: ${err?.message ?? "unknown error"}`,
             deps,
           );
           restartDeferred = false;
