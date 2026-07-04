@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { truncateUtf16Safe } from "../../../shared/utf16-slice.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
@@ -177,7 +178,7 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
-      : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
+      : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
     cause: error,
   });

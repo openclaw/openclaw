@@ -68,6 +68,9 @@ async function resolveTelegramSendContext(params: {
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  onDeliveryResult?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["onDeliveryResult"];
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
   send: TelegramSendFn;
@@ -83,6 +86,7 @@ async function resolveTelegramSendContext(params: {
     accountId?: string;
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
+    onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
   };
 }> {
   const send = await params.resolveSend(params.deps);
@@ -98,6 +102,11 @@ async function resolveTelegramSendContext(params: {
       accountId: params.accountId ?? undefined,
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
+      onDeliveryResult: params.onDeliveryResult
+        ? async (result) => {
+            await params.onDeliveryResult?.(attachChannelToResult("telegram", result));
+          }
+        : undefined,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
     },

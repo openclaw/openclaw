@@ -174,10 +174,13 @@ vi.mock("../chat/grouped-render.ts", () => ({
   },
 }));
 
-vi.mock("../markdown.ts", () => ({
-  isMarkdownBlockArtText: () => false,
-  toSanitizedMarkdownHtml: (value: string) => value,
-}));
+vi.mock("../markdown.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../markdown.ts")>();
+  return {
+    ...actual,
+    toSanitizedMarkdownHtml: (value: string) => value,
+  };
+});
 
 vi.mock("../chat/tool-expansion-state.ts", () => ({
   getExpandedToolCards: () => new Map<string, boolean>(),

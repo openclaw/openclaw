@@ -4566,6 +4566,82 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("hides internal lifecycle events while preserving visible tool progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:exec-1",
+          kind: "tool",
+          title: "exec pwd",
+          name: "exec",
+          phase: "start",
+          status: "running",
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "wait",
+          phase: "start",
+          args: { runId: "ordinary_wait" },
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "wait",
+          phase: "start",
+          args: { runId: "cm_1" },
+          hideFromChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "tool:wait-1",
+          kind: "tool",
+          title: "wait",
+          name: "wait",
+          phase: "start",
+          status: "running",
+          hideFromChannelProgress: true,
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { onItemEvent, onToolStart } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onToolStart).toHaveBeenCalledTimes(2);
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "exec", phase: "start" }),
+    );
+    expect(onToolStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "wait", phase: "start" }),
+    );
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "exec", phase: "start" }),
+    );
+  });
+
   it("forwards raw tool progress detail mode to tool-start reply options", async () => {
     const onToolStart = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {

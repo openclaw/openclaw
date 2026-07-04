@@ -730,6 +730,65 @@ describe("agentLoop tool termination", () => {
     };
   }
 
+  it("marks lifecycle events from the concrete hidden tool instance", async () => {
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-wait", name: "wait", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    const hiddenTool: AgentTool = {
+      ...makeTool("wait", []),
+      hideFromChannelProgress: true,
+      execute: async (_toolCallId, _args, _signal, onUpdate) => {
+        onUpdate?.({
+          content: [{ type: "text", text: "still waiting" }],
+          details: { status: "waiting" },
+        });
+        return {
+          content: [{ type: "text", text: "resumed" }],
+          details: { status: "completed" },
+        };
+      },
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "resume", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [hiddenTool] },
+        { ...config, toolExecution: "sequential" },
+        undefined,
+        streamFn,
+      ),
+    );
+    const lifecycleEvents = events.filter((event) => event.type.startsWith("tool_execution_"));
+
+    expect(lifecycleEvents.map((event) => event.type)).toEqual([
+      "tool_execution_start",
+      "tool_execution_update",
+      "tool_execution_end",
+    ]);
+    expect(
+      lifecycleEvents.every(
+        (event) => "hideFromChannelProgress" in event && event.hideFromChannelProgress === true,
+      ),
+    ).toBe(true);
+  });
+
   it("continues after a side-effect tool result when afterToolCall records it without terminate", async () => {
     const executed: string[] = [];
     let turn = 0;
