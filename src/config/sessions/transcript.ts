@@ -391,6 +391,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
   expectedSessionId?: string;
+  /** Explicit path; skips resolveAndPersistSessionFile so caller controls the write target. */
+  sessionFile?: string;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
   storePath?: string;
@@ -526,8 +528,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   };
 
   let result: SessionTranscriptAppendResult;
-  if (params.expectedSessionId) {
+  if (params.expectedSessionId && !params.sessionFile?.trim()) {
     result = await appendToSessionFile(entry);
+  } else if (params.sessionFile?.trim()) {
+    // expectedSessionId (if provided) flows to persistSessionTranscriptTurn for mid-write rebind detection.
+    result = await appendToSessionFile(entry, params.sessionFile.trim());
   } else {
     let sessionFile: string;
     try {
