@@ -87,6 +87,6 @@ describe("chat route", () => {
     vi.mocked(renderChat).mock.calls[0]?.[0].onSessionKeyChange("agent:main:new");
 
     expect(switchChatSession).toHaveBeenCalledWith(state, "agent:main:new");
-    expect(navigate).toHaveBeenCalledWith("chat");
+    expect(navigate).toHaveBeenCalledWith("chat", { history: "none" });
   });
 });

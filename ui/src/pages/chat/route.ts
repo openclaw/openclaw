@@ -93,7 +93,7 @@ export const page = definePage({
       const chatSessionArchived = isCurrentChatSessionArchived(state);
       const switchSession = (sessionKey: string) => {
         switchChatSession(state, sessionKey);
-        navigate("chat");
+        navigate("chat", { history: "none" });
       };
       return renderChat({
         sessionKey: state.sessionKey,
@@ -180,7 +180,7 @@ export const page = definePage({
         onNewSession: () =>
           void createChatSession(state, { source: "user" }).then((created) => {
             if (created) {
-              navigate("chat");
+              navigate("chat", { history: "none" });
             }
           }),
         onClearHistory: () => void clearChatHistory(state),

@@ -41,14 +41,19 @@ type ApplicationHost = SettingsHost & {
 export type ApplicationContext = {
   routeLoadContext: RouteLoadContext;
   routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>;
-  navigate: (routeId: RouteId) => void;
+  navigate: AppNavigate;
   notifyStateChange: (state: AppViewState, changed: ReadonlyMap<PropertyKey, unknown>) => void;
   dispose: () => void;
 };
 
+export type AppNavigate = (
+  routeId: RouteId,
+  options?: { history?: "push" | "replace" | "none" },
+) => void;
+
 export type RouteRenderContext = {
   state: AppViewState;
-  navigate: (routeId: RouteId) => void;
+  navigate: AppNavigate;
 };
 
 export function routeLoadContext(host: SettingsHost): RouteLoadContext {
@@ -107,7 +112,7 @@ export function createApplicationContext(
   };
   syncVisibleRoute();
   const stopRouteSync = routeSnapshot.subscribe(syncVisibleRoute);
-  const navigate = (next: RouteId) => {
+  const navigate: AppNavigate = (next, options) => {
     const location = {
       pathname: appRouter.pathForRoute(next, host.basePath),
       search:
@@ -122,7 +127,12 @@ export function createApplicationContext(
       currentLocation.search === location.search &&
       currentLocation.hash === location.hash;
     void appRouter
-      .navigate(next, loadContext, { history: sameLocation ? "none" : "push" }, location)
+      .navigate(
+        next,
+        loadContext,
+        { history: options?.history ?? (sameLocation ? "none" : "push") },
+        location,
+      )
       .catch(() => undefined);
     if (next !== "chat") {
       applicationHost.setChatMobileControlsOpen(false);

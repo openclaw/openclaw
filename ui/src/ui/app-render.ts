@@ -6,6 +6,7 @@ import {
   appRouter,
   pathForRoute,
   resolveAppNotFound,
+  type AppNavigate,
   type ApplicationContext,
   type AppRouteModule,
   type RouteId,
@@ -284,7 +285,7 @@ function renderSidebarSessions(
 function renderSidebarRecentSession(
   state: AppViewState,
   row: GatewaySessionRow,
-  navigate: (routeId: RouteId) => void,
+  navigate: AppNavigate,
 ) {
   const active = isActiveSidebarSessionRow(state, row.key);
   const label = resolveSessionDisplayName(row.key, row);
@@ -345,7 +346,7 @@ function renderSidebarRecentSession(
               const previousSessionKey = state.sessionKey;
               await patchSessionFromSessionsView(state, row.key, { archived: true });
               if (state.sessionKey !== previousSessionKey) {
-                navigate("chat");
+                navigate("chat", { history: "none" });
               }
             }}
           >
