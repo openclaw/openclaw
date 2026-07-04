@@ -798,10 +798,6 @@ struct RootTabsSourceGuardTests {
             gatewaySetupSource.range(of: "self.handledGatewaySetupRequestID = requestID"))
         let onboardingSetupGuard = try #require(
             gatewaySetupSource.range(of: "guard !self.showOnboarding else { return }"))
-        let onboardingDismissal = try Self.extract(
-            rootSource,
-            from: ".onChange(of: self.showOnboarding)",
-            to: ".onChange(of: self.appModel.openChatRequestID)")
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -861,8 +857,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
-        #expect(onboardingSetupGuard.lowerBound < handledGatewaySetup.lowerBound)
-        #expect(onboardingDismissal.contains("self.maybeOpenSettingsForGatewaySetup()"))
+        #expect(handledGatewaySetup.lowerBound < onboardingSetupGuard.lowerBound)
         #expect(settingsSource.contains("QRScannerView("))
         #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
         #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
@@ -878,6 +873,8 @@ struct RootTabsSourceGuardTests {
         #expect(onboardingSource.contains("self.applyPendingGatewaySetupLinkIfNeeded()"))
         #expect(onboardingSource.contains(".onChange(of: self.appModel.gatewaySetupRequestID)"))
         #expect(onboardingSource.contains("self.appModel.consumePendingGatewaySetupLink()"))
+        #expect(onboardingSource.contains("self.scannerResultHandoff.cancel()"))
+        #expect(!onboardingSource.contains("pendingScannerResult"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
     }
@@ -900,6 +897,8 @@ struct RootTabsSourceGuardTests {
         #expect(appSource.contains("func application(\n        _ app: UIApplication,\n        open url: URL,"))
         #expect(appSource.contains("self.pendingOpenURLs.append(url)"))
         #expect(appSource.contains("model.stageGatewaySetupLink(link)"))
+        #expect(appSource.contains(".onOpenURL"))
+        #expect(appSource.contains("self.appDelegate.handleOpenURL(url, model: self.appModel)"))
         #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
         #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
         #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))

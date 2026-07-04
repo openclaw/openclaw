@@ -155,7 +155,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         return true
     }
 
-    private func handleOpenURL(_ url: URL, model: NodeAppModel) async {
+    func handleOpenURL(_ url: URL, model: NodeAppModel) async {
         guard let route = DeepLinkParser.parse(url) else { return }
 
         switch route {
@@ -713,7 +713,9 @@ struct OpenClawApp: App {
                         OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
                     })
                 .onOpenURL { url in
-                    Task { await self.handleOpenURL(url) }
+                    // SwiftUI owns normal scene delivery; the delegate also queues URLs
+                    // that arrive before the scene has installed its model.
+                    Task { await self.appDelegate.handleOpenURL(url, model: self.appModel) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
@@ -756,18 +758,6 @@ struct OpenClawApp: App {
 }
 
 extension OpenClawApp {
-    @MainActor
-    private func handleOpenURL(_ url: URL) async {
-        guard let route = DeepLinkParser.parse(url) else { return }
-
-        switch route {
-        case .agent, .dashboard:
-            await self.appModel.handleDeepLink(url: url)
-        case let .gateway(link):
-            self.appModel.stageGatewaySetupLink(link)
-        }
-    }
-
     private static func installUncaughtExceptionLogger() {
         NSLog("OpenClaw: installing uncaught exception handler")
         NSSetUncaughtExceptionHandler { exception in

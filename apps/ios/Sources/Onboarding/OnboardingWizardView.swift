@@ -862,9 +862,7 @@ extension OnboardingWizardView {
     private func applyPendingGatewaySetupLinkIfNeeded() {
         guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.showQRScanner = false
-        self.pendingScannerResult = nil
-        self.pendingScannerResultTask?.cancel()
-        self.pendingScannerResultTask = nil
+        self.scannerResultHandoff.cancel()
         self.handleScannedLink(link)
     }
 
