@@ -36,9 +36,9 @@ function capitalize(s: string): string {
 export function shortenSessionKeyForCell(key: string): string {
   const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
   if (!directMatch) {
-    // Non-direct keys: defer to parseSessionKey for typed prefix + fallback.
-    const { prefix, fallbackName } = parseSessionKey(key);
-    return prefix ? `${prefix} ${fallbackName}`.trim() : fallbackName;
+    // Non-direct keys: defer to parseSessionKey's fallbackName directly.
+    const { fallbackName } = parseSessionKey(key);
+    return fallbackName;
   }
   const channel = directMatch[1];
   const identifier = directMatch[2];
