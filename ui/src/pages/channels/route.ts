@@ -2,18 +2,17 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 
-async function loadChannelsRoute(context: ApplicationContext) {
+function loadChannelsRoute(context: ApplicationContext) {
   const primaryRefresh = Promise.all([
     context.channels.refresh(false),
-    context.runtimeConfig.refresh(),
+    context.runtimeConfig.ensureLoaded(),
   ]);
   void primaryRefresh.then(
     () => {
-      void context.runtimeConfig.refreshSchema();
+      void context.runtimeConfig.ensureSchemaLoaded();
     },
     () => undefined,
   );
-  await primaryRefresh;
 }
 
 export const page = definePage({

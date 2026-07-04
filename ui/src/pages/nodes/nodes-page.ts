@@ -208,16 +208,16 @@ export class NodesPage extends LitElement implements NodesPageDataState {
 
   override render() {
     const config = this.context.runtimeConfig.state;
-    return renderSettingsWorkspace(
-      this.context.basePath,
-      html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">${titleForRoute("nodes")}</div>
-            <div class="page-sub">${subtitleForRoute("nodes")}</div>
-          </div>
-        </section>
-        ${renderNodes({
+    return html`
+      <section class="content-header">
+        <div>
+          <div class="page-title">${titleForRoute("nodes")}</div>
+          <div class="page-sub">${subtitleForRoute("nodes")}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        this.context.basePath,
+        renderNodes({
           loading: this.nodesLoading,
           nodes: this.nodes,
           devicesLoading: this.devicesLoading,
@@ -274,11 +274,12 @@ export class NodesPage extends LitElement implements NodesPageDataState {
           onExecApprovalsRemove: (path) => removeExecApprovalsFormValue(this, path),
           onSaveExecApprovals: () =>
             void saveExecApprovals(this, this.resolveExecApprovalsTarget()),
-        })}
-      `,
-      "nodes",
-      (routeId) => this.context.navigate(routeId),
-    );
+        }),
+        "nodes",
+        (routeId) => this.context.navigate(routeId),
+        (routeId) => this.context.preload(routeId),
+      )}
+    `;
   }
 }
 

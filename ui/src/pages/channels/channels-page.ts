@@ -97,11 +97,11 @@ export class ChannelsPage extends LitElement {
       void context.channels.refresh(false);
     }
     if (!config.configSnapshot && !config.configLoading) {
-      void context.runtimeConfig.refresh();
+      void context.runtimeConfig.ensureLoaded();
     }
     if (!config.configSchema && !config.configSchemaLoading && !this.schemaLoadStarted) {
       this.schemaLoadStarted = true;
-      void context.runtimeConfig.refreshSchema();
+      void context.runtimeConfig.ensureSchemaLoaded();
     }
   }
 
@@ -331,16 +331,16 @@ export class ChannelsPage extends LitElement {
     const context = this.context;
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
-    return renderSettingsWorkspace(
-      context.basePath,
-      html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">${titleForRoute("channels")}</div>
-            <div class="page-sub">${subtitleForRoute("channels")}</div>
-          </div>
-        </section>
-        ${renderChannels({
+    return html`
+      <section class="content-header">
+        <div>
+          <div class="page-title">${titleForRoute("channels")}</div>
+          <div class="page-sub">${subtitleForRoute("channels")}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        context.basePath,
+        renderChannels({
           connected: channels.connected,
           loading: channels.channelsLoading,
           snapshot: channels.channelsSnapshot,
@@ -371,11 +371,12 @@ export class ChannelsPage extends LitElement {
           onNostrProfileSave: () => void this.saveNostrProfile(),
           onNostrProfileImport: () => void this.importNostrProfile(),
           onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
-        })}
-      `,
-      "channels",
-      (routeId) => context.navigate(routeId),
-    );
+        }),
+        "channels",
+        (routeId) => context.navigate(routeId),
+        (routeId) => context.preload(routeId),
+      )}
+    `;
   }
 }
 

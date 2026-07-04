@@ -8,7 +8,7 @@ import type { ApplicationContext } from "./app/context.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
-// import { pages as configPages } from "./pages/config/route.ts";
+import { pages as configPages } from "./pages/config/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 // import { page as debugPage } from "./pages/debug/route.ts";
 // import { page as dreamsPage } from "./pages/dreams/route.ts";
@@ -39,6 +39,7 @@ export const APP_ROUTE_TREE = [
   chatPage,
   agentsPage,
   channelsPage,
+  ...configPages,
   skillWorkshopPage,
   skillsPage,
   cronPage,

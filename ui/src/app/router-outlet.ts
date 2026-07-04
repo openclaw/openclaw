@@ -115,7 +115,13 @@ export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModul
   selection: RouterOutletSelection<TRouteId, TModule, TData>,
   options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
 ): unknown {
-  const renderedMatch = selection.pending ?? selection.active;
+  const pending = selection.pending;
+  const coldPending =
+    pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
+  const renderedMatch =
+    coldPending && selection.active && !selection.showPending
+      ? selection.active
+      : (pending ?? selection.active);
   if (renderedMatch?.status === "notFound") {
     return nothing;
   }

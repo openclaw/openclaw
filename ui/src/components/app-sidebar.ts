@@ -4,8 +4,10 @@ import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SessionsListResult } from "../api/types.ts";
 import {
+  cancelRoutePreload,
   isSettingsNavigationRoute,
   navigationIconForRoute,
+  scheduleRoutePreload,
   type NavigationRouteId,
   SIDEBAR_SECTIONS,
   titleForRoute,
@@ -195,37 +197,18 @@ export class AppSidebar extends LitElement {
   };
 
   private preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
-    if (routeId === this.activeRouteId || !this.isRouteEnabled(routeId) || !this.onPreloadRoute) {
-      return;
-    }
-    const target = event.currentTarget;
-    if (!target) {
-      return;
-    }
-    const start = () => {
-      this.routePreloadTimers.delete(target);
-      void this.onPreloadRoute?.(routeId).catch(() => undefined);
-    };
-    if (immediate) {
-      this.cancelPreload(event);
-      start();
-      return;
-    }
-    if (!this.routePreloadTimers.has(target)) {
-      this.routePreloadTimers.set(target, globalThis.setTimeout(start, 50));
-    }
+    scheduleRoutePreload(
+      this.routePreloadTimers,
+      routeId,
+      event,
+      (nextRouteId) => this.onPreloadRoute?.(nextRouteId),
+      routeId === this.activeRouteId || !this.isRouteEnabled(routeId),
+      immediate,
+    );
   }
 
   private cancelPreload(event: Event) {
-    const target = event.currentTarget;
-    if (!target) {
-      return;
-    }
-    const timer = this.routePreloadTimers.get(target);
-    if (timer !== undefined) {
-      globalThis.clearTimeout(timer);
-      this.routePreloadTimers.delete(target);
-    }
+    cancelRoutePreload(this.routePreloadTimers, event);
   }
 
   private isRouteEnabled(routeId: NavigationRouteId): boolean {

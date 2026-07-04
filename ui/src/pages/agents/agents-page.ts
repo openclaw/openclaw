@@ -489,16 +489,16 @@ export class AgentsPage extends LitElement implements AgentsState {
     const configState = this.context.runtimeConfig.state;
     const selectedAgentId = this.resolveSelectedAgentId();
     const config = currentConfigObject(configState);
-    return renderSettingsWorkspace(
-      this.context.basePath,
-      html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">${titleForRoute("agents")}</div>
-            <div class="page-sub">${subtitleForRoute("agents")}</div>
-          </div>
-        </section>
-        ${renderAgents({
+    return html`
+      <section class="content-header">
+        <div>
+          <div class="page-title">${titleForRoute("agents")}</div>
+          <div class="page-sub">${subtitleForRoute("agents")}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        this.context.basePath,
+        renderAgents({
           basePath: this.context.basePath,
           loading: this.agentsLoading,
           error: this.agentsError,
@@ -719,11 +719,12 @@ export class AgentsPage extends LitElement implements AgentsState {
               }
             }
           },
-        })}
-      `,
-      "agents",
-      (routeId) => this.context.navigate(routeId),
-    );
+        }),
+        "agents",
+        (routeId) => this.context.navigate(routeId),
+        (routeId) => this.context.preload(routeId),
+      )}
+    `;
   }
 }
 

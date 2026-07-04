@@ -3,15 +3,14 @@ import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ConfigPageId } from "./config-page.ts";
 
-async function loadConfigRoute(context: ApplicationContext) {
-  const primaryRefresh = context.runtimeConfig.refresh();
-  void primaryRefresh.then(
+function loadConfigRoute(context: ApplicationContext) {
+  const primaryLoad = context.runtimeConfig.ensureLoaded();
+  void primaryLoad.then(
     () => {
-      void context.runtimeConfig.refreshSchema();
+      void context.runtimeConfig.ensureSchemaLoaded();
     },
     () => undefined,
   );
-  await primaryRefresh;
 }
 
 function configPage(id: ConfigPageId, path: string) {

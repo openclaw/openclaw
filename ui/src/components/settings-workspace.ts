@@ -1,18 +1,23 @@
 import { html, nothing } from "lit";
 import {
+  cancelRoutePreload,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   SETTINGS_NAVIGATION_ROUTES,
+  scheduleRoutePreload,
   titleForRoute,
 } from "../app-navigation.ts";
 import { isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 
+const preloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
+
 function renderSettingsSectionNav(
   basePath: string,
   currentRouteId: RouteId,
   navigate: (routeId: RouteId) => void,
+  preload?: (routeId: RouteId) => Promise<void> | void,
 ) {
   if (!isSettingsNavigationRoute(currentRouteId)) {
     return nothing;
@@ -27,6 +32,14 @@ function renderSettingsSectionNav(
           <a
             href=${href}
             class="settings-section-nav__item ${active ? "settings-section-nav__item--active" : ""}"
+            @focus=${(event: Event) =>
+              scheduleRoutePreload(preloadTimers, routeId, event, preload, active)}
+            @blur=${(event: Event) => cancelRoutePreload(preloadTimers, event)}
+            @pointerenter=${(event: Event) =>
+              scheduleRoutePreload(preloadTimers, routeId, event, preload, active)}
+            @pointerleave=${(event: Event) => cancelRoutePreload(preloadTimers, event)}
+            @touchstart=${(event: TouchEvent) =>
+              scheduleRoutePreload(preloadTimers, routeId, event, preload, active, true)}
             @click=${(event: MouseEvent) => {
               if (
                 event.defaultPrevented ||
@@ -58,10 +71,11 @@ export function renderSettingsWorkspace(
   body: unknown,
   routeId: RouteId,
   navigate: (routeId: RouteId) => void,
+  preload?: (routeId: RouteId) => Promise<void> | void,
 ) {
   return html`
     <section class="settings-workspace">
-      ${renderSettingsSectionNav(basePath, routeId, navigate)}
+      ${renderSettingsSectionNav(basePath, routeId, navigate, preload)}
       <div class="settings-workspace__body">${body}</div>
     </section>
   `;

@@ -8,6 +8,10 @@
   width: 100%;
 }
 
+.content-header + .settings-workspace {
+  margin-top: 20px;
+}
+
 .settings-workspace__body > * + * {
   margin-top: 20px;
 }

@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FastMode } from "../../api/types.ts";
+import type { RouteId } from "../../app-routes.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { importCustomThemeFromUrl, syncCustomThemeStyleTag } from "../../app/custom-theme.ts";
 import {
@@ -39,6 +40,16 @@ export type ConfigPageId =
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+
+const CONFIG_PAGE_I18N_KEYS = {
+  config: "config",
+  communications: "communications",
+  appearance: "appearance",
+  automation: "automation",
+  mcp: "mcp",
+  infrastructure: "infrastructure",
+  "ai-agents": "aiAgents",
+} as const satisfies Record<ConfigPageId, string>;
 
 const COMMUNICATION_SECTION_KEYS = [
   "messages",
@@ -87,6 +98,25 @@ const KNOWN_CHANNELS = [
 
 const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
 
+function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
+  switch (pageId) {
+    case "communications":
+      return { activeSection: "messages", activeSubsection: null };
+    case "appearance":
+      return { activeSection: "__appearance__", activeSubsection: null };
+    case "automation":
+      return { activeSection: "commands", activeSubsection: null };
+    case "mcp":
+      return { activeSection: "mcp", activeSubsection: null };
+    case "infrastructure":
+      return { activeSection: "gateway", activeSubsection: null };
+    case "ai-agents":
+      return { activeSection: "agents", activeSubsection: null };
+    case "config":
+      return { activeSection: null, activeSubsection: null };
+  }
+}
+
 function asConfigRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -113,10 +143,18 @@ function normalizeConfigSelection(
   if (pageId === "config" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
     return { activeSection: null, activeSubsection: null };
   }
-  if (sections && activeSection && !sections.includes(activeSection)) {
-    return { activeSection: null, activeSubsection: null };
+  if (sections && (!activeSection || !sections.includes(activeSection))) {
+    return defaultConfigSelection(pageId);
   }
   return { activeSection, activeSubsection };
+}
+
+function configPageTitle(pageId: ConfigPageId): string {
+  return pageId === "config" ? t("nav.settings") : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
+}
+
+function configPageSubtitle(pageId: ConfigPageId): string {
+  return t(`subtitles.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
 function mcpServerCount(config: unknown): number {
@@ -261,13 +299,13 @@ export class ConfigPage extends LitElement {
     "ai-agents": "",
   };
   @state() private selections: Record<ConfigPageId, ConfigSelection> = {
-    config: { activeSection: null, activeSubsection: null },
-    communications: { activeSection: null, activeSubsection: null },
-    appearance: { activeSection: null, activeSubsection: null },
-    automation: { activeSection: null, activeSubsection: null },
-    mcp: { activeSection: "mcp", activeSubsection: null },
-    infrastructure: { activeSection: null, activeSubsection: null },
-    "ai-agents": { activeSection: null, activeSubsection: null },
+    config: defaultConfigSelection("config"),
+    communications: defaultConfigSelection("communications"),
+    appearance: defaultConfigSelection("appearance"),
+    automation: defaultConfigSelection("automation"),
+    mcp: defaultConfigSelection("mcp"),
+    infrastructure: defaultConfigSelection("infrastructure"),
+    "ai-agents": defaultConfigSelection("ai-agents"),
   };
   @state() private customThemeImportUrl = "";
   @state() private customThemeImportBusy = false;
@@ -295,10 +333,10 @@ export class ConfigPage extends LitElement {
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig
-        .refresh()
-        .then(() => this.context.runtimeConfig.refreshSchema());
+        .ensureLoaded()
+        .then(() => this.context.runtimeConfig.ensureSchemaLoaded());
     } else if (!config.configSchema && !config.configSchemaLoading) {
-      void this.context.runtimeConfig.refreshSchema();
+      void this.context.runtimeConfig.ensureSchemaLoaded();
     }
   }
 
@@ -310,7 +348,7 @@ export class ConfigPage extends LitElement {
     super.disconnectedCallback();
   }
 
-  private navigate(routeId: string) {
+  private navigate(routeId: RouteId) {
     this.context.navigate(routeId);
   }
 
@@ -535,7 +573,7 @@ export class ConfigPage extends LitElement {
       assistantName:
         this.context.config.current.assistantIdentity.name || this.context.assistantName,
       configPath: state.configSnapshot?.path ?? null,
-      navRootLabel: this.pageId === "config" ? undefined : t(`tabs.${this.pageId}`),
+      navRootLabel: this.pageId === "config" ? undefined : configPageTitle(this.pageId),
       showRootTab: !includeSections?.length,
       includeSections: includeSections ? [...includeSections] : undefined,
       excludeSections,
@@ -671,22 +709,21 @@ export class ConfigPage extends LitElement {
       this.pageId === "config" && this.settingsMode === "quick"
         ? this.renderQuickConfig(configObject)
         : this.renderAdvancedConfig(configObject);
-    return renderSettingsWorkspace(
-      this.context.basePath,
-      html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">
-              ${this.pageId === "config" ? t("nav.settings") : t(`tabs.${this.pageId}`)}
-            </div>
-            <div class="page-sub">${t(`subtitles.${this.pageId}`)}</div>
-          </div>
-        </section>
-        ${body}
-      `,
-      this.pageId as never,
-      (routeId) => this.navigate(routeId),
-    );
+    return html`
+      <section class="content-header">
+        <div>
+          <div class="page-title">${configPageTitle(this.pageId)}</div>
+          <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        this.context.basePath,
+        body,
+        this.pageId,
+        (routeId) => this.navigate(routeId),
+        (routeId) => this.context.preload(routeId),
+      )}
+    `;
   }
 }
 

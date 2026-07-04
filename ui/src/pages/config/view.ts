@@ -25,6 +25,7 @@ import {
   analyzeConfigSchema,
   renderConfigForm,
   SECTION_META,
+  type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -61,6 +62,12 @@ type RawDiffCache = {
   current: string;
   diff: ConfigDiffEntry[];
 };
+type SchemaAnalysisCache = {
+  schema: JsonSchema | null;
+  includeKey: string;
+  excludeKey: string;
+  analysis: ConfigSchemaAnalysis;
+};
 
 export type ConfigViewState = {
   rawRevealed: boolean;
@@ -70,6 +77,7 @@ export type ConfigViewState = {
   revealedSensitivePaths: Set<string>;
   lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
+  schemaAnalysisCache?: SchemaAnalysisCache;
   lastConfigContextKey: string | null;
   lastFormModeForScroll: ConfigFormMode | null;
 };
@@ -560,6 +568,35 @@ function asConfigSchema(value: unknown): JsonSchema | null {
     return null;
   }
   return value as JsonSchema;
+}
+
+function configSectionKey(sections?: readonly string[]): string {
+  return sections?.length ? sections.join("\u001f") : "";
+}
+
+function getConfigSchemaAnalysis(
+  viewState: ConfigViewState,
+  schema: JsonSchema | null,
+  includeSections?: readonly string[],
+  excludeSections?: readonly string[],
+  include?: ReadonlySet<string> | null,
+  exclude?: ReadonlySet<string> | null,
+): ConfigSchemaAnalysis {
+  const includeKey = configSectionKey(includeSections);
+  const excludeKey = configSectionKey(excludeSections);
+  const cached = viewState.schemaAnalysisCache;
+  if (
+    cached &&
+    cached.schema === schema &&
+    cached.includeKey === includeKey &&
+    cached.excludeKey === excludeKey
+  ) {
+    return cached.analysis;
+  }
+  const scopedSchema = scopeSchemaSections(schema, { include, exclude });
+  const analysis = analyzeConfigSchema(scopedSchema);
+  viewState.schemaAnalysisCache = { schema, includeKey, excludeKey, analysis };
+  return analysis;
 }
 
 function resolveSectionMeta(
@@ -1247,8 +1284,14 @@ export function renderConfig(props: ConfigProps) {
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-  const scopedSchema = scopeSchemaSections(asConfigSchema(props.schema), { include, exclude });
-  const analysis = analyzeConfigSchema(scopedSchema);
+  const analysis = getConfigSchemaAnalysis(
+    viewState,
+    asConfigSchema(props.schema),
+    props.includeSections,
+    props.excludeSections,
+    include,
+    exclude,
+  );
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";

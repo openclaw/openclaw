@@ -272,16 +272,16 @@ export class SkillsPage extends LitElement {
 
   override render() {
     const error = this.skillsError ?? this.agentsError;
-    return renderSettingsWorkspace(
-      this.context.basePath,
-      html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">${titleForRoute("skills")}</div>
-            <div class="page-sub">${subtitleForRoute("skills")}</div>
-          </div>
-        </section>
-        ${renderSkills({
+    return html`
+      <section class="content-header">
+        <div>
+          <div class="page-title">${titleForRoute("skills")}</div>
+          <div class="page-sub">${subtitleForRoute("skills")}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        this.context.basePath,
+        renderSkills({
           connected: this.connected,
           loading: this.skillsLoading || this.agentsLoading,
           report: this.skillsReport,
@@ -331,11 +331,12 @@ export class SkillsPage extends LitElement {
           onClawHubDetailClose: () => closeClawHubDetail(this),
           onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
             void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
-        })}
-      `,
-      "skills",
-      (routeId) => this.context.navigate(routeId),
-    );
+        }),
+        "skills",
+        (routeId) => this.context.navigate(routeId),
+        (routeId) => this.context.preload(routeId),
+      )}
+    `;
   }
 }
 

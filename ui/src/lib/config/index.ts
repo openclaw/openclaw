@@ -55,6 +55,8 @@ type RuntimeConfigGateway = {
 
 export type RuntimeConfigCapability = {
   readonly state: ConfigState;
+  ensureLoaded: () => Promise<void>;
+  ensureSchemaLoaded: () => Promise<void>;
   refresh: (options?: LoadConfigOptions) => Promise<void>;
   refreshSchema: () => Promise<void>;
   patchForm: (path: Array<string | number>, value: unknown) => void;
@@ -789,6 +791,8 @@ export function createRuntimeConfigCapability(
 ): RuntimeConfigCapability {
   const state = createInitialConfigState(gateway.snapshot);
   const listeners = new Set<(state: ConfigState) => void>();
+  let configLoad: Promise<void> | null = null;
+  let schemaLoad: Promise<void> | null = null;
   let disposed = false;
 
   const publish = () => {
@@ -810,12 +814,37 @@ export function createRuntimeConfigCapability(
     task();
     publish();
   };
+  const trackLoad = (key: "config" | "schema", promise: Promise<void>): Promise<void> => {
+    const next = promise.finally(() => {
+      if (key === "config" && configLoad === next) {
+        configLoad = null;
+      } else if (key === "schema" && schemaLoad === next) {
+        schemaLoad = null;
+      }
+    });
+    if (key === "config") {
+      configLoad = next;
+    } else {
+      schemaLoad = next;
+    }
+    return next;
+  };
+  const loadOnce = (key: "config" | "schema", task: () => Promise<void>): Promise<void> => {
+    const current = key === "config" ? configLoad : schemaLoad;
+    return current ?? trackLoad(key, run(task));
+  };
+  const ensureLoaded = () =>
+    state.configSnapshot ? Promise.resolve() : loadOnce("config", () => loadConfig(state));
+  const ensureSchemaLoaded = () =>
+    state.configSchema ? Promise.resolve() : loadOnce("schema", () => loadConfigSchema(state));
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     state.client = snapshot.client;
     state.connected = snapshot.connected;
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged) {
+      configLoad = null;
+      schemaLoad = null;
       requestVersionsByState.delete(state);
       state.configLoading = false;
       state.configSchemaLoading = false;
@@ -827,8 +856,18 @@ export function createRuntimeConfigCapability(
     get state() {
       return state;
     },
-    refresh: (options) => run(() => loadConfig(state, options)),
-    refreshSchema: () => run(() => loadConfigSchema(state)),
+    ensureLoaded,
+    ensureSchemaLoaded,
+    refresh: (options) =>
+      trackLoad(
+        "config",
+        run(() => loadConfig(state, options)),
+      ),
+    refreshSchema: () =>
+      trackLoad(
+        "schema",
+        run(() => loadConfigSchema(state)),
+      ),
     patchForm: (path, value) => mutate(() => updateConfigFormValue(state, path, value)),
     removeFormValue: (path) => mutate(() => removeConfigFormValue(state, path)),
     setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
