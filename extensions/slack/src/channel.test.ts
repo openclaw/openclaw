@@ -1077,6 +1077,13 @@ describe("slackPlugin outbound", () => {
         type: "section",
         text: {
           type: "mrkdwn",
+          text: "hello",
+        },
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
           text: "Block body",
         },
       },

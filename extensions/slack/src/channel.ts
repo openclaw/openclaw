@@ -9,8 +9,11 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   attachChannelToResult,
@@ -61,6 +64,7 @@ import {
   isSlackInteractiveRepliesEnabled,
 } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
@@ -426,6 +430,14 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       accountId,
       payload,
     }),
+  presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadSlackOutboundAdapterModule,
+    renderPresentation: {
+      resolve: ({ slackOutbound }) => slackOutbound.renderPresentation,
+      unavailableMessage: "Slack outbound presentation rendering is unavailable",
+    },
+  }),
   sendPayload: async (ctx) => {
     const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
       cfg: ctx.cfg,
