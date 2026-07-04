@@ -86,8 +86,8 @@ import {
   type NormalizedOutboundPayload,
   type OutboundPayloadPlan,
 } from "./payloads.js";
+import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
-import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";

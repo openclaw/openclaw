@@ -37,16 +37,14 @@ import type {
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusOutboundMessageInput,
-  QaBusSearchMessagesInput,
-  QaBusWaitForInput,
 } from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
-const RECORDER_SYNC_INTERVAL_MS = 50;
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
   getOutboundEvents: () => Promise<readonly QaTransportOutboundEvent[]>;
+  observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
 
@@ -216,75 +214,38 @@ function createCrablineState(params: {
   const telegramMessageByProviderId = new Map<string, QaBusMessage>();
   const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
   const outboundEvents: QaTransportOutboundEvent[] = [];
-  let recorderLineCursor = 0;
-  let syncPromise: Promise<void> | null = null;
-
-  const syncRecorder = async () => {
-    if (syncPromise) {
-      return await syncPromise;
-    }
-    syncPromise = (async () => {
-      const text = await fs
-        .readFile(params.adapter.manifest.recorderPath, "utf8")
-        .catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return "";
-          }
-          throw error;
-        });
-      const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-      for (const line of lines.slice(recorderLineCursor)) {
-        const parsed = JSON.parse(line) as unknown;
-        if (params.adapter.channel === "telegram") {
-          const lifecycle = readTelegramLifecycleEvent({
-            cursor: outboundEvents.length + 1,
-            event: parsed,
-            messageByProviderId: telegramMessageByProviderId,
-            pendingByChat: pendingTelegramMessagesByChat,
-          });
-          if (lifecycle) {
-            outboundEvents.push(lifecycle);
-          }
-        }
-        const outbound = params.adapter.createOutboundFromRecorderEvent({
-          event: parsed,
-          targetByProviderTarget,
-        }) as QaBusOutboundMessageInput | null;
-        if (outbound) {
-          baseState.addOutboundMessage(outbound);
-        }
-      }
-      recorderLineCursor = lines.length;
-    })();
-    try {
-      await syncPromise;
-    } finally {
-      syncPromise = null;
-    }
-  };
-
-  const interval = setInterval(() => {
-    void syncRecorder().catch(() => undefined);
-  }, RECORDER_SYNC_INTERVAL_MS);
-  interval.unref?.();
 
   return {
-    async reset() {
-      await syncRecorder();
+    reset() {
       baseState.reset();
       targetByProviderTarget.clear();
       telegramMessageByProviderId.clear();
       pendingTelegramMessagesByChat.clear();
       outboundEvents.length = 0;
-      recorderLineCursor = await fs
-        .readFile(params.adapter.manifest.recorderPath, "utf8")
-        .then((text) => text.split(/\r?\n/u).filter((line) => line.trim().length > 0).length)
-        .catch(() => 0);
     },
     getSnapshot: baseState.getSnapshot.bind(baseState),
     async getOutboundEvents() {
-      await syncRecorder();
       return outboundEvents;
+    },
+    observeEvent(event) {
+      if (params.adapter.channel === "telegram") {
+        const lifecycle = readTelegramLifecycleEvent({
+          cursor: outboundEvents.length + 1,
+          event,
+          messageByProviderId: telegramMessageByProviderId,
+          pendingByChat: pendingTelegramMessagesByChat,
+        });
+        if (lifecycle) {
+          outboundEvents.push(lifecycle);
+        }
+      }
+      const outbound = params.adapter.createOutboundFromRecorderEvent({
+        event,
+        targetByProviderTarget,
+      }) as QaBusOutboundMessageInput | null;
+      if (outbound) {
+        baseState.addOutboundMessage(outbound);
+      }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
       const providerInbound = params.adapter.createInbound({ input });
@@ -305,17 +266,9 @@ function createCrablineState(params: {
     },
     addOutboundMessage: baseState.addOutboundMessage.bind(baseState),
     readMessage: baseState.readMessage.bind(baseState),
-    async searchMessages(input: QaBusSearchMessagesInput) {
-      await syncRecorder();
-      return baseState.searchMessages(input);
-    },
-    async waitFor(input: QaBusWaitForInput) {
-      await syncRecorder();
-      return await baseState.waitFor(input);
-    },
+    searchMessages: baseState.searchMessages.bind(baseState),
+    waitFor: baseState.waitFor.bind(baseState),
     async cleanup() {
-      clearInterval(interval);
-      await syncRecorder();
       await params.adapter.close();
     },
   };
@@ -325,6 +278,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
   readonly #state: QaCrablineTransportState;
+  readonly sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
+  readonly waitForOutboundSequence?: (input: QaTransportOutboundSequenceMatch) => Promise<{
+    events: QaTransportOutboundEvent[];
+    final: QaBusMessage;
+  }>;
 
   constructor(params: {
     adapter: StartedOpenClawCrablineAdapter;
@@ -341,6 +299,21 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     this.#adapter = params.adapter;
     this.#selection = params.selection;
     this.#state = params.state;
+    if (params.selection.channel === "telegram") {
+      this.sendNativeCommand = async (input) => {
+        const { command, ...message } = input;
+        await this.sendInbound({
+          ...message,
+          text: `/${command}`,
+          nativeCommand: { name: command },
+        });
+      };
+      this.waitForOutboundSequence = async (input) =>
+        await waitForQaTransportOutboundSequence({
+          input,
+          readEvents: () => this.#state.getOutboundEvents(),
+        });
+    }
   }
 
   createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig =>
@@ -364,27 +337,6 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   };
 
   createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
-
-  override async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
-    if (this.#selection.channel !== "telegram") {
-      throw new Error(
-        `Crabline ${this.#selection.channel} does not support native command injection.`,
-      );
-    }
-    const { command, ...message } = input;
-    await this.sendInbound({
-      ...message,
-      text: `/${command}`,
-      nativeCommand: { name: command },
-    });
-  }
-
-  override async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
-    return await waitForQaTransportOutboundSequence({
-      input,
-      readEvents: () => this.#state.getOutboundEvents(),
-    });
-  }
 
   handleAction = async (_params: {
     action: QaTransportActionName;
@@ -417,8 +369,10 @@ export async function createQaCrablineTransportAdapter(params: {
     `${params.selection.channel}-fake-provider.jsonl`,
   );
   await fs.mkdir(path.dirname(recorderPath), { recursive: true });
+  let observeEvent = (_event: unknown) => {};
   const adapter = await startOpenClawCrablineAdapter({
     channel: params.selection.channel,
+    onEvent: (event) => observeEvent(event),
     openclawConfig: {},
     recorderPath,
   });
@@ -428,12 +382,10 @@ export async function createQaCrablineTransportAdapter(params: {
     "utf8",
   );
 
-  return new QaCrablineTransport({
+  const state = createCrablineState({
     adapter,
-    selection: params.selection,
-    state: createCrablineState({
-      adapter,
-      state: params.state ?? createQaBusState(),
-    }),
+    state: params.state ?? createQaBusState(),
   });
+  observeEvent = state.observeEvent;
+  return new QaCrablineTransport({ adapter, selection: params.selection, state });
 }

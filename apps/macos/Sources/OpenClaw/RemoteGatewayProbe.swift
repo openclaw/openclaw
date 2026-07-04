@@ -175,7 +175,11 @@ enum RemoteGatewayProbe {
             if let validationMessage = CommandResolver.sshTargetValidationMessage(trimmedTarget) {
                 return .failed(validationMessage)
             }
-            guard let sshCommand = self.sshCheckCommand(target: settings.target, identity: settings.identity) else {
+            guard let sshCommand = self.sshCheckCommand(
+                target: settings.target,
+                identity: settings.identity,
+                hostKeyPolicy: settings.sshHostKeyPolicy)
+            else {
                 return .failed("SSH target is invalid")
             }
 
@@ -205,12 +209,16 @@ enum RemoteGatewayProbe {
         GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
     }
 
-    private static func sshCheckCommand(target: String, identity: String) -> [String]? {
+    private static func sshCheckCommand(
+        target: String,
+        identity: String,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
+    {
         guard let parsed = CommandResolver.parseSSHTarget(target) else { return nil }
         let options = [
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
-        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
+        ] + hostKeyPolicy.commandOptions
         let args = CommandResolver.sshArguments(
             target: parsed,
             identity: identity,
@@ -218,6 +226,15 @@ enum RemoteGatewayProbe {
             remoteCommand: ["echo", "ok"])
         return ["/usr/bin/ssh"] + args
     }
+
+    #if SWIFT_PACKAGE
+    static func _testSSHCheckCommand(
+        target: String,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
+    {
+        self.sshCheckCommand(target: target, identity: "", hostKeyPolicy: hostKeyPolicy)
+    }
+    #endif
 
     private static func formatSSHFailure(_ response: Response, target: String) -> String {
         let payload = response.payload.flatMap { String(data: $0, encoding: .utf8) }

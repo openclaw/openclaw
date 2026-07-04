@@ -226,8 +226,9 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledOnce();
   });
 
-  it("aborts an active embedded run before compacting", async () => {
+  it("waits for an active embedded run before compacting even when abort is rejected", async () => {
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(abortEmbeddedAgentRun).mockReturnValueOnce(false);
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
       compacted: false,

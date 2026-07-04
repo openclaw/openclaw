@@ -71,7 +71,8 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.sendNativeCommand({
+        expect(transport.sendNativeCommand).toBeTypeOf("function");
+        await transport.sendNativeCommand?.({
           command: "stop",
           conversation: { id: "alice", kind: "direct" },
           senderId: "alice",
@@ -165,14 +166,18 @@ describe("crabline transport", () => {
           message_thread_id: 42,
           text: "preview text",
         });
+        expect(transport.state.searchMessages({ query: "preview text" })).toEqual([
+          expect.objectContaining({ text: "preview text" }),
+        ]);
         await postTelegram("editMessageText", {
           chat_id: "-1001234567890",
           message_id: sent.result.message_id,
           text: "final marker",
         });
 
+        expect(transport.waitForOutboundSequence).toBeTypeOf("function");
         await expect(
-          transport.waitForOutboundSequence({
+          transport.waitForOutboundSequence!({
             conversationId: "-1001234567890",
             finalSettleMs: 0,
             finalTextIncludes: "final marker",
@@ -201,6 +206,8 @@ describe("crabline transport", () => {
       try {
         expect(transport.id).toBe("crabline");
         expect(transport.requiredPluginIds).toEqual(["slack"]);
+        expect(transport.sendNativeCommand).toBeUndefined();
+        expect(transport.waitForOutboundSequence).toBeUndefined();
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
             slack: {

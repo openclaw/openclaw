@@ -497,20 +497,25 @@ export function buildCliArgs(params: {
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
+  sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
+  const shouldSendSystemPrompt =
+    !params.useResume ||
+    params.backend.systemPromptWhen === "always" ||
+    params.sendSystemPromptOnResume;
   if (params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    shouldSendSystemPrompt &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    shouldSendSystemPrompt &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -522,11 +527,7 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (
-    (!params.useResume || params.backend.systemPromptWhen === "always") &&
-    params.systemPrompt &&
-    params.backend.systemPromptArg
-  ) {
+  } else if (shouldSendSystemPrompt && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

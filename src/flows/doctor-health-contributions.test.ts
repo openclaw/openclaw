@@ -1,5 +1,7 @@
 // Doctor health contribution tests cover plugin-provided health checks.
 import fs from "node:fs";
+import os from "node:os";
+import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   noteLegacyCodexProviderOverride: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
+  callGateway: vi.fn(),
   resolveSecretInputRef: vi.fn((params: { value?: unknown }) => ({
     ref:
       params.value === "exec-token"
@@ -98,7 +101,13 @@ const mocks = vi.hoisted(() => ({
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
+  collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
+  noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
+  collectLegacyCronStoreHealthFindings: vi.fn(async (): Promise<readonly HealthFinding[]> => []),
+  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(async () => undefined),
+  maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
+  noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
   scanConfiguredChannelPluginBlockers: vi.fn(
     (): Array<{ channelId: string; pluginId: string; reason: string }> => [],
   ),
@@ -111,6 +120,10 @@ const mocks = vi.hoisted(() => ({
       target: hit.pluginId,
       requirement: hit.reason,
     }),
+  ),
+  collectStalePluginRuntimeSymlinkHealthFindings: vi.fn(async () => [] as unknown[]),
+  collectChannelPreviewWarningHealthFindings: vi.fn(
+    async (): Promise<readonly HealthFinding[]> => [],
   ),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
@@ -126,6 +139,11 @@ const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
+}));
+
+vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
+  collectStalePluginRuntimeSymlinkHealthFindings:
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings,
 }));
 
 vi.mock("./bundled-health-checks.js", () => ({
@@ -205,6 +223,7 @@ vi.mock("../commands/doctor-memory-search.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
@@ -330,15 +349,35 @@ vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
   maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
 }));
 
+vi.mock("../commands/doctor-whatsapp-responsiveness.js", () => ({
+  collectWhatsappResponsivenessHealthFindings: mocks.collectWhatsappResponsivenessHealthFindings,
+  noteWhatsappResponsivenessHealth: mocks.noteWhatsappResponsivenessHealth,
+}));
+
 vi.mock("../commands/doctor-device-pairing.js", () => ({
   collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../commands/doctor/cron/index.js", () => ({
+  collectLegacyCronStoreHealthFindings: mocks.collectLegacyCronStoreHealthFindings,
+  collectLegacyWhatsAppCrontabHealthWarning: mocks.collectLegacyWhatsAppCrontabHealthWarning,
+  maybeRepairLegacyCronStore: mocks.maybeRepairLegacyCronStore,
+  noteLegacyWhatsAppCrontabHealthCheck: mocks.noteLegacyWhatsAppCrontabHealthCheck,
 }));
 
 vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
 }));
+
+vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>();
+  return {
+    ...actual,
+    collectChannelPreviewWarningHealthFindings: mocks.collectChannelPreviewWarningHealthFindings,
+  };
+});
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
@@ -420,6 +459,8 @@ describe("doctor health contributions", () => {
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear();
     mocks.buildGatewayConnectionDetails.mockReturnValue({ message: "gateway details" });
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({});
     mocks.resolveSecretInputRef.mockClear();
     mocks.resolveGatewayAuth.mockClear();
     mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token: undefined });
@@ -534,11 +575,27 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
     mocks.maybeRepairHeartbeatTemplate.mockReset();
     mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReset();
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValue([]);
+    mocks.noteWhatsappResponsivenessHealth.mockReset();
+    mocks.noteWhatsappResponsivenessHealth.mockResolvedValue(undefined);
     mocks.collectDevicePairingHealthFindings.mockReset();
     mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
+    mocks.collectLegacyCronStoreHealthFindings.mockReset();
+    mocks.collectLegacyCronStoreHealthFindings.mockResolvedValue([]);
+    mocks.collectLegacyWhatsAppCrontabHealthWarning.mockReset();
+    mocks.collectLegacyWhatsAppCrontabHealthWarning.mockResolvedValue(undefined);
+    mocks.maybeRepairLegacyCronStore.mockReset();
+    mocks.maybeRepairLegacyCronStore.mockResolvedValue(undefined);
+    mocks.noteLegacyWhatsAppCrontabHealthCheck.mockReset();
+    mocks.noteLegacyWhatsAppCrontabHealthCheck.mockResolvedValue(undefined);
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
     mocks.channelPluginBlockerHitToHealthFinding.mockClear();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
+    mocks.collectChannelPreviewWarningHealthFindings.mockReset();
+    mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1348,11 +1405,14 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/legacy-plugin-dependencies");
+    expect(contributionIds).toContain("core/doctor/stale-plugin-runtime-symlinks");
     expect(contributionIds).toContain("core/doctor/disk-space");
     expect(contributionIds).toContain("core/doctor/heartbeat-template");
-    expect(contributionIds).toContain("core/doctor/disk-space");
+    expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
+    expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
@@ -1398,6 +1458,53 @@ describe("doctor health contributions", () => {
       checksRun: 1,
       checksSkipped: 0,
     });
+  });
+
+  it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/stale-plugin-runtime-symlinks",
+    );
+    expect(check).toMatchObject({ defaultEnabled: false });
+    expect(check).toBeDefined();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/stale-plugin-runtime-symlinks",
+        severity: "warning",
+        message: "Stale plugin-runtime symlink left-pad points at plugin-runtime-deps.",
+        path: "/tmp/node_modules/left-pad",
+        target: "/tmp/node_modules/left-pad",
+      },
+    ]);
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check!],
+        onlyIds: ["core/doctor/stale-plugin-runtime-symlinks"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/stale-plugin-runtime-symlinks",
+          path: "/tmp/node_modules/left-pad",
+        }),
+      ],
+    });
+    expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
   it("reports agent findings for inherited default tool result caps", async () => {
@@ -1448,6 +1555,58 @@ describe("doctor health contributions", () => {
         }),
       ]),
     });
+  });
+
+  it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "openclaw-legacy-plugin-deps-lint-"));
+    const stateDir = nodePath.join(tempDir, "state");
+    const legacyRuntimeRoot = nodePath.join(stateDir, "plugin-runtime-deps");
+    fs.mkdirSync(legacyRuntimeRoot, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const contributionChecks = await resolveDoctorContributionHealthChecks();
+      const check = contributionChecks.find(
+        (entry) => entry.id === "core/doctor/legacy-plugin-dependencies",
+      );
+      expect(check).toMatchObject({ defaultEnabled: false });
+      expect(check).toBeDefined();
+
+      const ctx = {
+        cfg: {},
+        mode: "lint",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      } as const;
+
+      await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+        checksRun: 0,
+        checksSkipped: 1,
+      });
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [check!],
+          onlyIds: ["core/doctor/legacy-plugin-dependencies"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/legacy-plugin-dependencies",
+            severity: "warning",
+            path: legacyRuntimeRoot,
+          }),
+        ],
+      });
+      expect(fs.existsSync(legacyRuntimeRoot)).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {
@@ -1584,6 +1743,125 @@ describe("doctor health contributions", () => {
     expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith(ctx.cfg);
   });
 
+  it("keeps WhatsApp responsiveness opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const whatsappCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/whatsapp-responsiveness",
+    );
+    expect(whatsappCheck).toMatchObject({ defaultEnabled: false });
+    expect(whatsappCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { channels: { whatsapp: { enabled: true } } },
+      mode: "lint",
+      allowExecSecretRefs: true,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [whatsappCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).not.toHaveBeenCalled();
+
+    const status = {
+      eventLoop: {
+        degraded: true,
+        reasons: ["event_loop_delay"],
+        intervalMs: 30_000,
+        delayP99Ms: 42,
+        delayMaxMs: 12_000,
+        utilization: 0.3,
+        cpuCoreRatio: 0.4,
+      },
+    };
+    mocks.callGateway.mockResolvedValueOnce(status);
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValueOnce([
+      {
+        checkId: "core/doctor/whatsapp-responsiveness",
+        severity: "warning",
+        message: "Gateway event loop is degraded while local TUI clients are running.",
+        path: "channels.whatsapp",
+        requirement: "local-tui-event-loop-pressure",
+      },
+    ]);
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/whatsapp-responsiveness" })],
+    });
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      config: ctx.cfg,
+      deviceIdentity: null,
+    });
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      status,
+    });
+
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValueOnce([]);
+    const error = vi.fn();
+    await expect(
+      runDoctorLintChecks(
+        {
+          ...ctx,
+          runtime: { log: vi.fn(), error, exit: vi.fn() },
+        },
+        { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] },
+      ),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenLastCalledWith({
+      cfg: ctx.cfg,
+      status: undefined,
+    });
+  });
+
+  it("skips WhatsApp responsiveness Gateway status probes for exec SecretRefs without allow-exec", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const whatsappCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/whatsapp-responsiveness",
+    );
+    expect(whatsappCheck).toBeDefined();
+    mocks.gatewaySecretInputPathCanWin.mockReturnValue(true);
+    mocks.readGatewaySecretInputValue.mockReturnValue("exec-token");
+
+    const ctx = {
+      cfg: { channels: { whatsapp: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [whatsappCheck!];
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      status: undefined,
+    });
+  });
+
   it("keeps device pairing opt-in for default lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const devicePairingCheck = contributionChecks.find(
@@ -1614,6 +1892,52 @@ describe("doctor health contributions", () => {
       cfg: ctx.cfg,
       healthOk: false,
     });
+  });
+
+  it("keeps legacy cron store opt-in for default lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:legacy-cron");
+    expect(contribution.healthCheckIds).toEqual([
+      "core/doctor/legacy-whatsapp-crontab",
+      "core/doctor/legacy-cron-store",
+    ]);
+
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const cronStoreCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/legacy-cron-store",
+    );
+    expect(cronStoreCheck).toMatchObject({ defaultEnabled: false });
+    expect(cronStoreCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { cron: { store: "/tmp/openclaw-cron/jobs.json" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [cronStoreCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectLegacyCronStoreHealthFindings).not.toHaveBeenCalled();
+
+    mocks.collectLegacyCronStoreHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/legacy-cron-store",
+        severity: "warning",
+        message: "Legacy JSON cron store was found.",
+        path: "/tmp/openclaw-cron/jobs.json",
+        requirement: "legacy-cron-store",
+      },
+    ]);
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/legacy-cron-store"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" })],
+    });
+    expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {
@@ -1654,6 +1978,78 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
+  });
+
+  it("keeps channel preview warnings opt-in for default lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    expect(contribution.healthCheckIds).toEqual([
+      "core/doctor/channel-plugin-blockers",
+      "core/doctor/channel-preview-warnings",
+    ]);
+    const previewWarningsCheck = contribution.healthChecks.find(
+      (check) => check.id === "core/doctor/channel-preview-warnings",
+    ) as HealthCheck | undefined;
+    expect(previewWarningsCheck).toMatchObject({ defaultEnabled: false });
+    expect(previewWarningsCheck).toBeDefined();
+    mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([
+      {
+        checkId: "core/doctor/channel-preview-warnings",
+        severity: "warning",
+        message: "channels.matrix has a preview warning",
+        path: "channels.matrix",
+      },
+    ]);
+
+    const ctx = {
+      cfg: { channels: { matrix: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [previewWarningsCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectChannelPreviewWarningHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/channel-preview-warnings"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/channel-preview-warnings",
+          path: "channels.matrix",
+        }),
+      ],
+    });
+    expect(mocks.collectChannelPreviewWarningHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      allowExec: false,
+    });
+  });
+
+  it("forwards allow-exec secret refs into channel preview warnings", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    const previewWarningsCheck = contribution.healthChecks.find(
+      (check) => check.id === "core/doctor/channel-preview-warnings",
+    ) as HealthCheck | undefined;
+    expect(previewWarningsCheck).toBeDefined();
+    const ctx = {
+      cfg: { channels: { matrix: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      allowExecSecretRefs: true,
+    } as const;
+
+    await previewWarningsCheck!.detect(ctx);
+
+    expect(mocks.collectChannelPreviewWarningHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      allowExec: true,
+    });
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

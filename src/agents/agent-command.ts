@@ -135,6 +135,7 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import {
+  isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "./run-termination.js";
@@ -2127,6 +2128,9 @@ async function agentCommandInternal(
           continue;
         }
         if (!attemptLifecycleState.lifecycleEnded) {
+          const abortLifecycleFields = isAgentRunDirectAbortReason(err)
+            ? { aborted: true as const, stopReason: "aborted" as const }
+            : resolveAgentRunAbortLifecycleFields(opts.abortSignal);
           emitAgentEvent({
             runId,
             lifecycleGeneration,
@@ -2136,7 +2140,7 @@ async function agentCommandInternal(
               startedAt,
               endedAt: Date.now(),
               error: err instanceof Error ? err.message : "Agent run failed",
-              ...resolveAgentRunAbortLifecycleFields(opts.abortSignal),
+              ...abortLifecycleFields,
             },
           });
         }

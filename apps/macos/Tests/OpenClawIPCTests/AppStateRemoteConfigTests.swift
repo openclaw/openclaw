@@ -56,6 +56,39 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `updated remote gateway config keeps OpenSSH opt in only for the same target`() {
+        let sameTarget = AppState._testUpdatedRemoteGatewayConfig(
+            current: [
+                "sshHostKeyPolicy": "openssh",
+                "sshTarget": "alice@gateway.example",
+            ],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: nil,
+                remoteTarget: "alice@gateway.example",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+        let changedTarget = AppState._testUpdatedRemoteGatewayConfig(
+            current: [
+                "sshHostKeyPolicy": "openssh",
+                "sshTarget": "old-gateway-alias",
+            ],
+            draft: .init(
+                transport: .ssh,
+                remoteUrl: "",
+                remoteHost: nil,
+                remoteTarget: "new-gateway-alias",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false))
+
+        #expect(sameTarget["sshHostKeyPolicy"] as? String == "openssh")
+        #expect(changedTarget["sshHostKeyPolicy"] as? String == "strict")
+    }
+
+    @Test
     func `updated remote gateway config preserves custom loopback tunnel port`() {
         let remote = AppState._testUpdatedRemoteGatewayConfig(
             current: ["url": "ws://localhost.:29876"],

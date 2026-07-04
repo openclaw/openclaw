@@ -96,16 +96,10 @@ final class RemotePortTunnel: @unchecked Sendable {
                 "ssh tunnel using default remote port " +
                     "host=\(sshHost, privacy: .public) port=\(remotePort, privacy: .public)")
         }
-        let options: [String] = [
-            "-o", "BatchMode=yes",
-            "-o", "ExitOnForwardFailure=yes",
-            "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=3",
-            "-o", "TCPKeepAlive=yes",
-            "-n",
-            "-N",
-            "-L", "\(localPort):127.0.0.1:\(resolvedRemotePort)",
-        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
+        let options = Self.sshOptions(
+            localPort: localPort,
+            remotePort: resolvedRemotePort,
+            hostKeyPolicy: settings.sshHostKeyPolicy)
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
         let args = CommandResolver.sshArguments(
             target: parsed,
@@ -224,6 +218,28 @@ final class RemotePortTunnel: @unchecked Sendable {
             return nil
         }
         return port
+    }
+
+    private static func sshOptions(
+        localPort: UInt16,
+        remotePort: Int,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
+    {
+        [
+            "-o", "BatchMode=yes",
+            // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
+            "-o", "ControlMaster=no",
+            "-o", "ControlPath=none",
+            "-o", "ControlPersist=no",
+            "-o", "ForkAfterAuthentication=no",
+            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "TCPKeepAlive=yes",
+            "-n",
+            "-N",
+            "-L", "\(localPort):127.0.0.1:\(remotePort)",
+        ] + hostKeyPolicy.hostKeyOptions
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
@@ -375,6 +391,14 @@ final class RemotePortTunnel: @unchecked Sendable {
 
     static func _testResolveRemotePortOverride(defaultRemotePort: Int, sshHost: String) -> Int? {
         self.resolveRemotePortOverride(defaultRemotePort: defaultRemotePort, for: sshHost)
+    }
+
+    static func _testSSHOptions(
+        localPort: UInt16,
+        remotePort: Int,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
+    {
+        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
     }
 
     static func _testDrainStderr(_ handle: FileHandle) -> String {
