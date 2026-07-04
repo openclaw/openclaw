@@ -285,7 +285,7 @@ function Remove-FuturePluginEntries {
     }
   }
   $allow = Get-OpenClawJsonProperty $plugins 'allow'
-  if ($allow -is [array]) {
+  if ($null -ne $allow) {
     Set-OpenClawJsonProperty $plugins 'allow' @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
   }
   $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
