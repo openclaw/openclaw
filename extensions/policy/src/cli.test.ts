@@ -268,6 +268,11 @@ describe("policy commands", () => {
         },
       ],
     });
+    const attestedFinding = { ...parsed.findings[0] };
+    expect(attestedFinding.policy).toBeDefined();
+    delete attestedFinding.policy;
+    expect(parsed.attestation.findingsHash).toBe(policyFindingsHash([attestedFinding]));
+    expect(parsed.attestation.findingsHash).not.toBe(policyFindingsHash(parsed.findings));
   });
 
   it("attests underlying policy findings when the accepted attestation is stale", async () => {

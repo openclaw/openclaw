@@ -221,7 +221,7 @@ async function buildPolicyCheckReport(
     healthFindingMeetsSeverity(finding, severityMin),
   );
   const jsonFindings = findings.map(toJsonFinding);
-  const attestedFindings = evaluation.attestedFindings.map(toJsonFinding);
+  const attestedFindings = evaluation.attestedFindings.map(toAttestedJsonFinding);
   const ok = exitCodeFromFindings(evaluation.findings, severityMin) === 0;
   const attestation = createPolicyAttestation({
     ok: evaluation.attestedFindings.length === 0,
@@ -417,7 +417,7 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   return raw;
 }
 
-function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
+function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {
   return {
     checkId: finding.checkId,
     severity: finding.severity,
@@ -429,6 +429,12 @@ function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
     ...(finding.target !== undefined ? { target: finding.target } : {}),
     ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
+  };
+}
+
+function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
+  return {
+    ...toAttestedJsonFinding(finding),
     ...policyFindingMetadata(finding),
   };
 }
