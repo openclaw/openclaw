@@ -559,6 +559,41 @@ describe("durable continuation_work dispatch", () => {
     });
   });
 
+  it("preserves queued idle-retry mode across disabled-continuation rechecks", async () => {
+    const sessionKey = "agent:main:disabled-idle-retry-recheck";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 60_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 60_000,
+      maxChainLength: 8,
+      reason: "disabled idle retry recheck",
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: Date.now(),
+      },
+    });
+
+    continuationEnabledForTest = false;
+    await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+
+    continuationEnabledForTest = true;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await waitForTurnGrantCount(1);
+
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          SessionKey: sessionKey,
+          Body: expect.stringContaining("disabled idle retry recheck"),
+        }),
+      }),
+    ]);
+  });
+
   it("re-enters the persisted work.traceparent around the continuation turn (#1144)", async () => {
     const sessionKey = "agent:main:traceparent-reentry";
     const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";

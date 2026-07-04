@@ -162,6 +162,7 @@ function createDeliveryDeps(params: {
     return { status: params.spawnStatus ?? "accepted" };
   });
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
+  const markPendingDelegateFailed = vi.fn(() => true);
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
@@ -176,8 +177,16 @@ function createDeliveryDeps(params: {
     resolveStorePath: vi.fn(() => params.storePath),
     spawnSubagentDirect,
     markPendingDelegateSpawnAccepted,
+    markPendingDelegateFailed,
   };
-  return { deps, enqueueSystemEvent, log, markPendingDelegateSpawnAccepted, spawnSubagentDirect };
+  return {
+    deps,
+    enqueueSystemEvent,
+    log,
+    markPendingDelegateFailed,
+    markPendingDelegateSpawnAccepted,
+    spawnSubagentDirect,
+  };
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -992,12 +1001,21 @@ describe("post-compaction delegate dispatch extraction", () => {
       await seedSessionStore(storePath, {
         main: { sessionId: "session", updatedAt: 1, continuationChainCount: 2 },
       });
-      const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
-        storePath,
-        runtimeConfig: { maxChainLength: 2 },
-      });
+      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
+        createDeliveryDeps({
+          storePath,
+          runtimeConfig: { maxChainLength: 2 },
+        });
 
-      await deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps);
+      await deliverQueuedPostCompactionDelegate(
+        {
+          entry: createQueuedEntry({
+            sourceFlowId: "source-flow-capped",
+            sourceExpectedRevision: 3,
+          }),
+        },
+        deps,
+      );
 
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(
@@ -1006,6 +1024,15 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "[continuation] Post-compaction delegate rejected: chain length 2 reached. Task: queued delegate",
         { sessionKey: "main" },
+      );
+      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+        {
+          flowId: "source-flow-capped",
+          expectedRevision: 3,
+          task: "queued delegate",
+        },
+        "Post-compaction delegate rejected: chain length 2 reached.",
+        "Post-compaction delegate rejected",
       );
     });
   });
@@ -1016,12 +1043,21 @@ describe("post-compaction delegate dispatch extraction", () => {
       await seedSessionStore(storePath, {
         main: { sessionId: "session", updatedAt: 1, continuationChainTokens: 11 },
       });
-      const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
-        storePath,
-        runtimeConfig: { costCapTokens: 10 },
-      });
+      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
+        createDeliveryDeps({
+          storePath,
+          runtimeConfig: { costCapTokens: 10 },
+        });
 
-      await deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps);
+      await deliverQueuedPostCompactionDelegate(
+        {
+          entry: createQueuedEntry({
+            sourceFlowId: "source-flow-cost",
+            sourceExpectedRevision: 4,
+          }),
+        },
+        deps,
+      );
 
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(
@@ -1031,6 +1067,15 @@ describe("post-compaction delegate dispatch extraction", () => {
         "[continuation] Post-compaction delegate rejected: cost cap exceeded (11 > 10). Task: queued delegate",
         { sessionKey: "main" },
       );
+      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+        {
+          flowId: "source-flow-cost",
+          expectedRevision: 4,
+          task: "queued delegate",
+        },
+        "Post-compaction delegate rejected: cost cap exceeded (11 > 10).",
+        "Post-compaction delegate rejected",
+      );
     });
   });
 
@@ -1038,16 +1083,19 @@ describe("post-compaction delegate dispatch extraction", () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
-      const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
-        storePath,
-        runtimeConfig: { crossSessionTargeting: "disabled" },
-      });
+      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
+        createDeliveryDeps({
+          storePath,
+          runtimeConfig: { crossSessionTargeting: "disabled" },
+        });
 
       await deliverQueuedPostCompactionDelegate(
         {
           entry: createQueuedEntry({
             targetSessionKey: "other",
             traceparent: VALID_TRACEPARENT,
+            sourceFlowId: "source-flow-cross-session",
+            sourceExpectedRevision: 5,
           }),
         },
         deps,
@@ -1064,6 +1112,15 @@ describe("post-compaction delegate dispatch extraction", () => {
       const stored = readSessionStore(storePath);
       expect(Object.values(stored).some((entry) => entry.continuationChainCount != null)).toBe(
         false,
+      );
+      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+        {
+          flowId: "source-flow-cross-session",
+          expectedRevision: 5,
+          task: "queued delegate",
+        },
+        "Post-compaction delegate rejected: cross-session targeting was disabled at delivery time.",
+        "Post-compaction delegate rejected",
       );
     });
   });

@@ -1921,6 +1921,44 @@ describe("recoverPendingContinuationDelegates", () => {
     );
   });
 
+  it("keeps regular accepted rows recoverable when recovered chain-state persist fails", async () => {
+    const sessionKey = "agent:main:subagent:delegate-recover-persist-fail";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    enqueuePendingDelegate(sessionKey, { task: "accepted before persist failure" });
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    const first = await recoverPendingContinuationDelegates({});
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(updateSessionStoreForRecoveryOptions).toContainEqual({ requireWriteSuccess: true });
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "running" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toBeUndefined();
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("delegate-recovery-chain-persist-failed"),
+      }),
+    );
+
+    const digest = crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    updateSessionStoreForRecoveryShouldThrow = false;
+    spawnSubagentDirectMock.mockClear();
+
+    const reconciled = await recoverPendingContinuationDelegates({});
+
+    expect(reconciled).toMatchObject({ sessions: 1, dispatched: 1, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 0,
+    });
+  });
+
   it("persists the folded chain state when a recovered delayed delegate's hedge fires (#1158)", async () => {
     // The finding: recovery opts into applyDelegateChainTokensFold but, for a
     // still-unmatured delayed delegate, only ARMS a hedge. Without a

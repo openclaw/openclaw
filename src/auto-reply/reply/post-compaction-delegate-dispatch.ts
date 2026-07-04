@@ -27,6 +27,7 @@ import { defaultRuntime } from "../../runtime.js";
 import {
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
+  markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   stagePostCompactionDelegate,
 } from "../continuation-delegate-store.js";
@@ -63,6 +64,11 @@ export type PostCompactionDelegateDeliveryDeps = {
   markPendingDelegateSpawnAccepted(
     delegate: { flowId?: string; expectedRevision?: number; task: string },
     childSessionKey: string,
+  ): boolean;
+  markPendingDelegateFailed(
+    delegate: { flowId?: string; expectedRevision?: number; task: string },
+    blockedSummary: string,
+    currentStep?: string,
   ): boolean;
 };
 
@@ -132,6 +138,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
   resolveStorePath,
   spawnSubagentDirect,
   markPendingDelegateSpawnAccepted,
+  markPendingDelegateFailed,
 };
 
 const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchDeps = {
@@ -480,6 +487,25 @@ function applyReleaseTraceparent(
   return { ...delegate, traceparent: releaseTraceparent };
 }
 
+function failSourcePostCompactionFlow(
+  entry: QueuedPostCompactionDelegateDelivery,
+  deps: Pick<PostCompactionDelegateDeliveryDeps, "markPendingDelegateFailed">,
+  blockedSummary: string,
+): void {
+  if (!entry.sourceFlowId || entry.sourceExpectedRevision === undefined) {
+    return;
+  }
+  deps.markPendingDelegateFailed(
+    {
+      flowId: entry.sourceFlowId,
+      expectedRevision: entry.sourceExpectedRevision,
+      task: entry.task,
+    },
+    blockedSummary,
+    "Post-compaction delegate rejected",
+  );
+}
+
 export async function deliverQueuedPostCompactionDelegate(
   params: {
     entry: QueuedPostCompactionDelegateDelivery;
@@ -507,6 +533,7 @@ export async function deliverQueuedPostCompactionDelegate(
   const compactionChainTokens = sessionEntry?.continuationChainTokens ?? 0;
 
   if (currentCompactionChainCount >= maxCompactionChainLength) {
+    const summary = `Post-compaction delegate rejected: chain length ${maxCompactionChainLength} reached.`;
     deps.log(
       `Post-compaction delegate rejected: chain length ${currentCompactionChainCount} >= ${maxCompactionChainLength} for session ${params.entry.sessionKey}`,
     );
@@ -517,10 +544,12 @@ export async function deliverQueuedPostCompactionDelegate(
         ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
       },
     );
+    failSourcePostCompactionFlow(params.entry, deps, summary);
     return;
   }
 
   if (compactionCostCapTokens > 0 && compactionChainTokens > compactionCostCapTokens) {
+    const summary = `Post-compaction delegate rejected: cost cap exceeded (${compactionChainTokens} > ${compactionCostCapTokens}).`;
     deps.log(
       `Post-compaction delegate rejected: cost cap exceeded (${compactionChainTokens} > ${compactionCostCapTokens}) for session ${params.entry.sessionKey}`,
     );
@@ -531,6 +560,7 @@ export async function deliverQueuedPostCompactionDelegate(
         ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
       },
     );
+    failSourcePostCompactionFlow(params.entry, deps, summary);
     return;
   }
 
@@ -538,6 +568,8 @@ export async function deliverQueuedPostCompactionDelegate(
     crossSessionTargeting === "disabled" &&
     hasCrossSessionDelegateTargeting(params.entry, params.entry.sessionKey)
   ) {
+    const summary =
+      "Post-compaction delegate rejected: cross-session targeting was disabled at delivery time.";
     deps.log(
       `Post-compaction delegate rejected: crossSessionTargeting=disabled at delivery time for session ${params.entry.sessionKey}`,
     );
@@ -548,6 +580,7 @@ export async function deliverQueuedPostCompactionDelegate(
         ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
       },
     );
+    failSourcePostCompactionFlow(params.entry, deps, summary);
     return;
   }
 

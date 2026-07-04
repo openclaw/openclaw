@@ -101,6 +101,34 @@ function surfaceHedgeDispatchFailure(sessionKey: string, errorMessage: string): 
   }
 }
 
+class DelegateTerminalChainStatePersistError extends Error {
+  readonly originalError: unknown;
+
+  constructor(originalError: unknown) {
+    super(formatErrorMessage(originalError));
+    this.name = "DelegateTerminalChainStatePersistError";
+    this.originalError = originalError;
+  }
+}
+
+async function persistChainStateBeforeTerminalCommit(
+  params: {
+    persistBeforeTerminalCommit?: boolean;
+    persistChainState?: (chainState: ChainState) => void | Promise<void>;
+  },
+  chainState: ChainState,
+): Promise<boolean> {
+  if (!params.persistBeforeTerminalCommit || !params.persistChainState) {
+    return false;
+  }
+  try {
+    await params.persistChainState(chainState);
+    return true;
+  } catch (err) {
+    throw new DelegateTerminalChainStatePersistError(err);
+  }
+}
+
 function armHedgeTimer(
   sessionKey: string,
   fireAt: number,
@@ -112,6 +140,7 @@ function armHedgeTimer(
     loadFreshChainState?: () => ChainState;
     applyDelegateChainTokensFold?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
+    persistBeforeTerminalCommit?: boolean;
     inheritedSilent?: boolean;
     inheritedWake?: boolean;
   },
@@ -152,6 +181,7 @@ function armHedgeTimer(
       // basis when its delay elapses and the hedge re-dispatches it (#1144).
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
+      ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
       // Inherited silent/wake policy must survive the hedge: a delayed delegate
       // armed by a silent/wake parent chain must still spawn internal when the
       // hedge finally dispatches it, not announce to the channel (#1158).
@@ -160,7 +190,9 @@ function armHedgeTimer(
     })
       .then(async (result) => {
         if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
-          await params.persistChainState(result.chainState);
+          if (!result.chainStatePersistedBeforeTerminalCommit) {
+            await params.persistChainState(result.chainState);
+          }
           if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
             clearQueuedDelegatesChainTokensFold(sessionKey);
           }
@@ -275,6 +307,13 @@ export async function dispatchToolDelegates(params: {
    */
   persistChainState?: (chainState: ChainState) => void | Promise<void>;
   /**
+   * Recovery paths must persist the advanced/folded chain state before they
+   * terminalize a claimed TaskFlow row. If the write fails, the row stays
+   * `running` so the next recovery can reconcile an already-accepted child
+   * without losing the only durable chain-cost fold.
+   */
+  persistBeforeTerminalCommit?: boolean;
+  /**
    * Inherited silent/wake policy from a silent/wake parent continuation chain.
    * When set, a consumed delegate with its own `mode` unset (normal) still
    * spawns internal (silent) — and wakes on return when `inheritedWake` is also
@@ -289,6 +328,7 @@ export async function dispatchToolDelegates(params: {
   rejected: number;
   chainState: ChainState;
   appliedChainTokensFold?: number;
+  chainStatePersistedBeforeTerminalCommit?: boolean;
 }> {
   const { sessionKey, chainState, ctx } = params;
   const config = params.config ?? resolveContinuationRuntimeConfig();
@@ -324,6 +364,7 @@ export async function dispatchToolDelegates(params: {
       loadFreshChainState: params.loadFreshChainState,
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
+      ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
       ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
       ...(params.inheritedWake ? { inheritedWake: true } : {}),
     });
@@ -346,22 +387,6 @@ export async function dispatchToolDelegates(params: {
   );
   const delegatesWithinLimit = toolDelegates.slice(0, delegateSlotsAvailable);
   const delegatesOverLimit = toolDelegates.slice(delegateSlotsAvailable);
-
-  for (const dropped of delegatesOverLimit) {
-    const summary = `Tool delegate rejected: maxDelegatesPerTurn exceeded (${maxDelegatesPerTurn}).`;
-    log.info(
-      `[continuation:delegate-rejected] maxDelegatesPerTurn=${maxDelegatesPerTurn} task=${dropped.task.slice(0, 80)} session=${sessionKey}`,
-    );
-    markDelegateFailed(dropped, summary);
-    enqueueSystemEvent(
-      `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(dropped.task)}`,
-      {
-        sessionKey,
-        trusted: true,
-      },
-    );
-  }
-
   let dispatched = 0;
   let rejected = delegatesOverLimit.length;
   let currentChainCount = chainState.currentChainCount;
@@ -376,6 +401,34 @@ export async function dispatchToolDelegates(params: {
     : 0;
   const accumulatedTokens = chainState.accumulatedChainTokens + appliedChainTokensFold;
   let currentChainId = chainState.chainId;
+  let chainStatePersistedBeforeTerminalCommit = false;
+  const currentTerminalChainState = (): ChainState => ({
+    currentChainCount,
+    chainStartedAt: chainState.chainStartedAt,
+    accumulatedChainTokens: accumulatedTokens,
+    ...(currentChainId ? { chainId: currentChainId } : {}),
+  });
+  const persistTerminalChainState = async (nextState: ChainState): Promise<void> => {
+    if (await persistChainStateBeforeTerminalCommit(params, nextState)) {
+      chainStatePersistedBeforeTerminalCommit = true;
+    }
+  };
+
+  for (const dropped of delegatesOverLimit) {
+    const summary = `Tool delegate rejected: maxDelegatesPerTurn exceeded (${maxDelegatesPerTurn}).`;
+    log.info(
+      `[continuation:delegate-rejected] maxDelegatesPerTurn=${maxDelegatesPerTurn} task=${dropped.task.slice(0, 80)} session=${sessionKey}`,
+    );
+    await persistTerminalChainState(currentTerminalChainState());
+    markDelegateFailed(dropped, summary);
+    enqueueSystemEvent(
+      `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(dropped.task)}`,
+      {
+        sessionKey,
+        trusted: true,
+      },
+    );
+  }
 
   for (const delegate of delegatesWithinLimit) {
     if (
@@ -389,6 +442,7 @@ export async function dispatchToolDelegates(params: {
       log.info(
         `[continuation:delegate-rejected] policy.cross_session_targeting task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
       );
+      await persistTerminalChainState(currentTerminalChainState());
       markDelegateFailed(delegate, summary);
       enqueueSystemEvent(
         `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
@@ -426,6 +480,7 @@ export async function dispatchToolDelegates(params: {
       log.info(
         `[continuation:delegate-rejected] ${budgetCheck} task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
       );
+      await persistTerminalChainState(currentTerminalChainState());
       markDelegateFailed(delegate, summary);
       enqueueSystemEvent(
         `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
@@ -496,6 +551,12 @@ export async function dispatchToolDelegates(params: {
         (hasActiveSubagentRegistryRun(childSessionKey) ||
           (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
       ) {
+        await persistTerminalChainState({
+          currentChainCount: nextHop,
+          chainStartedAt: chainState.chainStartedAt,
+          accumulatedChainTokens: accumulatedTokens,
+          chainId: dispatchChainId,
+        });
         markPendingDelegateSpawnAccepted(delegate, childSessionKey);
         dispatchSpan.setStatus("OK");
         dispatched++;
@@ -539,6 +600,12 @@ export async function dispatchToolDelegates(params: {
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
+        await persistTerminalChainState({
+          currentChainCount: nextHop,
+          chainStartedAt: chainState.chainStartedAt,
+          accumulatedChainTokens: accumulatedTokens,
+          chainId: dispatchChainId,
+        });
         if (acceptedChildSessionKey) {
           markPendingDelegateSpawnAccepted(delegate, acceptedChildSessionKey);
         }
@@ -552,6 +619,7 @@ export async function dispatchToolDelegates(params: {
         log.info(
           `[continuation:delegate-spawn-rejected] status=${result.status} session=${sessionKey} reason=${reasonText} task=${delegate.task.slice(0, 80)}`,
         );
+        await persistTerminalChainState(currentTerminalChainState());
         markDelegateFailed(delegate, summary);
         dispatchSpan.setStatus("ERROR", reasonText);
         enqueueSystemEvent(
@@ -564,11 +632,21 @@ export async function dispatchToolDelegates(params: {
         rejected++;
       }
     } catch (err) {
+      if (err instanceof DelegateTerminalChainStatePersistError) {
+        const message = formatErrorMessage(err.originalError);
+        dispatchSpan?.recordException(err.originalError);
+        dispatchSpan?.setStatus("ERROR", message);
+        log.warn(
+          `[continuation:delegate-terminal-chain-persist-failed] error=${message} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
+        );
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       const summary = `DELEGATE spawn failed: ${message}`;
       dispatchSpan?.recordException(err);
       dispatchSpan?.setStatus("ERROR", message);
       log.info(`[continuation:delegate-spawn-failed] error=${message} session=${sessionKey}`);
+      await persistTerminalChainState(currentTerminalChainState());
       markDelegateFailed(delegate, summary);
       enqueueSystemEvent(
         `[continuation] ${summary}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
@@ -597,6 +675,7 @@ export async function dispatchToolDelegates(params: {
       ...(currentChainId ? { chainId: currentChainId } : {}),
     },
     ...(appliedChainTokensFold > 0 ? { appliedChainTokensFold } : {}),
+    ...(chainStatePersistedBeforeTerminalCommit ? { chainStatePersistedBeforeTerminalCommit } : {}),
   };
 }
 
@@ -679,31 +758,45 @@ export async function recoverPendingContinuationDelegates(
           });
           sessionStore[sessionKey] = inMemoryEntry;
         };
-    const result = await dispatchToolDelegates({
-      sessionKey,
-      chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
-      ctx: { ...params.ctx, sessionKey },
-      maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
-      recoverRunningDelegates: true,
-      includeRunningUpdatedAtOrBefore,
-      // Recovery rebuilds chain cost from the persisted child entry, which is
-      // stale when the settle-time chain-cost persist failed; apply the
-      // delegate's durable fold so the cost cap holds across the restart (#1144).
-      applyDelegateChainTokensFold: true,
-      // A recovered delayed delegate only arms a hedge here; pass the persist +
-      // fresh-load callbacks so the eventual hedge fire durably advances the
-      // folded chain state instead of losing it (cost-cap bypass) (#1158).
-      ...(persistRecoveredChainState
-        ? {
-            persistChainState: persistRecoveredChainState,
-            loadFreshChainState: () => loadContinuationChainState(sessionStore[sessionKey]),
-          }
-        : {}),
-    });
+    let result: Awaited<ReturnType<typeof dispatchToolDelegates>>;
+    try {
+      result = await dispatchToolDelegates({
+        sessionKey,
+        chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
+        ctx: { ...params.ctx, sessionKey },
+        maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
+        recoverRunningDelegates: true,
+        includeRunningUpdatedAtOrBefore,
+        // Recovery rebuilds chain cost from the persisted child entry, which is
+        // stale when the settle-time chain-cost persist failed; apply the
+        // delegate's durable fold so the cost cap holds across the restart (#1144).
+        applyDelegateChainTokensFold: true,
+        // A recovered delayed delegate only arms a hedge here; pass the persist +
+        // fresh-load callbacks so the eventual hedge fire durably advances the
+        // folded chain state instead of losing it (cost-cap bypass) (#1158).
+        ...(persistRecoveredChainState
+          ? {
+              persistChainState: persistRecoveredChainState,
+              persistBeforeTerminalCommit: true,
+              loadFreshChainState: () => loadContinuationChainState(sessionStore[sessionKey]),
+            }
+          : {}),
+      });
+    } catch (err) {
+      if (err instanceof DelegateTerminalChainStatePersistError) {
+        log.warn(
+          `[continuation:delegate-recovery-chain-persist-failed] session=${sessionKey} leaving accepted rows recoverable: ${formatErrorMessage(err.originalError)}`,
+        );
+        continue;
+      }
+      throw err;
+    }
     dispatched += result.dispatched;
     rejected += result.rejected;
     if (persistRecoveredChainState && (result.dispatched > 0 || result.rejected > 0)) {
-      await persistRecoveredChainState(result.chainState);
+      if (!result.chainStatePersistedBeforeTerminalCommit) {
+        await persistRecoveredChainState(result.chainState);
+      }
       if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
         clearQueuedDelegatesChainTokensFold(sessionKey);
       }
