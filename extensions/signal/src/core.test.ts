@@ -342,6 +342,30 @@ describe("signal outbound", () => {
     );
   });
 
+  it("reports a formatted Signal chunk before a later chunk fails", async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "signal-1" })
+      .mockRejectedValueOnce(new Error("second Signal chunk failed"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      signalPlugin.outbound?.sendFormattedText?.({
+        cfg: {} as OpenClawConfig,
+        to: "+15551234567",
+        text: "a".repeat(5000),
+        deps: { signal: send },
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second Signal chunk failed");
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "signal", messageId: "signal-1" }),
+    );
+  });
+
   it("resolves aliases before formatted Signal media sends", async () => {
     const send = vi.fn(async () => ({
       messageId: "signal-1",

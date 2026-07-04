@@ -44,6 +44,18 @@ public struct OpenClawChatView: View {
         case clean
     }
 
+    public struct StarterPrompt: Hashable, Identifiable, Sendable {
+        public let id: String
+        public let title: String
+        public let prompt: String
+
+        public init(id: String, title: String, prompt: String) {
+            self.id = id
+            self.title = title
+            self.prompt = prompt
+        }
+    }
+
     @State private var viewModel: OpenClawChatViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var scrollerBottomID = UUID()
@@ -69,6 +81,7 @@ public struct OpenClawChatView: View {
     private let isComposerEnabled: Bool
     private let messagePlaceholder: String?
     private let emptyAssistantIntro: String?
+    private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
 
     private enum ScrollFollowTarget: Equatable {
@@ -118,6 +131,7 @@ public struct OpenClawChatView: View {
         isComposerEnabled: Bool = true,
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
+        emptyAssistantPrompts: [StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil)
     {
         _viewModel = State(initialValue: viewModel)
@@ -135,6 +149,7 @@ public struct OpenClawChatView: View {
         self.isComposerEnabled = isComposerEnabled
         self.messagePlaceholder = messagePlaceholder
         self.emptyAssistantIntro = emptyAssistantIntro
+        self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
     }
 
@@ -299,7 +314,13 @@ public struct OpenClawChatView: View {
     @ViewBuilder
     private var messageListRows: some View {
         if let introText = visibleEmptyAssistantIntro {
-            ChatAssistantIntroCard(text: introText)
+            ChatAssistantIntroCard(
+                text: introText,
+                prompts: self.emptyAssistantPrompts,
+                onPrompt: { prompt in
+                    self.viewModel.input = prompt.prompt
+                    self.viewModel.send()
+                })
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
@@ -692,6 +713,7 @@ public struct OpenClawChatView: View {
                 role: last.role,
                 content: content,
                 timestamp: last.timestamp,
+                idempotencyKey: last.idempotencyKey,
                 toolCallId: last.toolCallId,
                 toolName: last.toolName,
                 usage: last.usage,
@@ -805,22 +827,49 @@ public struct OpenClawChatView: View {
 
 private struct ChatAssistantIntroCard: View {
     let text: String
+    let prompts: [OpenClawChatView.StarterPrompt]
+    let onPrompt: (OpenClawChatView.StarterPrompt) -> Void
 
     var body: some View {
-        // Rendered as a grey assistant bubble so the greeting reads like the
-        // agent's first message, matching the in-conversation bubble style.
-        Text(self.text)
-            .font(OpenClawChatTypography.body)
-            .foregroundStyle(OpenClawChatTheme.assistantText)
-            .multilineTextAlignment(.leading)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(OpenClawChatTheme.assistantBubble))
-            .frame(maxWidth: 320, alignment: .leading)
-            .padding(.top, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 10) {
+            // Rendered as a grey assistant bubble so the greeting reads like the
+            // agent's first message, matching the in-conversation bubble style.
+            Text(self.text)
+                .font(OpenClawChatTypography.body)
+                .foregroundStyle(OpenClawChatTheme.assistantText)
+                .multilineTextAlignment(.leading)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(OpenClawChatTheme.assistantBubble))
+
+            ForEach(self.prompts) { prompt in
+                Button {
+                    self.onPrompt(prompt)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(prompt.title)
+                            .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .callout))
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 8)
+                        Image(systemName: "arrow.up.right")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(OpenClawChatTheme.subtleCard))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("chat-starter-\(prompt.id)")
+            }
+        }
+        .frame(maxWidth: 340, alignment: .leading)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

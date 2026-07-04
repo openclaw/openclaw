@@ -788,6 +788,7 @@ export function handleToolExecutionStart(
     toolCallId: string;
     args: unknown;
     replaySafe?: boolean;
+    hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
@@ -804,6 +805,7 @@ export function handleToolExecutionStart(
   const continueToolExecutionStart = () => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
+    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
@@ -911,6 +913,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
     const itemData: AgentItemEventData = {
@@ -923,6 +926,7 @@ export function handleToolExecutionStart(
       meta,
       toolCallId,
       startedAt,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
@@ -933,6 +937,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
@@ -1026,10 +1031,12 @@ export function handleToolExecutionUpdate(
     toolName: string;
     toolCallId: string;
     partialResult?: unknown;
+    hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
@@ -1048,6 +1055,7 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         partialResult: liveResult,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1059,6 +1067,7 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(toolProgress
       ? { progressText: toolProgress.text }
       : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
@@ -1071,6 +1080,7 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1118,6 +1128,7 @@ export async function handleToolExecutionEnd(
 ) {
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1330,6 +1341,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -1345,6 +1357,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(isToolError && extractToolErrorMessage(sanitizedResult)
       ? { error: extractToolErrorMessage(sanitizedResult) }
       : {}),
@@ -1358,6 +1371,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
 

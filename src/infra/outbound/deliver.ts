@@ -66,6 +66,7 @@ import {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
+  failDeliveryAfterPlatformSend,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   type QueuedReplyPayloadSendingHook,
@@ -203,6 +204,7 @@ type ChannelHandlerParams = {
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
   onPlatformSendStart?: () => Promise<void>;
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -345,6 +347,11 @@ function createPluginHandler(
   const sendMedia = outbound?.sendMedia;
   const chunker = outbound?.chunker ?? null;
   const chunkerMode = outbound?.chunkerMode;
+  const onMessageDeliveryResult = params.onDeliveryResult
+    ? async (result: ChannelMessageSendResult): Promise<void> => {
+        await params.onDeliveryResult?.(normalizeChannelMessageSendResult(params.channel, result));
+      }
+    : undefined;
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
     replyToIdSource?: "explicit" | "implicit";
@@ -452,12 +459,16 @@ function createPluginHandler(
               payload,
             };
             if (messagePayload) {
+              const messagePayloadCtx = {
+                ...payloadCtx,
+                onDeliveryResult: onMessageDeliveryResult,
+              };
               const sent = await runChannelMessageSendWithLifecycle({
                 lifecycle: messageLifecycle,
-                ctx: payloadCtx,
+                ctx: messagePayloadCtx,
                 send: async () => {
                   await params.onPlatformSendStart?.();
-                  return await messagePayload(payloadCtx);
+                  return await messagePayload(messagePayloadCtx);
                 },
               });
               return attachOutboundDeliveryCommitHook(
@@ -495,12 +506,13 @@ function createPluginHandler(
         text,
       };
       if (messageText) {
+        const messageTextCtx = { ...textCtx, onDeliveryResult: onMessageDeliveryResult };
         const sent = await runChannelMessageSendWithLifecycle({
           lifecycle: messageLifecycle,
-          ctx: textCtx,
+          ctx: messageTextCtx,
           send: async () => {
             await params.onPlatformSendStart?.();
-            return await messageText(textCtx);
+            return await messageText(messageTextCtx);
           },
         });
         return attachOutboundDeliveryCommitHook(
@@ -520,12 +532,13 @@ function createPluginHandler(
         mediaUrl,
       };
       if (messageMedia) {
+        const messageMediaCtx = { ...mediaCtx, onDeliveryResult: onMessageDeliveryResult };
         const sent = await runChannelMessageSendWithLifecycle({
           lifecycle: messageLifecycle,
-          ctx: mediaCtx,
+          ctx: messageMediaCtx,
           send: async () => {
             await params.onPlatformSendStart?.();
-            return await messageMedia(mediaCtx);
+            return await messageMedia(messageMediaCtx);
           },
         });
         return attachOutboundDeliveryCommitHook(
@@ -580,6 +593,7 @@ function createChannelOutboundContextBase(
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
     gatewayClientScopes: params.gatewayClientScopes,
+    onDeliveryResult: params.onDeliveryResult,
   };
 }
 
@@ -590,37 +604,55 @@ const isDeliveryAbortError = (err: unknown): boolean =>
   (err instanceof OutboundDeliveryError &&
     isAbortError((err as Error & { cause?: unknown }).cause));
 
-async function markQueuedPlatformSendAttemptStarted(params: {
+type QueuedPostSendState = "marked" | "acked" | "failed";
+
+type QueuedPreSendState = "marked" | "acked";
+
+async function persistQueuedPreSendState(params: {
   queueId: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
-}): Promise<boolean> {
+  stateDir?: string;
+}): Promise<QueuedPreSendState> {
   try {
-    await markDeliveryPlatformSendAttemptStarted(params.queueId);
-    return true;
-  } catch (err: unknown) {
+    await markDeliveryPlatformSendAttemptStarted(params.queueId, params.stateDir);
+    return "marked";
+  } catch (markErr: unknown) {
     if (params.queuePolicy === "required") {
-      throw err;
+      throw markErr;
     }
     log.warn(
-      `failed to mark queued delivery ${params.queueId} as platform-send-attempt-started; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+      `failed to mark queued delivery ${params.queueId} as platform-send-attempt-started; removing replay intent before best-effort send: ${formatErrorMessage(markErr)}`,
     );
-    return false;
+    // If the pre-send marker is unavailable, remove the intent before crossing
+    // the platform boundary. An ack failure aborts the send, leaving safe retry state.
+    await ackDelivery(params.queueId, params.stateDir);
+    return "acked";
   }
 }
 
-async function markQueuedPlatformOutcomeUnknown(params: {
+async function persistQueuedPostSendState(params: {
   queueId: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
-}): Promise<void> {
+}): Promise<QueuedPostSendState> {
   try {
     await markDeliveryPlatformOutcomeUnknown(params.queueId);
-  } catch (err: unknown) {
-    if (params.queuePolicy === "required") {
-      throw err;
-    }
+    return "marked";
+  } catch (markErr: unknown) {
     log.warn(
-      `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+      `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; falling back to direct ack (${params.queuePolicy}): ${formatErrorMessage(markErr)}`,
     );
+    try {
+      // The platform already returned a result. If state marking is unavailable,
+      // deleting the intent is safer than leaving it replayable.
+      await ackDelivery(params.queueId);
+      return "acked";
+    } catch (ackErr: unknown) {
+      const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
+      // Keep the evidence in the same canonical row if both primary state
+      // transitions fail; a generic failure update would make it replayable.
+      await failDeliveryAfterPlatformSend(params.queueId, error);
+      return "failed";
+    }
   }
 }
 
@@ -645,15 +677,15 @@ type DeliverOutboundPayloadsCoreParams = {
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+  /** @internal Runs after each identified platform result, before further fallible work. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** @internal Persists ambiguous-send state immediately before platform I/O. */
+  onPlatformSendStart?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
-};
-
-type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
-  onPlatformSendStart?: () => Promise<void>;
 };
 
 /**
@@ -666,6 +698,10 @@ type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParam
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  /** @internal Existing recovery queue entry to mark when the platform send begins. */
+  deliveryQueueId?: string;
+  /** @internal State directory that owns the existing recovery queue entry. */
+  deliveryQueueStateDir?: string;
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
   deferCommitHooks?: boolean;
   queuePolicy?: OutboundDeliveryQueuePolicy;
@@ -858,23 +894,6 @@ function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
     result.toJid ||
     result.pollId,
   );
-}
-
-function pushIdentifiedDeliveryResult(
-  results: OutboundDeliveryResult[],
-  delivery: OutboundDeliveryResult,
-): boolean {
-  if (!hasDeliveryResultIdentity(delivery)) {
-    return false;
-  }
-  results.push(delivery);
-  return true;
-}
-
-function filterIdentifiedDeliveryResults(
-  results: readonly OutboundDeliveryResult[],
-): OutboundDeliveryResult[] {
-  return results.filter((result) => hasDeliveryResultIdentity(result));
 }
 
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
@@ -1326,34 +1345,61 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
-  const wrappedParams = {
+  let lastPayloadError: unknown;
+  const queuePolicy = params.queuePolicy ?? "best_effort";
+  const platformQueueId = queueId ?? params.deliveryQueueId;
+  const platformQueuePolicy = queueId ? queuePolicy : "required";
+  const platformQueueStateDir = queueId ? undefined : params.deliveryQueueStateDir;
+  let queuedPreSendState: QueuedPreSendState | undefined;
+  let queuedPostSendState: QueuedPostSendState | undefined;
+  let deliveredResults: OutboundDeliveryResult[] = [];
+  let commitHooksRun = false;
+  const runCommitHooksAfterAck = async (): Promise<void> => {
+    if (
+      queuedPostSendState !== "acked" ||
+      params.deferCommitHooks ||
+      commitHooksRun ||
+      deliveredResults.length === 0
+    ) {
+      return;
+    }
+    commitHooksRun = true;
+    await runOutboundDeliveryCommitHooks(deliveredResults);
+  };
+  const wrappedParams: DeliverOutboundPayloadsParams = {
     ...params,
+    onPlatformSendStart: async () => {
+      if (platformQueueId && queuedPreSendState === undefined) {
+        queuedPreSendState = await persistQueuedPreSendState({
+          queueId: platformQueueId,
+          queuePolicy: platformQueuePolicy,
+          stateDir: platformQueueStateDir,
+        });
+        if (queueId && queuedPreSendState === "acked") {
+          queuedPostSendState = "acked";
+        }
+      }
+      await params.onPlatformSendStart?.();
+    },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       hadPartialFailure = true;
+      lastPayloadError = err;
       params.onError?.(err, payload);
     },
+    onDeliveryResult: async (result) => {
+      deliveredResults.push(result);
+      if (queueId && queuedPostSendState === undefined) {
+        queuedPostSendState = await persistQueuedPostSendState({ queueId, queuePolicy });
+      }
+      await params.onDeliveryResult?.(result);
+    },
   };
-  const queuePolicy = params.queuePolicy ?? "best_effort";
   let platformResultsReturned = false;
-  let platformSendStarted = false;
 
   try {
-    const results = await deliverOutboundPayloadsCore({
-      ...wrappedParams,
-      ...(queueId
-        ? {
-            onPlatformSendStart: async () => {
-              if (platformSendStarted) {
-                return;
-              }
-              platformSendStarted = await markQueuedPlatformSendAttemptStarted({
-                queueId,
-                queuePolicy,
-              });
-            },
-          }
-        : {}),
-    });
+    const results = await deliverOutboundPayloadsCore(wrappedParams);
+    // Core reconciles adapter progress objects with hook-bearing final results.
+    deliveredResults = results;
     platformResultsReturned = true;
     if (!queueId) {
       if (!params.deferCommitHooks) {
@@ -1363,58 +1409,108 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     }
     if (queueId) {
       if (hadPartialFailure) {
-        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(
-          (err: unknown) => {
+        const partialSendEvidence =
+          results.length > 0 ||
+          (lastPayloadError instanceof OutboundDeliveryError && lastPayloadError.sentBeforeError);
+        const postSendState =
+          queuedPostSendState ??
+          (partialSendEvidence
+            ? await persistQueuedPostSendState({ queueId, queuePolicy })
+            : undefined);
+        const error = "partial delivery failure (bestEffort)";
+        if (postSendState === undefined || postSendState === "marked") {
+          await failDelivery(queueId, error).catch((err: unknown) => {
             log.warn(
               `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
             );
-          },
-        );
-      } else {
-        if (platformSendStarted) {
-          await markQueuedPlatformOutcomeUnknown({
-            queueId,
-            queuePolicy,
           });
+        } else if (postSendState === "acked") {
+          // Direct ack is the fallback when the post-send marker cannot be
+          // written. Once the row is gone, recovery cannot run these hooks.
+          await runCommitHooksAfterAck();
         }
-        const acked = await ackDelivery(queueId)
-          .then(() => true)
-          .catch((err: unknown) => {
-            if (queuePolicy === "required") {
-              throw err;
-            }
-            log.warn(
-              `failed to ack queued delivery ${queueId}; continuing best-effort delivery: ${formatErrorMessage(err)}`,
-            );
-            return false;
-          });
+      } else {
+        const postSendState =
+          queuedPostSendState ??
+          (results.length > 0 || queuedPreSendState === "marked"
+            ? await persistQueuedPostSendState({ queueId, queuePolicy })
+            : queuedPreSendState === "acked"
+              ? "acked"
+              : undefined);
+        const acked =
+          postSendState === "acked"
+            ? true
+            : postSendState === "failed"
+              ? false
+              : await ackDelivery(queueId)
+                  .then(() => true)
+                  .catch(async (err: unknown) => {
+                    const hasSendEvidence =
+                      deliveredResults.length > 0 || queuedPreSendState !== undefined;
+                    try {
+                      if (hasSendEvidence) {
+                        await failDeliveryAfterPlatformSend(
+                          queueId,
+                          `failed to ack sent delivery: ${formatErrorMessage(err)}`,
+                        );
+                        queuedPostSendState = "failed";
+                      } else {
+                        await failDelivery(
+                          queueId,
+                          `failed to ack unsent delivery: ${formatErrorMessage(err)}`,
+                        );
+                      }
+                    } catch (persistErr: unknown) {
+                      log.warn(
+                        `failed to preserve queued delivery ${queueId} after ack failure: ${formatErrorMessage(persistErr)}`,
+                      );
+                    }
+                    if (queuePolicy === "required") {
+                      throw err;
+                    }
+                    log.warn(
+                      hasSendEvidence
+                        ? `failed to ack queued delivery ${queueId}; preserved unknown-after-send state: ${formatErrorMessage(err)}`
+                        : `failed to ack unsent queued delivery ${queueId}; retained it for retry: ${formatErrorMessage(err)}`,
+                    );
+                    return false;
+                  });
         if (acked) {
-          await runOutboundDeliveryCommitHooks(results);
+          queuedPostSendState = "acked";
+          await runCommitHooksAfterAck();
         }
       }
     }
     return results;
   } catch (err) {
+    if (err instanceof OutboundDeliveryError && err.results.length > 0) {
+      deliveredResults = err.results;
+    }
     if (queueId) {
       if (isDeliveryAbortError(err)) {
         await ackDelivery(queueId).catch(() => {});
       } else if (!platformResultsReturned) {
         const sendEvidence =
-          platformSendStarted && err instanceof OutboundDeliveryError && err.sentBeforeError;
+          deliveredResults.length > 0 ||
+          (err instanceof OutboundDeliveryError && err.sentBeforeError);
         if (sendEvidence) {
-          await markQueuedPlatformOutcomeUnknown({
-            queueId,
-            queuePolicy,
-          }).catch((markErr: unknown) => {
-            log.warn(
-              `failed to mark queued delivery ${queueId} as platform-outcome-unknown after mid-send error; falling back to fail: ${formatErrorMessage(markErr)}`,
-            );
-            return failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
-              log.warn(
-                `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-              );
+          try {
+            queuedPostSendState ??= await persistQueuedPostSendState({
+              queueId,
+              queuePolicy,
             });
-          });
+            if (queuedPostSendState === "marked") {
+              await failDeliveryAfterPlatformSend(queueId, formatErrorMessage(err));
+              queuedPostSendState = "failed";
+            }
+          } catch (persistErr: unknown) {
+            // Do not convert concrete send evidence back into a generic retry.
+            // All canonical state transitions failed, so retain the original row.
+            log.warn(
+              `failed to preserve queued delivery ${queueId} post-send evidence: ${formatErrorMessage(persistErr)}`,
+            );
+          }
+          await runCommitHooksAfterAck();
         } else {
           await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
             log.warn(
@@ -1430,7 +1526,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
 
 /** Core delivery logic (extracted for queue wrapper). */
 async function deliverOutboundPayloadsCore(
-  params: DeliverOutboundPayloadsCoreRuntimeParams,
+  params: DeliverOutboundPayloadsCoreParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const directiveOptions = await resolveChannelOutboundDirectiveOptions({ cfg, channel });
@@ -1444,6 +1540,164 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
+  const results: OutboundDeliveryResult[] = [];
+  let reportedResults: Array<{ identityKey: string; resultIndex: number }> = [];
+  const resultIdentityKey = (delivery: OutboundDeliveryResult): string =>
+    JSON.stringify([
+      delivery.channel,
+      delivery.messageId,
+      delivery.chatId,
+      delivery.channelId,
+      delivery.roomId,
+      delivery.conversationId,
+      delivery.timestamp,
+      delivery.toJid,
+      delivery.pollId,
+    ]);
+  const resultPlatformIds = (
+    delivery: OutboundDeliveryResult,
+    options?: { receiptOnly?: boolean },
+  ): Set<string> => {
+    const ids = new Set<string>();
+    const add = (value: string | undefined) => {
+      const id = value?.trim();
+      if (id && id !== "unknown" && id !== "suppressed") {
+        ids.add(id);
+      }
+    };
+    if (!options?.receiptOnly) {
+      add(delivery.messageId);
+    }
+    add(delivery.receipt?.primaryPlatformMessageId);
+    for (const id of delivery.receipt?.platformMessageIds ?? []) {
+      add(id);
+    }
+    for (const part of delivery.receipt?.parts ?? []) {
+      add(part.platformMessageId);
+    }
+    return ids;
+  };
+  const reportIdentifiedDeliveryResult = async (
+    delivery: OutboundDeliveryResult,
+  ): Promise<void> => {
+    if (!hasDeliveryResultIdentity(delivery)) {
+      return;
+    }
+    const resultIndex = results.length;
+    results.push(delivery);
+    reportedResults.push({ identityKey: resultIdentityKey(delivery), resultIndex });
+    // Persist concrete platform evidence before pinning, hooks, mirroring, or
+    // another send can fail or the process can stop.
+    await params.onDeliveryResult?.(delivery);
+  };
+  const recordIdentifiedDeliveryResults = async (
+    deliveries: readonly OutboundDeliveryResult[],
+    options?: { finalResultIsLastReported?: boolean },
+  ): Promise<boolean[]> => {
+    const reportedByIdentity = new Map<string, number[]>();
+    for (const reported of reportedResults) {
+      const matches = reportedByIdentity.get(reported.identityKey) ?? [];
+      matches.push(reported.resultIndex);
+      reportedByIdentity.set(reported.identityKey, matches);
+    }
+    try {
+      const recorded: boolean[] = [];
+      const availableReportedIndices = new Set(
+        reportedResults.map((reported) => reported.resultIndex),
+      );
+      const replacements = new Map<number, OutboundDeliveryResult>();
+      const removals = new Set<number>();
+      const appendResults: OutboundDeliveryResult[] = [];
+      for (const delivery of deliveries) {
+        if (!hasDeliveryResultIdentity(delivery)) {
+          recorded.push(false);
+          continue;
+        }
+        const receiptPartIds = (delivery.receipt?.parts ?? [])
+          .map((part) => part.platformMessageId?.trim())
+          .filter((id): id is string => Boolean(id && id !== "unknown" && id !== "suppressed"));
+        const receiptIds =
+          receiptPartIds.length > 0
+            ? receiptPartIds
+            : [...resultPlatformIds(delivery, { receiptOnly: true })];
+        const coveredIndices: number[] = [];
+        for (const receiptId of receiptIds) {
+          const matchingIndices = reportedResults
+            .filter(
+              (reported) =>
+                availableReportedIndices.has(reported.resultIndex) &&
+                !coveredIndices.includes(reported.resultIndex) &&
+                results[reported.resultIndex]?.channel === delivery.channel &&
+                resultPlatformIds(results[reported.resultIndex]).has(receiptId),
+            )
+            .map((reported) => reported.resultIndex);
+          // One receipt part covers one progress result. Repeated parts preserve
+          // aggregate multiplicity, while one constant platform ID cannot erase
+          // other successful sends that the final receipt does not aggregate.
+          const matchingIndex = options?.finalResultIsLastReported
+            ? matchingIndices.at(-1)
+            : matchingIndices[0];
+          if (matchingIndex !== undefined && !coveredIndices.includes(matchingIndex)) {
+            coveredIndices.push(matchingIndex);
+          }
+        }
+        let reportedIndex: number | undefined;
+        if (coveredIndices.length > 0) {
+          reportedIndex = Math.min(...coveredIndices);
+          for (const coveredIndex of coveredIndices) {
+            availableReportedIndices.delete(coveredIndex);
+            if (coveredIndex !== reportedIndex) {
+              removals.add(coveredIndex);
+            }
+          }
+        } else {
+          const reportedMatches = (
+            reportedByIdentity.get(resultIdentityKey(delivery)) ?? []
+          ).filter((index) => availableReportedIndices.has(index));
+          reportedIndex = options?.finalResultIsLastReported
+            ? reportedMatches.at(-1)
+            : reportedMatches[0];
+          if (reportedIndex !== undefined) {
+            availableReportedIndices.delete(reportedIndex);
+          }
+        }
+        if (reportedIndex !== undefined) {
+          // Replace all progress covered by an aggregate receipt with the final
+          // hook-bearing object, avoiding duplicate receipt parts.
+          replacements.set(reportedIndex, delivery);
+        } else {
+          appendResults.push(delivery);
+        }
+        recorded.push(true);
+      }
+      if (replacements.size > 0 || removals.size > 0) {
+        const reconciled = results.flatMap((result, index) => {
+          if (removals.has(index)) {
+            return [];
+          }
+          return [replacements.get(index) ?? result];
+        });
+        results.splice(0, results.length, ...reconciled);
+      }
+      for (const delivery of appendResults) {
+        results.push(delivery);
+        await params.onDeliveryResult?.(delivery);
+      }
+      return recorded;
+    } finally {
+      // Progress matching is scoped to exactly one adapter invocation. IDs such
+      // as LINE's constant "push" value can legitimately repeat later.
+      reportedResults = [];
+    }
+  };
+  const recordIdentifiedDeliveryResult = async (
+    delivery: OutboundDeliveryResult,
+  ): Promise<boolean> =>
+    (
+      await recordIdentifiedDeliveryResults([delivery], {
+        finalResultIsLastReported: true,
+      })
+    )[0] ?? false;
   const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
     mediaSources.length > 0
       ? resolveAgentScopedOutboundMediaAccess({
@@ -1477,7 +1731,8 @@ async function deliverOutboundPayloadsCore(
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
-      ...(params.onPlatformSendStart ? { onPlatformSendStart: params.onPlatformSendStart } : {}),
+      onPlatformSendStart: params.onPlatformSendStart,
+      onDeliveryResult: reportIdentifiedDeliveryResult,
     });
   const baseHandler = await createHandler([]);
   const handlerByMediaSources = new Map<string, Promise<ChannelHandler>>();
@@ -1494,7 +1749,6 @@ async function deliverOutboundPayloadsCore(
     handlerByMediaSources.set(key, created);
     return created;
   };
-  const results: OutboundDeliveryResult[] = [];
   const handler = baseHandler;
   const configuredTextLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -1538,7 +1792,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       throwIfAborted(abortSignal);
-      pushIdentifiedDeliveryResult(results, await sendHandler.sendText(unit.text, unit.overrides));
+      await recordIdentifiedDeliveryResult(await sendHandler.sendText(unit.text, unit.overrides));
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -1557,7 +1811,7 @@ async function deliverOutboundPayloadsCore(
     payloadSummary: NormalizedOutboundPayload,
     deliveredResults: readonly OutboundDeliveryResult[],
   ): void => {
-    if (!params.mirror || !params.replyPayloadSendingHook || deliveredResults.length === 0) {
+    if (!params.mirror || deliveredResults.length === 0) {
       return;
     }
     deliveredMirrorPayloads.push(payloadSummary);
@@ -1750,11 +2004,14 @@ async function deliverOutboundPayloadsCore(
           }) ||
           effectivePayload.audioAsVoice === true)
       ) {
+        const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
           applySendReplyToConsumption(sendOverrides),
         );
-        if (!hasDeliveryResultIdentity(delivery)) {
+        await recordIdentifiedDeliveryResult(delivery);
+        const deliveredResults = results.slice(beforeCount);
+        if (deliveredResults.length === 0) {
           completeDeliveryDiagnostics(0);
           recordPayloadOutcome(
             suppressedPayloadOutcome({
@@ -1764,39 +2021,36 @@ async function deliverOutboundPayloadsCore(
           );
           continue;
         }
-        results.push(delivery);
-        recordPayloadOutcome({ index: payloadIndex, status: "sent", results: [delivery] });
-        recordDeliveredMirrorPayload(payloadSummary, [delivery]);
+        recordPayloadOutcome({ index: payloadIndex, status: "sent", results: deliveredResults });
+        recordDeliveredMirrorPayload(payloadSummary, deliveredResults);
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
-          messageId: delivery.messageId,
+          messageId: deliveredResults.find((entry) => entry.messageId)?.messageId,
           gatewayClientScopes: params.gatewayClientScopes,
         });
         await maybeNotifyAfterDeliveredPayload({
           handler: deliveryHandler,
           payload: effectivePayload,
           target: deliveryTarget,
-          results: [delivery],
+          results: deliveredResults,
         });
-        completeDeliveryDiagnostics(1);
+        completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
           success: true,
           content: payloadSummary.hookContent ?? payloadSummary.text,
-          messageId: delivery.messageId,
+          messageId: deliveredResults.at(-1)?.messageId,
         });
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
         if (deliveryHandler.sendFormattedText) {
-          results.push(
-            ...filterIdentifiedDeliveryResults(
-              await deliveryHandler.sendFormattedText(
-                payloadSummary.text,
-                applySendReplyToConsumption(sendOverrides),
-              ),
+          await recordIdentifiedDeliveryResults(
+            await deliveryHandler.sendFormattedText(
+              payloadSummary.text,
+              applySendReplyToConsumption(sendOverrides),
             ),
           );
         } else {
@@ -1920,7 +2174,7 @@ async function deliverOutboundPayloadsCore(
               unit.overrides,
             )
           : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
-        if (pushIdentifiedDeliveryResult(results, delivery)) {
+        if (await recordIdentifiedDeliveryResult(delivery)) {
           firstMessageId ??= delivery.messageId;
           lastMessageId = delivery.messageId;
         }
@@ -1961,6 +2215,9 @@ async function deliverOutboundPayloadsCore(
         messageId: lastMessageId,
       });
     } catch (err) {
+      // A rejected adapter has no final return to reconcile with its progress
+      // results. Keep the results, but never match them to a later payload.
+      reportedResults = [];
       recordPayloadOutcome({
         index: payloadIndex,
         status: "failed",
@@ -1985,17 +2242,14 @@ async function deliverOutboundPayloadsCore(
       params.onError?.(err, payloadSummary);
     }
   }
-  if (params.mirror && results.length > 0) {
-    const deliveredMirror =
-      deliveredMirrorPayloads.length > 0
-        ? {
-            text: deliveredMirrorPayloads
-              .map((payload) => payload.hookContent ?? payload.text)
-              .filter((text) => text.trim())
-              .join("\n"),
-            mediaUrls: deliveredMirrorPayloads.flatMap((payload) => payload.mediaUrls),
-          }
-        : params.mirror;
+  if (params.mirror && deliveredMirrorPayloads.length > 0) {
+    const deliveredMirror = {
+      text: deliveredMirrorPayloads
+        .map((payload) => payload.hookContent ?? payload.text)
+        .filter((text) => text.trim())
+        .join("\n"),
+      mediaUrls: deliveredMirrorPayloads.flatMap((payload) => payload.mediaUrls),
+    };
     const mirrorText = resolveMirroredTranscriptText({
       text: deliveredMirror.text,
       mediaUrls: deliveredMirror.mediaUrls,
