@@ -19,6 +19,7 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { sleep } from "./utils/sleep.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
   resolveWorkspaceTemplateDir,
@@ -245,19 +246,52 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
   }
 }
 
-async function fileContentDiffersFromTemplate(
+// Transient filesystem errors that can surface when another process is
+// swapping a workspace bootstrap file. EAGAIN/EINTR are retryable; the
+// "Unknown system error -11"/"-4" forms appear on some macOS/networked
+// filesystem setups. ENOENT is handled by callers as "file absent".
+function isTransientFsError(error: unknown): boolean {
+  const anyErr = error as { code?: string; errno?: number; message?: string };
+  if (anyErr.code === "EAGAIN" || anyErr.code === "EINTR") {
+    return true;
+  }
+  if (anyErr.errno === -11 || anyErr.errno === -4) {
+    return true;
+  }
+  const message = anyErr.message ?? "";
+  return /Unknown system error -11/.test(message) || /system error -4\b/.test(message);
+}
+
+/** @internal Exported for tests that need to exercise transient FS retry behavior directly. */
+export async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
 ): Promise<boolean> {
-  try {
-    return (await fs.readFile(filePath, "utf-8")) !== template;
-  } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
+  // A few short retries absorb transient EAGAIN/EINTR observed when another
+  // process is swapping the file (heartbeat bootstrap on macOS; see #99994).
+  // On a clean read we return immediately; only transient errors retry.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return (await fs.readFile(filePath, "utf-8")) !== template;
+    } catch (err) {
+      const anyErr = err as { code?: string };
+      if (anyErr.code === "ENOENT") {
+        return false;
+      }
+      if (attempt < 2 && isTransientFsError(err)) {
+        await sleep(50);
+        continue;
+      }
+      if (isTransientFsError(err)) {
+        // Exhausted retries on a transient error: treat as "no difference
+        // detected" so the caller does not rewrite a file we could not read.
+        return false;
+      }
       throw err;
     }
-    return false;
   }
+  // Unreachable; satisfies the type checker for the exhausted-loop path.
+  return false;
 }
 
 async function hasWorkspaceUserContentEvidence(
