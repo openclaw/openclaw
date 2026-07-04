@@ -94,6 +94,10 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import {
+  buildEmptyInteractiveReplyFallbackPayload,
+  hasCommittedSourceReplyDeliveryEvidence,
+} from "./empty-interactive-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -241,25 +245,6 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
 }
 
-function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
-  if (!Array.isArray(value)) {
-    return false;
-  }
-  return value.some((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const record = entry as { text?: unknown; mediaUrls?: unknown };
-    if ("text" in record || "mediaUrls" in record) {
-      return (
-        (typeof record.text === "string" && record.text.trim().length > 0) ||
-        hasNonEmptyStringArray(record.mediaUrls)
-      );
-    }
-    return true;
-  });
-}
-
 function hasSuccessfulSideEffectDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
@@ -290,7 +275,9 @@ function hasSuccessfulSourceReplyDelivery(params: {
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
-    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+    hasCommittedSourceReplyDeliveryEvidence({
+      messagingToolSentTargets: params.messagingToolSentTargets,
+    })
   );
 }
 
@@ -1995,6 +1982,28 @@ export async function runReplyAgent(params: {
     ) {
       await opts.onObservedReplyDelivery?.();
     }
+    const buildEmptyInteractiveReplyFallbackIfNeeded = async (): Promise<
+      ReplyPayload | undefined
+    > => {
+      const payload = buildEmptyInteractiveReplyFallbackPayload({
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery:
+          successfulSideEffectDelivery || committedMessagingToolSourceReplyDelivery,
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+        sourceReplyDeliveryMode:
+          opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode,
+      });
+      if (!payload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error("empty interactive reply produced no visible payload"),
+      );
+      await signalTypingIfNeeded([payload], typingSignals);
+      return returnWithQueuedFollowupDrain(payload);
+    };
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
@@ -2094,6 +2103,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const emptyInteractiveFallbackPayload = await buildEmptyInteractiveReplyFallbackIfNeeded();
+      if (emptyInteractiveFallbackPayload) {
+        return emptyInteractiveFallbackPayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2147,6 +2160,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveFallbackPayload = await buildEmptyInteractiveReplyFallbackIfNeeded();
+      if (emptyInteractiveFallbackPayload) {
+        return emptyInteractiveFallbackPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }

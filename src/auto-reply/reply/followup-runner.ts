@@ -79,6 +79,10 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import {
+  buildEmptyInteractiveReplyFallbackPayload,
+  hasCommittedSourceReplyDeliveryEvidence,
+} from "./empty-interactive-reply.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -645,6 +649,8 @@ export function createFollowupRunner(params: {
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
       let fallbackExhausted = false;
+      let didSendCompactionNoticePayload = false;
+      let didObserveRetryingCompaction = false;
       const resolveFollowupCurrentMessageId = () =>
         run.inputProvenance?.kind === "internal_system" &&
         run.inputProvenance.sourceTool === "restart-sentinel"
@@ -680,6 +686,7 @@ export function createFollowupRunner(params: {
           mirror: false,
           runId,
         });
+        didSendCompactionNoticePayload = true;
       };
       const notifyPreflightCompaction = shouldNotifyUserAboutCompaction(runtimeConfig)
         ? async (phase: CompactionNoticePhase) => {
@@ -1252,6 +1259,13 @@ export function createFollowupRunner(params: {
                 onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) => {
                   lifecycleBackstop.note(evt);
+                  if (
+                    evt.stream === "compaction" &&
+                    evt.data?.phase === "end" &&
+                    evt.data?.willRetry === true
+                  ) {
+                    didObserveRetryingCompaction = true;
+                  }
                   return enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({
                       evt,
@@ -1431,8 +1445,48 @@ export function createFollowupRunner(params: {
         });
       }
 
+      const sendEmptyInteractiveFallbackIfNeeded = async (): Promise<boolean> => {
+        const payload = buildEmptyInteractiveReplyFallbackPayload({
+          isHeartbeat: opts?.isHeartbeat === true,
+          silentExpected: run.silentExpected,
+          allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
+          sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+          hasSuccessfulSideEffectDelivery:
+            hasCommittedSourceReplyDeliveryEvidence({
+              didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+              messagingToolSentTexts: runResult.messagingToolSentTexts,
+              messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+              messagingToolSentTargets: runResult.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+            }) ||
+            runResult.didSendDeterministicApprovalPrompt === true ||
+            (runResult.successfulCronAdds ?? 0) > 0 ||
+            didSendCompactionNoticePayload ||
+            didObserveRetryingCompaction,
+        });
+        if (!payload) {
+          return false;
+        }
+        replyOperation?.fail(
+          "run_failed",
+          new Error("empty interactive follow-up produced no visible payload"),
+        );
+        await sendFollowupPayloads(
+          [payload],
+          effectiveQueued,
+          {
+            provider: providerUsed,
+            modelId: modelUsed,
+          },
+          { runId },
+        );
+        return true;
+      };
+
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
+        await sendEmptyInteractiveFallbackIfNeeded();
         return;
       }
       const finalPayloads = resolveFollowupDeliveryPayloads({
@@ -1451,6 +1505,7 @@ export function createFollowupRunner(params: {
       });
 
       if (finalPayloads.length === 0) {
+        await sendEmptyInteractiveFallbackIfNeeded();
         return;
       }
 

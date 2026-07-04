@@ -11,6 +11,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { EMPTY_INTERACTIVE_REPLY_FALLBACK_TEXT } from "./empty-interactive-reply.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -4565,6 +4566,82 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const runArg = requireMockCallArg(runEmbeddedAgentMock, 0);
     expect(runArg.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(runArg.forceMessageTool).toBe(true);
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("routes a visible fallback when an interactive followup completes empty", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0)).toMatchObject({
+      channel: "discord",
+      to: "channel:C1",
+      replyKind: "final",
+      payload: {
+        text: EMPTY_INTERACTIVE_REPLY_FALLBACK_TEXT,
+        isError: true,
+      },
+    });
+  });
+
+  it("does not emit the empty fallback after a deterministic approval prompt", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didSendDeterministicApprovalPrompt: true,
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not emit the empty fallback after successful cron delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        successfulCronAdds: 1,
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps message-tool-only empty followup completions silent", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
   });
