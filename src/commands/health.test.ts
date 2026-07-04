@@ -185,6 +185,26 @@ describe("healthCommand", () => {
     expect(parsed.sessions.count).toBe(1);
   });
 
+  it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    snapshot.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: Date.now() - 7_200_000 }],
+    };
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+    expect(output).toContain(
+      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago)",
+    );
+  });
+
   it("prints the rich text summary and verbose gateway details", async () => {
     const recent = [
       { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },

@@ -1,7 +1,7 @@
 // Validates SQLite delivery queue inflate guards against corrupted entry_json.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   countFailedDeliveryQueueEntries,
@@ -195,18 +195,27 @@ describe("countFailedDeliveryQueueEntries", () => {
     enqueue("outbound", "dead-2", 2_000);
     enqueue("outbound", "still-pending", 3_000);
     enqueue("session", "dead-3", 4_000);
-    moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
-    moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
-    moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(50_000);
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
+      vi.setSystemTime(60_000);
+      moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
+      vi.setSystemTime(70_000);
+      moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const counts = countFailedDeliveryQueueEntries(stateDir);
 
     expect(counts).toHaveLength(2);
     const outbound = counts.find((queue) => queue.queueName === "outbound");
     expect(outbound?.count).toBe(2);
-    expect(outbound?.oldestFailedAt).toBeTypeOf("number");
+    expect(outbound?.oldestFailedAt).toBe(50_000);
     const session = counts.find((queue) => queue.queueName === "session");
     expect(session?.count).toBe(1);
+    expect(session?.oldestFailedAt).toBe(70_000);
     expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
       "still-pending",
     ]);

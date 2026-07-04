@@ -260,7 +260,8 @@ function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefin
       return entry;
     });
     return failed.length > 0 ? { failed } : undefined;
-  } catch {
+  } catch (error) {
+    debugHealth("delivery queue health read failed", error);
     return undefined;
   }
 }

@@ -552,6 +552,39 @@ describe("getHealthSnapshot", () => {
     ]);
   });
 
+  it("includes dead-lettered delivery queue entries in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    setActivePluginRegistry(createTestRegistry([]));
+    const tmpStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-dq-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpStateDir;
+    try {
+      const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
+        await import("../infra/delivery-queue-sqlite.js");
+      const clean = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+      expect(clean.deliveryQueues).toBeUndefined();
+
+      upsertDeliveryQueueEntry({
+        queueName: "outbound",
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+      });
+      moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+
+      const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+      expect(snap.deliveryQueues?.failed).toEqual([
+        { queueName: "outbound", count: 1, oldestFailedAt: expect.any(Number) },
+      ]);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tmpStateDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips telegram probe when not configured", async () => {
     testConfig = { session: { store: "/tmp/x" } };
     testStore = {
