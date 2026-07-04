@@ -12,8 +12,10 @@ import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   isAuthorizedTextSlashCommandTurn,
   isNativeCommandTurn,
+  isTextSlashCommandTurn,
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
+import { normalizeCommandBody, shouldHandleTextCommands } from "../commands-registry.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -23,6 +25,7 @@ import {
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
+import { parseInlineDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
@@ -42,6 +45,14 @@ const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
+
+type TextSlashFastPathIntent =
+  | { kind: "status"; commandBodyNormalized: string }
+  | { kind: "directive"; commandBodyNormalized: string }
+  | { kind: "command"; commandBodyNormalized: string };
+
+const TEXT_FAST_PATH_DIRECTIVE_COMMANDS = new Set(["think", "verbose", "fast", "reasoning"]);
+const TEXT_FAST_PATH_COMMAND_HANDLERS = new Set(["activation", "send", "usage", "whoami"]);
 
 function loadCommandsRuntime() {
   return commandsRuntimeLoader.load();
@@ -67,6 +78,25 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
   return normalizeOptionalString(match?.[1])?.toLowerCase();
 }
 
+function resolveSlashCommandName(commandBodyNormalized: string): string | undefined {
+  const match = commandBodyNormalized.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  return normalizeOptionalString(match?.[1])?.toLowerCase();
+}
+
+function resolveTextCommandBody(ctx: MsgContext): string | undefined {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (!isTextSlashCommandTurn(commandTurn)) {
+    return undefined;
+  }
+  const commandText = stripStructuralPrefixes(
+    commandTurn.body ?? ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
+  ).trim();
+  if (!commandText.startsWith("/") || commandText.includes("\n")) {
+    return undefined;
+  }
+  return normalizeCommandBody(commandText, { botUsername: ctx.BotUsername });
+}
+
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
   const commandName = resolveNativeSlashCommandName(ctx);
@@ -77,6 +107,96 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
     (isNativeCommandTurn(commandTurn) ||
       shouldRunInternalTextSlashCommandFastPath(ctx, commandTurn, commandName)),
   );
+}
+
+function hasOnlyTextFastPathDirectives(directives: InlineDirectives): boolean {
+  const hasAllowedDirective =
+    directives.hasThinkDirective ||
+    directives.hasVerboseDirective ||
+    directives.hasFastDirective ||
+    directives.hasReasoningDirective;
+  if (!hasAllowedDirective) {
+    return false;
+  }
+  return (
+    !directives.hasTraceDirective &&
+    !directives.hasElevatedDirective &&
+    !directives.hasExecDirective &&
+    !directives.hasStatusDirective &&
+    !directives.hasModelDirective &&
+    !directives.hasQueueDirective &&
+    directives.cleaned.trim().length === 0
+  );
+}
+
+function isTextFastPathHandlerCommand(commandName: string, commandBodyNormalized: string): boolean {
+  switch (commandName) {
+    case "activation":
+      return /^\/activation(?:\s+[a-zA-Z]+)?$/i.test(commandBodyNormalized);
+    case "send":
+      return /^\/send(?:\s+[a-zA-Z]+)?$/i.test(commandBodyNormalized);
+    case "usage":
+      return /^\/usage(?:\s+(?:off|on|tokens?|tok|minimal|min|full|session|cost|disable|disabled|enable|enabled|false|true|yes|no|0|1))?$/i.test(
+        commandBodyNormalized,
+      );
+    case "whoami":
+      return commandBodyNormalized === "/whoami";
+    default:
+      return false;
+  }
+}
+
+function resolveTextSlashFastPathIntent(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}): TextSlashFastPathIntent | undefined {
+  if (
+    !shouldHandleTextCommands({
+      cfg: params.cfg,
+      surface: params.ctx.Surface ?? params.ctx.Provider ?? "",
+      commandSource: params.ctx.CommandSource,
+    })
+  ) {
+    return undefined;
+  }
+
+  const commandBodyNormalized = resolveTextCommandBody(params.ctx);
+  if (!commandBodyNormalized) {
+    return undefined;
+  }
+  const commandName = resolveSlashCommandName(commandBodyNormalized);
+  if (!commandName) {
+    return undefined;
+  }
+
+  if (commandName === "status") {
+    const directives = parseInlineDirectives(commandBodyNormalized, {
+      allowStatusDirective: true,
+    });
+    if (directives.hasStatusDirective && directives.cleaned.trim().length === 0) {
+      return { kind: "status", commandBodyNormalized };
+    }
+    return undefined;
+  }
+
+  if (TEXT_FAST_PATH_DIRECTIVE_COMMANDS.has(commandName)) {
+    const directives = parseInlineDirectives(commandBodyNormalized, {
+      allowStatusDirective: false,
+    });
+    if (hasOnlyTextFastPathDirectives(directives)) {
+      return { kind: "directive", commandBodyNormalized };
+    }
+    return undefined;
+  }
+
+  if (
+    TEXT_FAST_PATH_COMMAND_HANDLERS.has(commandName) &&
+    isTextFastPathHandlerCommand(commandName, commandBodyNormalized)
+  ) {
+    return { kind: "command", commandBodyNormalized };
+  }
+
+  return undefined;
 }
 
 function shouldRunInternalTextSlashCommandFastPath(
@@ -127,7 +247,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 }): Promise<
   { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined } | { handled: false }
 > {
-  if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
+  const isNativeSlashFastPath = shouldRunNativeSlashCommandFastPath(params.ctx);
+  const textFastPathIntent = resolveTextSlashFastPathIntent({
+    ctx: params.ctx,
+    cfg: params.cfg,
+  });
+  if (!isNativeSlashFastPath && !textFastPathIntent) {
     return { handled: false };
   }
 
@@ -166,15 +291,20 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionStore[sessionState.sessionKey] = persistedInitialEntry;
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
+  const triggerBodyNormalized =
+    textFastPathIntent?.commandBodyNormalized ?? sessionState.triggerBodyNormalized;
   const command = buildCommandContext({
     ctx: params.ctx,
     cfg: params.cfg,
     agentId: params.agentId,
     sessionKey: sessionState.sessionKey,
     isGroup: sessionState.isGroup,
-    triggerBodyNormalized: sessionState.triggerBodyNormalized,
+    triggerBodyNormalized,
     commandAuthorized: params.commandAuthorized,
   });
+  if (textFastPathIntent && !command.isAuthorizedSender) {
+    return { handled: true, reply: undefined };
+  }
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
@@ -226,6 +356,101 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     });
     return loadedSkillCommands;
   };
+
+  if (textFastPathIntent?.kind === "command") {
+    const commandResult = await (
+      await loadCommandsRuntime()
+    ).handleCommands({
+      ctx: sessionState.sessionCtx,
+      rootCtx: params.ctx,
+      cfg: params.cfg,
+      command,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      directives: clearInlineDirectives(textFastPathIntent.commandBodyNormalized),
+      elevated: {
+        enabled: false,
+        allowed: false,
+        failures: [],
+      },
+      sessionEntry: sessionState.sessionEntry,
+      previousSessionEntry: sessionState.previousSessionEntry,
+      sessionStore: sessionState.sessionStore,
+      sessionKey: sessionState.sessionKey,
+      storePath: sessionState.storePath,
+      sessionScope: sessionState.sessionScope,
+      workspaceDir: params.workspaceDir,
+      opts: params.opts,
+      defaultGroupActivation: () => "always",
+      resolvedThinkLevel: undefined,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolvedElevatedLevel: "off",
+      blockReplyChunking: undefined,
+      resolvedBlockStreamingBreak: "text_end",
+      resolveDefaultThinkingLevel: async () => undefined,
+      provider: params.provider,
+      model: params.model,
+      contextTokens: params.agentCfg?.contextTokens ?? 0,
+      isGroup: sessionState.isGroup,
+      loadSkillCommands: async () => [],
+      typing: params.typing,
+    });
+    const commandSessionMetadataChanges = takeCommandSessionMetadataChangesFromTargets([
+      sessionState.sessionCtx,
+      params.ctx,
+    ]);
+    if (commandSessionMetadataChanges) {
+      (params.opts as InternalGetReplyOptions | undefined)?.onSessionMetadataChanges?.(
+        commandSessionMetadataChanges,
+      );
+    }
+    if (!commandResult.shouldContinue) {
+      params.typing.cleanup();
+      return { handled: true, reply: markCommandReplyForDelivery(commandResult.reply) };
+    }
+    return { handled: false };
+  }
+
+  if (textFastPathIntent?.kind === "directive") {
+    const directiveResult = await resolveReplyDirectives({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      agentCfg: params.agentCfg,
+      sessionCtx: sessionState.sessionCtx,
+      sessionEntry: sessionState.sessionEntry,
+      sessionStore: sessionState.sessionStore,
+      sessionKey: sessionState.sessionKey,
+      storePath: sessionState.storePath,
+      sessionScope: sessionState.sessionScope,
+      groupResolution: sessionState.groupResolution,
+      isGroup: sessionState.isGroup,
+      triggerBodyNormalized,
+      resetTriggered: false,
+      commandAuthorized: params.commandAuthorized,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+      aliasIndex: params.aliasIndex,
+      provider: params.provider,
+      model: params.model,
+      hasResolvedHeartbeatModelOverride: false,
+      typing: params.typing,
+      opts: params.opts,
+      skillFilter: params.skillFilter,
+    });
+    if (directiveResult.kind === "reply") {
+      params.typing.cleanup();
+      return { handled: true, reply: markCommandReplyForDelivery(directiveResult.reply) };
+    }
+    return { handled: false };
+  }
+
+  if (!isNativeSlashFastPath) {
+    return { handled: false };
+  }
 
   const commandResult = await (
     await loadCommandsRuntime()

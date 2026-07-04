@@ -3,6 +3,7 @@ import {
   buildChannelInboundEventContext,
   formatInboundMediaUnavailableText,
   toInboundMediaFacts,
+  type CommandTurnContext,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -1165,6 +1166,23 @@ export async function handleFeishuMessage(params: {
               })
             ).commandAccess.authorized
       : undefined;
+    const isTextSlashCommandTurn = core.channel.commands.isControlCommandMessage(
+      effectiveCommandProbeBody,
+      effectiveCfg,
+    );
+    const commandTurn: CommandTurnContext = isTextSlashCommandTurn
+      ? {
+          kind: "text-slash",
+          source: "text",
+          authorized: Boolean(commandAuthorized),
+          body: effectiveCommandProbeBody,
+        }
+      : {
+          kind: "normal",
+          source: "message",
+          authorized: false,
+          body: agentFacingContent,
+        };
 
     const isTopicSessionForThread =
       isGroup &&
@@ -1463,6 +1481,7 @@ export async function handleFeishuMessage(params: {
             authorized: commandAuthorized,
           },
         },
+        commandTurn,
         extra: {
           RootMessageId: ctx.rootId,
           Transcript: audioTranscript,

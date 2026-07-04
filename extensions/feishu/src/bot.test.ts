@@ -192,6 +192,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         withReplyDispatcher: withReplyDispatcherMock as never,
       },
       commands: {
+        isControlCommandMessage: vi.fn(() => false),
         shouldComputeCommandAuthorized: vi.fn(() => false),
         resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
       },
@@ -1082,6 +1083,9 @@ describe("handleFeishuMessage command authorization", () => {
             withReplyDispatcher: mockWithReplyDispatcher as never,
           },
           commands: {
+            isControlCommandMessage: vi.fn(
+              (body?: string) => typeof body === "string" && body.trim().startsWith("/"),
+            ),
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
@@ -1146,6 +1150,94 @@ describe("handleFeishuMessage command authorization", () => {
       BodyForCommands: "/compact",
       RawBody: "/compact",
       MessageSid: "msg-compact-command",
+    });
+  });
+
+  it("marks authorized Feishu text slash commands as text command turns", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-admin"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-admin",
+        },
+      },
+      message: {
+        message_id: "msg-text-command-turn",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "/status" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const context = mockCallArg<{
+      CommandAuthorized?: boolean;
+      CommandBody?: string;
+      CommandTurn?: unknown;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.CommandBody).toBe("/status");
+    expect(context.CommandAuthorized).toBe(true);
+    expect(context.CommandTurn).toEqual({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      body: "/status",
+    });
+  });
+
+  it("does not mark inline Feishu command tokens as text command turns", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["ou-admin"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-admin",
+        },
+      },
+      message: {
+        message_id: "msg-inline-command-token",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "please check /status" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const context = mockCallArg<{
+      CommandAuthorized?: boolean;
+      CommandBody?: string;
+      CommandTurn?: unknown;
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.CommandBody).toBe("please check /status");
+    expect(context.CommandAuthorized).toBe(true);
+    expect(context.CommandTurn).toEqual({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+      body: "please check /status",
     });
   });
 

@@ -517,6 +517,170 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
 
+  it("handles authorized text /status before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-status-fast-"));
+    const sessionKey = "agent:yuantai:feishu:dm:ou-user";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          workspace: path.join(home, "workspace"),
+        },
+        list: [
+          {
+            id: "yuantai",
+            model: "openai/gpt-5.5",
+          },
+        ],
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        BodyForCommands: "/status",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          body: "/status",
+        },
+        SessionKey: sessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
+      throw new Error("expected status reply text");
+    }
+    expect(reply.text).toContain("OpenClaw");
+    expect(reply.text).toContain("Model: openai/gpt-5.5");
+    expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("handles authorized text local directives before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-directive-fast-"));
+    const sessionKey = "agent:yuantai:feishu:dm:ou-user";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    mocks.resolveReplyDirectives.mockResolvedValueOnce({
+      kind: "reply",
+      reply: { text: "Thinking level set to medium." },
+    });
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        Body: "/thinking medium",
+        BodyForAgent: "/thinking medium",
+        RawBody: "/thinking medium",
+        CommandBody: "/thinking medium",
+        BodyForCommands: "/thinking medium",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          body: "/thinking medium",
+        },
+        SessionKey: sessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(reply).toMatchObject({ text: "Thinking level set to medium." });
+    if (!reply || Array.isArray(reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    const directiveParams = requireDirectiveParams();
+    expect(directiveParams.sessionKey).toBe(sessionKey);
+    const directiveCall = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
+      | { triggerBodyNormalized?: string }
+      | undefined;
+    expect(directiveCall?.triggerBodyNormalized).toBe("/think medium");
+  });
+
+  it("handles authorized text local command handlers before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-text-whoami-fast-"));
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      commands: { text: true },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Provider: "feishu",
+        Surface: "feishu",
+        Body: "/id",
+        BodyForAgent: "/id",
+        RawBody: "/id",
+        CommandBody: "/id",
+        BodyForCommands: "/id",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          body: "/id",
+        },
+        SenderId: "ou_test_sender",
+        SessionKey: "agent:yuantai:feishu:dm:ou-user",
+      }),
+      undefined,
+      cfg,
+    );
+
+    if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
+      throw new Error("expected whoami reply text");
+    }
+    expect(reply.text).toContain("Identity");
+    expect(reply.text).toContain("Channel: feishu");
+    expect(reply.text).toContain("User id: ou_test_sender");
+    expect(getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
   it("handles native slash directives before workspace bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-slash-fast-"));
     const targetSessionKey = "agent:main:telegram:123";
