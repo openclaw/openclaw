@@ -163,9 +163,9 @@ describe("openclaw npm publish wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(readFileSync(npmLog, "utf8")).toContain(
-      "publish --access public --tag extended-stable --provenance",
+      "publish --access public --tag extended-stable-candidate-2026-6-11 --provenance",
     );
-    expect(result.stdout).toContain("Resolved publish tag: extended-stable");
+    expect(result.stdout).toContain("Resolved publish tag: extended-stable-candidate-2026-6-11");
   });
 
   it.each([
