@@ -3787,7 +3787,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     try {
       gatewayWorkAdmission = await beginSessionWorkAdmission({
         scope: storePath,
-        identities: [sessionKey, backingSessionId],
+        identities: [...sessionLoadResult.storeKeys, backingSessionId],
         assertAllowed: () => {
           if (context.chatAbortedRuns.has(clientRunId)) {
             return;
@@ -5662,6 +5662,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       cfg,
       storePath,
       entry,
+      storeKeys,
       canonicalKey: sessionKey,
     } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
     const selectedAgent = validateChatSelectedAgent({
@@ -5688,7 +5689,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     try {
       const admission = await beginSessionWorkAdmission({
         scope: storePath,
-        identities: [sessionKey, sessionId],
+        identities: [...storeKeys, sessionId],
         assertAllowed: () => {
           const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
           if (!latestEntry) {
