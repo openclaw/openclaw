@@ -740,6 +740,8 @@ export const doctorHandlers: GatewayRequestHandlers = {
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
       const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
+      // Status reads configured Dreaming workspaces even when Dreaming is
+      // disabled, so existing per-workspace stats and store errors stay visible.
       const configuredWorkspaces = requestedAgentId
         ? workspaceDir
           ? [workspaceDir]

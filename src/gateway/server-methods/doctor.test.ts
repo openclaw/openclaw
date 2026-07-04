@@ -957,6 +957,89 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("reads allowlisted workspace stats when dreaming is disabled", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-allowlist-"));
+    const mainWorkspaceDir = path.join(workspaceRoot, "main");
+    const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
+    loadShortTermPromotionDreamingStats.mockResolvedValueOnce(
+      makeDreamingStats({
+        promotedTotal: 1,
+        promotedEntries: [
+          {
+            key: "memory:memory/2026-04-03.md:1:2",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            snippet: "main allowlisted memory",
+            recallCount: 0,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalSignalCount: 0,
+            lightHits: 0,
+            remHits: 0,
+            phaseHitCount: 0,
+            promotedAt: "2026-04-04T00:00:00.000Z",
+          },
+        ],
+        lastPromotedAt: "2026-04-04T00:00:00.000Z",
+      }),
+    );
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: false,
+                agents: ["main"],
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", workspace: mainWorkspaceDir },
+          { id: "alpha", workspace: alphaWorkspaceDir },
+        ],
+      },
+    } as OpenClawConfig);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
+      agentId === "main" ? mainWorkspaceDir : alphaWorkspaceDir,
+    );
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: mainWorkspaceDir }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    try {
+      await invokeDoctorMemoryStatus(respond);
+
+      const payload = respondPayload(respond);
+      const dreaming = expectRecordFields(payload.dreaming, {
+        enabled: false,
+        agents: ["main"],
+        shortTermCount: 0,
+        promotedTotal: 1,
+      });
+      expectRecordFields((dreaming.promotedEntries as unknown[])[0], {
+        snippet: "main allowlisted memory",
+      });
+      const statWorkspaceDirs = loadShortTermPromotionDreamingStats.mock.calls.map(
+        (call) => (call[0] as { workspaceDir: string }).workspaceDir,
+      );
+      expect(statWorkspaceDirs).toEqual([mainWorkspaceDir]);
+    } finally {
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("does not fall back to the manager workspace when the dreaming agent allowlist is empty after resolution", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
