@@ -165,8 +165,9 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (!hasTerminalLifecycle) {
     return undefined;
   }
-  if (params.entry.status === "failed") {
-    // Failed rows with a present transcript stay reusable for retry/recovery.
+  if (params.entry.status === "failed" || params.entry.status === "done") {
+    // Failed/done rows with a present transcript stay reusable for the next
+    // inbound turn.  failed → retry/recovery; done → successful completion.
     // Callers already rotate failed rows when the transcript is missing.
     return undefined;
   }
