@@ -1476,8 +1476,9 @@ export interface ProviderModelConfig {
   reasoning: boolean;
   /** Maps OpenClaw thinking levels to provider/model-specific values; null marks a level unsupported. */
   thinkingLevelMap?: Model["thinkingLevelMap"];
-  /** Supported input types. */
-  input: ("text" | "image")[];
+  /** Supported input types. Tied to the canonical Model.input contract so provider
+   * catalog refreshes carrying "video"/"audio" stay assignable here (#97048). */
+  input: Model["input"];
   /** Cost per token (for tracking, can be 0). */
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   /** Maximum context window size in tokens. */

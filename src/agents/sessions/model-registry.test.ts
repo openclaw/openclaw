@@ -3,12 +3,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   PLUGIN_MODEL_CATALOG_FILE,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
 } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
+import type { ProviderModelConfig } from "./extensions/index.js";
 import { ModelRegistry } from "./model-registry.js";
 
 const tempDirs: string[] = [];
@@ -210,6 +211,16 @@ describe("ModelRegistry models.json auth", () => {
       "video",
       "audio",
     ]);
+  });
+
+  it("keeps the plugin-facing ProviderModelConfig.input tied to the widened Model.input contract (#97048)", () => {
+    // ProviderModelConfig is the exported session-extension model type plugins
+    // author against; if it narrows below Model.input, catalog shards carrying
+    // "video"/"audio" would type-error at the plugin boundary even though the
+    // registry accepts them at runtime (see the test above).
+    expectTypeOf<ProviderModelConfig["input"]>().toEqualTypeOf<
+      ("text" | "image" | "video" | "audio")[]
+    >();
   });
 
   it("isolates invalid generated plugin catalog shards from valid models", () => {
