@@ -713,6 +713,7 @@ public struct OpenClawChatView: View {
                 role: last.role,
                 content: content,
                 timestamp: last.timestamp,
+                idempotencyKey: last.idempotencyKey,
                 toolCallId: last.toolCallId,
                 toolName: last.toolName,
                 usage: last.usage,

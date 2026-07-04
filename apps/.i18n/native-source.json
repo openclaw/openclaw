@@ -5859,7 +5859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 303,
+      "line": 308,
       "path": "apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift",
       "source": "\\\"\\(trimmed)\\\"",
       "surface": "apple",
@@ -5867,7 +5867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 303,
+      "line": 308,
       "path": "apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift",
       "source": "that request",
       "surface": "apple",
@@ -19787,7 +19787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 880,
+      "line": 881,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Loading chat",
       "surface": "apple",
@@ -19795,7 +19795,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 960,
+      "line": 961,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Dismiss",
       "surface": "apple",

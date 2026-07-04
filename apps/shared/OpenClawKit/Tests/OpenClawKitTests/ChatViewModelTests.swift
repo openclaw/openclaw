@@ -3,16 +3,26 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
-private func chatTextMessage(role: String, text: String, timestamp: Double, contentId: String? = nil) -> AnyCodable {
+private func chatTextMessage(
+    role: String,
+    text: String,
+    timestamp: Double,
+    contentId: String? = nil,
+    idempotencyKey: String? = nil) -> AnyCodable
+{
     var content: [String: Any] = ["type": "text", "text": text]
     if let contentId {
         content["id"] = contentId
     }
-    return AnyCodable([
+    var message: [String: Any] = [
         "role": role,
         "content": [content],
         "timestamp": timestamp,
-    ])
+    ]
+    if let idempotencyKey {
+        message["__openclaw"] = ["idempotencyKey": idempotencyKey]
+    }
+    return AnyCodable(message)
 }
 
 private func chatTextModelMessage(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
@@ -142,6 +152,7 @@ private func makeViewModel(
     modelResponses: [[OpenClawChatModelChoice]] = [],
     commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+    historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
     setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
     resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -149,6 +160,7 @@ private func makeViewModel(
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
     sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
+    sendMessageStatus: String = "ok",
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
@@ -162,6 +174,7 @@ private func makeViewModel(
         modelResponses: modelResponses,
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
+        historyResponseHook: historyResponseHook,
         setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
         resetSessionHook: resetSessionHook,
@@ -169,6 +182,7 @@ private func makeViewModel(
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook,
         sendMessageHook: sendMessageHook,
+        sendMessageStatus: sendMessageStatus,
         waitForRunCompletionHook: waitForRunCompletionHook,
         healthResponses: healthResponses)
     let vm = await MainActor.run {
@@ -392,6 +406,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let modelResponses: [[OpenClawChatModelChoice]]
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
+    private let historyResponseHook:
+        (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)?
     private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
     private let createSessionHook: (@Sendable (String, String?) async throws -> Void)?
     private let resetSessionHook: (@Sendable (String) async throws -> Void)?
@@ -399,6 +415,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
     private let sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)?
+    private let sendMessageStatus: String
     private let waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)?
     private let healthResponses: [Bool]
 
@@ -411,6 +428,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         modelResponses: [[OpenClawChatModelChoice]] = [],
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+        historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
         setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
         resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -418,6 +436,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
         sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
+        sendMessageStatus: String = "ok",
         waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
         healthResponses: [Bool] = [true])
     {
@@ -426,6 +445,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.modelResponses = modelResponses
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
+        self.historyResponseHook = historyResponseHook
         self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
         self.resetSessionHook = resetSessionHook
@@ -433,6 +453,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
         self.sendMessageHook = sendMessageHook
+        self.sendMessageStatus = sendMessageStatus
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -471,6 +492,12 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         if let requestHistoryHook {
             try await requestHistoryHook(sessionKey)
         }
+        if let historyResponseHook {
+            let sentRunIds = await self.sentRunIds()
+            if let response = try await historyResponseHook(sessionKey, idx, sentRunIds) {
+                return response
+            }
+        }
         if idx < self.historyResponses.count {
             return self.historyResponses[idx]
         }
@@ -495,7 +522,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         if let sendMessageHook {
             return try await sendMessageHook(idempotencyKey)
         }
-        return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
+        return OpenClawChatSendResponse(runId: idempotencyKey, status: self.sendMessageStatus)
     }
 
     func abortRun(sessionKey _: String, runId: String) async throws {
@@ -728,6 +755,27 @@ extension TestChatTransportState {
 }
 
 struct ChatViewModelTests {
+    @Test func `keeps distinct idempotent user turns with identical timestamps and content`() async throws {
+        let history = historyPayload(
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same words",
+                    timestamp: 1,
+                    idempotencyKey: "client-a:user"),
+                chatTextMessage(
+                    role: "user",
+                    text: "same words",
+                    timestamp: 1,
+                    idempotencyKey: "client-b:user"),
+            ])
+        let (_, vm) = await makeViewModel(historyResponses: [history])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        #expect(await MainActor.run { vm.messages.count } == 2)
+    }
+
     @Test func `timeline revision advances when visible history changes`() async throws {
         let history = historyPayload(
             sessionId: "revision-session",
@@ -840,7 +888,9 @@ struct ChatViewModelTests {
                     timestamp: Date().timeIntervalSince1970 * 1000),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
@@ -876,7 +926,9 @@ struct ChatViewModelTests {
     @Test func `renders final chat event message when history is stale`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -919,7 +971,8 @@ struct ChatViewModelTests {
                 if count == 2 {
                     await finalRefreshGate.wait()
                 }
-            })
+            },
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -980,7 +1033,8 @@ struct ChatViewModelTests {
                 if count == 2 {
                     await finalRefreshGate.wait()
                 }
-            })
+            },
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -1090,6 +1144,7 @@ struct ChatViewModelTests {
             ])
         let (transport, vm) = await makeViewModel(
             historyResponses: [history1, history2, history3],
+            sendMessageStatus: "pending",
             waitForRunCompletionHook: { _, _ in true })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
@@ -1124,7 +1179,9 @@ struct ChatViewModelTests {
                     text: "completed from lifecycle",
                     timestamp: now + 60000),
             ])
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2, history3])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2, history3],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -1151,7 +1208,9 @@ struct ChatViewModelTests {
     @Test func `pending run blocks second main send`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "first")
@@ -1230,7 +1289,9 @@ struct ChatViewModelTests {
                     timestamp: now + 1),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         try await sendMessageAndEmitFinal(
             transport: transport,
@@ -1253,7 +1314,9 @@ struct ChatViewModelTests {
         let history1 = historyPayload(sessionId: sessionId)
         let history2 = historyPayload(sessionId: sessionId, messages: [])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         try await sendMessageAndEmitFinal(
             transport: transport,
@@ -1281,24 +1344,28 @@ struct ChatViewModelTests {
                     text: "earlier answer",
                     timestamp: now + 1000),
             ])
-        let history2 = historyPayload(
-            sessionId: sessionId,
-            messages: [
-                chatTextMessage(
-                    role: "assistant",
-                    text: "earlier answer",
-                    timestamp: now + 1000),
-                chatTextMessage(
-                    role: "user",
-                    text: "hello from mac webchat",
-                    timestamp: now + 5000),
-                chatTextMessage(
-                    role: "assistant",
-                    text: "final answer",
-                    timestamp: now + 6000),
-            ])
-
-        let (_, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history1],
+            historyResponseHook: { _, index, sentRunIds in
+                guard index == 1, let runId = sentRunIds.last else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "earlier answer",
+                            timestamp: now + 1000),
+                        chatTextMessage(
+                            role: "user",
+                            text: "hello from mac webchat",
+                            timestamp: now + 5000,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "final answer",
+                            timestamp: now + 6000),
+                    ])
+            })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         await sendUserMessage(vm, text: "hello from mac webchat")
 
@@ -1317,24 +1384,64 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test func `preserves local echo when another client sends identical text during refresh`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: sessionId)],
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "same words",
+                            timestamp: now + 5000,
+                            idempotencyKey: "other-client:user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "other client's answer",
+                            timestamp: now + 6000),
+                    ])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm, text: "same words")
+
+        try await waitUntil("foreign identical turn and local echo both survive") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.count(where: { message in
+                        message.role == "user" &&
+                            message.content.compactMap(\.text).joined(separator: "\n") == "same words"
+                    }) == 2
+            }
+        }
+        #expect(await transport.sentRunIds().count == 1)
+    }
+
     @Test func `preserves repeated optimistic user messages with identical content during refresh`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(sessionId: sessionId)
-        let history2 = historyPayload(
-            sessionId: sessionId,
-            messages: [
-                chatTextMessage(
-                    role: "user",
-                    text: "retry",
-                    timestamp: now + 5000),
-                chatTextMessage(
-                    role: "assistant",
-                    text: "first answer",
-                    timestamp: now + 6000),
-            ])
-
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1],
+            historyResponseHook: { _, index, sentRunIds in
+                guard index > 0, let firstRunId = sentRunIds.first else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "retry",
+                            timestamp: now + 5000,
+                            idempotencyKey: "\(firstRunId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "first answer",
+                            timestamp: now + 6000),
+                    ])
+            })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         try await sendMessageAndEmitFinal(
             transport: transport,
@@ -1472,7 +1579,9 @@ struct ChatViewModelTests {
                     timestamp: Date().timeIntervalSince1970 * 1000),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm)
         await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
@@ -1504,7 +1613,9 @@ struct ChatViewModelTests {
                     timestamp: now),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm)
 
         await sendUserMessage(vm)
@@ -1702,7 +1813,9 @@ struct ChatViewModelTests {
 
     @Test func `appends external session assistant message while run pending`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageStatus: "pending")
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
@@ -1749,6 +1862,7 @@ struct ChatViewModelTests {
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
 
         await sendUserMessage(vm, text: "echo me")
+        let runId = try await waitForLastSentRunId(transport)
         try await waitUntil("optimistic user message visible") {
             await MainActor.run {
                 vm.messages.count == 1 && vm.messages.first?.content.first?.text == "echo me"
@@ -1771,7 +1885,8 @@ struct ChatViewModelTests {
                                 fileName: nil,
                                 content: nil),
                         ],
-                        timestamp: Date().timeIntervalSince1970 * 1000 + 5000),
+                        timestamp: Date().timeIntervalSince1970 * 1000 + 5000,
+                        idempotencyKey: "\(runId):user"),
                     messageId: "srv-echo-1",
                     messageSeq: 1)))
 
@@ -1903,7 +2018,9 @@ struct ChatViewModelTests {
             text: "resynced after gap",
             timestamp: now)])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
 
         try await loadAndWaitBootstrap(vm: vm)
 
@@ -3449,7 +3566,8 @@ struct ChatViewModelTests {
                     await staleFallbackGate.wait()
                     _ = await staleFallbackReleasedCount.increment()
                 }
-            })
+            },
+            sendMessageStatus: "pending")
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
@@ -4339,7 +4457,9 @@ struct ChatViewModelTests {
     @Test func `abort requests do not clear pending until aborted event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm)

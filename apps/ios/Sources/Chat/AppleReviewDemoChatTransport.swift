@@ -298,7 +298,12 @@ private actor LocalFixtureChatStore {
 
     func sendMessage(sessionKey _: String, message: String, runId: String) throws -> OpenClawChatSendResponse {
         let now = Date().timeIntervalSince1970 * 1000
-        self.messages.append(Self.message(role: "user", text: message, timestamp: now))
+        self.messages.append(
+            Self.message(
+                role: "user",
+                text: message,
+                timestamp: now,
+                idempotencyKey: "\(runId):user"))
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = trimmed.isEmpty ? "that request" : "\"\(trimmed)\""
         self.messages.append(
@@ -377,7 +382,12 @@ private actor LocalFixtureChatStore {
         }
     }
 
-    private static func message(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
+    private static func message(
+        role: String,
+        text: String,
+        timestamp: Double,
+        idempotencyKey: String? = nil) -> OpenClawChatMessage
+    {
         OpenClawChatMessage(
             role: role,
             content: [
@@ -388,7 +398,8 @@ private actor LocalFixtureChatStore {
                     fileName: nil,
                     content: nil),
             ],
-            timestamp: timestamp)
+            timestamp: timestamp,
+            idempotencyKey: idempotencyKey)
     }
 
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {

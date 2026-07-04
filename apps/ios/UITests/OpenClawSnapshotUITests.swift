@@ -307,9 +307,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-empty-starters")
 
         starter.tap()
-        XCTAssertTrue(
-            self.app?.staticTexts["Summarize the current OpenClaw status and tell me what needs attention."]
-                .waitForExistence(timeout: 5) == true)
+        let sentText = "Summarize the current OpenClaw status and tell me what needs attention."
+        let sentRows = self.app?.staticTexts.matching(NSPredicate(format: "label == %@", sentText))
+        XCTAssertTrue(sentRows?.firstMatch.waitForExistence(timeout: 5) == true)
+        XCTAssertEqual(sentRows?.count, 1)
         XCTAssertTrue(
             self.app?.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
                 .firstMatch.waitForExistence(timeout: 5) == true)

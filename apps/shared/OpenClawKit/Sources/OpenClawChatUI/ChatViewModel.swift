@@ -610,6 +610,7 @@ public final class OpenClawChatViewModel {
             role: message.role,
             content: sanitizedContent,
             timestamp: message.timestamp,
+            idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
             toolName: message.toolName,
             usage: message.usage,
@@ -685,6 +686,11 @@ public final class OpenClawChatViewModel {
 
     private static func normalizedRunID(_ runId: String?) -> String? {
         let trimmed = runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func normalizedIdempotencyKey(_ key: String?) -> String? {
+        let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 
@@ -794,10 +800,10 @@ public final class OpenClawChatViewModel {
     }
 
     private func adoptPendingLocalUserEcho(incoming: OpenClawChatMessage) -> Bool {
-        guard let incomingKey = Self.userRefreshIdentityKey(for: incoming) else { return false }
+        guard let incomingKey = Self.normalizedIdempotencyKey(incoming.idempotencyKey) else { return false }
         guard let matchIndex = messages.lastIndex(where: { existing in
             self.pendingLocalUserEchoMessageIDsByRunID.values.contains(existing.id)
-                && Self.userRefreshIdentityKey(for: existing) == incomingKey
+                && Self.normalizedIdempotencyKey(existing.idempotencyKey) == incomingKey
         }) else {
             return false
         }
@@ -812,6 +818,7 @@ public final class OpenClawChatViewModel {
             role: incoming.role,
             content: incoming.content,
             timestamp: incoming.timestamp ?? existing.timestamp,
+            idempotencyKey: incoming.idempotencyKey,
             toolCallId: incoming.toolCallId,
             toolName: incoming.toolName,
             usage: incoming.usage,
@@ -844,6 +851,7 @@ public final class OpenClawChatViewModel {
             role: incoming.role,
             content: incoming.content,
             timestamp: incoming.timestamp ?? existing.timestamp,
+            idempotencyKey: incoming.idempotencyKey,
             toolCallId: incoming.toolCallId,
             toolName: incoming.toolName,
             usage: incoming.usage,
@@ -890,6 +898,7 @@ public final class OpenClawChatViewModel {
                 role: message.role,
                 content: message.content,
                 timestamp: message.timestamp,
+                idempotencyKey: message.idempotencyKey,
                 toolCallId: message.toolCallId,
                 toolName: message.toolName,
                 usage: message.usage,
@@ -914,6 +923,9 @@ public final class OpenClawChatViewModel {
 
         var reconciled = Self.reconcileMessageIDs(previous: previous, incoming: incoming)
         let incomingIdentityKeys = Set(reconciled.compactMap(Self.messageIdentityKey(for:)))
+        var incomingIdempotencyKeys = Set(reconciled.compactMap { message in
+            Self.normalizedIdempotencyKey(message.idempotencyKey)
+        })
         var remainingIncomingUserRefreshCounts = countKeys(
             reconciled.compactMap(Self.userRefreshIdentityKey(for:)))
 
@@ -939,19 +951,24 @@ public final class OpenClawChatViewModel {
             previous[previous.index(after: index)...]
         } ?? []
 
-        // Pending send IDs own their canonical echo match. Exclude them from the
-        // trailing-row pass so one refresh cannot suppress and then re-add the same row.
+        // Transcript idempotency owns pending-send correlation. Content equality
+        // can otherwise erase another client's identical user turn.
         let pendingLocalUsers = previous.filter { message in
             guard message.role.lowercased() == "user", pendingLocalUserEchoIDs.contains(message.id) else {
                 return false
             }
-            guard let userKey = Self.userRefreshIdentityKey(for: message) else { return true }
-            let remaining = remainingIncomingUserRefreshCounts[userKey] ?? 0
-            if remaining > 0 {
-                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
-                return false
+            guard let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey),
+                  incomingIdempotencyKeys.remove(idempotencyKey) != nil
+            else {
+                return true
             }
-            return true
+            if let userKey = Self.userRefreshIdentityKey(for: message),
+               let remaining = remainingIncomingUserRefreshCounts[userKey],
+               remaining > 0
+            {
+                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
+            }
+            return false
         }
         let trailingLocalUsers = trailingLocalCandidates.filter { message in
             guard message.role.lowercased() == "user" else { return false }
@@ -1007,6 +1024,9 @@ public final class OpenClawChatViewModel {
     }
 
     private static func dedupeKey(for message: OpenClawChatMessage) -> String? {
+        if let idempotencyKey = normalizedIdempotencyKey(message.idempotencyKey) {
+            return "\(message.role)|idempotency|\(idempotencyKey)"
+        }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1323,7 +1343,8 @@ public final class OpenClawChatViewModel {
                 id: userMessageID,
                 role: "user",
                 content: userContent,
-                timestamp: userMessageTimestamp))
+                timestamp: userMessageTimestamp,
+                idempotencyKey: "\(runId):user"))
         self.pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
         self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
 
@@ -2145,6 +2166,7 @@ public final class OpenClawChatViewModel {
             role: message.role,
             content: message.content,
             timestamp: Date().timeIntervalSince1970 * 1000,
+            idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
             toolName: message.toolName,
             usage: message.usage,
