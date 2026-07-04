@@ -91,9 +91,6 @@ function createHost() {
     chatMessages: [],
     chatToolMessages: [],
     chatStream: "" as string | null,
-    logsAutoFollow: false,
-    logsAtBottom: true,
-    logsEntries: [],
     topbarObserver: null,
   };
 }

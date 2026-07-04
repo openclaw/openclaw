@@ -113,7 +113,6 @@ import {
 } from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
-import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
 import {
@@ -655,31 +654,11 @@ export class OpenClawApp extends LitElement {
   @state() debugHealth: HealthSummary | null = null;
   @state() debugModels: ModelCatalogEntry[] = [];
   @state() debugHeartbeat: unknown = null;
-  @state() debugCallMethod = "";
-  @state() debugCallParams = "{}";
-  @state() debugCallResult: string | null = null;
-  @state() debugCallError: string | null = null;
 
   @state() webPushSupported = false;
   @state() webPushPermission: NotificationPermission | "unsupported" = "unsupported";
   @state() webPushSubscribed = false;
   @state() webPushLoading = false;
-
-  @state() logsLoading = false;
-  @state() logsError: string | null = null;
-  @state() logsFile: string | null = null;
-  @state() logsEntries: LogEntry[] = [];
-  @state() logsFilterText = "";
-  @state() logsLevelFilters: Record<LogLevel, boolean> = {
-    ...DEFAULT_LOG_LEVEL_FILTERS,
-  };
-  @state() logsAutoFollow = true;
-  @state() logsTruncated = false;
-  @state() logsCursor: number | null = null;
-  @state() logsLastFetchAt: number | null = null;
-  @state() logsLimit = 500;
-  @state() logsMaxBytes = 250_000;
-  @state() logsAtBottom = true;
 
   client: GatewayBrowserClient | null = null;
   chatScrollFrame: number | null = null;
@@ -691,9 +670,6 @@ export class OpenClawApp extends LitElement {
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;
-  logsPollInterval: number | null = null;
-  debugPollInterval: number | null = null;
-  logsScrollFrame: number | null = null;
   activityScrollFrame: number | null = null;
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();

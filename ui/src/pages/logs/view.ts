@@ -2,7 +2,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import type { LogEntry, LogLevel } from "./data.ts";
+import type { LogEntry, LogLevel } from "./log-lines.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 type ExportFileLabel = "filtered" | "visible";
@@ -58,7 +58,7 @@ export function renderLogs(props: LogsProps) {
   const exportDisplayLabel = t(`logsView.exportLabels.${exportFileLabel}`);
 
   return html`
-    <section class="card card--fill-height">
+    <section class="card logs-card">
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">${t("logsView.title")}</div>

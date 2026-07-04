@@ -57,8 +57,6 @@ function createScrollHost(
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
     settings,
-    logsScrollFrame: null as number | null,
-    logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,
   };
 

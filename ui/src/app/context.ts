@@ -1,5 +1,6 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -31,10 +32,12 @@ export type ApplicationGatewayConnection = {
 export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
+  readonly eventLog: readonly EventLogEntry[];
   connect: (connection?: Partial<ApplicationGatewayConnection>) => void;
   start: () => void;
   stop: () => void;
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
+  subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
   subscribeEvents: (listener: GatewayEventListener) => () => void;
 };
 

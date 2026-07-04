@@ -57,15 +57,12 @@ type SettingsHost = {
   routeId: RouteId;
   connected: boolean;
   chatHasAutoScrolled: boolean;
-  logsAtBottom: boolean;
   eventLog: unknown[];
   eventLogBuffer: unknown[];
   password?: string;
   basePath: string;
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
-  logsPollInterval: number | null;
-  debugPollInterval: number | null;
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
   dreamingStatusLoading: boolean;
@@ -155,7 +152,6 @@ const createHost = (routeId: RouteId): SettingsHost => ({
   routeId,
   connected: false,
   chatHasAutoScrolled: false,
-  logsAtBottom: false,
   eventLog: [],
   eventLogBuffer: [],
   updateComplete: Promise.resolve(),
@@ -163,8 +159,6 @@ const createHost = (routeId: RouteId): SettingsHost => ({
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
-  logsPollInterval: null,
-  debugPollInterval: null,
   pendingGatewayUrl: null,
   pendingGatewayToken: null,
   dreamingStatusLoading: false,
@@ -187,6 +181,10 @@ const createHost = (routeId: RouteId): SettingsHost => ({
 });
 
 describe("app settings", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("re-resolves the active palette when only themeMode changes", () => {
     const host = createHost("chat");
     host.settings.theme = "knot";

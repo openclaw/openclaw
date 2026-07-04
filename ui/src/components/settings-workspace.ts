@@ -72,9 +72,13 @@ export function renderSettingsWorkspace(
   routeId: RouteId,
   navigate: (routeId: RouteId) => void,
   preload?: (routeId: RouteId) => Promise<void> | void,
+  options: { fillHeight?: boolean } = {},
 ) {
+  const className = options.fillHeight
+    ? "settings-workspace settings-workspace--fill-height"
+    : "settings-workspace";
   return html`
-    <section class="settings-workspace">
+    <section class=${className}>
       ${renderSettingsSectionNav(basePath, routeId, navigate, preload)}
       <div class="settings-workspace__body">${body}</div>
     </section>

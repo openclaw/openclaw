@@ -1,4 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { EventLogEntry } from "../api/event-log.ts";
 import {
   GatewayBrowserClient,
   type GatewayEventListener,
@@ -224,6 +225,8 @@ function createApplicationGateway(
   let client: GatewayBrowserClient | null = null;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
+  const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
+  let eventLog: EventLogEntry[] = [];
   let stopClientEvents: (() => void) | undefined;
   const syncClientEvents = (nextClient: GatewayBrowserClient | null) => {
     stopClientEvents?.();
@@ -246,6 +249,18 @@ function createApplicationGateway(
   const setSnapshot = (next: ApplicationGatewaySnapshot) => {
     snapshot = next;
     notify();
+  };
+  const publishEventLog = () => {
+    for (const listener of eventLogListeners) {
+      listener(eventLog);
+    }
+  };
+  const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
+    eventLog = [{ ts: Date.now(), event: event.event, payload: event.payload }, ...eventLog].slice(
+      0,
+      250,
+    );
+    publishEventLog();
   };
 
   const connect = (overrides: Partial<ApplicationGatewayConnection> = {}) => {
@@ -323,6 +338,7 @@ function createApplicationGateway(
         });
         connect();
       },
+      onEvent: recordGatewayEvent,
     });
     client = nextClient;
     syncClientEvents(nextClient);
@@ -344,6 +360,9 @@ function createApplicationGateway(
     get connection() {
       return connection;
     },
+    get eventLog() {
+      return eventLog;
+    },
     connect,
     start: () => connect(),
     stop: () => {
@@ -363,6 +382,10 @@ function createApplicationGateway(
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    subscribeEventLog: (listener) => {
+      eventLogListeners.add(listener);
+      return () => eventLogListeners.delete(listener);
     },
     subscribeEvents: (listener) => {
       eventListeners.add(listener);

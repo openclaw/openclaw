@@ -12,7 +12,7 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
-import { loadDebug } from "../debug/data.ts";
+import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { loadPresence } from "../instances/data.ts";
 import { loadUsage } from "../usage/data.ts";
 
@@ -40,7 +40,7 @@ export async function loadOverview(
 
   const secondaryStartedAtMs = controlUiNowMs();
   void Promise.allSettled([
-    loadDebug(app),
+    loadOverviewDebug(app),
     loadSkills(app),
     isCurrentOverviewRefresh() ? loadUsage(app) : Promise.resolve(),
     loadOverviewLogs(app),
@@ -62,6 +62,22 @@ export async function loadOverview(
       { console: false },
     );
   });
+}
+
+async function loadOverviewDebug(host: SettingsAppHost) {
+  if (!host.client || !host.connected || host.debugLoading) {
+    return;
+  }
+  host.debugLoading = true;
+  try {
+    const result = await loadGatewayDiagnostics(host.client);
+    host.debugStatus = result.status;
+    host.debugHealth = result.health;
+    host.debugModels = result.models;
+    host.debugHeartbeat = result.heartbeat;
+  } finally {
+    host.debugLoading = false;
+  }
 }
 
 async function loadOverviewLogs(host: SettingsAppHost) {

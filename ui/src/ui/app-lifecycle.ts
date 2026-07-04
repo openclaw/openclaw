@@ -6,8 +6,6 @@ import {
   persistChatComposerState,
   restoreChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
-import { stopDebugPolling } from "../pages/debug/polling.ts";
-import { stopLogsPolling } from "../pages/logs/polling.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../pages/workboard/data.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
@@ -69,15 +67,11 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
-  logsAutoFollow: boolean;
-  logsAtBottom: boolean;
-  logsEntries: unknown[];
   activityEntries: unknown[];
   activityAutoFollow: boolean;
   activityAtBottom: boolean;
   chatScrollFrame?: number | null;
   chatScrollTimeout?: number | null;
-  logsScrollFrame?: number | null;
   activityScrollFrame?: number | null;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   controlUiBootstrapReady?: Promise<void> | null;
@@ -183,14 +177,10 @@ export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   appRouter.stop();
   flushPendingChatComposerPersistence(host);
-  stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   stopWorkboardPolling(host);
   stopWorkboardLifecycleRefresh(host);
   cancelHostAnimationFrame(host.chatScrollFrame);
   host.chatScrollFrame = null;
-  cancelHostAnimationFrame(host.logsScrollFrame);
-  host.logsScrollFrame = null;
   cancelHostAnimationFrame(host.activityScrollFrame);
   host.activityScrollFrame = null;
   clearHostTimeout(host.chatScrollTimeout);

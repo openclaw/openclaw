@@ -1,6 +1,6 @@
 // Control UI tests cover logs behavior.
 import { describe, expect, it } from "vitest";
-import { parseLogLine } from "./data.ts";
+import { parseLogLine } from "./log-lines.ts";
 
 describe("parseLogLine", () => {
   it("strips ANSI escape sequences from rendered log fields", () => {

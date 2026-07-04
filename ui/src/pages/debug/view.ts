@@ -11,7 +11,7 @@ export type DebugProps = {
   health: Record<string, unknown> | null;
   models: unknown[];
   heartbeat: unknown;
-  eventLog: EventLogEntry[];
+  eventLog: readonly EventLogEntry[];
   methods: string[];
   callMethod: string;
   callParams: string;

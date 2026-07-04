@@ -16,37 +16,56 @@
   margin-top: 20px;
 }
 
-/* Logs opt into a fill-height chain so the log stream, not the page, owns
-   desktop scrolling. Other settings routes keep the default `.content` scroll. */
-.content:has(> .content--logs) {
-  display: flex;
-  flex-direction: column;
+.content:has(openclaw-logs-page) {
   overflow: hidden;
 }
 
-.content > .content--logs {
+.content:has(openclaw-logs-page) > openclaw-router-outlet {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  box-sizing: border-box;
+  margin-top: 0;
   min-height: 0;
+  height: 100%;
   width: 100%;
-  overflow: hidden;
 }
 
-.content > .content--logs .settings-workspace {
+openclaw-logs-page {
+  display: contents;
+}
+
+.content:has(openclaw-logs-page) .content-header {
+  flex: 0 0 auto;
+}
+
+.settings-workspace--fill-height {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  height: auto;
 }
 
-.content > .content--logs .settings-workspace__body {
+.settings-workspace--fill-height > .settings-section-nav {
+  flex: 0 0 auto;
+}
+
+.settings-workspace--fill-height > .settings-workspace__body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.settings-workspace--fill-height .logs-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height .log-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .settings-section-nav {

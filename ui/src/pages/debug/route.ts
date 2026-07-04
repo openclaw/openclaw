@@ -1,59 +1,12 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
-import type { RouteRenderContext } from "../../app-routes.ts";
-import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { callDebugMethod, loadDebug } from "./data.ts";
-import { startDebugPolling, stopDebugPolling } from "./polling.ts";
-
-type DebugRenderContext = RouteRenderContext;
-type DebugLoadContext = { host: SettingsHost; app: SettingsAppHost };
 
 export const page = definePage({
   id: "debug",
   path: "/debug",
   component: () =>
-    import("./view.ts").then((module) => ({
-      render: ({ state, navigate }: DebugRenderContext) => html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">${titleForRoute("debug")}</div>
-            <div class="page-sub">${subtitleForRoute("debug")}</div>
-          </div>
-        </section>
-        ${renderSettingsWorkspace(
-          state.basePath,
-          module.renderDebug({
-            loading: state.debugLoading,
-            status: state.debugStatus,
-            health: state.debugHealth,
-            models: state.debugModels,
-            heartbeat: state.debugHeartbeat,
-            eventLog: state.eventLog,
-            methods: (state.hello?.features?.methods ?? []).toSorted(),
-            callMethod: state.debugCallMethod,
-            callParams: state.debugCallParams,
-            callResult: state.debugCallResult,
-            callError: state.debugCallError,
-            onCallMethodChange: (next) => (state.debugCallMethod = next),
-            onCallParamsChange: (next) => (state.debugCallParams = next),
-            onRefresh: () => void loadDebug(state),
-            onCall: () => void callDebugMethod(state),
-          }),
-          "debug",
-          navigate,
-        )}
-      `,
+    import("./debug-page.ts").then(() => ({
       header: true,
+      render: () => html`<openclaw-debug-page></openclaw-debug-page>`,
     })),
-  loader: async ({ host, app }: DebugLoadContext) => {
-    await loadDebug(app);
-    host.eventLog = host.eventLogBuffer;
-  },
-  onEnter: ({ host }: DebugLoadContext) => {
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  },
-  onLeave: ({ host }: DebugLoadContext) =>
-    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]),
 });
