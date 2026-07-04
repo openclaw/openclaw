@@ -399,12 +399,14 @@ metadata:
       formulas into system package commands. In Linux containers without
       `brew`, brew-only installers are hidden; use a custom image or install
       the dependency manually.
-    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs.
-      If `go` is missing and `brew` is available on `PATH`, OpenClaw installs Go
-      via Homebrew first and sets `GOBIN` to Homebrew's `bin`. On Linux,
-      OpenClaw can instead use `apt-get` as root or through passwordless `sudo`
-      when the distro's `golang-go` candidate meets the minimum version.
-      Apt metadata is refreshed before the final install candidate is accepted.
+    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs and
+      does not override `GOTOOLCHAIN`. If the configured toolchain cannot satisfy
+      a module's required Go version, onboarding groups the skill with manual Go
+      prerequisites after the install attempt. If `go` is missing and `brew` is
+      available on `PATH`, OpenClaw installs Go via Homebrew first and sets
+      `GOBIN` to Homebrew's `bin`. On Linux, OpenClaw can instead use `apt-get`
+      as root or through passwordless `sudo` when the refreshed `golang-go`
+      candidate meets the minimum version.
     - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
       `extract` (default: auto when archive detected), `stripComponents`,
       `targetDir` (default: `~/.openclaw/tools/<skillKey>`).

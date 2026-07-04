@@ -98,6 +98,21 @@ function expectAptPolicyCall(index: number): void {
   expect(options.env).toEqual({ LC_ALL: "C" });
 }
 
+function expectLocalGoVersionEnvCall(index: number): void {
+  const [argv, options] = commandCallAt(index);
+  expect(argv).toEqual(["go", "env", "GOVERSION"]);
+  expect(options.timeoutMs).toBe(5_000);
+  expect(options.env).toEqual({ GOTOOLCHAIN: "local" });
+}
+
+function mockLocalGoVersion(version = "go1.22.4"): void {
+  runCommandWithTimeoutMock.mockResolvedValueOnce({
+    code: 0,
+    stdout: version,
+    stderr: "",
+  });
+}
+
 function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
   const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
   return fn().finally(() => spy.mockRestore());
@@ -286,11 +301,11 @@ describe("skills-install fallback edge cases", () => {
 
       expect(result.ok).toBe(true);
       const brewInstallCall = commandCallAt(0);
-      const brewPrefixCall = commandCallAt(1);
       expect(brewInstallCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "install", "go"]);
       expect(brewInstallCall?.[1]?.timeoutMs).toBe(300_000);
-      expect(brewPrefixCall?.[0]).toEqual(["/safe/homebrew/bin/brew", "--prefix"]);
-      expect(brewPrefixCall?.[1]?.timeoutMs).toBe(30_000);
+      const brewPrefixCall = commandCallAt(1);
+      expect(brewPrefixCall[0]).toEqual(["/safe/homebrew/bin/brew", "--prefix"]);
+      expect(brewPrefixCall[1].timeoutMs).toBe(30_000);
       const finalCall = commandCallAt(-1);
       expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
       expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
@@ -323,45 +338,10 @@ describe("skills-install fallback edge cases", () => {
   });
 
   describe("resolveInstallerKindReadiness", () => {
-    const usableAptCandidate = {
-      code: 0,
-      stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
-      stderr: "",
-    };
-
-    it("keeps missing-Go recipes ready when apt-get can bootstrap as root", async () => {
-      await withUid(0, async () => {
-        mockAvailableBinaries(["apt-get"]);
-        runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
-
-        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        // Existing usable metadata should not trigger an update or install.
-        expectAptPolicyCall(0);
-        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    it("forces the C locale when parsing apt candidate output", async () => {
-      const envSnapshot = captureEnv(["LC_ALL"]);
-      try {
-        process.env.LC_ALL = "de_DE.UTF-8";
-        await withUid(0, async () => {
-          mockAvailableBinaries(["apt-get"]);
-          runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
-
-          expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-          expectAptPolicyCall(0);
-        });
-      } finally {
-        envSnapshot.restore();
-      }
-    });
-
     it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
       await withUid(1000, async () => {
         mockAvailableBinaries(["apt-get", "sudo"]);
         runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-        runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
         expect(commandCallAt(0)[0]).toEqual([
@@ -377,27 +357,12 @@ describe("skills-install fallback edge cases", () => {
       });
     });
 
-    it("defers empty apt metadata to the policy-approved installer", async () => {
+    it("defers apt candidate validation until the policy-approved refresh", async () => {
       await withUid(0, async () => {
         mockAvailableBinaries(["apt-get"]);
-        runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expectAptPolicyCall(0);
-        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    it("skips missing-Go recipes when the apt candidate is older than 1.21", async () => {
-      await withUid(0, async () => {
-        mockAvailableBinaries(["apt-get"]);
-        runCommandWithTimeoutMock.mockResolvedValueOnce({
-          code: 0,
-          stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.18~0ubuntu2\n",
-          stderr: "",
-        });
-
-        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
       });
     });
 
@@ -450,38 +415,45 @@ describe("skills-install fallback edge cases", () => {
 
     it("keeps usable Go ready without consulting an unrelated Homebrew install", async () => {
       mockAvailableBinaries(["go", "brew"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "go version go1.24.12 linux/amd64\n",
-        stderr: "",
-      });
+      mockLocalGoVersion("go1.24.12");
 
       expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-      expect(commandCallAt(0)[0]).toEqual(["go", "version"]);
+      expectLocalGoVersionEnvCall(0);
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     });
 
     it("skips too-old Go even though the binary exists", async () => {
       mockAvailableBinaries(["go", "brew"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "go version go1.18.1 linux/amd64\n",
-        stderr: "",
-      });
+      mockLocalGoVersion("go1.18.1");
 
       expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+      expectLocalGoVersionEnvCall(0);
     });
 
     it("keeps usable Go ready without consulting brew or apt", async () => {
       mockAvailableBinaries(["go"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 0,
-        stdout: "go version go1.22.4 linux/amd64\n",
-        stderr: "",
-      });
+      mockLocalGoVersion();
 
       expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+      expectLocalGoVersionEnvCall(0);
     });
+
+    it.each(["local", "path", "go1.22.4", "asdf+auto"])(
+      "keeps a supported local compiler ready with GOTOOLCHAIN=%s",
+      async (toolchain) => {
+        const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
+        try {
+          process.env.GOTOOLCHAIN = toolchain;
+          mockAvailableBinaries(["go"]);
+          mockLocalGoVersion();
+
+          expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+          expectLocalGoVersionEnvCall(0);
+        } finally {
+          envSnapshot.restore();
+        }
+      },
+    );
 
     it("mirrors uv and brew fallbacks and passes unknown kinds through", async () => {
       mockAvailableBinaries([]);
@@ -605,6 +577,79 @@ describe("skills-install fallback edge cases", () => {
       ]);
       expectAptPolicyCall(1);
     });
+  });
+
+  it.each([
+    [
+      "a newer module Go requirement",
+      "go: example.com/tool@latest requires go >= 1.24 (running go 1.22; GOTOOLCHAIN=local)",
+    ],
+    ["an invalid toolchain setting", 'go: invalid GOTOOLCHAIN "asdf+auto"'],
+    ["a missing PATH toolchain", 'go: cannot find "go1.24.0" in PATH'],
+  ])("classifies %s as a deferred Go prerequisite", async (_label, stderr) => {
+    mockAvailableBinaries(["go"]);
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr,
+    });
+
+    const result = await installSkill({
+      workspaceDir,
+      skillName: "go-tool-single",
+      installId: "deps",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.skipReason).toBe("go");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(commandCallAt(0)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+  });
+
+  it("keeps ordinary Go install failures as install failures", async () => {
+    mockAvailableBinaries(["go"]);
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "go: example.com/tool@latest: module not found",
+    });
+
+    const result = await installSkill({
+      workspaceDir,
+      skillName: "go-tool-single",
+      installId: "deps",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.skipReason).toBeUndefined();
+  });
+
+  it("does not override a configured fixed toolchain for direct Go installs", async () => {
+    const envSnapshot = captureEnv(["GOTOOLCHAIN"]);
+    try {
+      process.env.GOTOOLCHAIN = "local";
+      mockAvailableBinaries(["go"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "installed",
+        stderr: "",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+      const [argv, options] = commandCallAt(0);
+      expect(argv).toEqual(["go", "install", "example.com/tool@latest"]);
+      expect(options.env).toEqual({ GOBIN: path.join(os.homedir(), ".local", "bin") });
+      expect(options.env).not.toHaveProperty("GOTOOLCHAIN");
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("preserves system uv/python env vars when running uv installs", async () => {

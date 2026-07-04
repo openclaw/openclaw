@@ -343,9 +343,9 @@ async function ensureUvInstalled(params: {
   });
 }
 
-// Auto-install requires Go 1.21+: older toolchains reject newer `go` module
-// directives mid-recipe, which reads as a skill failure instead of a
-// prerequisite gap. installSkill never re-bootstraps over an existing Go.
+// Go 1.21 is the onboarding auto-install baseline. Module-specific toolchain
+// requirements stay with `go install`, which can honor local, path, or automatic
+// switching according to the user's GOTOOLCHAIN setting.
 const MIN_AUTO_GO_MAJOR = 1;
 const MIN_AUTO_GO_MINOR = 21;
 export const MIN_AUTO_GO_VERSION = `${MIN_AUTO_GO_MAJOR}.${MIN_AUTO_GO_MINOR}`;
@@ -355,6 +355,7 @@ const APT_GO_POLICY_ARGV = ["apt-cache", "policy", APT_GO_PACKAGE];
 const APT_GO_UPDATE_ARGV = ["apt-get", "update", "-qq"];
 const APT_GO_INSTALL_ARGV = ["apt-get", "install", "-y", APT_GO_PACKAGE];
 const SUDO_APT_GO_INSTALL_CHECK_ARGV = ["sudo", "-n", "-l", ...APT_GO_INSTALL_ARGV];
+const GO_VERSION_ENV_ARGV = ["go", "env", "GOVERSION"];
 
 type GoVersion = { major: number; minor: number };
 
@@ -541,12 +542,24 @@ function parseGoVersion(output: string): GoVersion | undefined {
 }
 
 async function isGoUsableForAutoInstall(): Promise<boolean> {
-  const result = await runCommandSafely(["go", "version"], { timeoutMs: 5_000 });
-  if (result.code !== 0) {
+  const versionResult = await runCommandSafely(GO_VERSION_ENV_ARGV, {
+    timeoutMs: 5_000,
+    env: { GOTOOLCHAIN: "local" },
+  });
+  if (versionResult.code !== 0) {
     return false;
   }
-  const version = parseGoVersion(`${result.stdout}\n${result.stderr}`);
+  const version = parseGoVersion(versionResult.stdout);
   return version !== undefined && isSupportedGoVersion(version);
+}
+
+function isGoToolchainPrerequisiteFailure(result: SkillInstallResult): boolean {
+  const output = `${result.message}\n${result.stdout}\n${result.stderr}`;
+  return (
+    /requires go >= \S+ \(running go \S+(?:; GOTOOLCHAIN=[^)]+)?\)/i.test(output) ||
+    /invalid GOTOOLCHAIN/i.test(output) ||
+    /cannot find "go[^"]+" in PATH/i.test(output)
+  );
 }
 
 async function canBootstrapGoViaApt(): Promise<boolean> {
@@ -757,7 +770,12 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
-  return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
+  const installResult = await executeInstallCommand({ argv, timeoutMs, env });
+  const normalizedResult =
+    spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
+      ? { ...installResult, skipReason: "go" as const }
+      : installResult;
+  return withWarnings(normalizedResult, warnings);
 }
 
 export const testing = {

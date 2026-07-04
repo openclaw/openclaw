@@ -31,6 +31,12 @@ type OnboardInstallSkill = {
   install: Array<{ kind: string; label: string }>;
 };
 
+type SkippedInstall = {
+  skill: OnboardInstallSkill;
+  reason: SkillInstallSkipReason;
+  detail?: string;
+};
+
 function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
   return HOMEBREW_PROMPT_PLATFORMS.has(platform);
 }
@@ -60,7 +66,7 @@ function formatSkillHint(skill: {
 
 const SKIP_REASON_LABELS = {
   brew: "Homebrew",
-  go: `Go ${MIN_AUTO_GO_VERSION}+`,
+  go: `Go toolchain (${MIN_AUTO_GO_VERSION}+)`,
   uv: "uv",
 } satisfies Record<SkillInstallSkipReason, string>;
 
@@ -70,9 +76,7 @@ function formatSkillNames(names: string[]): string {
   return `${visible.join(", ")}${suffix}`;
 }
 
-function formatSkippedInstallNote(
-  skipped: Array<{ skill: OnboardInstallSkill; reason: SkillInstallSkipReason }>,
-): string {
+function formatSkippedInstallNote(skipped: SkippedInstall[]): string {
   const byReason = new Map<SkillInstallSkipReason, string[]>();
   for (const item of skipped) {
     const names = byReason.get(item.reason) ?? [];
@@ -86,6 +90,9 @@ function formatSkippedInstallNote(
       continue;
     }
     lines.push(`${SKIP_REASON_LABELS[reason]}: ${formatSkillNames(names)}`);
+  }
+  for (const item of skipped.filter((entry) => entry.detail).slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
+    lines.push(`${item.skill.name}: ${item.detail}`);
   }
   lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
   return lines.join("\n");
@@ -202,10 +209,7 @@ export async function setupSkills(
     candidateInstallable.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
     !(await detectBrewOnce());
   const readyInstallable: typeof installable = [];
-  const skippedInstallable: Array<{
-    skill: OnboardInstallSkill;
-    reason: SkillInstallSkipReason;
-  }> = [];
+  const skippedInstallable: SkippedInstall[] = [];
   for (const skill of candidateInstallable) {
     // Onboarding intentionally executes only the primary recipe below. Keep
     // readiness aligned with that recipe instead of silently changing methods.
@@ -277,10 +281,7 @@ export async function setupSkills(
       };
     }
 
-    const deferredSkippedInstallable: Array<{
-      skill: OnboardInstallSkill;
-      reason: SkillInstallSkipReason;
-    }> = [];
+    const deferredSkippedInstallable: SkippedInstall[] = [];
     for (const target of selectedSkills) {
       if (target.install.length === 0) {
         continue;
@@ -312,7 +313,12 @@ export async function setupSkills(
       }
       if (result.skipReason) {
         spin.stop(t("wizard.skills.installSkipped", { name: target.name }));
-        deferredSkippedInstallable.push({ skill: target, reason: result.skipReason });
+        const detail = summarizeInstallFailure(result.message);
+        deferredSkippedInstallable.push({
+          skill: target,
+          reason: result.skipReason,
+          ...(detail ? { detail } : {}),
+        });
         for (const warning of warnings) {
           runtime.log(warning);
         }

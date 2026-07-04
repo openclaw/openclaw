@@ -417,7 +417,7 @@ describe("setupSkills", () => {
         expect.objectContaining({ skillName: "mcporter", installId: "node" }),
       );
       const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
-      expect(manualNote?.message).toContain("Go 1.21+: blogwatcher");
+      expect(manualNote?.message).toContain("Go toolchain (1.21+): blogwatcher");
       expect(manualNote?.message).toContain("uv: nano-pdf");
     });
   });
@@ -435,7 +435,8 @@ describe("setupSkills", () => {
       ]);
       mocks.installSkill.mockResolvedValueOnce({
         ok: false,
-        message: "go not installed",
+        message:
+          "Install failed (exit 1): go: blogwatcher requires go >= 1.24 (running go 1.22; GOTOOLCHAIN=local)",
         stdout: "",
         stderr: "",
         code: null,
@@ -447,7 +448,10 @@ describe("setupSkills", () => {
 
       expect(mocks.installSkill).toHaveBeenCalledTimes(1);
       const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
-      expect(manualNote?.message).toContain("Go 1.21+: blogwatcher");
+      expect(manualNote?.message).toContain("Go toolchain (1.21+): blogwatcher");
+      expect(manualNote?.message).toContain(
+        "blogwatcher: go: blogwatcher requires go >= 1.24 (running go 1.22; GOTOOLCHAIN=local)",
+      );
       expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Docs:"));
     });
   });
