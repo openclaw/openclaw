@@ -250,17 +250,22 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
           expect(result.receipt.platformMessageIds).toEqual(["feishu-text-1"]);
         },
         media: async () => {
+          const onDeliveryResult = vi.fn();
           const result = await adapterSendMedia({
             cfg: emptyConfig,
             to: "chat:chat-1",
             text: "",
             mediaUrl: "https://example.com/image.png",
             accountId: "default",
+            onDeliveryResult,
           });
           expect(sendMediaCall()?.to).toBe("chat:chat-1");
           expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/image.png");
           expect(sendMediaCall()?.accountId).toBe("default");
           expect(result.receipt.platformMessageIds).toEqual(["feishu-media-1"]);
+          expect(onDeliveryResult.mock.calls[0]?.[0]?.receipt.platformMessageIds).toEqual([
+            "feishu-media-1",
+          ]);
         },
       },
     });
@@ -1319,6 +1324,58 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
 
     expect(sendMessageCall()?.text).toBe("caption text");
     expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/song.mp3");
+  });
+
+  it("reports a sent caption before media failure and avoids repeating it in fallback", async () => {
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "caption_msg" })
+      .mockResolvedValueOnce({ messageId: "fallback_msg" });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+    const onDeliveryResult = vi.fn();
+
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "caption text",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "main",
+      onDeliveryResult,
+    });
+
+    expect(sendMessageCall(0)?.text).toBe("caption text");
+    expect(sendMessageCall(1)?.text).toBe("📎 https://example.com/image.png");
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "caption_msg",
+      "fallback_msg",
+    ]);
+    expectFeishuResult(result, "fallback_msg");
+  });
+
+  it("does not resend successful media when delivery progress persistence fails", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "caption_msg" });
+    sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "media_msg" });
+    const onDeliveryResult = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("progress write failed"));
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "caption text",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("progress write failed");
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual([
+      "caption_msg",
+      "media_msg",
+    ]);
   });
 
   it("keeps skipped voice text in the upload failure fallback", async () => {

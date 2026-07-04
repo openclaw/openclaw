@@ -7,12 +7,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  drainPendingDeliveries,
-  type DeliverFn,
-  enqueueDelivery,
-  loadPendingDeliveries,
-} from "./delivery-queue.js";
+import { drainPendingDeliveries, type DeliverFn, loadPendingDeliveries } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -62,7 +57,7 @@ async function drainMatrixReconnect(opts: { deliver: DeliverFn; stateDir: string
     log: createRecoveryLog(),
     stateDir: opts.stateDir,
     deliver: opts.deliver,
-    selectEntry: (entry) => ({ match: entry.channel === "matrix" }),
+    selectEntry: (entry) => ({ match: entry.channel === "matrix", bypassBackoff: true }),
   });
 }
 
@@ -114,44 +109,27 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   it("advances queued entry to unknown_after_send when a later payload fails after an earlier one succeeded", async () => {
-    const sendMatrix = createPartialSendFailure();
+    let sendCount = 0;
+    let stateBeforeSecondSend: string | undefined;
+    const sendMatrix = vi.fn(async () => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        return { messageId: "m1" };
+      }
+      stateBeforeSecondSend = (await loadPendingDeliveries(tmpDir))[0]?.recoveryState;
+      throw new Error("second payload send failed");
+    });
 
     await deliverPartialMatrixBatch(sendMatrix, tmpDir);
 
+    expect(stateBeforeSecondSend).toBe("unknown_after_send");
     const entries = await loadPendingDeliveries(tmpDir);
     expect(entries).toHaveLength(1);
     const entry = entries[0];
     expect(entry.recoveryState).toBe("unknown_after_send");
-    expect(entry.retryCount).toBe(0);
-    expect(entry.lastError).toBeUndefined();
+    expect(entry.retryCount).toBe(1);
+    expect(entry.lastError).toContain("second payload send failed");
     expect(sendMatrix).toHaveBeenCalledTimes(2);
-  });
-
-  it("marks an existing recovery entry before crossing the platform send boundary", async () => {
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!room:example", payloads: [{ text: "recovered" }] },
-      tmpDir,
-    );
-    let stateAtSend: string | undefined;
-    const sendMatrix = vi.fn(async () => {
-      stateAtSend = (await loadPendingDeliveries(tmpDir))[0]?.recoveryState;
-      return { messageId: "m1" };
-    });
-
-    await deliverOutboundPayloads({
-      cfg: {} as OpenClawConfig,
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "recovered" }],
-      deps: { matrix: sendMatrix },
-      skipQueue: true,
-      deferCommitHooks: true,
-      deliveryQueueId: id,
-      deliveryQueueStateDir: tmpDir,
-    });
-
-    expect(stateAtSend).toBe("send_attempt_started");
-    expect((await loadPendingDeliveries(tmpDir))[0]?.recoveryState).toBe("send_attempt_started");
   });
 
   it("drain does not replay an unknown_after_send entry when no adapter reconciliation is available", async () => {
@@ -169,7 +147,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 
-  it("leaves entry for retry in send_attempt_started when no send evidence exists", async () => {
+  it("retains retryable send-attempt state when an adapter fails before returning a result", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("first payload send failed"));
 

@@ -13,6 +13,7 @@ import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/cha
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
+  attachChannelToResult,
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
@@ -454,7 +455,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, onDeliveryResult }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -466,6 +467,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         cfg,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("slack", result));
+            }
+          : undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
     },
@@ -479,6 +485,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       cfg,
+      onDeliveryResult,
     }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
@@ -493,6 +500,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         mediaLocalRoots,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("slack", result));
+            }
+          : undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
     },
