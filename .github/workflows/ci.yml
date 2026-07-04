@@ -288,7 +288,12 @@ jobs:
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
-              { check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" },
+              {
+                check_name: "QA Smoke CI",
+                runtime: "node",
+                task: "qa-smoke-ci",
+                runner: "blacksmith-16vcpu-ubuntu-2404",
+              },
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
@@ -845,7 +850,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -878,7 +883,7 @@ jobs:
               export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
               export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
               export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
-              export NODE_OPTIONS=--max-old-space-size=12288
+              export NODE_OPTIONS=--max-old-space-size=16384
               node scripts/package-openclaw-for-docker.mjs \
                 --output-dir "$package_dir" \
                 --output-name openclaw-current.tgz
