@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { createFindToolDefinition } from "./find.js";
 
@@ -16,15 +16,11 @@ vi.mock("../../utils/tools-manager.js", () => ({
   ensureTool: vi.fn(),
 }));
 
-let tempDir = "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
 
-afterEach(async () => {
+afterEach(() => {
   vi.clearAllMocks();
-  if (tempDir) {
-    await fs.rm(tempDir, { recursive: true, force: true });
-    tempDir = "";
-  }
 });
 
 function createChild(): MockChild {
@@ -56,7 +52,7 @@ it.each([
   { name: "inside a repository", gitBoundary: true, expected: false },
   { name: "outside a repository", gitBoundary: false, expected: true },
 ])("sets --no-require-git only $name", async ({ gitBoundary, expected }) => {
-  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-find-fd-"));
+  const tempDir = tempDirs.make("openclaw-find-fd-");
   const searchPath = path.join(tempDir, "nested");
   await fs.mkdir(searchPath, { recursive: true });
   if (gitBoundary) {
