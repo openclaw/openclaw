@@ -27,6 +27,7 @@ export function handleHelp(): PluginCommandResult {
       "  `status`             show shared-client liveness and recent error context",
       "  `version`            report plugin, running, installed, and required bridge versions",
       "  `threads`            list the active session's claude thread binding",
+      "  `conversations`      list this agent's other real conversations with a bound Claude/GLM thread",
       "  `resume <thread_id>` rotate the active session's binding to a specific thread",
       "",
       "Example: `/claude status`",
@@ -110,6 +111,140 @@ export async function handleThreads(ctx: PluginCommandContext): Promise<PluginCo
     };
   }
   return { text: formatBinding(sessionFile, binding) };
+}
+
+const CONVERSATIONS_LIST_LIMIT = 15;
+
+/**
+ * Session-key segments that mark automation, not a real user-facing
+ * conversation — cron runs, native subagent dispatches, and isolated
+ * heartbeat sessions. Everything else (`:direct:`, `:channel:`, etc.) is a
+ * real channel/DM conversation. Session KEYS already carry this signal for
+ * free (see `agent:<id>:direct:<peer>` vs `agent:<id>:subagent:<uuid>` /
+ * `agent:<id>:cron:<uuid>` / `...:heartbeat`) — no new metadata needed.
+ */
+export function isConversationSessionKey(sessionKey: string): boolean {
+  if (sessionKey.includes(":subagent:") || sessionKey.includes(":cron:")) {
+    return false;
+  }
+  if (sessionKey.endsWith(":heartbeat")) {
+    return false;
+  }
+  return true;
+}
+
+export type ConversationSessionEntry = {
+  sessionKey: string;
+  entry: {
+    sessionId?: string;
+    sessionFile?: string;
+    providerOverride?: string;
+    modelProvider?: string;
+    cliSessionBindings?: Record<string, { sessionId?: string } | undefined>;
+    cliSessionIds?: Record<string, string | undefined>;
+    origin?: { label?: string };
+  };
+};
+
+export type ConversationRow = {
+  label: string;
+  sessionKey: string;
+  binding: ClaudeAppServerBinding;
+};
+
+/**
+ * Filters session entries down to real conversations with a bound
+ * Claude/GLM thread, and resolves each one's binding summary. Takes
+ * `resolveSessionFile`/`readBinding` as params (rather than importing
+ * plugin-sdk/thread-store directly) so this stays unit-testable without a
+ * real session store or filesystem.
+ */
+export async function buildConversationRows(
+  entries: readonly ConversationSessionEntry[],
+  deps: {
+    resolveSessionFile: (entry: ConversationSessionEntry["entry"]) => string | undefined;
+    readBinding: (sessionFile: string) => Promise<ClaudeAppServerBinding | null>;
+  },
+): Promise<{ rows: ConversationRow[]; candidateCount: number }> {
+  const rows: ConversationRow[] = [];
+  let candidateCount = 0;
+  for (const { sessionKey, entry } of entries) {
+    if (!isConversationSessionKey(sessionKey) || !entry.sessionId) {
+      continue;
+    }
+    const provider = entry.providerOverride ?? entry.modelProvider;
+    const bound = provider
+      ? (entry.cliSessionBindings?.[provider]?.sessionId ?? entry.cliSessionIds?.[provider])
+      : undefined;
+    if (!bound) {
+      continue;
+    }
+    candidateCount += 1;
+    const sessionFile = deps.resolveSessionFile(entry);
+    const binding = sessionFile ? await deps.readBinding(sessionFile) : null;
+    if (!binding) {
+      continue;
+    }
+    rows.push({ label: entry.origin?.label ?? sessionKey, sessionKey, binding });
+  }
+  return { rows, candidateCount };
+}
+
+export function formatConversationsList(
+  rows: readonly ConversationRow[],
+  candidateCount: number,
+): string {
+  if (rows.length === 0) {
+    return candidateCount === 0
+      ? "**Claude conversations**\n\nNo other real conversations with a bound Claude/GLM thread found for this agent yet."
+      : "**Claude conversations**\n\nFound conversation sessions bound to a provider, but none have a claude-binding sidecar yet (no turn has completed through the app-server harness for them).";
+  }
+  const sorted = rows.toSorted((a, b) => b.binding.updatedAt - a.binding.updatedAt);
+  const top = sorted.slice(0, CONVERSATIONS_LIST_LIMIT);
+
+  const lines = ["**Claude conversations**", ""];
+  lines.push(
+    `Showing ${top.length} of ${sorted.length} conversation(s) with a bound Claude/GLM thread (use \`/claude resume <thread_id>\` in that conversation to rejoin one):`,
+  );
+  lines.push("");
+  for (const row of top) {
+    lines.push(`- **${row.label}**`);
+    lines.push(`  - Thread: \`${row.binding.threadId}\``);
+    if (row.binding.model) {
+      const providerSuffix = row.binding.modelProvider ? ` (${row.binding.modelProvider})` : "";
+      lines.push(`  - Model: ${row.binding.model}${providerSuffix}`);
+    }
+    if (typeof row.binding.turnCount === "number") {
+      lines.push(`  - Turns: ${row.binding.turnCount}`);
+    }
+    if (row.binding.lastAssistantPreview) {
+      lines.push(`  - Last reply: ${row.binding.lastAssistantPreview}`);
+    }
+    lines.push(`  - Updated: ${new Date(row.binding.updatedAt).toISOString()}`);
+  }
+  if (sorted.length > top.length) {
+    lines.push("", `_${sorted.length - top.length} more not shown._`);
+  }
+  return lines.join("\n");
+}
+
+export async function handleConversations(ctx: PluginCommandContext): Promise<PluginCommandResult> {
+  if (!ctx.sessionKey) {
+    return {
+      text: "**Claude conversations**\n\nNo session key available for this invocation; run `/claude conversations` from an active agent session.",
+    };
+  }
+  const { resolveAgentIdFromSessionKey } = await import("openclaw/plugin-sdk/session-key-runtime");
+  const { listSessionEntries, resolveSessionFilePath } =
+    await import("openclaw/plugin-sdk/session-store-runtime");
+  const agentId = resolveAgentIdFromSessionKey(ctx.sessionKey);
+  const entries = listSessionEntries({ agentId }) as unknown as ConversationSessionEntry[];
+  const { rows, candidateCount } = await buildConversationRows(entries, {
+    resolveSessionFile: (entry) =>
+      entry.sessionId ? resolveSessionFilePath(entry.sessionId, entry, { agentId }) : undefined,
+    readBinding: safeReadBinding,
+  });
+  return { text: formatConversationsList(rows, candidateCount) };
 }
 
 export async function handleResume(

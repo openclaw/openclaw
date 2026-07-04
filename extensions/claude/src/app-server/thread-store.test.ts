@@ -65,6 +65,23 @@ describe("recordClaudeThreadTurnSummary", () => {
     expect(binding?.lastAssistantPreview?.endsWith("…")).toBe(true);
   });
 
+  it("always stamps a fresh updatedAt, even though it read-modify-writes onto an object that already carries the old one", async () => {
+    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_1", cwd: dir });
+    const first = await readClaudeAppServerBinding(sessionFile);
+    const firstUpdatedAt = first?.updatedAt;
+    expect(firstUpdatedAt).toBeDefined();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+    await recordClaudeThreadTurnSummary(sessionFile, { stopReason: "stop" });
+    const second = await readClaudeAppServerBinding(sessionFile);
+    // Before the fix: spreading `...existing` (which carries the OLD
+    // updatedAt) onto the object AFTER the freshly computed `now` clobbered
+    // it back to the stale value, so this would equal firstUpdatedAt.
+    expect(second?.updatedAt).toBeGreaterThan(firstUpdatedAt ?? 0);
+    expect(second?.createdAt).toBe(first?.createdAt);
+  });
+
   it("keeps the previous preview when the new turn's summary omits one", async () => {
     await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_1", cwd: dir });
     await recordClaudeThreadTurnSummary(sessionFile, { assistantPreview: "first reply" });
