@@ -843,8 +843,13 @@ export async function dispatchPendingContinuationWork(params: {
   // can recover the row without startup or unrelated traffic.
   const runtimeConfig = resolveContinuationRuntimeConfig();
   if (!runtimeConfig.enabled) {
-    clearIdleRetryFailureTimer(params.sessionKey);
-    armWorkTimer(params.sessionKey, Date.now() + DISABLED_CONTINUATION_RECHECK_MS);
+    const recheckAt = Date.now() + DISABLED_CONTINUATION_RECHECK_MS;
+    if (params.includeIdleRetry === true || params.includeRunningIdleRetry === true) {
+      armIdleRetryFailureTimer(params.sessionKey, recheckAt);
+    } else {
+      clearIdleRetryFailureTimer(params.sessionKey);
+      armWorkTimer(params.sessionKey, recheckAt);
+    }
     return { dispatched: 0, failed: 0, reaped: 0 };
   }
   const { replyRunRegistry } = await importReplyRunRegistry();

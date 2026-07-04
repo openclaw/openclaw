@@ -17,6 +17,7 @@
 import type { SessionPostCompactionDelegate } from "../config/sessions.js";
 import {
   consumeStagedPostCompactionDelegates as canonicalConsumeStaged,
+  requeueReleasedPostCompactionDelegate as canonicalRequeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate as canonicalStage,
 } from "./continuation/delegate-store.js";
 
@@ -67,9 +68,10 @@ export function stagePostCompactionDelegate(
 
 export function consumeStagedPostCompactionDelegates(
   sessionKey: string,
+  options?: { claimFor?: "release" | "next-seam-persist" },
 ): SessionPostCompactionDelegate[] {
   const now = Date.now();
-  return canonicalConsumeStaged(sessionKey).map((d) => {
+  return canonicalConsumeStaged(sessionKey, options).map((d) => {
     const firstArmedAt = d.firstArmedAt ?? now;
     const delegate: SessionPostCompactionDelegate = {
       task: d.task,
@@ -103,4 +105,10 @@ export function consumeStagedPostCompactionDelegates(
     }
     return delegate;
   });
+}
+
+export function requeueReleasedPostCompactionDelegate(
+  delegate: Pick<SessionPostCompactionDelegate, "flowId" | "expectedRevision" | "task">,
+): boolean {
+  return canonicalRequeueReleasedPostCompactionDelegate(delegate);
 }

@@ -190,6 +190,7 @@ import {
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
   listRecoverableStagedPostCompactionDelegates,
+  requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
 } from "./delegate-store.js";
@@ -2096,6 +2097,52 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(flowId).toBeDefined();
     return flowId as string;
   }
+
+  it("does not recover a next-seam persist claim before the next compaction", async () => {
+    const sessionKey = "agent:main:subagent:pc-next-seam-persist";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    stagePostCompactionDelegate(sessionKey, {
+      task: "rehydrate at the next compaction seam",
+      stagedAt: Date.now(),
+    });
+    const claimed = consumeStagedPostCompactionDelegates(sessionKey, {
+      claimFor: "next-seam-persist",
+    });
+    expect(claimed).toHaveLength(1);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "running" });
+
+    const result = await recoverAndReleaseStagedPostCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "running" });
+  });
+
+  it("requeues a next-seam persist claim on session-store persist failure", async () => {
+    const sessionKey = "agent:main:subagent:pc-next-seam-requeue";
+    stagePostCompactionDelegate(sessionKey, {
+      task: "rehydrate after failed persist",
+      stagedAt: Date.now(),
+    });
+    const claimed = consumeStagedPostCompactionDelegates(sessionKey, {
+      claimFor: "next-seam-persist",
+    });
+    expect(claimed).toHaveLength(1);
+
+    expect(requeueReleasedPostCompactionDelegate(claimed[0]!)).toBe(true);
+
+    const flowId = claimed[0]?.flowId as string;
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "queued" });
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
 
   it("re-dispatches a crash-orphaned running row without a new compaction, finalizing it", async () => {
     const sessionKey = "agent:main:subagent:pc-recover";

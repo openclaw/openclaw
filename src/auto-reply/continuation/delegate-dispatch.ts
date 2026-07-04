@@ -496,7 +496,40 @@ export async function dispatchToolDelegates(params: {
         (hasActiveSubagentRegistryRun(childSessionKey) ||
           (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
       ) {
-        markPendingDelegateSpawnAccepted(delegate, childSessionKey);
+        const acceptedChainState = {
+          currentChainCount: nextHop,
+          chainStartedAt: chainState.chainStartedAt,
+          accumulatedChainTokens: accumulatedTokens,
+          ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
+        };
+        if (params.persistChainState) {
+          try {
+            await params.persistChainState(acceptedChainState);
+          } catch (err) {
+            const errorMessage = formatErrorMessage(err);
+            log.warn(
+              `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
+            );
+            dispatchSpan.setStatus("ERROR", errorMessage);
+            rejected++;
+            continue;
+          }
+        }
+        try {
+          markPendingDelegateSpawnAccepted(
+            delegate,
+            childSessionKey,
+            params.persistChainState ? { requireWriteSuccess: true } : {},
+          );
+        } catch (err) {
+          const errorMessage = formatErrorMessage(err);
+          log.warn(
+            `[continuation:delegate-accept-finalize-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
+          );
+          dispatchSpan.setStatus("ERROR", errorMessage);
+          rejected++;
+          continue;
+        }
         dispatchSpan.setStatus("OK");
         dispatched++;
         currentChainCount = nextHop;
@@ -539,8 +572,41 @@ export async function dispatchToolDelegates(params: {
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
+        const acceptedChainState = {
+          currentChainCount: nextHop,
+          chainStartedAt: chainState.chainStartedAt,
+          accumulatedChainTokens: accumulatedTokens,
+          ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
+        };
+        if (params.persistChainState) {
+          try {
+            await params.persistChainState(acceptedChainState);
+          } catch (err) {
+            const errorMessage = formatErrorMessage(err);
+            log.warn(
+              `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
+            );
+            dispatchSpan.setStatus("ERROR", errorMessage);
+            rejected++;
+            continue;
+          }
+        }
         if (acceptedChildSessionKey) {
-          markPendingDelegateSpawnAccepted(delegate, acceptedChildSessionKey);
+          try {
+            markPendingDelegateSpawnAccepted(
+              delegate,
+              acceptedChildSessionKey,
+              params.persistChainState ? { requireWriteSuccess: true } : {},
+            );
+          } catch (err) {
+            const errorMessage = formatErrorMessage(err);
+            log.warn(
+              `[continuation:delegate-accept-finalize-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
+            );
+            dispatchSpan.setStatus("ERROR", errorMessage);
+            rejected++;
+            continue;
+          }
         }
         dispatchSpan.setStatus("OK");
         dispatched++;

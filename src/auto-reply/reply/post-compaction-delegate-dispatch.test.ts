@@ -162,6 +162,7 @@ function createDeliveryDeps(params: {
     return { status: params.spawnStatus ?? "accepted" };
   });
   const markPendingDelegateSpawnAccepted = vi.fn(() => true);
+  const markPendingDelegateFailed = vi.fn(() => true);
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
@@ -176,8 +177,16 @@ function createDeliveryDeps(params: {
     resolveStorePath: vi.fn(() => params.storePath),
     spawnSubagentDirect,
     markPendingDelegateSpawnAccepted,
+    markPendingDelegateFailed,
   };
-  return { deps, enqueueSystemEvent, log, markPendingDelegateSpawnAccepted, spawnSubagentDirect };
+  return {
+    deps,
+    enqueueSystemEvent,
+    log,
+    markPendingDelegateFailed,
+    markPendingDelegateSpawnAccepted,
+    spawnSubagentDirect,
+  };
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -992,12 +1001,21 @@ describe("post-compaction delegate dispatch extraction", () => {
       await seedSessionStore(storePath, {
         main: { sessionId: "session", updatedAt: 1, continuationChainCount: 2 },
       });
-      const { deps, enqueueSystemEvent, log, spawnSubagentDirect } = createDeliveryDeps({
-        storePath,
-        runtimeConfig: { maxChainLength: 2 },
-      });
+      const { deps, enqueueSystemEvent, log, markPendingDelegateFailed, spawnSubagentDirect } =
+        createDeliveryDeps({
+          storePath,
+          runtimeConfig: { maxChainLength: 2 },
+        });
 
-      await deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps);
+      await deliverQueuedPostCompactionDelegate(
+        {
+          entry: createQueuedEntry({
+            sourceFlowId: "pc-flow-source",
+            sourceExpectedRevision: 7,
+          }),
+        },
+        deps,
+      );
 
       expect(spawnSubagentDirect).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith(
@@ -1006,6 +1024,15 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "[continuation] Post-compaction delegate rejected: chain length 2 reached. Task: queued delegate",
         { sessionKey: "main" },
+      );
+      expect(markPendingDelegateFailed).toHaveBeenCalledWith(
+        {
+          flowId: "pc-flow-source",
+          expectedRevision: 7,
+          task: "queued delegate",
+        },
+        "Post-compaction delegate rejected: chain length 2 reached.",
+        "Post-compaction delegate rejected",
       );
     });
   });

@@ -552,10 +552,50 @@ describe("durable continuation_work dispatch", () => {
     // The queued row was not consumed/mutated, and the disabled callback left a
     // recheck timer so hot re-enable recovers it without waiting for startup or
     // unrelated traffic.
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     continuationEnabledForTest = true;
-    await vi.runOnlyPendingTimersAsync();
+    await dispatchPendingContinuationWork({
+      sessionKey,
+      includeIdleRetry: true,
+    });
     await vi.waitFor(() => {
-      expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(turnGrants).toHaveLength(1);
+    });
+  });
+
+  it("uses the idle-retry timer while hot-disabled idle recovery waits", async () => {
+    const sessionKey = "agent:main:disabled-idle-retry";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "disabled idle retry",
+      idleRetry: {
+        trigger: "reply-run-ended",
+        reasonCategory: "follow-up-work",
+        armedAt: Date.now(),
+      },
+    });
+    continuationEnabledForTest = false;
+    const disabled = await dispatchPendingContinuationWork({
+      sessionKey,
+      includeIdleRetry: true,
+    });
+    expect(disabled).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    continuationEnabledForTest = true;
+    await dispatchPendingContinuationWork({
+      sessionKey,
+      includeIdleRetry: true,
+    });
+    await vi.waitFor(() => {
+      expect(turnGrants).toHaveLength(1);
     });
   });
 

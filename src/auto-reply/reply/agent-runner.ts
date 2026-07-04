@@ -69,6 +69,7 @@ import {
   enqueuePendingDelegate,
   finalizeStagedPostCompactionDelegates,
   pendingDelegateCount,
+  requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
 } from "../continuation-delegate-store.js";
@@ -3206,7 +3207,9 @@ export async function runReplyAgent(replyParams: {
     // the NEXT seam. Without persisting it now the finally-drain below would
     // consume and silently discard it (C1).
     if (continuationFeatureEnabled && sessionKey) {
-      const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey);
+      const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey, {
+        claimFor: "next-seam-persist",
+      });
       // consumeStagedPostCompactionDelegates claims the TaskFlow rows to
       // `running`; capture their handles so the finalize below finishes ONLY
       // these rows, never other running rows for the session (#1144).
@@ -3227,7 +3230,9 @@ export async function runReplyAgent(replyParams: {
           // postCompactionDelegatesToPreserve list would drop them on a crash
           // before the finally re-stage runs (#1144).
           for (const delegate of stagedCompactionDelegates) {
-            stagePostCompactionDelegate(sessionKey, delegate);
+            if (!requeueReleasedPostCompactionDelegate(delegate)) {
+              stagePostCompactionDelegate(sessionKey, delegate);
+            }
           }
           defaultRuntime.log(
             `Failed to persist post-compaction delegates for ${sessionKey}; re-staged ${stagedCompactionDelegates.length} to the durable queue: ${String(err)}`,

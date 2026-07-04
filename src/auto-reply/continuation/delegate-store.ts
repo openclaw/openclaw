@@ -98,6 +98,7 @@ const PendingDelegateStateSchema = z
     spawnRequesterAccountId: z.string().min(1).optional(),
     spawnRequesterTo: z.string().min(1).optional(),
     spawnRequesterThreadId: z.union([z.string().min(1), z.number()]).optional(),
+    awaitingNextCompaction: z.boolean().optional(),
   })
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
@@ -609,6 +610,7 @@ export function consumePendingDelegates(
 export function markPendingDelegateSpawnAccepted(
   delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
   childSessionKey: string,
+  options: { requireWriteSuccess?: boolean } = {},
 ): boolean {
   if (!delegate.flowId || delegate.expectedRevision === undefined) {
     log.warn(
@@ -632,9 +634,11 @@ export function markPendingDelegateSpawnAccepted(
     endedAt: now,
   });
   if (!finished.applied) {
-    log.warn(
-      `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`,
-    );
+    const message = `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`;
+    log.warn(message);
+    if (options.requireWriteSuccess === true) {
+      throw new Error(message);
+    }
   }
   return finished.applied;
 }
@@ -861,16 +865,57 @@ export function stagePostCompactionDelegate(
   sessionKey: string,
   delegate: StagedPostCompactionDelegate,
 ): void {
-  enqueuePendingDelegate(sessionKey, {
-    task: delegate.task,
-    mode: "post-compaction",
-    firstArmedAt: delegate.firstArmedAt ?? delegate.stagedAt,
-    ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
-    ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
-    ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
-    ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
-    ...(delegate.model ? { model: delegate.model } : {}),
+  createManagedTaskFlow({
+    ownerKey: sessionKey,
+    controllerId: CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+    notifyPolicy: "silent",
+    goal: buildDelegateGoal({ task: delegate.task, mode: "post-compaction" }),
+    currentStep: "Staged for release after compaction",
+    stateJson: buildDelegateState({
+      task: delegate.task,
+      mode: "post-compaction",
+      firstArmedAt: delegate.firstArmedAt ?? delegate.stagedAt,
+      ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
+      ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
+      ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+      ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
+      ...(delegate.model ? { model: delegate.model } : {}),
+    }),
   });
+}
+
+export function requeueReleasedPostCompactionDelegate(
+  delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
+): boolean {
+  if (!delegate.flowId || delegate.expectedRevision === undefined) {
+    return false;
+  }
+  const flow = getTaskFlowById(delegate.flowId);
+  if (!flow || !isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
+    return false;
+  }
+  const state = decodeDelegateState(flow);
+  const now = Date.now();
+  const result = updateFlowRecordByIdExpectedRevision({
+    flowId: flow.flowId,
+    expectedRevision: delegate.expectedRevision,
+    patch: {
+      status: "queued",
+      currentStep: "Staged for release after compaction",
+      stateJson: state
+        ? (() => {
+            const { releasedAt: _releasedAt, awaitingNextCompaction: _awaiting, ...rest } = state;
+            return rest;
+          })()
+        : { kind: "continuation_delegate", task: delegate.task, postCompaction: true },
+      waitJson: null,
+      blockedTaskId: null,
+      blockedSummary: null,
+      endedAt: null,
+      updatedAt: now,
+    },
+  });
+  return result.applied;
 }
 
 /**
@@ -888,6 +933,7 @@ export function stagePostCompactionDelegate(
  */
 export function consumeStagedPostCompactionDelegates(
   sessionKey: string,
+  options: { claimFor?: "release" | "next-seam-persist" } = {},
 ): PendingContinuationDelegate[] {
   const delegates: PendingContinuationDelegate[] = [];
 
@@ -910,13 +956,20 @@ export function consumeStagedPostCompactionDelegates(
     }
 
     const releasedAt = Date.now();
+    const claimForNextSeamPersist = options.claimFor === "next-seam-persist";
     const claimed = updateFlowRecordByIdExpectedRevision({
       flowId: flow.flowId,
       expectedRevision: flow.revision,
       patch: {
         status: "running",
-        currentStep: "Released after compaction — awaiting durable handoff",
-        stateJson: { ...state, releasedAt },
+        currentStep: claimForNextSeamPersist
+          ? "Persisting staged delegate for next compaction seam"
+          : "Released after compaction — awaiting durable handoff",
+        stateJson: {
+          ...state,
+          releasedAt,
+          ...(claimForNextSeamPersist ? { awaitingNextCompaction: true } : {}),
+        },
         waitJson: null,
         blockedTaskId: null,
         blockedSummary: null,
@@ -1007,6 +1060,9 @@ export function listRecoverableStagedPostCompactionDelegates(options?: {
       log.warn(
         `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} raw=${JSON.stringify(flow.stateJson).slice(0, 200)}`,
       );
+      continue;
+    }
+    if (state.awaitingNextCompaction === true) {
       continue;
     }
     recoverable.push({ sessionKey: flow.ownerKey, delegate: flowToDelegate(flow, state) });
