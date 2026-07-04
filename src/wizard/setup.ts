@@ -1157,6 +1157,7 @@ async function runSetupWizardOnce(
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
 
+  prompter.disableBackNavigation?.();
   if (opts.skipChannels ?? opts.skipProviders) {
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {

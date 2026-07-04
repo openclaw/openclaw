@@ -8,7 +8,7 @@ import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import { WizardNavigationError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 
 type ResolveProviderPluginChoice =
@@ -2311,6 +2311,64 @@ describe("runSetupWizard", () => {
       },
       "channel setup options",
     );
+  });
+
+  it("blocks back navigation before channel setup side effects", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          port: 19001,
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    setupChannels.mockClear();
+    setupChannels.mockImplementationOnce(async (...args: unknown[]) => {
+      const prompter = args[2] as WizardPrompter;
+      await prompter.select({
+        message: "Channel setup side effect",
+        options: [{ value: "continue", label: "Continue" }],
+      });
+      return args[0];
+    });
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) => {
+      if (message === "Config handling") {
+        return "modify";
+      }
+      if (message === "Channel setup side effect") {
+        throw new WizardNavigationError("back");
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipChannels: false,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        buildWizardPrompter({ select }),
+      ),
+    ).rejects.toBeInstanceOf(WizardNavigationError);
+    expect(setupChannels).toHaveBeenCalledOnce();
   });
 
   it("prompts for a model during explicit interactive Ollama setup", async () => {
