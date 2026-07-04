@@ -192,3 +192,12 @@ export function discoverCachedAgentStores(
 export function resetModelDiscoveryCacheForTest(): void {
   DISCOVERY_STORE_CACHE.clear();
 }
+
+/**
+ * Clears the process-local discovery cache on config hot reload so the next
+ * agent-model resolution rebuilds the registry from the current (include-resolved)
+ * config snapshot rather than serving a file-fingerprint-matched stale snapshot.
+ */
+export function clearModelDiscoveryCache(): void {
+  DISCOVERY_STORE_CACHE.clear();
+}

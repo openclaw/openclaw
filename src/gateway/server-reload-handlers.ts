@@ -7,6 +7,7 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../agents/embedded-agent-runner/run-state.js";
+import { clearModelDiscoveryCache } from "../agents/embedded-agent-runner/model-discovery-cache.js";
 import { loadModelCatalog, resetModelCatalogCache } from "../agents/model-catalog.js";
 import {
   clearCurrentProviderAuthState,
@@ -113,6 +114,7 @@ function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
   clearCurrentProviderAuthState();
   markGatewayModelCatalogStaleForReload();
+  clearModelDiscoveryCache();
 }
 
 function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolean {
