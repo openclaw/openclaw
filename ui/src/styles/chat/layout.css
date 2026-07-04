@@ -2471,6 +2471,12 @@
   background: var(--muted);
 }
 
+/* Inherited default that is not on the offered scale (e.g. "adaptive"):
+   ghost the parked thumb so its position does not read as the default. */
+.chat-controls__reasoning-range--unanchored::-webkit-slider-thumb {
+  opacity: 0.35;
+}
+
 .chat-controls__reasoning-range::-moz-range-track {
   height: 3px;
   border-radius: var(--radius-full);
@@ -2494,6 +2500,10 @@
 
 .chat-controls__reasoning-range--inherit::-moz-range-thumb {
   background: var(--muted);
+}
+
+.chat-controls__reasoning-range--unanchored::-moz-range-thumb {
+  opacity: 0.35;
 }
 
 .chat-controls__reasoning-scale {

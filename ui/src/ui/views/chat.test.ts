@@ -4341,6 +4341,28 @@ describe("chat session controls", () => {
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
     expect(thinkingSelect.title).toContain("Adaptive");
+    // "adaptive" is not one of the offered stops, so the parked thumb must
+    // render as unanchored instead of pretending the default is "off".
+    expect(getThinkingSliderValues(container)).not.toContain("adaptive");
+    expect(
+      getThinkingSlider(container)?.classList.contains(
+        "chat-controls__reasoning-range--unanchored",
+      ),
+    ).toBe(true);
+  });
+
+  it("anchors the slider thumb on the inherited default when it is a stop", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      thinkingDefault: "medium",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const slider = getThinkingSlider(container);
+    expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(false);
+    expect(slider?.value).toBe(String(getThinkingSliderValues(container).indexOf("medium")));
   });
 
   it("keeps a single available thinking level selectable without a slider", async () => {

@@ -1215,6 +1215,10 @@ function renderChatModelReasoningSelect(params: {
     (option) => option.value === selectedThinkingValue,
   );
   const sliderIndex = Math.max(hasThinkingOverride ? overrideStopIndex : defaultStopIndex, 0);
+  // Inherited defaults like "adaptive" may not exist on the offered scale.
+  // The value label stays truthful ("Default (Adaptive)"); the thumb gets an
+  // unanchored style so its parked position does not read as the default.
+  const sliderUnanchored = !hasThinkingOverride && defaultStopIndex < 0;
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
   const reasoningValueLabel = hasThinkingOverride
@@ -1343,7 +1347,9 @@ function renderChatModelReasoningSelect(params: {
                               <input
                                 class="chat-controls__reasoning-range ${hasThinkingOverride
                                   ? ""
-                                  : "chat-controls__reasoning-range--inherit"}"
+                                  : "chat-controls__reasoning-range--inherit"} ${sliderUnanchored
+                                  ? "chat-controls__reasoning-range--unanchored"
+                                  : ""}"
                                 type="range"
                                 min="0"
                                 max=${sliderStops.length - 1}
