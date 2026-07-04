@@ -915,7 +915,11 @@ function buildBlockedProfileUsageStats(params: {
     blockedUntil: Math.max(activeBlockedUntil, params.blockedUntil),
     blockedReason: "subscription_limit",
     blockedSource: params.source,
-    blockedModel: params.modelId,
+    blockedModel: mergeBlockedModel(
+      params.previousStats?.blockedModel,
+      activeBlockedUntil,
+      params.modelId,
+    ),
     cooldownUntil: undefined,
     cooldownReason: undefined,
     cooldownModel: undefined,
