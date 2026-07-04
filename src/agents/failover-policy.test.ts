@@ -90,6 +90,12 @@ const CASES: ReasonCase[] = [
     preserveTransientProbeSlot: true,
   },
   {
+    reason: "refusal",
+    allowCooldownProbe: false,
+    useTransientProbeSlot: false,
+    preserveTransientProbeSlot: true,
+  },
+  {
     reason: "timeout",
     allowCooldownProbe: true,
     useTransientProbeSlot: true,

@@ -67,6 +67,7 @@ describe("cron run log errorReason", () => {
       "no_error_details",
       "unclassified",
       "unknown",
+      "refusal",
     ] satisfies Array<NonNullable<CronRunLogEntry["errorReason"]>>;
     for (const [index, errorReason] of reasons.entries()) {
       await appendCronRunLog({

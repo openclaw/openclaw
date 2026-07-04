@@ -22,6 +22,7 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "no_error_details",
   "unclassified",
   "unknown",
+  "refusal",
 ]);
 
 function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {

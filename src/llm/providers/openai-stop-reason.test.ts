@@ -27,6 +27,7 @@ describe("mapOpenAIStopReason", () => {
     expect(mapOpenAIStopReason("content_filter")).toEqual({
       stopReason: "error",
       errorMessage: "Provider finish_reason: content_filter",
+      errorCode: "provider_refusal",
     });
     expect(mapOpenAIStopReason("unexpected")).toEqual({
       stopReason: "error",

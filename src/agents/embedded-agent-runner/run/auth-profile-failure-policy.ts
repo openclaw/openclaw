@@ -34,8 +34,9 @@ export function resolveAuthProfileFailureReason(params: {
         (params.failoverReason === "rate_limit" && params.transientRateLimit === true))) ||
     params.failoverReason === "server_error" ||
     params.failoverReason === "empty_response" ||
+    params.failoverReason === "format" ||
     params.failoverReason === "context_overflow" ||
-    params.failoverReason === "format"
+    params.failoverReason === "refusal"
   ) {
     return null;
   }

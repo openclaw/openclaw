@@ -13,11 +13,6 @@ import {
 } from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-type ProviderErrorPayloadFailoverReason = Extract<
-  FailoverReason,
-  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded"
->;
-
 /**
  * Classifies embedded-agent terminal results for model fallback decisions.
  *
@@ -154,7 +149,10 @@ function classifyHarnessResult(params: {
 function classifyProviderErrorPayloadReason(
   errorText: string,
   provider: string,
-): ProviderErrorPayloadFailoverReason | null {
+): Extract<
+  FailoverReason,
+  "auth" | "auth_permanent" | "billing" | "rate_limit" | "server_error" | "overloaded" | "refusal"
+> | null {
   if (!errorText.trim()) {
     return null;
   }
@@ -166,6 +164,7 @@ function classifyProviderErrorPayloadReason(
     case "rate_limit":
     case "server_error":
     case "overloaded":
+    case "refusal":
       return failoverReason;
     default:
       return null;
@@ -263,8 +262,11 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return {
       message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
       reason: failoverReason,
-      code: "embedded_error_payload",
+      code: failoverReason === "refusal" ? "provider_refusal" : "embedded_error_payload",
       rawError: errorText,
+      ...(failoverReason === "refusal"
+        ? { preserveResultOnExhaustion: true, preserveResultPriority: 0 }
+        : {}),
     };
   }
 

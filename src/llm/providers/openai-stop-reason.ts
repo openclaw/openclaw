@@ -3,6 +3,7 @@ import type { StopReason } from "../types.js";
 export type OpenAIStopReasonResult = {
   stopReason: StopReason;
   errorMessage?: string;
+  errorCode?: string;
 };
 
 export function mapOpenAIStopReason(
@@ -28,7 +29,11 @@ export function mapOpenAIStopReason(
       }
       break;
     case "content_filter":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
+      return {
+        stopReason: "error",
+        errorMessage: "Provider finish_reason: content_filter",
+        errorCode: "provider_refusal",
+      };
     case "network_error":
       return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
   }
