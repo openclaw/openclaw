@@ -170,6 +170,7 @@ vi.mock("../infra/update-check.js", () => ({
   }),
   fetchNpmPackageTargetStatus: vi.fn(),
   fetchNpmTagVersion: vi.fn(),
+  resolveExtendedStablePackage: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
 }));
 
@@ -376,8 +377,13 @@ const {
   readSourceConfigBestEffort,
   replaceConfigFile,
 } = await import("../config/config.js");
-const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
-  await import("../infra/update-check.js");
+const {
+  checkUpdateStatus,
+  fetchNpmPackageTargetStatus,
+  fetchNpmTagVersion,
+  resolveExtendedStablePackage,
+  resolveNpmChannelTag,
+} = await import("../infra/update-check.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
@@ -799,6 +805,12 @@ describe("update-cli", () => {
       target: "latest",
       version: "9999.0.0",
       nodeEngine: ">=22.19.0",
+    });
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValue({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2026.6.33",
+      packageSpec: "openclaw@2026.6.33",
     });
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
@@ -2526,6 +2538,125 @@ describe("update-cli", () => {
     await updateCommand({});
 
     expectPackageInstallSpec("openclaw@latest");
+  });
+
+  it("installs the verified exact package and persists an explicit extended-stable channel", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+
+    await updateCommand({ channel: "extended-stable", yes: true, restart: false });
+
+    expect(resolveExtendedStablePackage).toHaveBeenCalledWith({
+      installKind: "package",
+      timeoutMs: undefined,
+    });
+    expectPackageInstallSpec("openclaw@2026.6.33");
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
+    expect(syncPluginCall()?.channel).toBe("stable");
+    expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("stable");
+  });
+
+  it("uses the same exact resolver for a bare update with stored extended-stable", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: config,
+      config,
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(resolveExtendedStablePackage).toHaveBeenCalledWith({
+      installKind: "package",
+      timeoutMs: undefined,
+    });
+    expectPackageInstallSpec("openclaw@2026.6.33");
+    expect(syncPluginCall()?.channel).toBe("stable");
+  });
+
+  it("fails closed without config or package mutation when extended-stable resolution fails", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "failed",
+      reason: "selector_missing",
+    });
+
+    await updateCommand({ channel: "extended-stable", yes: true });
+
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(lastWriteJsonCall()).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects extended-stable Git updates before handoff, conversion, or config mutation", async () => {
+    await updateCommand({ channel: "extended-stable", yes: true });
+
+    expect(resolveExtendedStablePackage).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "refuses", yes: false, installs: false },
+    { name: "allows with --yes", yes: true, installs: true },
+  ])("$name an extended-stable downgrade in non-interactive mode", async ({ yes, installs }) => {
+    const tempDir = createCaseDir("openclaw-update");
+    setTty(false);
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.7.10");
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2026.6.33",
+      packageSpec: "openclaw@2026.6.33",
+    });
+
+    await updateCommand({ channel: "extended-stable", yes, restart: false });
+
+    expect(packageInstallCommandCall() !== undefined).toBe(installs);
+    if (installs) {
+      expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
+    } else {
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    }
+  });
+
+  it("retains extended-stable after a post-commit plugin convergence failure", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: [],
+      warnings: [
+        {
+          pluginId: "demo",
+          reason: "plugin smoke failed",
+          message: "plugin smoke failed",
+          guidance: ["Run openclaw update repair."],
+        },
+      ],
+      errored: true,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await updateCommand({ channel: "extended-stable", yes: true, json: true, restart: false });
+
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
+    const output = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(output?.status).toBe("error");
+    expect(output?.reason).toBe("post-update-plugins");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("refreshes package-manager updates when the installed version already matches the target", async () => {

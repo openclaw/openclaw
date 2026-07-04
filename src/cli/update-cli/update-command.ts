@@ -73,8 +73,10 @@ import {
 import {
   compareSemverStrings,
   fetchNpmPackageTargetStatus,
+  resolveExtendedStablePackage,
   resolveNpmChannelTag,
   checkUpdateStatus,
+  type ExtendedStableFailureReason,
 } from "../../infra/update-check.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
@@ -1358,6 +1360,24 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   }
 }
 
+function reportPreMutationUpdateFailure(params: {
+  root: string;
+  installKind: "git" | "package" | "unknown";
+  reason: ExtendedStableFailureReason;
+  opts: UpdateCommandOptions;
+}): void {
+  const result: UpdateRunResult = {
+    status: "error",
+    mode: params.installKind === "git" ? "git" : "unknown",
+    root: params.root,
+    reason: params.reason,
+    steps: [],
+    durationMs: 0,
+  };
+  printResult(result, params.opts);
+  defaultRuntime.exit(1);
+}
+
 async function refreshGatewayServiceEnv(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
@@ -1605,6 +1625,7 @@ async function runPackageInstallUpdate(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   tag: string;
+  installSpec?: string;
   timeoutMs: number;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
@@ -1637,11 +1658,13 @@ async function runPackageInstallUpdate(params: {
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
     DEFAULT_PACKAGE_NAME;
-  const installSpec = resolveGlobalInstallSpec({
-    packageName,
-    tag: params.tag,
-    env: installEnv,
-  });
+  const installSpec =
+    params.installSpec ??
+    resolveGlobalInstallSpec({
+      packageName,
+      tag: params.tag,
+      env: installEnv,
+    });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
   if (pkgRoot) {
@@ -1924,13 +1947,15 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const pluginInstallRecords =
     params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
+  const pluginUpdateChannel: UpdateChannel =
+    params.channel === "extended-stable" ? "stable" : params.channel;
   const syncConfig = withPluginInstallRecords(
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
   );
   const syncResult = await syncPluginsForUpdateChannel({
     config: syncConfig,
-    channel: params.channel,
+    channel: pluginUpdateChannel,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
@@ -2003,7 +2028,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       config: pluginConfig,
       pluginIds: missingIds,
       timeoutMs: params.timeoutMs,
-      updateChannel: params.channel,
+      updateChannel: pluginUpdateChannel,
       skipDisabledPlugins: true,
       syncOfficialPluginInstalls: true,
       disableOnFailure: true,
@@ -2023,7 +2048,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
-    updateChannel: params.channel,
+    updateChannel: pluginUpdateChannel,
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
@@ -3346,11 +3371,15 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
+  const deferLaunchdCleanupForExtendedStable =
+    normalizeUpdateChannel(opts.channel) === "extended-stable";
   if (timeoutMs === null) {
     return;
   }
   if (opts.dryRun !== true) {
-    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+    if (!deferLaunchdCleanupForExtendedStable) {
+      await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+    }
     assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -3456,6 +3485,16 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     return;
   }
 
+  if (requestedChannel === "extended-stable" && updateStatus.installKind === "git") {
+    reportPreMutationUpdateFailure({
+      root,
+      installKind: updateStatus.installKind,
+      reason: "unsupported_git_channel",
+      opts,
+    });
+    return;
+  }
+
   let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
@@ -3475,6 +3514,22 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   const installKind = updateStatus.installKind;
+  const selectedChannel =
+    requestedChannel ??
+    storedChannel ??
+    (installKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL);
+  if (selectedChannel === "extended-stable" && installKind === "git") {
+    reportPreMutationUpdateFailure({
+      root,
+      installKind,
+      reason: "unsupported_git_channel",
+      opts,
+    });
+    return;
+  }
+  if (opts.dryRun !== true && deferLaunchdCleanupForExtendedStable) {
+    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+  }
   const switchToGit = requestedChannel === "dev" && installKind !== "git";
   const switchToPackage =
     requestedChannel !== null && requestedChannel !== "dev" && installKind === "git";
@@ -3569,7 +3624,24 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    if (explicitTag) {
+    if (!explicitTag && channel === "extended-stable") {
+      const extendedStable = await resolveExtendedStablePackage({
+        installKind: updateInstallKind,
+        timeoutMs,
+      });
+      if (extendedStable.status === "failed") {
+        reportPreMutationUpdateFailure({
+          root,
+          installKind: updateInstallKind,
+          reason: extendedStable.reason,
+          opts,
+        });
+        return;
+      }
+      targetVersion = extendedStable.version;
+      tag = extendedStable.version;
+      packageInstallSpec = extendedStable.packageSpec;
+    } else if (explicitTag) {
       const explicitSpec = resolveGlobalInstallSpec({
         packageName: DEFAULT_PACKAGE_NAME,
         tag,
@@ -3608,7 +3680,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
-    packageInstallSpec = resolveGlobalInstallSpec({
+    packageInstallSpec ??= resolveGlobalInstallSpec({
       packageName: DEFAULT_PACKAGE_NAME,
       tag,
       env: packageInstallEnv,
@@ -3830,6 +3902,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
             root,
             installKind,
             tag,
+            installSpec: packageInstallSpec ?? undefined,
             timeoutMs: updateStepTimeoutMs,
             startedAt,
             progress,

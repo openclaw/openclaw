@@ -28,7 +28,7 @@ import {
   isStableTag,
   type UpdateChannel,
 } from "./update-channels.js";
-import { compareSemverStrings } from "./update-check.js";
+import { compareSemverStrings, resolveExtendedStablePackage } from "./update-check.js";
 import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
@@ -832,6 +832,17 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   }
 
   if (gitRoot && pkgRoot && (await pathsReferToSameLocation(gitRoot, pkgRoot))) {
+    const channel: UpdateChannel = opts.channel ?? "dev";
+    if (channel === "extended-stable") {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "unsupported_git_channel",
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
     // Get current SHA (not a visible step, no progress)
     const beforeShaResult = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
@@ -839,7 +850,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
-    const channel: UpdateChannel = opts.channel ?? "dev";
     const devTargetRef = channel === "dev" ? normalizeDevTargetRef(opts.devTargetRef) : null;
     const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
@@ -1670,13 +1680,35 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       packageName,
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
-    const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
+    const extendedStable =
+      channel === "extended-stable" && opts.tag === undefined
+        ? await resolveExtendedStablePackage({ installKind: "package", timeoutMs })
+        : null;
+    if (extendedStable?.status === "failed") {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: extendedStable.reason,
+        before: { version: beforeVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    const tag = normalizeTag(
+      extendedStable?.status === "resolved"
+        ? extendedStable.version
+        : (opts.tag ?? channelToNpmTag(channel)),
+    );
     const globalInstallEnv = await createGlobalInstallEnv();
-    const spec = resolveGlobalInstallSpec({
-      packageName,
-      tag,
-      env: globalInstallEnv,
-    });
+    const spec =
+      extendedStable?.status === "resolved"
+        ? extendedStable.packageSpec
+        : resolveGlobalInstallSpec({
+            packageName,
+            tag,
+            env: globalInstallEnv,
+          });
     const packageUpdate = await runGlobalPackageUpdateSteps({
       installTarget,
       installSpec: spec,
