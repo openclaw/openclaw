@@ -217,7 +217,9 @@ describe("gateway-processes", () => {
         status: 0,
         stdout: [
           "Proto  Local Address          Foreign Address        State           PID",
-          "TCP    0.0.0.0:18789         0.0.0.0:0              LISTENING       200",
+          "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
+          "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
+          "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
         ].join("\r\n"),
       })
       .mockReturnValueOnce({
