@@ -740,7 +740,8 @@ extension GeneralSettings {
     @MainActor
     func testRemote() async {
         self.remoteStatus = .checking
-        self.remoteStatus = Self.remoteStatus(for: await RemoteGatewayProbe.run())
+        let result = await RemoteGatewayProbe.run()
+        self.remoteStatus = Self.remoteStatus(for: result)
     }
 
     static func remoteStatus(for result: RemoteGatewayProbeResult) -> RemoteStatus {
