@@ -735,20 +735,14 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(capturedFallbacksOverride).toEqual(["openai/gpt-4o"]);
   });
 
-  it("forwards the cron abort signal into runWithModelFallback", async () => {
+  it("rejects a pre-aborted cron turn before model fallback starts", async () => {
     const controller = new AbortController();
-    let capturedAbortSignal: AbortSignal | undefined;
-    runWithModelFallbackMock.mockImplementation(
-      async (params: { provider: string; model: string; abortSignal?: AbortSignal }) => {
-        capturedAbortSignal = params.abortSignal;
-        return makeSuccessfulRunResult();
-      },
-    );
 
     controller.abort(new Error("cron: job execution timed out"));
 
-    await runCronIsolatedAgentTurn(makeParams({ abortSignal: controller.signal }));
-
-    expect(capturedAbortSignal).toBe(controller.signal);
+    await expect(
+      runCronIsolatedAgentTurn(makeParams({ abortSignal: controller.signal })),
+    ).rejects.toThrow("cron: job execution timed out");
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 });

@@ -511,7 +511,7 @@ describe("control UI routing", () => {
     ]) as typeof app.sessionsResult;
     await app.updateComplete;
 
-    const recent = Array.from(app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session"));
+    const recent = Array.from(app.querySelectorAll<HTMLElement>(".sidebar-recent-session"));
     expect(recent.map((entry) => entry.textContent?.replace(/\s+/g, " ").trim())).toEqual([
       "Second workspace just now",
       "First workspace 5m ago",
@@ -539,7 +539,9 @@ describe("control UI routing", () => {
     expect(recentToggle.getAttribute("aria-expanded")).toBe("true");
     expect([...recentSection.classList]).not.toContain("sidebar-recent-sessions--collapsed");
 
-    recent[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    recent[1]
+      ?.querySelector("a.sidebar-recent-session__link")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
     expect(app.tab).toBe("chat");
@@ -591,7 +593,7 @@ describe("control UI routing", () => {
     ) as typeof app.sessionsResult;
     await app.updateComplete;
 
-    const rows = Array.from(app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session"));
+    const rows = Array.from(app.querySelectorAll<HTMLElement>(".sidebar-recent-session"));
     // Pinned active row plus the nine-row recents cap.
     expect(rows).toHaveLength(10);
     expect(rows[0]?.dataset.sessionKey).toBe("agent:main:oldest");
@@ -707,7 +709,7 @@ describe("control UI routing", () => {
 
     const activeRow = expectElement(
       app,
-      'a.sidebar-recent-session[data-session-key="agent:main:subagent:task-123"]',
+      '.sidebar-recent-session[data-session-key="agent:main:subagent:task-123"] a.sidebar-recent-session__link',
       HTMLAnchorElement,
     );
     activeRow.dispatchEvent(
@@ -740,7 +742,7 @@ describe("control UI routing", () => {
 
     const chatRow = expectElement(
       app,
-      'a.sidebar-recent-session[data-session-key="agent:main:subagent:task-123"]',
+      '.sidebar-recent-session[data-session-key="agent:main:subagent:task-123"] a.sidebar-recent-session__link',
       HTMLAnchorElement,
     );
     chatRow.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));

@@ -231,6 +231,7 @@ type FollowupRuntimeMetadata = Pick<
   | "currentInboundAudio"
   | "currentInboundContext"
   | "abortSignal"
+  | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
 >;
@@ -253,7 +254,11 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
 }
 
 function combineAbortSignals(items: readonly FollowupRun[]): AbortSignal | undefined {
-  const signals = items.flatMap((item) => (item.abortSignal ? [item.abortSignal] : []));
+  const signals = items.flatMap((item) =>
+    [item.abortSignal, item.queueAbortSignal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    ),
+  );
   if (signals.length === 0) {
     return undefined;
   }
@@ -290,6 +295,7 @@ function collectRuntimeMetadata(
       ? singletonOwner
       : items.find(hasCurrentTurnRuntimeMetadata);
   const abortSignal = singletonOwner?.abortSignal ?? combineAbortSignals(candidates);
+  const queueAbortSignal = singletonOwner?.queueAbortSignal;
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const lifecycleSource = singletonOwner ?? items.find((item) => item.queuedLifecycle);
   return {
@@ -297,6 +303,7 @@ function collectRuntimeMetadata(
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: currentTurnSource?.currentInboundContext,
     abortSignal,
+    queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle:
       singletonOwner?.queuedLifecycle ??
@@ -502,6 +509,7 @@ function resolveOverflowSummarySourceGroup(queue: {
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
+    queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
@@ -594,6 +602,7 @@ async function runSyntheticOverflowSummary(params: {
   const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
   await params.runFollowup({
     prompt: params.prompt,
+    queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,
     userTurnTranscriptRecorder,

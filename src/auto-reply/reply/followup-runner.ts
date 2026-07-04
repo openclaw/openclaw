@@ -99,6 +99,15 @@ import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
+function resolveFollowupAbortSignal(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): AbortSignal | undefined {
+  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+}
+
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
@@ -602,10 +611,12 @@ export function createFollowupRunner(params: {
       const admission = await admitReplyTurn({
         sessionId: effectiveQueued.admissionSessionId ?? run.sessionId,
         sessionKey: replySessionKey ?? "",
+        expectedSessionId: activeSessionEntry?.sessionId,
+        storePath,
         kind: "queued_followup",
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
-        upstreamAbortSignal: queued.abortSignal,
+        upstreamAbortSignal: resolveFollowupAbortSignal(queued),
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {

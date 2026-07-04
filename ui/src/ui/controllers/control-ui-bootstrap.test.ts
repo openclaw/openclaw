@@ -247,6 +247,50 @@ describe("loadControlUiBootstrapConfig", () => {
     vi.unstubAllGlobals();
   });
 
+  it("reloads the document when the terminal flips from disabled to enabled", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: false }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: true }),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const reload = vi.fn();
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost", reload },
+    } as unknown as Window & typeof globalThis);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      terminalEnabled: true,
+    };
+
+    // Page served with the terminal disabled: strict CSP, flag lands false.
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+    expect(state.terminalEnabled).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+
+    // The enabling gateway restart refetches bootstrap over the same document,
+    // whose CSP still lacks the WASM allowances — the UI must reload for them.
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+    expect(reload).toHaveBeenCalledTimes(1);
+    // The flag stays false until the reload delivers the fresh document.
+    expect(state.terminalEnabled).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
   it("does not apply default-agent bootstrap identity to an active non-default session", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

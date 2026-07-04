@@ -755,7 +755,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Reusable sender groups
   - H3: Where the state lives
   - H2: 2) Node device pairing (iOS/Android/macOS/headless nodes)
-  - H3: Pair via Telegram (recommended for iOS)
+  - H3: Pair from the Control UI (recommended)
+  - H3: Pair via Telegram
   - H3: Approve a node device
   - H3: Optional trusted-CIDR node auto-approve
   - H3: Node pairing state storage
@@ -8055,7 +8056,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Version naming
   - H2: Release cadence
-  - H2: Release operator checklist
+  - H2: Monthly npm-only extended-stable publication
+  - H2: Regular release operator checklist
   - H2: Stable main closeout
   - H2: Release preflight
   - H2: Release test boxes
@@ -8063,9 +8065,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Docker
   - H3: QA Lab
   - H3: Package
-  - H2: Release publish automation
+  - H2: Regular release publish automation
   - H2: NPM workflow inputs
-  - H2: Stable npm release sequence
+  - H2: Regular beta/latest stable release sequence
   - H2: Public references
   - H2: Related
 
@@ -9804,6 +9806,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick open (local)
   - H2: Device pairing (first connection)
+  - H2: Pair a mobile device
   - H2: Personal identity (browser-local)
   - H2: Runtime config endpoint
   - H2: Language support

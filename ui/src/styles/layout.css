@@ -37,11 +37,15 @@
 
 .shell--nav-collapsed {
   grid-template-columns: var(--shell-nav-rail-width) minmax(0, 1fr);
+  /* Keep --shell-nav-width in sync with the real column so fixed-position
+     consumers (e.g. the docked terminal panel) align to the collapsed rail. */
+  --shell-nav-width: var(--shell-nav-rail-width);
 }
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
+  --shell-nav-width: 0px;
 }
 
 .shell--onboarding .topbar {
@@ -284,6 +288,34 @@
 }
 
 .topbar-search:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.topbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-height: 38px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.topbar-icon-btn:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.topbar-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -802,16 +834,13 @@
 }
 
 .sidebar-recent-session {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
   min-height: 34px;
-  padding: 5px 9px;
+  padding-right: 4px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
-  text-decoration: none;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -821,7 +850,6 @@
 .sidebar-recent-session:hover {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-recent-session--active {
@@ -830,11 +858,19 @@
   color: var(--text-strong);
 }
 
-.sidebar-recent-session__body {
+.sidebar-recent-session__link {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 5px 4px 5px 9px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-recent-session__link:hover {
+  text-decoration: none;
 }
 
 .sidebar-recent-session__name {
@@ -853,21 +889,8 @@
   color: var(--text-strong);
 }
 
-.sidebar-recent-session__meta {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-  opacity: 0.85;
-}
-
-.sidebar-recent-session__live {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: var(--ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 12%, transparent);
-  animation: pulse-subtle 2s ease-in-out infinite;
+.sidebar-recent-session__aside {
+  padding-right: 2px;
 }
 
 .sidebar-nav::-webkit-scrollbar {
@@ -1280,6 +1303,14 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve space for the docked operator terminal so it reshapes the content
+     area (shrinks it) instead of overlaying the chat. The terminal panel sets
+     these vars; they are 0 when it is closed. */
+  margin-bottom: var(--oc-terminal-reserve-bottom, 0);
+  margin-right: var(--oc-terminal-reserve-right, 0);
+  transition:
+    margin-bottom 0.16s ease,
+    margin-right 0.16s ease;
 }
 
 .content > * + * {

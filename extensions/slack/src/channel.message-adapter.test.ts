@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const cfg = {
@@ -185,6 +186,56 @@ describe("slack channel message adapter", () => {
         },
       },
     });
+  });
+
+  it("renders portable presentations through the facade as card receipts (#95440)", async () => {
+    const outbound = slackPlugin.outbound;
+    const renderPresentation = outbound?.renderPresentation;
+    if (!renderPresentation) {
+      throw new Error("Expected Slack presentation renderer");
+    }
+    expect(outbound.presentationCapabilities).toBe(SLACK_PRESENTATION_CAPABILITIES);
+
+    const presentation = {
+      title: "Status",
+      blocks: [{ type: "divider" as const }],
+    };
+    const payload = { text: "Fallback", presentation };
+    const rendered = await renderPresentation({
+      payload,
+      presentation,
+      ctx: { cfg, to: "C123", text: payload.text, payload },
+    });
+    if (!rendered) {
+      throw new Error("Expected rendered Slack presentation payload");
+    }
+    // Core consumes the portable presentation before handing the native payload to the adapter.
+    const { presentation: _presentation, ...deliveryPayload } = rendered;
+
+    const result = await requirePayloadSender(requireSlackMessageAdapter())({
+      cfg,
+      to: "C123",
+      text: deliveryPayload.text ?? "",
+      payload: deliveryPayload,
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    const [to, text, options] = expectLastSendSlackCall();
+    expect(to).toBe("C123");
+    expect(text).toBe("Fallback");
+    expect(options.blocks).toEqual([
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Fallback" },
+      },
+      {
+        type: "header",
+        text: { type: "plain_text", text: "Status", emoji: true },
+      },
+      { type: "divider" },
+    ]);
+    expect(result.receipt.parts[0]?.kind).toBe("card");
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {

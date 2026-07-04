@@ -258,6 +258,26 @@ export type GatewayRemoteConfig = {
   sshHostKeyPolicy?: "strict" | "openssh";
 };
 
+/**
+ * Operator terminal surface served to Control UI and mobile clients.
+ *
+ * The terminal opens a PTY-backed shell on the gateway host, gated to
+ * admin-scope operator sessions. It starts in the target agent's workspace; if
+ * that agent is fully sandboxed (`sandbox.mode: "all"`) the terminal is refused
+ * rather than handed an unconfined host shell (workspace isolation is
+ * fail-closed). Under "non-main" the agent's main session runs on the host, so a
+ * host terminal is allowed.
+ */
+export type GatewayTerminalConfig = {
+  /** Master switch for the operator terminal. Default: true. */
+  enabled?: boolean;
+  /**
+   * Shell executable to launch. When unset the host login shell is used
+   * ($SHELL on Unix, %ComSpec% on Windows).
+   */
+  shell?: string;
+};
+
 /** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
@@ -485,6 +505,7 @@ export type GatewayConfig = {
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
+  terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;

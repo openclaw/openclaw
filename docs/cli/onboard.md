@@ -77,10 +77,18 @@ importing.
 
 `--modern` starts Crestodian, the bounded setup and repair helper.
 
-On a fresh install where the active config file is missing or has no authored
-settings (empty or metadata-only), bare `openclaw` starts onboarding. Once a
-working setup exists, bare `openclaw` opens the normal local agent.
-For a valid remote Gateway profile, it opens the normal remote-backed TUI instead.
+In an interactive terminal, bare `openclaw` (no subcommand) routes by config
+state:
+
+- If the active config file is missing or has no authored settings (empty or
+  metadata-only), it starts onboarding.
+- If the config file exists but fails validation, it starts
+  [Crestodian](/cli/crestodian) for repair.
+- If the config file is valid, it opens the normal local agent or connects the
+  TUI to a reachable configured remote Gateway.
+
+On a configured install, reach Crestodian with `/crestodian` inside the TUI or
+`openclaw crestodian`.
 
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
 Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
