@@ -11,11 +11,7 @@ type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
 };
 
-export type RouterOutletOptions<
-  TRouteId extends string,
-  TLoadContext = unknown,
-  TData = unknown,
-> = {
+export type RouterOutletOptions<TLoadContext = unknown> = {
   retryContext?: TLoadContext;
 };
 
@@ -33,6 +29,15 @@ export type RouterOutletSelection<
   pending: RouteMatch<TRouteId, TModule, TData> | undefined;
   showPending: boolean;
 };
+
+export function selectRenderedRouteMatch<TRouteId extends string, TModule, TData>(
+  active: RouteMatch<TRouteId, TModule, TData> | undefined,
+  pending: RouteMatch<TRouteId, TModule, TData> | undefined,
+): RouteMatch<TRouteId, TModule, TData> | undefined {
+  const coldPending =
+    pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
+  return coldPending && active ? active : (pending ?? active);
+}
 
 function selectRouterOutletState<TRouteId extends string, TModule, TData>(
   state: RouterState<TRouteId, TModule, TData>,
@@ -113,15 +118,10 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
 export function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   selection: RouterOutletSelection<TRouteId, TModule, TData>,
-  options: RouterOutletOptions<TRouteId, TLoadContext, TData> = {},
+  options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
   const pending = selection.pending;
-  const coldPending =
-    pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
-  const renderedMatch =
-    coldPending && selection.active && !selection.showPending
-      ? selection.active
-      : (pending ?? selection.active);
+  const renderedMatch = selectRenderedRouteMatch(selection.active, pending);
   if (renderedMatch?.status === "notFound") {
     return nothing;
   }
@@ -230,7 +230,8 @@ class RouterOutletDirective extends AsyncDirective {
     const pending = selection.pending;
     const coldPending =
       pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
-    if (!coldPending) {
+    const needsPendingFallback = coldPending && !selection.active;
+    if (!needsPendingFallback) {
       this.clearPendingTimer();
       this.pendingMatchId = undefined;
       this.showPending = false;
@@ -285,7 +286,7 @@ const routerOutletDirective = directive(RouterOutletDirective);
 export function routerOutlet<TRouteId extends string, TModule, TData, TContext>(
   router: Router<TRouteId, TContext, TModule, TData>,
   boundaryOptions: RouterOutletBoundaryOptions,
-  options: RouterOutletOptions<TRouteId, TContext, TData> = {},
+  options: RouterOutletOptions<TContext> = {},
 ): unknown {
   return routerOutletDirective(router, options.retryContext, boundaryOptions);
 }

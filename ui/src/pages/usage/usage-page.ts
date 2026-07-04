@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   CostUsageSummary,
@@ -28,6 +28,21 @@ import { mergeUsageCacheStatus } from "./cache-status.ts";
 import { selectUsageSessionKeys, toggleUsageRangeSelection } from "./helpers.ts";
 import type { SessionLogEntry, SessionLogRole, UsageColumnId, UsageProps } from "./types.ts";
 import { renderUsage } from "./view.ts";
+
+export type UsageRouteData = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  query: {
+    startDate: string;
+    endDate: string;
+    scope: "instance" | "family";
+    timeZone: "local" | "utc";
+    agentId: string | null;
+  };
+  result: SessionsUsageResult | null;
+  costSummary: CostUsageSummary | null;
+  error: string | null;
+};
 
 const DEFAULT_VISIBLE_COLUMNS: UsageColumnId[] = [
   "channel",
@@ -70,7 +85,9 @@ export class UsagePage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
-  @state() private usageLoading = false;
+  @property({ attribute: false }) routeData?: UsageRouteData;
+
+  @state() private usageLoading = true;
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
   @state() private usageError: string | null = null;
@@ -116,6 +133,8 @@ export class UsagePage extends LitElement {
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
   private subscriptions: Array<() => void> = [];
+  private routeDataInitialized = false;
+  private routeDataEnabled = true;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -123,7 +142,19 @@ export class UsagePage extends LitElement {
       this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
       this.context.agents.subscribe(() => this.requestUpdate()),
     ];
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
+    this.applyGatewaySnapshot(this.context.gateway.snapshot, true);
+  }
+
+  override willUpdate(changed: Map<PropertyKey, unknown>) {
+    if (changed.has("routeData")) {
+      this.applyRouteData();
+    }
+  }
+
+  override updated(changed: Map<PropertyKey, unknown>) {
+    if (changed.has("routeData")) {
+      this.ensureInitialData();
+    }
   }
 
   override disconnectedCallback() {
@@ -139,13 +170,13 @@ export class UsagePage extends LitElement {
     super.disconnectedCallback();
   }
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, initial = false) {
     const clientChanged = snapshot.client !== this.client;
     const becameConnected = snapshot.connected && !this.connected;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
 
-    if (clientChanged) {
+    if (clientChanged && !initial) {
       this.resetForClientChange();
     }
     if (!snapshot.connected || !snapshot.client) {
@@ -154,14 +185,55 @@ export class UsagePage extends LitElement {
     }
 
     void this.context.agents.ensureList();
-    if (clientChanged || becameConnected) {
+    if (this.routeDataInitialized && (clientChanged || becameConnected)) {
       void this.loadUsage();
     }
+  }
+
+  private applyRouteData() {
+    const data = this.routeData;
+    if (!data) {
+      return;
+    }
+    this.routeDataInitialized = true;
+    if (!this.routeDataEnabled) {
+      return;
+    }
+    const gateway = this.context.gateway.snapshot;
+    if (data.client !== gateway.client || data.connected !== gateway.connected) {
+      this.routeDataEnabled = false;
+      this.usageLoading = false;
+      return;
+    }
+
+    this.usageStartDate = data.query.startDate;
+    this.usageEndDate = data.query.endDate;
+    this.usageScope = data.query.scope;
+    this.usageTimeZone = data.query.timeZone;
+    this.usageAgentId = data.query.agentId;
+    this.usageResult = data.result;
+    this.usageCostSummary = data.costSummary;
+    this.usageError = data.error;
+    this.usageLoading = false;
+  }
+
+  private ensureInitialData() {
+    if (
+      this.routeDataEnabled ||
+      !this.routeDataInitialized ||
+      !this.client ||
+      !this.connected ||
+      this.usageLoading
+    ) {
+      return;
+    }
+    void this.loadUsage();
   }
 
   private resetForClientChange() {
     this.clearDateDebounce();
     this.invalidateRequests();
+    this.routeDataEnabled = false;
     this.usageResult = null;
     this.usageCostSummary = null;
     this.usageError = null;
@@ -180,6 +252,7 @@ export class UsagePage extends LitElement {
 
   private invalidateUsageRequest() {
     this.usageRequestId += 1;
+    this.routeDataEnabled = false;
     this.usageLoading = false;
   }
 
@@ -217,6 +290,7 @@ export class UsagePage extends LitElement {
       return;
     }
 
+    this.routeDataEnabled = false;
     const requestId = ++this.usageRequestId;
     const startDate = this.usageStartDate;
     const endDate = this.usageEndDate;

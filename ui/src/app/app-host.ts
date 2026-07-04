@@ -23,8 +23,8 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "./context.ts";
-import "./router-outlet.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
+import { selectRenderedRouteMatch } from "./router-outlet.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
@@ -33,7 +33,7 @@ type ShellRouteState = {
 };
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
-  const match = routerState.pendingMatches[0] ?? routerState.matches[0];
+  const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
   return match
     ? {
         routeId: match.routeId,
