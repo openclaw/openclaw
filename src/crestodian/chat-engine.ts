@@ -252,8 +252,11 @@ export class CrestodianChatEngine {
   }
 
   async handle(text: string): Promise<CrestodianChatReply> {
+    // Snapshot before resolving: wizard answers to sensitive steps (tokens,
+    // passwords) must never enter the AI-visible history.
+    const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
     const reply = await this.resolveTurn(text);
-    this.history.push({ role: "user", text });
+    this.history.push({ role: "user", text: sensitiveTurn ? "<redacted secret>" : text });
     if (reply.text) {
       this.history.push({ role: "assistant", text: reply.text });
     }

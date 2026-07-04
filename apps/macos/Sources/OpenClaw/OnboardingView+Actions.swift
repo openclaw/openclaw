@@ -42,6 +42,8 @@ extension OnboardingView {
     }
 
     func handleNext() {
+        // All callers (Next button, chat handoff) honor the same page gates.
+        guard self.canAdvance else { return }
         self.commitRecommendedConnectionIfNeeded(for: self.activePageIndex)
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }

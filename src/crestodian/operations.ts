@@ -508,8 +508,10 @@ async function chooseSetupModel(params: {
   }
   const detect = params.deps?.detectInferenceBackends ?? detectInferenceBackends;
   const candidates = await detect({});
+  // A definitively logged-out CLI must never become the configured model:
+  // setup would claim working AI access while every agent run fails auth.
   const detected: InferenceBackendCandidate | undefined = candidates.find(
-    (candidate) => candidate.kind !== "existing-model",
+    (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
   );
   if (!detected) {
     return { source: "none" };

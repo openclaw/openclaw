@@ -27,7 +27,10 @@ export async function buildOnboardingWelcome(params: {
     import("../commands/onboard-helpers.js"),
   ]);
   const candidates = await detectInferenceBackends({});
-  const detected = candidates.find((candidate) => candidate.kind !== "existing-model");
+  // Mirror chooseSetupModel: never advertise a definitively logged-out CLI.
+  const detected = candidates.find(
+    (candidate) => candidate.kind !== "existing-model" && candidate.credentials !== false,
+  );
   const workspace = resolveUserPath(params.workspace ?? DEFAULT_WORKSPACE);
 
   params.engine.propose({ kind: "setup", workspace });
