@@ -3,6 +3,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
+type TranscriptUsageSnapshotForStatusTest = {
+  costUsd?: number;
+};
+
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
@@ -13,6 +17,9 @@ const statusSummaryMocks = vi.hoisted(() => ({
       entry: Record<string, unknown>;
     }>
   >(() => []),
+  readLatestSessionUsageFromTranscriptAsync: vi.fn<
+    () => Promise<TranscriptUsageSnapshotForStatusTest | undefined>
+  >(async () => undefined),
   configureTaskRegistryMaintenance: vi.fn(),
   taskRegistrySummary: {
     total: 0,
@@ -144,6 +151,11 @@ vi.mock("../gateway/agent-list.js", () => ({
   })),
 }));
 
+vi.mock("../gateway/session-transcript-readers.js", () => ({
+  readLatestSessionUsageFromTranscriptAsync:
+    statusSummaryMocks.readLatestSessionUsageFromTranscriptAsync,
+}));
+
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: statusSummaryMocks.buildChannelSummary,
 }));
@@ -188,6 +200,8 @@ vi.mock("./status.link-channel.js", () => ({
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveStorePath } = await import("../config/sessions/paths.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
+const { readLatestSessionUsageFromTranscriptAsync } =
+  await import("../gateway/session-transcript-readers.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("./status.summary.runtime.js").statusSummaryRuntime;
@@ -255,6 +269,8 @@ describe("getStatusSummary", () => {
           : undefined,
     );
     statusSummaryMocks.listSessionEntries.mockReturnValue([]);
+    statusSummaryMocks.readLatestSessionUsageFromTranscriptAsync.mockReset();
+    statusSummaryMocks.readLatestSessionUsageFromTranscriptAsync.mockResolvedValue(undefined);
     vi.mocked(resolveStorePath).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
@@ -481,6 +497,32 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
+  });
+
+  it("uses cumulative transcript cost for recent session rows", async () => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "session-cost",
+          sessionFile: "/tmp/session-cost.jsonl",
+          updatedAt: Date.now(),
+          estimatedCostUsd: 0.001,
+        },
+      }),
+    );
+    statusSummaryMocks.readLatestSessionUsageFromTranscriptAsync.mockResolvedValue({
+      costUsd: 0.0063,
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.costUsd).toBe(0.0063);
+    expect(readLatestSessionUsageFromTranscriptAsync).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionFile: "/tmp/session-cost.jsonl",
+      sessionId: "session-cost",
+      storePath: "/tmp/sessions.json",
+    });
   });
 
   it("hydrates only recent session rows while preserving total counts", async () => {

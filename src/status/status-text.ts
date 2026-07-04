@@ -32,6 +32,7 @@ import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import {
   formatUsageWindowSummary,
@@ -296,6 +297,31 @@ async function resolveRuntimePluginHealthLine(): Promise<string> {
     return formatCompactPluginHealthLine(collectRuntimePluginHealthSnapshot());
   } catch {
     return "⚠️ Plugins: health unavailable";
+  }
+}
+
+async function resolveStatusSessionCostUsd(params: {
+  includeTranscriptUsage: boolean;
+  sessionEntry?: SessionEntry;
+  sessionId?: string;
+  agentId?: string;
+  storePath?: string;
+}): Promise<number | undefined> {
+  if (!params.includeTranscriptUsage || !params.sessionId) {
+    return undefined;
+  }
+  try {
+    const snapshot = await readLatestSessionUsageFromTranscriptAsync({
+      agentId: params.agentId,
+      sessionFile: params.sessionEntry?.sessionFile,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+    return typeof snapshot?.costUsd === "number" && Number.isFinite(snapshot.costUsd)
+      ? snapshot.costUsd
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -607,6 +633,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         ? contextTokens
         : undefined))
     : undefined;
+  const sessionCostUsd = await resolveStatusSessionCostUsd({
+    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    sessionEntry,
+    sessionId: sessionEntry?.sessionId,
+    agentId: statusAgentId,
+    storePath,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -629,6 +662,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     explicitConfiguredContextTokens: configuredContextTokens,
     runtimeContextTokens: statusRuntimeContextTokens,
     sessionEntry,
+    ...(sessionCostUsd !== undefined ? { sessionCostUsd } : {}),
     sessionKey,
     parentSessionKey,
     sessionScope,

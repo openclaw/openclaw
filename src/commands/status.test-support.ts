@@ -121,6 +121,7 @@ const baseStatusSummary = {
         selectedModel: "openai/gpt-5.5",
         modelSelectionReason: null,
         runtime: "OpenClaw Default",
+        costUsd: 0.042,
         totalTokens: 12_000,
         totalTokensFresh: true,
         remainingTokens: 4_000,
