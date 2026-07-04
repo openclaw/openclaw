@@ -4,6 +4,13 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { TSchema } from "typebox";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -16,18 +23,13 @@ import { logVerbose } from "../globals.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import {
+  resolveActiveWebSearchProviders,
   resolvePluginWebSearchProviders,
   resolveRuntimeWebSearchProviders,
 } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,
@@ -443,6 +445,101 @@ function isStructuredAvailabilityError(result: unknown): result is { error: stri
   }
   const error = (result as { error?: unknown }).error;
   return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
+}
+
+/**
+ * Resolves the model-facing web_search schema from the provider that a request
+ * would actually use. Provider plugins own their own parameter shape, so the
+ * tool advertises exactly what the resolved provider supports (Brave's
+ * search_lang/ui_lang, Perplexity's domain_filter/max_tokens, Exa's type/
+ * contents, and so on) instead of a hand-maintained core superset. Mirrors
+ * runWebSearch selection semantics: explicit selection never falls back, while
+ * implicit auto-detect only falls through to providers execution would try
+ * (same credential-signal filter as runWebSearch). Returns undefined when no
+ * provider can be resolved so the tool falls back to the superset schema.
+ * Best-effort: any resolution failure yields undefined.
+ */
+export function resolveWebSearchToolSchema(
+  options?: ResolveWebSearchDefinitionParams,
+): TSchema | undefined {
+  try {
+    const { config, search, runtimeWebSearch } = resolveWebSearchRequestContext(options);
+    if (!resolveWebSearchEnabled({ search, sandboxed: options?.sandboxed })) {
+      return undefined;
+    }
+    // Read only the already-active registry; schema construction must never
+    // cold-load the plugin runtime. Fall back to the base schema when nothing
+    // is active yet.
+    const providers = sortWebSearchProvidersForAutoDetect(resolveActiveWebSearchProviders());
+    if (providers.length === 0) {
+      return undefined;
+    }
+    const targetId =
+      resolveExplicitWebSearchProviderId({
+        search,
+        runtimeWebSearch,
+        providerId: options?.providerId,
+        includeRuntimeSelection: true,
+      }) ??
+      resolveRuntimePreferredWebSearchProviderId({
+        config,
+        search,
+        runtimeWebSearch,
+        providers,
+        agentDir: options?.agentDir,
+      }) ??
+      resolveWebSearchProviderId({ config, search, providers, agentDir: options?.agentDir });
+    if (!targetId) {
+      return undefined;
+    }
+    const targetEntry = providers.find((provider) => provider.id === targetId);
+    if (!targetEntry) {
+      return undefined;
+    }
+    const buildParameters = (provider: PluginWebSearchProviderEntry): TSchema | undefined =>
+      provider.createTool({
+        config,
+        agentDir: options?.agentDir,
+        searchConfig: search as Record<string, unknown> | undefined,
+        runtimeMetadata: runtimeWebSearch,
+      })?.parameters;
+
+    // Mirror runWebSearch selection semantics. Explicit selection (configured
+    // or runtime-pinned provider) never falls back: runWebSearch throws when the
+    // selected provider is unavailable rather than running another one, so the
+    // schema must advertise only that provider (or the superset when it yields
+    // no definition), never a backup provider's parameters.
+    const allowFallback = !hasExplicitWebSearchSelection({
+      search,
+      runtimeWebSearch,
+      providerId: options?.providerId,
+      providers,
+    });
+    if (!allowFallback) {
+      return buildParameters(targetEntry);
+    }
+    // Implicit auto-detect can fall through, but only to providers execution
+    // would actually try. runWebSearch filters implicit fallback candidates by
+    // hasImplicitProviderSelectionSignal, so mirror that filter here: never
+    // advertise the schema of an unconfigured provider that execution would skip.
+    const orderedCandidates = [
+      targetEntry,
+      ...providers.filter(
+        (provider) =>
+          provider.id !== targetId &&
+          hasImplicitProviderSelectionSignal(provider, config, search, options?.agentDir),
+      ),
+    ];
+    for (const candidate of orderedCandidates) {
+      const parameters = buildParameters(candidate);
+      if (parameters) {
+        return parameters;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Executes web_search with fallback when selection was not explicit. */

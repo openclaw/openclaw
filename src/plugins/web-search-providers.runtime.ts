@@ -2,6 +2,7 @@
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
@@ -62,6 +63,20 @@ export function resolvePluginWebSearchProviders(params: {
     mapRegistryProviders: mapRegistryWebSearchProviders,
     resolveBundledPublicArtifactProviders: resolveBundledWebSearchProvidersFromPublicArtifacts,
   });
+}
+
+/**
+ * Reads web-search providers from the already-active plugin registry without
+ * triggering a plugin load. Building model-facing tool schema runs on the agent
+ * hot path (and in isolated tool tests), so it must never cold-load the full
+ * plugin runtime; callers fall back to a generic schema when nothing is active.
+ */
+export function resolveActiveWebSearchProviders(): PluginWebSearchProviderEntry[] {
+  const registry = getActivePluginRegistry();
+  if (!registry) {
+    return [];
+  }
+  return mapRegistryWebSearchProviders({ registry });
 }
 
 export function resolveRuntimeWebSearchProviders(params: {

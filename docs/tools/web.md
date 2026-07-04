@@ -368,10 +368,16 @@ show the `x_search` prompt.
 
 ## Tool parameters
 
+The `web_search` tool advertises the parameter schema of the provider it will
+actually use, so the exact parameters the model sees depend on your selected (or
+auto-detected) provider (for example, Exa also exposes `type` and `contents`,
+and allows a higher `count`). When no provider can be resolved yet, it falls
+back to the superset below, which keeps every historically supported parameter.
+
 | Parameter             | Description                                           |
 | --------------------- | ----------------------------------------------------- |
 | `query`               | Search query (required)                               |
-| `count`               | Results to return (1-10, default: 5)                  |
+| `count`               | Results to return (fallback range 1-10, default: 5)   |
 | `country`             | 2-letter ISO country code (e.g. "US", "DE")           |
 | `language`            | ISO 639-1 language code (e.g. "en", "de")             |
 | `search_lang`         | Search-language code (Brave only)                     |

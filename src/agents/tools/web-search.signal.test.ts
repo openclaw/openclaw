@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../web-search/runtime.js", () => ({
   resolveWebSearchProviderId: vi.fn(() => "mock"),
+  resolveWebSearchToolSchema: vi.fn(() => undefined),
   runWebSearch: mocks.runWebSearch,
 }));
 

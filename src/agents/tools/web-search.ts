@@ -5,13 +5,24 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
+import {
+  resolveWebSearchProviderId,
+  resolveWebSearchToolSchema,
+  runWebSearch,
+} from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
 import { MAX_SEARCH_COUNT, SEARCH_CACHE } from "./web-search-provider-common.js";
 import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
-const WebSearchSchema = {
+// Back-compat fallback schema. When a concrete provider can be resolved at
+// build time, resolveWebSearchToolSchema returns that provider's own (more
+// accurate) schema instead. This union is advertised only when no provider is
+// active yet (before startup activation, or when nothing is configured /
+// detected). It intentionally keeps every historically shipped parameter so the
+// model never loses parameters it had before this fast path existed; keep it as
+// the union of provider-specific knobs.
+const WEB_SEARCH_FALLBACK_SCHEMA = {
   type: "object",
   required: ["query"],
   properties: {
@@ -86,11 +97,29 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
+  // Advertise the schema of the provider this tool would actually use, so the
+  // model sees provider-accurate parameters instead of a hand-maintained
+  // superset. Uses the same late-bound runtime context as execution; falls back
+  // to the generic base schema when no concrete provider resolves.
+  const schemaContext = resolveWebSearchToolRuntimeContext({
+    config: options?.config,
+    lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+    runtimeWebSearch: options?.runtimeWebSearch,
+  });
+  const parameters =
+    resolveWebSearchToolSchema({
+      config: schemaContext.config,
+      agentDir: options?.agentDir,
+      sandboxed: options?.sandboxed,
+      runtimeWebSearch: schemaContext.runtimeWebSearch,
+      preferRuntimeProviders: schemaContext.preferRuntimeProviders,
+    }) ?? WEB_SEARCH_FALLBACK_SCHEMA;
+
   return {
     label: "Web Search",
     name: "web_search",
     description: "Search web for current info; returns normalized provider results.",
-    parameters: WebSearchSchema,
+    parameters,
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
       // rebuilding the tool object.
