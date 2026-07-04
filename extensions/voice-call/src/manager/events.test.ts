@@ -769,8 +769,8 @@ describe("processEvent (functional)", () => {
       answerCall: async (input: AnswerCallInput): Promise<void> => {
         answeredCalls.push(input);
       },
-    }) as VoiceCallProvider & { getClassicStreamUrl?: () => string | null };
-    provider.getClassicStreamUrl = () => "wss://example.com/voice/stream";
+    }) as VoiceCallProvider & { getClassicStreamUrl?: (callId: string) => string | null };
+    provider.getClassicStreamUrl = (callId) => `wss://example.com/voice/stream?token=${callId}`;
 
     const ctx = createContext({
       provider,
@@ -795,7 +795,7 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     expect(answeredCalls).toHaveLength(1);
-    expect(answeredCalls[0]?.streamUrl).toBe("wss://example.com/voice/stream");
+    expect(answeredCalls[0]?.streamUrl).toBe("wss://example.com/voice/stream?token=call-control-telnyx");
   });
 
   it("ignores classic streamUrl if realtime is enabled on Telnyx", async () => {
@@ -805,8 +805,8 @@ describe("processEvent (functional)", () => {
       answerCall: async (input: AnswerCallInput): Promise<void> => {
         answeredCalls.push(input);
       },
-    }) as VoiceCallProvider & { getClassicStreamUrl?: () => string | null };
-    provider.getClassicStreamUrl = () => "wss://example.com/voice/stream";
+    }) as VoiceCallProvider & { getClassicStreamUrl?: (callId: string) => string | null };
+    provider.getClassicStreamUrl = (callId) => `wss://example.com/voice/stream?token=${callId}`;
 
     const ctx = createContext({
       provider,
@@ -836,7 +836,7 @@ describe("processEvent (functional)", () => {
 
     expect(answeredCalls).toHaveLength(1);
     // Realtime doesn't have a streamSessionIssuer in this mock ctx so streamUrl is undefined,
-    // but the key point is that it did NOT use the classicStreamUrl "wss://example.com/voice/stream".
+    // but the key point is that it did NOT use the classicStreamUrl "wss://example.com/voice/stream?token=...".
     expect(answeredCalls[0]?.streamUrl).toBeUndefined();
   });
 });

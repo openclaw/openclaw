@@ -19,6 +19,7 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
@@ -71,6 +72,8 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly baseUrl = "https://api.telnyx.com/v2";
   private readonly apiHost = "api.telnyx.com";
   private currentPublicUrl: string | undefined;
+  private mediaStreamHandler: any = null;
+  private readonly streamAuthTokens = new Map<string, string>();
 
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
@@ -90,11 +93,33 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.currentPublicUrl = url;
   }
 
-  isConversationStreamConnectEnabled(): boolean {
-    return Boolean(this.currentPublicUrl && this.options.streamPath);
+  setMediaStreamHandler(handler: any): void {
+    this.mediaStreamHandler = handler;
   }
 
-  getClassicStreamUrl(): string | null {
+  isConversationStreamConnectEnabled(): boolean {
+    return Boolean(this.mediaStreamHandler && this.currentPublicUrl && this.options.streamPath);
+  }
+
+  private getStreamAuthToken(callControlId: string): string {
+    const existing = this.streamAuthTokens.get(callControlId);
+    if (existing) {
+      return existing;
+    }
+    const token = crypto.randomBytes(16).toString("base64url");
+    this.streamAuthTokens.set(callControlId, token);
+    return token;
+  }
+
+  isValidStreamToken(callControlId: string, token?: string): boolean {
+    const expected = this.streamAuthTokens.get(callControlId);
+    if (!expected || !token) {
+      return false;
+    }
+    return safeEqualSecret(expected, token);
+  }
+
+  getClassicStreamUrl(callControlId: string): string | null {
     if (!this.currentPublicUrl || !this.options.streamPath) {
       return null;
     }
@@ -105,7 +130,8 @@ export class TelnyxProvider implements VoiceCallProvider {
     const path = this.options.streamPath.startsWith("/")
       ? this.options.streamPath
       : `/${this.options.streamPath}`;
-    return `${wsOrigin}${path}`;
+    const token = this.getStreamAuthToken(callControlId);
+    return `${wsOrigin}${path}?token=${token}`;
   }
 
   /**

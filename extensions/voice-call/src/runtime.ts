@@ -24,6 +24,7 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import type { TelnyxProvider } from "./providers/telnyx.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -481,9 +482,11 @@ export async function createVoiceCallRuntime(params: {
     }
 
     if (provider.name === "telnyx" && config.streaming?.enabled) {
+      const telnyxProvider = provider as TelnyxProvider;
       const mediaHandler = webhookServer.getMediaStreamHandler();
       if (mediaHandler) {
         mediaHandler.setParseMessage(parseTelnyxMediaMessage);
+        telnyxProvider.setMediaStreamHandler(mediaHandler);
         log.info("[voice-call] Telnyx classic streaming: media stream handler wired");
       } else {
         log.warn("[voice-call] Telnyx classic streaming: media stream handler not available");

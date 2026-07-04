@@ -243,9 +243,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           !ctx.config.realtime?.enabled &&
           ctx.config.streaming?.enabled &&
           ctx.provider.name === "telnyx" &&
-          typeof (ctx.provider as { getClassicStreamUrl?: () => string | null }).getClassicStreamUrl ===
+          typeof (ctx.provider as unknown as { getClassicStreamUrl?: (callId: string) => string | null }).getClassicStreamUrl ===
             "function"
-            ? (ctx.provider as { getClassicStreamUrl: () => string | null }).getClassicStreamUrl()
+            ? (ctx.provider as unknown as { getClassicStreamUrl: (callId: string) => string | null }).getClassicStreamUrl(call.providerCallId ?? call.callId)
             : null;
         void ctx.provider
           .answerCall({

@@ -37,6 +37,7 @@ import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import type { TelnyxProvider } from "./providers/telnyx.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
 import type { WebhookResponsePayload } from "./webhook.types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -382,6 +383,12 @@ export class VoiceCallWebhookServer {
         if (this.provider.name === "twilio") {
           const twilio = this.provider as TwilioProvider;
           if (!twilio.isValidStreamToken(callId, token)) {
+            console.warn(`[voice-call] Rejecting media stream: invalid token for ${callId}`);
+            return false;
+          }
+        } else if (this.provider.name === "telnyx") {
+          const telnyx = this.provider as TelnyxProvider;
+          if (!telnyx.isValidStreamToken(callId, token)) {
             console.warn(`[voice-call] Rejecting media stream: invalid token for ${callId}`);
             return false;
           }

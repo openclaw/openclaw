@@ -495,7 +495,7 @@ describe("TelnyxProvider classic streaming options", () => {
       apiKey: "KEY123",
       connectionId: "CONN456",
     });
-    expect(provider.getClassicStreamUrl()).toBeNull();
+    expect(provider.getClassicStreamUrl("call-123")).toBeNull();
     expect(provider.isConversationStreamConnectEnabled()).toBe(false);
   });
 
@@ -505,7 +505,7 @@ describe("TelnyxProvider classic streaming options", () => {
       {},
     );
     provider.setPublicUrl("https://example.com");
-    expect(provider.getClassicStreamUrl()).toBeNull();
+    expect(provider.getClassicStreamUrl("call-123")).toBeNull();
     expect(provider.isConversationStreamConnectEnabled()).toBe(false);
   });
 
@@ -514,18 +514,34 @@ describe("TelnyxProvider classic streaming options", () => {
       { apiKey: "KEY123", connectionId: "CONN456" },
       { streamPath: "/voice/stream" },
     );
-    expect(provider.getClassicStreamUrl()).toBeNull();
+    expect(provider.getClassicStreamUrl("call-123")).toBeNull();
     expect(provider.isConversationStreamConnectEnabled()).toBe(false);
   });
 
-  it("returns wss URL when both publicUrl and streamPath are configured", () => {
+  it("returns wss URL when both publicUrl and streamPath are configured and mediaStreamHandler is wired", () => {
     const provider = new TelnyxProvider(
       { apiKey: "KEY123", connectionId: "CONN456" },
       { streamPath: "/voice/stream" },
     );
     provider.setPublicUrl("https://example.com/");
-    expect(provider.getClassicStreamUrl()).toBe("wss://example.com/voice/stream");
+    expect(provider.isConversationStreamConnectEnabled()).toBe(false);
+
+    provider.setMediaStreamHandler({});
     expect(provider.isConversationStreamConnectEnabled()).toBe(true);
+
+    const streamUrl = provider.getClassicStreamUrl("call-123");
+    expect(streamUrl).not.toBeNull();
+    const url = new URL(streamUrl!);
+    expect(url.origin).toBe("wss://example.com");
+    expect(url.pathname).toBe("/voice/stream");
+    const token = url.searchParams.get("token");
+    expect(token).not.toBeNull();
+    expect(token!.length).toBeGreaterThan(0);
+
+    // Verify token validation works
+    expect(provider.isValidStreamToken("call-123", token!)).toBe(true);
+    expect(provider.isValidStreamToken("call-123", "wrong-token")).toBe(false);
+    expect(provider.isValidStreamToken("call-different", token!)).toBe(false);
   });
 
   it("normalizes path slashes and non-secure http to ws", () => {
@@ -534,7 +550,12 @@ describe("TelnyxProvider classic streaming options", () => {
       { streamPath: "voice/stream" },
     );
     provider.setPublicUrl("http://example.com");
-    expect(provider.getClassicStreamUrl()).toBe("ws://example.com/voice/stream");
+    provider.setMediaStreamHandler({});
+    const streamUrl = provider.getClassicStreamUrl("call-123");
+    expect(streamUrl).not.toBeNull();
+    const url = new URL(streamUrl!);
+    expect(url.origin).toBe("ws://example.com");
+    expect(url.pathname).toBe("/voice/stream");
     expect(provider.isConversationStreamConnectEnabled()).toBe(true);
   });
 });
