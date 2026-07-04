@@ -20,6 +20,8 @@ NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
 NODE_MIN_MINOR=19
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
+NODE_23_MIN_MINOR=11
+NODE_SUPPORTED_VERSION_LABEL="22.19+, 23.11+, or 24+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1479,23 +1481,32 @@ node_major_version() {
     return 1
 }
 
-node_is_at_least_required() {
+node_version_components_are_supported() {
+    local major="$1"
+    local minor="$2"
+    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -eq 23 && "$minor" -ge "$NODE_23_MIN_MINOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -gt 23 ]]; then
+        return 0
+    fi
+    return 1
+}
+
+node_is_supported() {
     local version_components major minor
     version_components="$(parse_node_version_components || true)"
     read -r major minor <<< "$version_components"
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
-        return 0
-    fi
-    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
-        return 0
-    fi
-    return 1
+    node_version_components_are_supported "$major" "$minor"
 }
 
-node_binary_is_at_least_required() {
+node_binary_is_supported() {
     local node_bin="$1"
     local version_components major minor
     version_components="$(parse_node_version_components_for_binary "$node_bin" || true)"
@@ -1503,13 +1514,7 @@ node_binary_is_at_least_required() {
     if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
         return 1
     fi
-    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
-        return 0
-    fi
-    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
-        return 0
-    fi
-    return 1
+    node_version_components_are_supported "$major" "$minor"
 }
 
 prepend_path_dir() {
@@ -1585,7 +1590,7 @@ promote_supported_node_binary() {
             continue
         fi
         seen_dirs="${seen_dirs}${dir}:"
-        if node_binary_is_at_least_required "$candidate"; then
+        if node_binary_is_supported "$candidate"; then
             prepend_path_dir "$dir" || continue
             if [[ "$OS" == "linux" ]]; then
                 persist_shell_path_prepend "$dir" || true
@@ -1633,9 +1638,7 @@ ensure_macos_default_node_active() {
         fi
     fi
 
-    local major=""
-    major="$(node_major_version || true)"
-    if [[ -n "$major" && "$major" -ge 22 ]]; then
+    if node_is_supported; then
         return 0
     fi
 
@@ -1658,7 +1661,7 @@ ensure_macos_default_node_active() {
 
 ensure_default_node_active_shell() {
     promote_supported_node_binary || true
-    if node_is_at_least_required; then
+    if node_is_supported; then
         return 0
     fi
 
@@ -1666,7 +1669,7 @@ ensure_default_node_active_shell() {
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
 
-    ui_error "Active Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+    ui_error "Active Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
     print_active_node_paths || true
 
     local nvm_detected=0
@@ -1686,7 +1689,7 @@ ensure_default_node_active_shell() {
         echo "Then open a new shell and rerun:"
         echo "  curl -fsSL https://openclaw.ai/install.sh | bash"
     else
-        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} (or Node ${NODE_MIN_VERSION}+ minimum) and ensure it is first on PATH, then rerun installer."
+        echo "Install/select Node.js ${NODE_DEFAULT_MAJOR} and ensure it is first on PATH, then rerun installer."
     fi
 
     return 1
@@ -1716,15 +1719,15 @@ load_nvm_for_node_detection() {
 check_node() {
     if command -v node &> /dev/null; then
         NODE_VERSION="$(node_major_version || true)"
-        if node_is_at_least_required; then
+        if node_is_supported; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
             print_active_node_paths || true
             return 0
         else
             if [[ -n "$NODE_VERSION" ]]; then
-                ui_info "Node.js $(node -v) found, upgrading to v${NODE_MIN_VERSION}+"
+                ui_info "Node.js $(node -v) found, upgrading to a supported version"
             else
-                ui_info "Node.js found but version could not be parsed; reinstalling v${NODE_MIN_VERSION}+"
+                ui_info "Node.js found but version could not be parsed; reinstalling a supported version"
             fi
             return 1
         fi
@@ -1736,11 +1739,11 @@ check_node() {
 
 finish_linux_node_install() {
     activate_supported_node_on_path || true
-    if ! node_is_at_least_required; then
+    if ! node_is_supported; then
         local active_path active_version
         active_path="$(command -v node 2>/dev/null || echo "not found")"
         active_version="$(node -v 2>/dev/null || echo "missing")"
-        ui_error "Installed Node.js must be v${NODE_MIN_VERSION}+ but this shell is using ${active_version} (${active_path})"
+        ui_error "Installed Node.js must be ${NODE_SUPPORTED_VERSION_LABEL} but this shell is using ${active_version} (${active_path})"
         echo "Upgrade the system Node.js package or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
         exit 1
     fi
@@ -1758,14 +1761,14 @@ install_node_with_apk() {
     fi
 
     activate_supported_node_on_path || true
-    if node_is_at_least_required; then
+    if node_is_supported; then
         finish_linux_node_install
         return 0
     fi
 
     local apk_node_version
     apk_node_version="$(node -v 2>/dev/null || echo "missing")"
-    ui_warn "Alpine nodejs package installed ${apk_node_version}, below required v${NODE_MIN_VERSION}+"
+    ui_warn "Alpine nodejs package installed ${apk_node_version}, outside the supported range (${NODE_SUPPORTED_VERSION_LABEL})"
     ui_info "Trying Alpine nodejs-current package"
     if is_root; then
         run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm
@@ -1774,7 +1777,7 @@ install_node_with_apk() {
     fi
 
     activate_supported_node_on_path || true
-    if node_is_at_least_required; then
+    if node_is_supported; then
         finish_linux_node_install
         return 0
     fi
@@ -1782,7 +1785,7 @@ install_node_with_apk() {
     local active_path active_version
     active_path="$(command -v node 2>/dev/null || echo "not found")"
     active_version="$(node -v 2>/dev/null || echo "missing")"
-    ui_error "Alpine apk repositories did not provide Node.js v${NODE_MIN_VERSION}+; found ${active_version} (${active_path})"
+    ui_error "Alpine apk repositories did not provide Node.js ${NODE_SUPPORTED_VERSION_LABEL}; found ${active_version} (${active_path})"
     echo "Use Alpine 3.21+ or install Node.js ${NODE_DEFAULT_MAJOR} manually, then rerun the installer."
     exit 1
 }
@@ -1864,7 +1867,7 @@ install_node() {
             fi
         else
             ui_error "Could not detect package manager"
-            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually (or Node ${NODE_MIN_VERSION}+ minimum): https://nodejs.org"
+            echo "Please install Node.js ${NODE_DEFAULT_MAJOR} manually: https://nodejs.org"
             exit 1
         fi
 

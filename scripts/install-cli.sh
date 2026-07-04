@@ -58,6 +58,8 @@ if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
 MIN_NODE_VERSION="22.19.0"
+MIN_NODE_23_VERSION="23.11.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 22.19+, Node 23.11+, or Node 24+"
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
@@ -423,11 +425,14 @@ linked_node_is_usable() {
 
   current_version="$("$(node_bin)" -v 2>/dev/null || echo "")"
   required_version="$(required_node_version)"
+  if ! node_version_is_supported "$current_version"; then
+    return 1
+  fi
   if ! semver_at_least "$current_version" "$required_version"; then
     return 1
   fi
 
-  "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1
+  "$(node_bin)" -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(':memory:'); const statement = db.prepare('SELECT 1'); const supported = typeof statement.columns === 'function'; db.close(); if (!supported) process.exit(1);" >/dev/null 2>&1
 }
 
 semver_at_least() {
@@ -460,8 +465,32 @@ semver_at_least() {
   ((version_patch >= required_patch))
 }
 
+node_version_is_supported() {
+  local version="${1#v}"
+  local major minor patch
+
+  IFS=. read -r major minor patch <<<"$version"
+  minor="${minor:-0}"
+  patch="${patch:-0}"
+  for part in "$major" "$minor" "$patch"; do
+    if [[ ! "$part" =~ ^[0-9]+$ ]]; then
+      return 1
+    fi
+  done
+
+  if ((major == 22)); then
+    semver_at_least "$version" "$MIN_NODE_VERSION"
+    return
+  fi
+  if ((major == 23)); then
+    semver_at_least "$version" "$MIN_NODE_23_VERSION"
+    return
+  fi
+  ((major > 23))
+}
+
 required_node_version() {
-  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && semver_at_least "$NODE_VERSION" "$MIN_NODE_VERSION"; then
+  if [[ "$NODE_VERSION_REQUESTED" == "1" ]] && node_version_is_supported "$NODE_VERSION"; then
     printf '%s\n' "$NODE_VERSION"
     return
   fi
@@ -766,6 +795,10 @@ install_node() {
   local tarball
   local expected_sha
   local actual_sha
+
+  if ! node_version_is_supported "$NODE_VERSION"; then
+    fail "Node ${NODE_VERSION} is unsupported; use ${SUPPORTED_NODE_VERSION_LABEL}."
+  fi
 
   os="$(os_detect)"
   arch="$(arch_detect)"
