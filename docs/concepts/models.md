@@ -44,7 +44,7 @@ OpenClaw selects models in this order:
 <AccordionGroup>
   <Accordion title="Related model surfaces">
     - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases). Use `provider/*` entries to limit visible providers while keeping provider discovery dynamic.
-    - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles and supported channel thread/topic titles. Per-agent `agents.list[].utilityModel` overrides it. When unset, these tasks use the agent's primary model.
+    - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles and supported channel thread/topic titles. Per-agent `agents.list[].utilityModel` overrides it. When unset, these tasks use the agent's primary model. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
     - `agents.defaults.imageModel` is used **only when** the primary model can't accept images.
     - `agents.defaults.pdfModel` is used by the `pdf` tool. If omitted, the tool falls back to `agents.defaults.imageModel`, then the resolved session/default model.
     - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
