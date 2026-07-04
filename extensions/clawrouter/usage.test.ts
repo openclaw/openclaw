@@ -1,6 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchClawRouterUsage } from "./usage.js";
 
+function oversizedJsonResponse(): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunk = 1024 * 1024;
+  const maxChunks = 64;
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= maxChunks) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunk;
+        controller.enqueue(new Uint8Array(chunk));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+  return { response, state };
+}
+
 describe("ClawRouter usage", () => {
   it("maps the managed monthly budget and usage totals", async () => {
     const fetchFn = vi.fn(async () =>
@@ -69,6 +97,20 @@ describe("ClawRouter usage", () => {
     expect(snapshot.windows).toEqual([]);
     expect(snapshot.summary).toBe("0 requests · 0 tokens · $0.00 used");
     expect(snapshot.plan).toBe("Unmetered proxy key");
+  });
+
+  it("rejects oversized successful JSON responses before buffering the whole body", async () => {
+    const { response, state } = oversizedJsonResponse();
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "proxy-key",
+        timeoutMs: 5000,
+        fetchFn: vi.fn(async () => response) as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("ClawRouter usage: JSON response exceeds 16777216 bytes");
+    expect(state.canceled).toBe(true);
+    expect(state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
   it("does not expose an upstream error body", async () => {

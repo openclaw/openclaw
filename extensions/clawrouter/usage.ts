@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeClawRouterRootUrl } from "./provider-catalog.js";
 
@@ -78,7 +79,10 @@ export async function fetchClawRouterUsage(params: {
   if (!response.ok) {
     throw new Error(`ClawRouter usage request failed (HTTP ${response.status})`);
   }
-  const payload = (await response.json()) as ClawRouterUsagePayload;
+  const payload = await readProviderJsonResponse<ClawRouterUsagePayload>(
+    response,
+    "ClawRouter usage",
+  );
   const budget = payload.budget;
   const limitMicros = nonNegativeNumber(budget?.limitMicros);
   const spentMicros = nonNegativeNumber(budget?.spentMicros);
