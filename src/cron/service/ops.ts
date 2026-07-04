@@ -473,22 +473,32 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
-// Rolls the live store back to its pre-mutation snapshot when the durable
-// write fails. recomputeNextRunsForMaintenance mutates schedule state across
-// all jobs, so restoring only the touched job would leave siblings ahead of
-// disk; without the rollback a failed add/update/remove keeps running,
-// reverting, or resurrecting jobs the caller was told did not apply.
-async function persistOrRestore(state: CronServiceState, snapshot: CronStoreFile | null) {
+type CronRollbackSnapshot = {
+  store: CronStoreFile | null;
+  pendingCatchupDeferralJobIds: Set<string>;
+};
+
+// Rolls the live scheduler state back to its pre-mutation snapshot when the
+// durable write fails. recomputeNextRunsForMaintenance mutates schedule state
+// across all jobs and drops catch-up deferral markers for removed/disabled
+// jobs, so restoring only the touched job would leave siblings and deferrals
+// ahead of disk; without the rollback a failed add/update/remove keeps
+// running, reverting, or resurrecting jobs the caller was told did not apply.
+async function persistOrRestore(state: CronServiceState, snapshot: CronRollbackSnapshot) {
   try {
     await persist(state);
   } catch (err) {
-    state.store = snapshot;
+    state.store = snapshot.store;
+    state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
   }
 }
 
-function snapshotStoreForRollback(state: CronServiceState): CronStoreFile | null {
-  return state.store ? structuredClone(state.store) : null;
+function snapshotStoreForRollback(state: CronServiceState): CronRollbackSnapshot {
+  return {
+    store: state.store ? structuredClone(state.store) : null,
+    pendingCatchupDeferralJobIds: new Set(state.pendingCatchupDeferralJobIds),
+  };
 }
 
 /** Adds a cron job, recomputes scheduler state, persists, and re-arms the timer. */

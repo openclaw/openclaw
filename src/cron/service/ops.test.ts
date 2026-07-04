@@ -905,6 +905,25 @@ describe("cron service ops persist rollback", () => {
     expect(loaded.jobs.map((entry) => entry.id)).toEqual([job.id]);
   });
 
+  it("keeps a job's catch-up deferral marker when a remove persist fails", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+
+    const job = await add(state, makeCreateInput("daily cleanup"));
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    state.pendingCatchupDeferralJobIds.add(job.id);
+
+    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(remove(state, job.id)).rejects.toThrow("disk full");
+
+    expect(state.pendingCatchupDeferralJobIds.has(job.id)).toBe(true);
+    expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
+  });
+
   it("recovers after a failed persist so the next mutation succeeds", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
