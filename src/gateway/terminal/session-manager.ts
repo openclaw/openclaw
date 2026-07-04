@@ -51,8 +51,8 @@ export type TerminalOpenOutcome =
   | { ok: true; sessionId: string; agentId: string; cwd: string; shell: string }
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 
-/** Abort flag shared between a pending open and its connection's disconnect. */
-type OpenToken = { aborted: boolean };
+/** Abort state shared between a pending open and lifecycle/policy teardown. */
+type OpenToken = { agentId: string; abortMessage?: string };
 
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index by
@@ -94,7 +94,7 @@ export class TerminalSessionManager {
     }
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
-    const token: OpenToken = { aborted: false };
+    const token: OpenToken = { agentId: request.agentId };
     this.trackPendingOpen(request.connId, token);
     let pty: TerminalPtyHandle;
     try {
@@ -116,7 +116,7 @@ export class TerminalSessionManager {
     // await — so the counts never both drop).
     this.opening -= 1;
     this.untrackPendingOpen(request.connId, token);
-    if (token.aborted) {
+    if (token.abortMessage) {
       // The owning connection disconnected while the shell was spawning; kill it
       // now rather than register an orphan no one can reach or close.
       try {
@@ -124,7 +124,7 @@ export class TerminalSessionManager {
       } catch {
         // Best-effort; the process may already be gone.
       }
-      return { ok: false, code: "closed", message: "connection closed during open" };
+      return { ok: false, code: "closed", message: token.abortMessage };
     }
 
     const session: TerminalSession = {
@@ -233,7 +233,7 @@ export class TerminalSessionManager {
     const opens = this.pendingOpens.get(connId);
     if (opens) {
       for (const token of opens) {
-        token.aborted = true;
+        token.abortMessage = "connection closed during open";
       }
     }
     const ids = this.byConn.get(connId);
@@ -250,6 +250,27 @@ export class TerminalSessionManager {
     this.byConn.delete(connId);
   }
 
+  /** Closes live and pending sessions whose agent no longer permits a host shell. */
+  closeDisallowedAgents(isAllowed: (agentId: string) => boolean): void {
+    // Config can change while spawn is awaiting the native PTY import. Mark the
+    // pending open so it kills the process instead of registering stale access.
+    for (const opens of this.pendingOpens.values()) {
+      for (const token of opens) {
+        if (!isAllowed(token.agentId)) {
+          token.abortMessage = "terminal closed because the agent policy changed";
+        }
+      }
+    }
+    // Snapshot first: finalize() mutates the session map.
+    for (const session of Array.from(this.sessions.values())) {
+      if (!isAllowed(session.agentId)) {
+        this.finalize(session, "closed", {
+          error: "terminal closed because the agent policy changed",
+        });
+      }
+    }
+  }
+
   /** Kills every session; used on gateway shutdown. */
   /**
    * Tears down every session on gateway shutdown/stop. Silent because the
@@ -260,7 +281,7 @@ export class TerminalSessionManager {
     // Abort any opens still spawning so they don't register after shutdown.
     for (const opens of this.pendingOpens.values()) {
       for (const token of opens) {
-        token.aborted = true;
+        token.abortMessage = "gateway closed during terminal open";
       }
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.

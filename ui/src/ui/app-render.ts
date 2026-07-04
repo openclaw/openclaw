@@ -4274,6 +4274,7 @@ export function renderApp(state: AppViewState) {
           : "dark";
         return html`<openclaw-terminal-panel
           .client=${state.client}
+          .agentId=${chatAgentId}
           .available=${terminalAvailable}
           .themeMode=${terminalMode}
         ></openclaw-terminal-panel>`;

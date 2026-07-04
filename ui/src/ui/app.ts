@@ -1,6 +1,7 @@
-// Control UI module implements app behavior.
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
+// Control UI module implements app behavior.
+import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {
@@ -175,6 +176,9 @@ declare global {
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
+const bootTerminalEnabled =
+  typeof document !== "undefined" &&
+  document.documentElement.getAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE) === "true";
 const FULL_MESSAGE_SIDEBAR_MAX_CHARS = 500_000;
 
 function isSidebarMarkdownLike(content: SidebarContent | null): content is SidebarContent {
@@ -255,7 +259,7 @@ export class OpenClawApp extends LitElement {
   @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "strict";
-  @state() terminalEnabled = true;
+  @state() terminalEnabled = bootTerminalEnabled;
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;

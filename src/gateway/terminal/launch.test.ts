@@ -1,9 +1,14 @@
-import { mkdtempSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildTerminalEnv, resolveTerminalLaunch, resolveTerminalShell } from "./launch.js";
+import {
+  buildTerminalEnv,
+  createTerminalLaunchPolicy,
+  resolveTerminalLaunch,
+  resolveTerminalShell,
+} from "./launch.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveTerminalShell", () => {
   it("prefers an explicitly configured shell", () => {
@@ -41,7 +46,7 @@ describe("resolveTerminalLaunch", () => {
   });
 
   it("returns a host plan starting in the agent workspace", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-ws-"));
+    const workspace = tempDirs.make("term-ws-");
     const config = {
       agents: { defaults: { workspace } },
     } as unknown as OpenClawConfig;
@@ -75,7 +80,7 @@ describe("resolveTerminalLaunch", () => {
   });
 
   it("allows a host terminal under non-main sandbox mode (main session runs on host)", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-ws-nm-"));
+    const workspace = tempDirs.make("term-ws-nm-");
     const config = {
       agents: { defaults: { workspace, sandbox: { mode: "non-main" } } },
     } as unknown as OpenClawConfig;
@@ -110,7 +115,7 @@ describe("resolveTerminalLaunch", () => {
   });
 
   it("accepts an explicit id that names a configured agent", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-ws-id-"));
+    const workspace = tempDirs.make("term-ws-id-");
     const config = {
       agents: {
         defaults: { workspace },
@@ -128,6 +133,198 @@ describe("resolveTerminalLaunch", () => {
     if (result.ok) {
       expect(result.plan.agentId).toBe("ops");
     }
+  });
+});
+
+describe("createTerminalLaunchPolicy", () => {
+  it("applies restart-bound revocations without granting access early", () => {
+    const enabled = {
+      gateway: { terminal: { enabled: true } },
+    } as OpenClawConfig;
+    const policy = createTerminalLaunchPolicy(enabled);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(enabled, { restartPending: true });
+    expect(policy.isEnabled()).toBe(false);
+    expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+
+    const disabledPolicy = createTerminalLaunchPolicy({});
+    disabledPolicy.prepareConfig(enabled, { restartPending: true });
+    expect(disabledPolicy.isEnabled()).toBe(false);
+    expect(disabledPolicy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+  });
+
+  it("preserves sandbox revocations across later restart-bound updates", () => {
+    const workspace = tempDirs.make("term-policy-agent-");
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { workspace }, list: [{ id: "ops" }] },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+    policy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: {
+          defaults: { workspace },
+          list: [{ id: "ops", sandbox: { mode: "all" } }],
+        },
+      },
+      { restartPending: true },
+    );
+    policy.prepareConfig(baseConfig, { restartPending: true });
+
+    const resolved = policy.resolve("ops");
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.block.kind).toBe("sandboxed");
+    }
+  });
+
+  it("keeps current launch details until a restart-bound change takes effect", () => {
+    const workspace = tempDirs.make("term-policy-");
+    const policy = createTerminalLaunchPolicy({
+      gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
+      agents: { defaults: { workspace } },
+    });
+
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
+        agents: { defaults: { workspace } },
+      },
+      { restartPending: true },
+    );
+
+    const resolved = policy.resolve();
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.plan.shell).toBe("/bin/old-shell");
+    }
+
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
+        agents: { defaults: { workspace, sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    const tightened = policy.resolve();
+    expect(tightened.ok).toBe(false);
+    if (!tightened.ok) {
+      expect(tightened.block.kind).toBe("sandboxed");
+    }
+  });
+
+  it("applies non-restart sandbox policy changes immediately", () => {
+    const policy = createTerminalLaunchPolicy({
+      gateway: { terminal: { enabled: true } },
+    });
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+
+    const blocked = policy.resolve();
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) {
+      expect(blocked.block.kind).toBe("sandboxed");
+    }
+  });
+
+  it("does not grant a non-restart policy relaxation before commit", () => {
+    const policy = createTerminalLaunchPolicy({
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    });
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "off" } } },
+      },
+      { restartPending: false },
+    );
+    expect(policy.resolve().ok).toBe(false);
+
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(true);
+  });
+
+  it("retains failed hot-reload revocations until a later commit succeeds", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "off" } } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    // Simulate a failed hot reload, followed by a relaxation that has not
+    // succeeded yet. The first attempt's revocation must remain in force.
+    policy.prepareConfig(baseConfig, { restartPending: false });
+    expect(policy.resolve().ok).toBe(false);
+
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(true);
+
+    const restartPolicy = createTerminalLaunchPolicy(baseConfig);
+    restartPolicy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    restartPolicy.prepareConfig(baseConfig, { restartPending: true });
+    expect(restartPolicy.resolve().ok).toBe(false);
+  });
+
+  it("does not promote a terminal setting previously ignored by reload mode", () => {
+    const disabledPolicy = createTerminalLaunchPolicy({});
+    disabledPolicy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      },
+      { restartPending: false },
+    );
+    disabledPolicy.commitConfig();
+    expect(disabledPolicy.isEnabled()).toBe(false);
+    expect(disabledPolicy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+
+    const enabledPolicy = createTerminalLaunchPolicy({
+      gateway: { terminal: { enabled: true, shell: "/bin/current-shell" } },
+    });
+    enabledPolicy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: false, shell: "/bin/ignored-shell" } },
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      },
+      { restartPending: false },
+    );
+    enabledPolicy.commitConfig();
+    expect(enabledPolicy.isEnabled()).toBe(true);
+    const resolved = enabledPolicy.resolve();
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.plan.shell).toBe("/bin/current-shell");
+    }
+
+    enabledPolicy.prepareConfig({}, { restartPending: true });
+    enabledPolicy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      },
+      { restartPending: false },
+    );
+    expect(enabledPolicy.isEnabled()).toBe(false);
   });
 });
 

@@ -77,6 +77,8 @@ export function createLocalGatewayRequestContext(
     cron: unavailableCron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
+    isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
       loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
     getHealthCache: () => null,

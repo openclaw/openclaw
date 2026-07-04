@@ -143,6 +143,47 @@ describe("TerminalSessionManager", () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it("closes live and pending sessions when their agent becomes disallowed", async () => {
+    const emit = vi.fn();
+    const livePty = makeFakePty();
+    const pendingPty = makeFakePty();
+    let releasePending: (() => void) | undefined;
+    const pendingGate = new Promise<void>((resolve) => {
+      releasePending = resolve;
+    });
+    const manager = new TerminalSessionManager({
+      emit,
+      spawn: async (request) => {
+        if (request.cwd === "/pending") {
+          await pendingGate;
+          return pendingPty;
+        }
+        return livePty;
+      },
+    });
+
+    const live = await manager.open(baseRequest({ agentId: "locked" }));
+    expect(live.ok).toBe(true);
+    const pending = manager.open(
+      baseRequest({ agentId: "locked", connId: "conn-2", cwd: "/pending" }),
+    );
+
+    manager.closeDisallowedAgents((agentId) => agentId !== "locked");
+    expect(livePty.killed).toBe(true);
+    expect(manager.size).toBe(0);
+    expect(emit).toHaveBeenCalledWith(
+      "conn-1",
+      TERMINAL_EVENT_EXIT,
+      expect.objectContaining({ reason: "closed" }),
+    );
+
+    releasePending?.();
+    const pendingOutcome = await pending;
+    expect(pendingOutcome.ok).toBe(false);
+    expect(pendingPty.killed).toBe(true);
+    expect(manager.size).toBe(0);
+  });
+
   it("disposes every session silently (gateway shutdown)", async () => {
     const emit = vi.fn();
     const ptys = [makeFakePty(), makeFakePty()];

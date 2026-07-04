@@ -11,7 +11,7 @@ import {
   validateTerminalOpenParams,
   validateTerminalResizeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { buildTerminalEnv, resolveTerminalLaunch } from "../terminal/launch.js";
+import { buildTerminalEnv } from "../terminal/launch.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function invalid(respond: GatewayRequestHandlerOptions["respond"], detail: string): void {
@@ -28,7 +28,7 @@ function requireConnId(opts: GatewayRequestHandlerOptions): string | null {
 }
 
 function terminalEnabled(context: GatewayRequestHandlerOptions["context"]): boolean {
-  return context.getRuntimeConfig().gateway?.terminal?.enabled ?? true;
+  return context.isTerminalEnabled();
 }
 
 /** Handlers for the operator terminal method family. */
@@ -51,17 +51,8 @@ export const terminalHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is not available"));
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const terminalCfg = cfg.gateway?.terminal;
-    const enabled = terminalCfg?.enabled ?? true;
     const p = params as { agentId?: string; cols: number; rows: number };
-
-    const launch = resolveTerminalLaunch({
-      config: cfg,
-      enabled,
-      agentId: p.agentId,
-      configuredShell: terminalCfg?.shell,
-    });
+    const launch = context.resolveTerminalLaunchPolicy(p.agentId);
     if (!launch.ok) {
       if (launch.block.kind === "disabled") {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "terminal is disabled"));

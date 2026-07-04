@@ -99,6 +99,8 @@ function clampSize(value: unknown, min: number, max: number, fallback: number): 
 export class OpenClawTerminalPanel extends LitElement {
   /** Gateway client used for terminal.* RPCs; null until connected. */
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
+  /** Agent whose workspace and sandbox policy own newly opened sessions. */
+  @property({ attribute: false }) agentId: string | null = null;
   /** Whether the connected gateway advertises the terminal surface. */
   @property({ type: Boolean }) available = false;
   /** Active Control UI color mode, mirrored into the terminal theme. */
@@ -261,6 +263,8 @@ export class OpenClawTerminalPanel extends LitElement {
     }
     this.booting = true;
     this.errorText = null;
+    // Freeze the selection for this tab; later agent changes affect only new tabs.
+    const agentId = this.agentId?.trim() || undefined;
     // Tracked outside the try so the catch can dispose a tab whose open failed.
     let createdTab: TerminalTabState | undefined;
     try {
@@ -315,7 +319,7 @@ export class OpenClawTerminalPanel extends LitElement {
       const rows = term.rows || 24;
 
       const result = await connection.open(
-        { cols, rows },
+        { agentId, cols, rows },
         {
           // The cancelled guard also protects the buffered-event replay inside
           // connection.open from writing to an already-disposed terminal.
