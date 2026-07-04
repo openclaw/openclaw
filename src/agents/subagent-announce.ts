@@ -7,6 +7,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   annotateQueuedDelegatesChainTokensFold,
+  clearQueuedDelegatesChainTokensFold,
   consumePendingDelegates,
   enqueuePendingDelegate,
   markPendingDelegateFailed,
@@ -508,6 +509,9 @@ async function drainChildContinuationQueue(params: {
     if (params.chainStateOverride) {
       const overridePersisted = await persistAdvancedChildChainState(chainState);
       forceDispatchRegardlessOfDelay ||= !overridePersisted;
+      if (overridePersisted) {
+        clearQueuedDelegatesChainTokensFold(params.childSessionKey);
+      }
     }
     const dispatchResult = await dispatchToolDelegates({
       sessionKey: params.childSessionKey,
@@ -545,7 +549,10 @@ async function drainChildContinuationQueue(params: {
     // and under-enforce `maxChainLength`. The hedge path persists itself via the
     // persistChainState callback above.
     if (dispatchResult && dispatchResult.dispatched > 0) {
-      await persistAdvancedChildChainState(dispatchResult.chainState);
+      const persisted = await persistAdvancedChildChainState(dispatchResult.chainState);
+      if (persisted) {
+        clearQueuedDelegatesChainTokensFold(params.childSessionKey);
+      }
     }
   } catch (err) {
     defaultRuntime.error?.(
@@ -1599,6 +1606,15 @@ export async function runSubagentAnnounceFlow(params: {
                     childSessionKey: params.childSessionKey,
                     requesterOrigin: targetRequesterOrigin,
                     additionalChainTokens: childChainTokensToFold,
+                    chainStateOverride: (() => {
+                      const state = buildChildContinuationSpawnState(nextChainHop);
+                      return {
+                        currentChainCount: state.count,
+                        chainStartedAt: state.startedAt,
+                        accumulatedChainTokens: state.tokens,
+                        chainId: state.chainId,
+                      };
+                    })(),
                     inheritedSilent: params.silentAnnounce === true,
                     inheritedWake: params.wakeOnReturn === true,
                   }).catch((err: unknown) => {

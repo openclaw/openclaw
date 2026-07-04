@@ -59,6 +59,7 @@ describe("deleteSubagentSessionForCleanup", () => {
       childSessionKey: "agent:main:subagent:child",
     });
     expect(callGateway).not.toHaveBeenCalled();
+    expect(failStagedPostCompactionDelegatesForCleanupMock).not.toHaveBeenCalled();
     expect(countActiveDescendantRunsMock).toHaveBeenCalledWith("agent:main:subagent:child");
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -86,6 +87,7 @@ describe("deleteSubagentSessionForCleanup", () => {
       childSessionKey: "agent:main:subagent:post-compaction-owner",
     });
     expect(callGateway).not.toHaveBeenCalled();
+    expect(failStagedPostCompactionDelegatesForCleanupMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(callGateway).toHaveBeenCalledWith({
@@ -107,6 +109,7 @@ describe("deleteSubagentSessionForCleanup", () => {
     }) as typeof defaultCallGateway;
     failStagedPostCompactionDelegatesForCleanupMock.mockReturnValueOnce(1);
     hasRecoverablePendingDelegateMock.mockReturnValue(false);
+    countActiveDescendantRunsMock.mockReturnValue(0);
 
     await deleteSubagentSessionForCleanup({
       callGateway,

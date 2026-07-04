@@ -62,6 +62,27 @@ export async function deleteSubagentSessionForCleanup(
     import("../auto-reply/continuation/delegate-store.js"),
     import("./subagent-registry-runtime.js"),
   ]);
+  // A continuation_work TaskFlow, an in-flight regular continuation delegate, or
+  // an accepted child run that still uses this session as requester owns
+  // same-session re-entry. Keep the child session entry until the remaining work
+  // drains, then retry, so delete-mode child sessions do not leak after cleanup
+  // bookkeeping finishes AND delayed bracket/tool delegates do not lose the
+  // child's chain/requester state to deletion before they finish. The delegate
+  // gate must count queued AND `running` (claimed) flows; the registry gate must
+  // cover the post-accept window after the TaskFlow row has finished but the
+  // spawned continuation still depends on this requester session (#1144).
+  // Post-compaction rows are failed below only when cleanup is actually going to
+  // delete the child: if same-session re-entry is pending, the child may still
+  // reach a future compaction seam.
+
+  if (
+    hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey) ||
+    hasRecoverablePendingDelegate(params.childSessionKey) ||
+    countActiveDescendantRuns(params.childSessionKey) > 0
+  ) {
+    scheduleDeferredCleanupRetry(params);
+    return;
+  }
   const failedPostCompactionDelegates = failStagedPostCompactionDelegatesForCleanup(
     params.childSessionKey,
     "Post-compaction delegate was staged by a delete-mode child session during cleanup; the completed child will not receive a future compaction seam.",
@@ -72,25 +93,6 @@ export async function deleteSubagentSessionForCleanup(
     );
   }
 
-  // A continuation_work TaskFlow, an in-flight regular continuation delegate, or
-  // an accepted child run that still uses this session as requester owns
-  // same-session re-entry. Post-compaction rows are failed above because a
-  // completed delete-mode child will not receive another compaction seam. Keep
-  // the child session entry until the remaining work drains, then retry, so
-  // delete-mode child sessions do not leak after cleanup bookkeeping finishes
-  // AND delayed bracket/tool delegates do not lose the child's chain/requester
-  // state to deletion before they finish. The delegate gate must count queued
-  // AND `running` (claimed) flows; the registry gate must cover the post-accept
-  // window after the TaskFlow row has finished but the spawned continuation
-  // still depends on this requester session (#1144).
-  if (
-    hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey) ||
-    hasRecoverablePendingDelegate(params.childSessionKey) ||
-    countActiveDescendantRuns(params.childSessionKey) > 0
-  ) {
-    scheduleDeferredCleanupRetry(params);
-    return;
-  }
   clearDeferredCleanupRetry(params.childSessionKey);
   try {
     await params.callGateway({

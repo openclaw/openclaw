@@ -68,6 +68,7 @@ const markPendingDelegateFailedMock = vi.fn();
 // #1144: capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
+const clearQueuedDelegatesChainTokensFoldMock = vi.fn((_sessionKey: string) => 0);
 const stagePostCompactionDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
 const spawnSubagentDirectMock = vi.fn(
   async (_params: Record<string, unknown>, _ctx: unknown): Promise<SpawnSubagentResult> => ({
@@ -227,6 +228,12 @@ vi.mock("../auto-reply/continuation/delegate-dispatch.js", () => ({
   dispatchToolDelegates: (params: unknown) => dispatchToolDelegatesMock(params),
 }));
 
+vi.mock("../auto-reply/continuation-delegate-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/continuation-delegate-store.js")>()),
+  clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
+    clearQueuedDelegatesChainTokensFoldMock(sessionKey),
+}));
+
 // Feed the in-function tool-delegate drain (subagent-announce.ts) and capture
 // its spawn. `consumePendingDelegates` is mocked on the canonical store module
 // (not the barrel shim) because the forks pool does not intercept barrel
@@ -237,6 +244,8 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
   markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
   enqueuePendingDelegate: (sessionKey: string, delegate: unknown) =>
     enqueuePendingDelegateMock(sessionKey, delegate),
+  clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
+    clearQueuedDelegatesChainTokensFoldMock(sessionKey),
   stagePostCompactionDelegate: (sessionKey: string, delegate: unknown) =>
     stagePostCompactionDelegateMock(sessionKey, delegate),
 }));
@@ -357,6 +366,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
     enqueuePendingDelegateMock.mockReset();
+    clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
     stagePostCompactionDelegateMock.mockReset();
     spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
@@ -658,6 +668,45 @@ describe("subagent-announce continuation drain (F7)", () => {
       accumulatedChainTokens: 7_000,
     });
     expect(call.dispatchQueuedRegardlessOfDelay).toBe(true);
+  });
+
+  it("clears queued fold markers after a post-bracket override persists (#1159)", async () => {
+    const childEntry = {
+      sessionId: "session-child",
+      updatedAt: Date.now(),
+      continuationChainCount: 1,
+      continuationChainStartedAt: 1_700_000_000_000,
+      continuationChainTokens: 7_000,
+    };
+    const store: Record<string, Record<string, unknown>> = {
+      "agent:main:subagent:override-persist-clear-fold": childEntry,
+      "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+    };
+    loadSessionStoreMock.mockImplementation(() => store as unknown as Record<string, unknown>);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:override-persist-clear-fold",
+      childRunId: "run-override-persist-clear-fold",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: prior hop",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done\n[[CONTINUE_DELEGATE: delayed bracket +30s]]",
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(dispatchToolDelegatesMock).toHaveBeenCalledTimes(1);
+    expect(clearQueuedDelegatesChainTokensFoldMock).toHaveBeenCalledWith(
+      "agent:main:subagent:override-persist-clear-fold",
+    );
   });
 
   it("defaults chain state to 0 when child session has no chain fields", async () => {
@@ -1418,7 +1467,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       chainState?: { currentChainCount?: number; accumulatedChainTokens?: number };
     };
     expect(dispatchCall.chainState).toMatchObject({
-      currentChainCount: 1,
+      currentChainCount: 2,
       accumulatedChainTokens: 1_000,
     });
   });
