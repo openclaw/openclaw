@@ -10,7 +10,7 @@ function padSecretBytes(bytes: Buffer, length: number): Buffer {
   return padded;
 }
 
-/** Compare optional UTF-8 secrets without short-circuiting on unequal byte lengths. */
+/** Compare two optional UTF-8 secrets without leaking length through timingSafeEqual errors. */
 export function safeEqualSecret(
   provided: string | undefined | null,
   expected: string | undefined | null,
@@ -24,9 +24,10 @@ export function safeEqualSecret(
   if (byteLength === 0) {
     return true;
   }
-  const bytesEqual = timingSafeEqual(
-    padSecretBytes(providedBytes, byteLength),
-    padSecretBytes(expectedBytes, byteLength),
+  return (
+    timingSafeEqual(
+      padSecretBytes(providedBytes, byteLength),
+      padSecretBytes(expectedBytes, byteLength),
+    ) && providedBytes.length === expectedBytes.length
   );
-  return bytesEqual && providedBytes.length === expectedBytes.length;
 }

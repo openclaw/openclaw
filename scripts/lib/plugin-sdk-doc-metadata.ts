@@ -144,9 +144,6 @@ export const pluginSdkDocMetadata = {
   "inline-image-data-url-runtime": {
     category: "runtime",
   },
-  "secret-display-runtime": {
-    category: "utilities",
-  },
   "allow-from": {
     category: "utilities",
   },

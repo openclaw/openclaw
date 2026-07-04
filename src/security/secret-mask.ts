@@ -24,12 +24,3 @@ function stripControlCharacters(value: string): string {
   }
   return result;
 }
-
-/** Masks a trimmed secret with a visible UTF-16 prefix or a fixed short-value marker. */
-export function maskSecretPrefix(value: string, visiblePrefixLength = 6): string {
-  const trimmed = value.trim();
-  if (trimmed.length <= visiblePrefixLength) {
-    return "***";
-  }
-  return `${trimmed.slice(0, visiblePrefixLength)}…`;
-}
