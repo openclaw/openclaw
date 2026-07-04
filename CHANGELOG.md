@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - **Constrainable bundled Claude harness:** the Claude app-server harness now derives its default `approvalPolicy` / `sandbox` from your core `tools.exec` policy and an enterprise `/etc/openclaw-claude/requirements.toml` floor (`allowed_approval_policies` / `allowed_sandbox_modes`), instead of only a static permissive default — so operators and enterprises can constrain the bundled Claude harness via the same mechanism Codex already uses (`/etc/codex/requirements.toml`). Explicit `appServer.approvalPolicy` / `appServer.sandbox` plugin config and the env overrides still win; with no exec policy and no requirements file the prior `never` / `danger-full-access` default is preserved. (#86655)
+- **`/claude threads` now shows a turn-completion summary:** turns completed, the real last stop reason, last-turn token usage, and a short preview of the final reply, in addition to the existing thread id / model / cwd / config metadata. Recorded as a best-effort update to the thread binding sidecar after each turn — builds on the timestamp/stopReason correctness fixes below, so the new fields are trustworthy rather than just more hardcoded values. (#86655)
 
 ### Fixes
 
