@@ -442,20 +442,20 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 
 The current bundled harness is `@openai/codex` `0.142.5`. A `model/list` probe
-against that bundled app-server in a GPT-5.6-enabled workspace returned these
-public picker rows:
+against that bundled app-server in a GPT-5.6-enabled workspace included these
+public picker rows, ordered by model family:
 
 | Model id        | Input modalities | Reasoning efforts        |
 | --------------- | ---------------- | ------------------------ |
+| `gpt-5.2`       | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh |
 | `gpt-5.6`       | text, image      | medium, high, xhigh      |
 | `gpt-5.6-luna`  | text, image      | medium, high, xhigh      |
 | `gpt-5.6-sol`   | text, image      | medium, high, xhigh      |
 | `gpt-5.6-terra` | text, image      | medium, high, xhigh      |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh |
 
 Model access and supported reasoning efforts are account-scoped, so live
 results can differ from this captured workspace.
