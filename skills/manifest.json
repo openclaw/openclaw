@@ -225,6 +225,17 @@
     }
   },
   {
+    "contentHash": "sha256:364136a789a7d77ce2da440bd271d4573aec9bfb970275f21095cd4d435074a3",
+    "description": "Generate a short music/audio clip from a text prompt via OpenRouter (Google Lyria) and send it as a file.",
+    "emoji": "🎵",
+    "name": "music-gen",
+    "path": "skills/music-gen/SKILL.md",
+    "requires": {
+      "bins": ["curl", "jq"],
+      "env": ["OPENROUTER_API_KEY"]
+    }
+  },
+  {
     "contentHash": "sha256:9ab0838e959fee7de750d28eca79bb708f6e927fea71876f3c75614dea60386e",
     "description": "Generate or edit images via Gemini 3 Pro Image (Nano Banana Pro).",
     "emoji": "🍌",
