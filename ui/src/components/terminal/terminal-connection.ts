@@ -16,6 +16,21 @@ export type TerminalOpenResult = {
   confined: boolean;
 };
 
+export type TerminalAttachResult = TerminalOpenResult & {
+  /** Recent output replayed into the emulator before live data resumes. */
+  buffer: string;
+};
+
+export type TerminalSessionInfo = {
+  sessionId: string;
+  agentId: string;
+  shell: string;
+  cwd: string;
+  confined: boolean;
+  attached: boolean;
+  createdAtMs: number;
+};
+
 export type TerminalExitInfo = {
   exitCode: number | null;
   signal: number | null;
@@ -106,38 +121,73 @@ export class TerminalConnection {
     params: { agentId?: string; cols: number; rows: number },
     sink: SessionSink,
   ): Promise<TerminalOpenResult> {
+    const result = await this.requestWhileHoldingStream(() =>
+      this.client.request<TerminalOpenResult>("terminal.open", params),
+    );
+    this.adoptSession(result.sessionId, sink);
+    return result;
+  }
+
+  /**
+   * Rebinds an existing (usually detached) session to this connection and
+   * replays its buffered output into the sink before live data resumes.
+   */
+  async attach(sessionId: string, sink: SessionSink): Promise<TerminalAttachResult> {
+    const result = await this.requestWhileHoldingStream(() =>
+      this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
+    );
+    this.adoptSession(sessionId, sink, result.buffer);
+    return result;
+  }
+
+  /** Sessions this operator could attach; empty when the surface is off. */
+  async list(): Promise<TerminalSessionInfo[]> {
+    const result = await this.client.request<{ sessions?: TerminalSessionInfo[] }>("terminal.list");
+    return result?.sessions ?? [];
+  }
+
+  /**
+   * Holds the event subscription while an open/attach RPC is in flight so a
+   * concurrent close/exit on another session cannot drop the listener and lose
+   * this session's early output.
+   */
+  private async requestWhileHoldingStream<T>(run: () => Promise<T>): Promise<T> {
     this.ensureSubscribed();
-    // Holds the subscription while the RPC is in flight so a concurrent
-    // close/exit on another session cannot drop the listener and lose this
-    // session's early output.
     this.pendingOpenCount += 1;
-    let result: TerminalOpenResult;
     try {
-      result = await this.client.request<TerminalOpenResult>("terminal.open", params);
+      const result = await run();
+      this.pendingOpenCount -= 1;
+      return result;
     } catch (err) {
-      // A rejected open (sandboxed agent, disabled terminal, missing PTY,
-      // disconnect race) never registers a sink. Drop the listener when no
-      // sessions remain so repeated failed opens across reconnects don't
+      // A rejected open/attach (sandboxed agent, disabled terminal, expired
+      // session, disconnect race) never registers a sink. Drop the listener
+      // when no sessions remain so repeated failures across reconnects don't
       // accumulate listeners on the shared gateway client.
       this.pendingOpenCount -= 1;
       this.maybeUnsubscribe();
       throw err;
     }
-    this.pendingOpenCount -= 1;
-    this.sinks.set(result.sessionId, sink);
+  }
+
+  /** Registers a sink, replaying the attach buffer first, then early events. */
+  private adoptSession(sessionId: string, sink: SessionSink, replay?: string): void {
+    this.sinks.set(sessionId, sink);
+    if (replay) {
+      sink.onData(replay);
+    }
     // Replay any events that raced ahead of registration, in arrival order.
-    const early = this.pending.get(result.sessionId);
+    // These are post-snapshot bytes, so they follow the attach replay.
+    const early = this.pending.get(sessionId);
     if (early) {
-      this.pending.delete(result.sessionId);
+      this.pending.delete(sessionId);
       for (const event of early) {
         if (event.kind === "data") {
           sink.onData(event.data);
         } else {
-          this.deliverExit(result.sessionId, sink, event.info);
+          this.deliverExit(sessionId, sink, event.info);
         }
       }
     }
-    return result;
   }
 
   /**

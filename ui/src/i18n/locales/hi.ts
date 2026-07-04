@@ -440,6 +440,7 @@ export const hi: TranslationMap = {
     tabHint: "{agent} · {cwd}",
     exited: "exited",
     exitedCode: "exited ({code})",
+    detached: "अलग किया गया",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
   },

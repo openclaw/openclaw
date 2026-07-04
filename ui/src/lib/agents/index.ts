@@ -191,24 +191,18 @@ export async function loadToolsEffective(
   });
 }
 
-export async function saveAgentsConfig(state: AgentsState, config: AgentsConfigCapability) {
-  const selectedBefore = state.agentsSelectedId;
-  await config.save();
-  await loadAgents(state);
-  if (selectedBefore && state.agentsList?.agents.some((entry) => entry.id === selectedBefore)) {
-    state.agentsSelectedId = selectedBefore;
-  }
-}
-
 export async function setDefaultAgent(
-  state: AgentsState,
   config: AgentsConfigCapability,
   agentId: string,
+  refreshAgents: () => Promise<unknown>,
 ): Promise<void> {
   const hadPendingConfigDraft = config.state.configFormDirty;
   if (config.stageDefaultAgent(agentId)) {
     if (!hadPendingConfigDraft && config.state.configFormDirty) {
-      await saveAgentsConfig(state, config);
+      const saved = await config.save();
+      if (saved) {
+        await refreshAgents();
+      }
     }
   }
 }

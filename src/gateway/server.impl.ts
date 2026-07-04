@@ -943,11 +943,17 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
-  const { TerminalSessionManager } = await import("./terminal/session-manager.js");
+  const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
+    await import("./terminal/session-manager.js");
   // One PTY store per gateway. Emits each session's bytes only to the owning
   // connection so terminals stay private to the operator that opened them.
+  // Startup config is enough here: gateway.terminal.* changes restart the
+  // gateway (config-reload-plan), so the grace period never drifts at runtime.
   const terminalSessions = new TerminalSessionManager({
     emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+    detachGraceMs:
+      (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
+        DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
   });
   applyGatewayLaneConcurrency(cfgAtStart);
 

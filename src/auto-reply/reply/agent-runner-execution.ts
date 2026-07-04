@@ -2368,9 +2368,10 @@ async function runAgentTurnWithFallbackInternal(
                     }
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
-                  onReasoningText: async (text) => {
+                  onReasoningText: async ({ text, isReasoningSnapshot }) => {
                     await params.opts?.onReasoningStream?.({
                       text,
+                      ...(isReasoningSnapshot ? { isReasoningSnapshot } : {}),
                       requiresReasoningProgressOptIn: true,
                     });
                   },

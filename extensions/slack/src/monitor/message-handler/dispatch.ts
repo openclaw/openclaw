@@ -696,11 +696,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
     });
-  // Slack's native streaming APIs do not accept chat:write.customize identity
-  // fields. Keep custom-identity replies on the draft/standard postMessage
-  // path so the configured username and icon are not silently discarded.
+  const hasSlackCustomIdentity = Boolean(
+    slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
+  );
   const streamingEnabled =
-    !slackIdentity &&
     !sourceRepliesAreToolOnly &&
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,
@@ -711,10 +710,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
-    previewStreamingEnabled,
-    useStreaming,
-  });
+  // chat.update cannot preserve custom authorship. Use native streaming when
+  // possible; otherwise keep identity intact with one final postMessage.
+  const shouldUseDraftStream =
+    !hasSlackCustomIdentity &&
+    shouldInitializeSlackDraftStream({
+      previewStreamingEnabled,
+      useStreaming,
+    });
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
@@ -1105,6 +1108,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
+          ...(slackIdentity ? { identity: slackIdentity } : {}),
           teamId: await resolveSlackStreamRecipientTeamId({
             client: ctx.app.client,
             token: ctx.botToken,
@@ -1610,6 +1614,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         threadTs: streamThreadTs,
         chunks,
         taskDisplayMode: "plan",
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
         teamId: await resolveSlackStreamRecipientTeamId({
           client: ctx.app.client,
           token: ctx.botToken,
