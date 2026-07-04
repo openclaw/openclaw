@@ -8,7 +8,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -132,6 +132,24 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     targetSessionKey: "agent:main:discord:group:dev",
     reason: "session-delete",
   });
+});
+
+test("sessions.delete removes main when session.allowMainDelete is enabled", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  testState.sessionConfig = { allowMainDelete: true };
+  try {
+    await expectSessionDeleteSucceeds({ key: "main" });
+  } finally {
+    testState.sessionConfig = undefined;
+  }
 });
 
 test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {

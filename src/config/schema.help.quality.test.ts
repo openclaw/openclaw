@@ -163,6 +163,7 @@ const TARGET_KEYS = [
   "session.typingIntervalSeconds",
   "session.typingMode",
   "session.mainKey",
+  "session.allowMainDelete",
   "session.sendPolicy",
   "session.sendPolicy.default",
   "session.sendPolicy.rules",
