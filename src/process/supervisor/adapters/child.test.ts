@@ -512,8 +512,10 @@ describe("createChildAdapter", () => {
     expect(second).toHaveBeenCalledWith("second");
   });
 
-  it("suppresses stream errors on stdout and stderr to prevent unhandled error crashes", async () => {
-    const { child } = createStubChild(6666);
+  it("guards stream errors before output listeners are registered", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    const { child, emitExit } = createStubChild(6666);
     spawnWithFallbackMock.mockResolvedValue({
       child,
       usedFallback: false,
@@ -523,17 +525,28 @@ describe("createChildAdapter", () => {
       stdinMode: "pipe-open",
     });
 
-    // Register stdout/stderr listeners to install the error handlers
-    adapter.onStdout(() => {});
-    adapter.onStderr(() => {});
-
-    // Emitting errors on the streams must not crash the process.
-    // If the noop error handlers were missing, Node would throw
-    // an unhandled 'error' event and crash the test runner.
     const stdoutErr = new Error("simulated stdout pipe error");
     const stderrErr = new Error("simulated stderr pipe error");
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
 
+    emitExit(0, null);
     expect(() => child.stdout?.emit("error", stdoutErr)).not.toThrow();
     expect(() => child.stderr?.emit("error", stderrErr)).not.toThrow();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(settled).not.toHaveBeenCalled();
+
+    adapter.onStdout(() => {});
+    adapter.onStdout(() => {});
+    adapter.onStderr(() => {});
+    adapter.onStderr(() => {});
+
+    expect(child.stdout?.listenerCount("error")).toBe(1);
+    expect(child.stderr?.listenerCount("error")).toBe(1);
+
+    child.stdout?.emit("close");
+    child.stderr?.emit("close");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 });

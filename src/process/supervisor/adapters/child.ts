@@ -103,6 +103,11 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
+  // Pipe errors can arrive before output subscribers attach. Close remains
+  // responsible for decoder flush and Windows drain completion.
+  const ignoreOutputStreamError = () => {};
+  child.stdout.on("error", ignoreOutputStreamError);
+  child.stderr.on("error", ignoreOutputStreamError);
   const childStdin = spawned.child.stdin;
   let stdinDestroyed = childStdin?.destroyed ?? false;
   let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
@@ -191,7 +196,6 @@ export async function createChildAdapter(params: {
         listener(text);
       }
     });
-    child.stdout.on("error", () => {});
     child.stdout.once("end", flush);
     child.stdout.once("close", flush);
   };
@@ -215,7 +219,6 @@ export async function createChildAdapter(params: {
         listener(text);
       }
     });
-    child.stderr.on("error", () => {});
     child.stderr.once("end", flush);
     child.stderr.once("close", flush);
   };
