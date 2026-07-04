@@ -1,5 +1,5 @@
 // Control UI view renders overview screen content.
-import { html, nothing } from "lit";
+import { html } from "lit";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type {
   AttentionItem,
@@ -10,21 +10,12 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../../api/types.ts";
-import type { RouteId } from "../../app-routes.ts";
+import type { NavigationRouteId } from "../../app-navigation.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
-import { renderConnectCommand } from "../../components/connect-command.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
-import {
-  resolveAuthHintKind,
-  type PairingHint,
-  resolvePairingHint,
-  shouldShowInsecureContextHint,
-} from "../../lib/overview-hints.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { GatewayHelloOk } from "../../ui/gateway.ts";
 import { renderOverviewAttention } from "./attention.ts";
 import { renderOverviewCards } from "./cards.ts";
@@ -37,14 +28,7 @@ export type OverviewProps = {
   settings: UiSettings;
   password: string;
   lastError: string | null;
-  lastErrorCode: string | null;
-  presenceCount: number;
-  sessionsCount: number | null;
-  cronEnabled: boolean | null;
-  cronNext: number | null;
   lastChannelsRefresh: number | null;
-  warnQueryToken: boolean;
-  // New dashboard data
   modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
@@ -52,44 +36,21 @@ export type OverviewProps = {
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
   attentionItems: AttentionItem[];
-  eventLog: EventLogEntry[];
+  eventLog: readonly EventLogEntry[];
   overviewLogLines: string[];
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
-  onSettingsChange: (next: UiSettings) => void;
+  onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
+  onLocaleChange: (locale: Locale) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
   onToggleGatewayTokenVisibility: () => void;
   onToggleGatewayPasswordVisibility: () => void;
   onConnect: () => void;
   onRefresh: () => void;
-  onNavigate: (routeId: RouteId) => void;
+  onNavigate: (routeId: NavigationRouteId) => void;
+  canNavigate: (routeId: NavigationRouteId) => boolean;
   onRefreshLogs: () => void;
-};
-
-const PAIRING_HINT_COPY: Record<
-  PairingHint["kind"],
-  {
-    titleKey: string | null;
-    summaryKey: string | null;
-  }
-> = {
-  "pairing-required": {
-    titleKey: null,
-    summaryKey: null,
-  },
-  "scope-upgrade-pending": {
-    titleKey: "overview.pairing.scopeUpgradeTitle",
-    summaryKey: "overview.pairing.scopeUpgradeSummary",
-  },
-  "role-upgrade-pending": {
-    titleKey: "overview.pairing.roleUpgradeTitle",
-    summaryKey: "overview.pairing.roleUpgradeSummary",
-  },
-  "metadata-upgrade-pending": {
-    titleKey: "overview.pairing.metadataUpgradeTitle",
-    summaryKey: "overview.pairing.metadataUpgradeSummary",
-  },
 };
 
 export function renderOverview(props: OverviewProps) {
@@ -107,146 +68,6 @@ export function renderOverview(props: OverviewProps) {
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
 
-  const pairingHint = (() => {
-    const pairingState = resolvePairingHint(props.connected, props.lastError, props.lastErrorCode);
-    if (!pairingState) {
-      return null;
-    }
-    const copy = PAIRING_HINT_COPY[pairingState.kind];
-    const title = copy.titleKey ? t(copy.titleKey) : t("overview.pairing.hint");
-    return html`
-      <div class="muted" style="margin-top: 8px">
-        ${title}
-        ${copy.summaryKey
-          ? html`<div style="margin-top: 6px">${t(copy.summaryKey)}</div>`
-          : nothing}
-        <div style="margin-top: 6px">
-          ${pairingState.requestId
-            ? html`<span class="mono">openclaw devices approve ${pairingState.requestId}</span
-                ><br />`
-            : nothing}
-          <span class="mono">openclaw devices list</span>
-        </div>
-        <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
-        <div style="margin-top: 6px">
-          <a
-            class="session-link"
-            href="https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection"
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            >${t("overview.pairing.docsLink")}</a
-          >
-        </div>
-      </div>
-    `;
-  })();
-
-  const authHint = (() => {
-    const authHintKind = resolveAuthHintKind({
-      connected: props.connected,
-      lastError: props.lastError,
-      lastErrorCode: props.lastErrorCode,
-      hasToken: Boolean(props.settings.token.trim()),
-      hasPassword: Boolean(props.password.trim()),
-    });
-    if (authHintKind == null) {
-      return null;
-    }
-    if (authHintKind === "required") {
-      return html`
-        <div class="muted" style="margin-top: 8px">
-          ${t("overview.auth.required")}
-          <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
-          </div>
-          <div style="margin-top: 6px">
-            <a
-              class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
-              target=${EXTERNAL_LINK_TARGET}
-              rel=${buildExternalLinkRel()}
-              >${t("overview.connection.authDocsLink")}</a
-            >
-          </div>
-        </div>
-      `;
-    }
-    return html`
-      <div class="muted" style="margin-top: 8px">
-        ${t("overview.auth.failed", { command: "openclaw dashboard --no-open" })}
-        <div style="margin-top: 6px">
-          <a
-            class="session-link"
-            href="https://docs.openclaw.ai/web/dashboard"
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            >${t("overview.connection.authDocsLink")}</a
-          >
-        </div>
-      </div>
-    `;
-  })();
-
-  const insecureContextHint = (() => {
-    if (props.connected || !props.lastError) {
-      return null;
-    }
-    const isSecureContext = typeof window !== "undefined" ? window.isSecureContext : true;
-    if (isSecureContext) {
-      return null;
-    }
-    if (!shouldShowInsecureContextHint(props.connected, props.lastError, props.lastErrorCode)) {
-      return null;
-    }
-    return html`
-      <div class="muted" style="margin-top: 8px">
-        ${t("overview.insecure.hint", { url: "http://127.0.0.1:18789" })}
-        <div style="margin-top: 6px">
-          ${t("overview.insecure.stayHttp", {
-            config: "gateway.controlUi.allowInsecureAuth: true",
-          })}
-        </div>
-        <div style="margin-top: 6px">
-          <a
-            class="session-link"
-            href="https://docs.openclaw.ai/gateway/tailscale"
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            >${t("overview.connection.tailscaleDocsLink")}</a
-          >
-          <span class="muted"> · </span>
-          <a
-            class="session-link"
-            href="https://docs.openclaw.ai/web/control-ui#insecure-http"
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            >${t("overview.connection.insecureHttpDocsLink")}</a
-          >
-        </div>
-      </div>
-    `;
-  })();
-
-  const queryTokenHint = (() => {
-    if (props.connected || !props.lastError || !props.warnQueryToken) {
-      return null;
-    }
-    const lower = normalizeLowercaseStringOrEmpty(props.lastError);
-    const authFailed = lower.includes("unauthorized") || lower.includes("device identity required");
-    if (!authFailed) {
-      return null;
-    }
-    return html`
-      <div class="muted" style="margin-top: 8px">
-        Auth token must be passed as a URL fragment:
-        <span class="mono">#token=&lt;token&gt;</span>. Query parameters (<span class="mono"
-          >?token=</span
-        >) may appear in server logs.
-      </div>
-    `;
-  })();
-
   const currentLocale = isSupportedLocale(props.settings.locale)
     ? props.settings.locale
     : i18n.getLocale();
@@ -263,8 +84,7 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.gatewayUrl}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                props.onSettingsChange({
-                  ...props.settings,
+                props.onConnectionChange({
                   gatewayUrl: v,
                   token: resolveGatewayTokenForUrlEdit(
                     props.settings.gatewayUrl,
@@ -289,7 +109,7 @@ export function renderOverview(props: OverviewProps) {
                       .value=${props.settings.token}
                       @input=${(e: Event) => {
                         const v = (e.target as HTMLInputElement).value;
-                        props.onSettingsChange({ ...props.settings, token: v });
+                        props.onConnectionChange({ token: v });
                       }}
                       placeholder="OPENCLAW_GATEWAY_TOKEN"
                     />
@@ -361,7 +181,7 @@ export function renderOverview(props: OverviewProps) {
               @change=${(e: Event) => {
                 const v = (e.target as HTMLSelectElement).value as Locale;
                 void i18n.setLocale(v);
-                props.onSettingsChange({ ...props.settings, locale: v });
+                props.onLocaleChange(v);
               }}
             >
               ${SUPPORTED_LOCALES.map((loc) => {
@@ -382,38 +202,6 @@ export function renderOverview(props: OverviewProps) {
               : t("overview.access.connectHint")}</span
           >
         </div>
-        ${!props.connected
-          ? html`
-              <div class="login-gate__help" style="margin-top: 16px;">
-                <div class="login-gate__help-title">${t("overview.connection.title")}</div>
-                <ol class="login-gate__steps">
-                  <li>
-                    ${t("overview.connection.step1")}
-                    ${renderConnectCommand("openclaw gateway run")}
-                  </li>
-                  <li>
-                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
-                  </li>
-                  <li>${t("overview.connection.step3")}</li>
-                  <li>
-                    ${t("overview.connection.step4")}<code
-                      >openclaw doctor --generate-gateway-token</code
-                    >
-                  </li>
-                </ol>
-                <div class="login-gate__docs">
-                  ${t("overview.connection.docsHint")}
-                  <a
-                    class="session-link"
-                    href="https://docs.openclaw.ai/web/dashboard"
-                    target="_blank"
-                    rel="noreferrer"
-                    >${t("overview.connection.docsLink")}</a
-                  >
-                </div>
-              </div>
-            `
-          : nothing}
       </div>
 
       <div class="card">
@@ -446,8 +234,6 @@ export function renderOverview(props: OverviewProps) {
         ${props.lastError
           ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
-              ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
-              ${queryTokenHint ?? ""}
             </div>`
           : html`
               <div class="callout" style="margin-top: 14px">
@@ -466,8 +252,8 @@ export function renderOverview(props: OverviewProps) {
       cronJobs: props.cronJobs,
       cronStatus: props.cronStatus,
       modelAuthStatus: props.modelAuthStatus,
-      presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,
+      canNavigate: props.canNavigate,
     })}
     ${renderOverviewAttention({ items: props.attentionItems })}
 

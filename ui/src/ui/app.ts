@@ -7,9 +7,15 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  CostUsageSummary,
   ConfigSnapshot,
   ConfigUiHints,
+  CronDeliveryStatus,
   CronJob,
+  CronRunScope,
+  CronRunsStatusFilter,
+  CronRunsStatusValue,
+  CronSortDir,
   CronRunLogEntry,
   CronStatus,
   HealthSummary,
@@ -17,11 +23,14 @@ import type {
   ModelCatalogEntry,
   PresenceEntry,
   SessionCompactionCheckpoint,
+  SessionUsageTimeSeries,
+  SessionsUsageResult,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
   ToolsEffectiveResult,
+  UpdateAvailable,
 } from "../api/types.ts";
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
@@ -113,14 +122,14 @@ import {
 } from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
-import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
-import { type SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
+import type { SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
 import {
   loadSkillWorkshopMode,
   loadSkillWorkshopUseCurrentChatForRevisions,
   saveSkillWorkshopMode,
   saveSkillWorkshopUseCurrentChatForRevisions,
 } from "../pages/skill-workshop/storage.ts";
+import type { SessionLogEntry } from "../pages/usage/view.ts";
 import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -474,8 +483,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
 
   @state() usageLoading = false;
-  @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
-  @state() usageCostSummary: import("./types.js").CostUsageSummary | null = null;
+  @state() usageResult: SessionsUsageResult | null = null;
+  @state() usageCostSummary: CostUsageSummary | null = null;
   @state() usageError: string | null = null;
   @state() usageStartDate = (() => {
     const d = new Date();
@@ -494,11 +503,11 @@ export class OpenClawApp extends LitElement {
   @state() usageDailyChartMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
   @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
-  @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
+  @state() usageTimeSeries: SessionUsageTimeSeries | null = null;
   @state() usageTimeSeriesLoading = false;
   @state() usageTimeSeriesCursorStart: number | null = null;
   @state() usageTimeSeriesCursorEnd: number | null = null;
-  @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
+  @state() usageSessionLogs: SessionLogEntry[] | null = null;
   @state() usageSessionLogsLoading = false;
   @state() usageSessionLogsExpanded = false;
   // Applied query (used to filter the already-loaded sessions list client-side).
@@ -566,26 +575,20 @@ export class OpenClawApp extends LitElement {
   @state() cronRunsHasMore = false;
   @state() cronRunsNextOffset: number | null = null;
   @state() cronRunsLimit = 50;
-  @state() cronRunsScope: import("./types.js").CronRunScope = "all";
-  @state() cronRunsStatuses: import("./types.js").CronRunsStatusValue[] = [];
-  @state() cronRunsDeliveryStatuses: import("./types.js").CronDeliveryStatus[] = [];
-  @state() cronRunsStatusFilter: import("./types.js").CronRunsStatusFilter = "all";
+  @state() cronRunsScope: CronRunScope = "all";
+  @state() cronRunsStatuses: CronRunsStatusValue[] = [];
+  @state() cronRunsDeliveryStatuses: CronDeliveryStatus[] = [];
+  @state() cronRunsStatusFilter: CronRunsStatusFilter = "all";
   @state() cronRunsQuery = "";
-  @state() cronRunsSortDir: import("./types.js").CronSortDir = "desc";
+  @state() cronRunsSortDir: CronSortDir = "desc";
   @state() cronModelSuggestions: string[] = [];
   @state() cronBusy = false;
 
-  @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
+  @state() updateAvailable: UpdateAvailable | null = null;
 
-  // Overview dashboard state
-  @state() attentionItems: import("./types.js").AttentionItem[] = [];
   @state() paletteOpen = false;
   @state() paletteQuery = "";
   @state() paletteActiveIndex = 0;
-  @state() overviewShowGatewayToken = false;
-  @state() overviewShowGatewayPassword = false;
-  @state() overviewLogLines: string[] = [];
-  @state() overviewLogCursor = 0;
 
   @state() skillsLoading = false;
   @state() skillsAgentId: string | null = null;
@@ -1059,17 +1062,13 @@ export class OpenClawApp extends LitElement {
     return [active, ...rest];
   }
 
-  async loadOverview(opts?: { refresh?: boolean }) {
-    await loadOverviewPage(this as unknown as Parameters<typeof loadOverviewPage>[0], opts);
-  }
-
   async loadCron() {
-    const state = this as unknown as Parameters<typeof loadCronStatus>[0];
+    const cronState = this as unknown as Parameters<typeof loadCronStatus>[0];
     const activeCronJobId = this.cronRunsScope === "job" ? this.cronRunsJobId : null;
-    void loadCronRuns(state, activeCronJobId);
+    void loadCronRuns(cronState, activeCronJobId);
     await Promise.all([
-      loadCronStatus(state),
-      loadCronJobsPage(state, { tableFilters: this.visibleRouteId === "cron" }),
+      loadCronStatus(cronState),
+      loadCronJobsPage(cronState, { tableFilters: this.visibleRouteId === "cron" }),
     ]);
   }
 

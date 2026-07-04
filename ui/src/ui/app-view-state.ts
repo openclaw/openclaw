@@ -3,7 +3,6 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
-  AttentionItem,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
   ConfigUiHints,
@@ -20,6 +19,8 @@ import type {
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
+  ToolsEffectiveResult,
+  UpdateAvailable,
 } from "../api/types.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UiSettings } from "../app/settings.ts";
@@ -287,7 +288,7 @@ export type AppViewState = {
   toolsEffectiveLoadingKey: string | null;
   toolsEffectiveResultKey: string | null;
   toolsEffectiveError: string | null;
-  toolsEffectiveResult: import("./types.js").ToolsEffectiveResult | null;
+  toolsEffectiveResult: ToolsEffectiveResult | null;
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
@@ -471,16 +472,11 @@ export type AppViewState = {
     debugHealth: HealthSummary | null;
     debugModels: ModelCatalogEntry[];
     debugHeartbeat: unknown;
-    updateAvailable: import("./types.js").UpdateAvailable | null;
-    attentionItems: AttentionItem[];
+    updateAvailable: UpdateAvailable | null;
     paletteOpen: boolean;
     paletteQuery: string;
     paletteActiveIndex: number;
     streamMode: boolean;
-    overviewShowGatewayToken: boolean;
-    overviewShowGatewayPassword: boolean;
-    overviewLogLines: string[];
-    overviewLogCursor: number;
     client: GatewayBrowserClient | null;
     refreshSessionsAfterChat: Map<string, import("../lib/sessions/index.js").SessionRefreshTarget>;
     connect: () => void;
@@ -500,7 +496,6 @@ export type AppViewState = {
     setSkillWorkshopUseCurrentChatForRevisions: (enabled: boolean) => void;
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
-    loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
     loadAssistantIdentity: (opts?: {
       sessionKey?: string;
       expectedSessionKey?: string;

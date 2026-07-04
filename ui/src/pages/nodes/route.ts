@@ -1,6 +1,5 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   createInitialNodesState,
@@ -10,7 +9,7 @@ import {
 } from "../../lib/nodes/index.ts";
 import type { NodesRouteData } from "./nodes-page.ts";
 
-async function loadNodesRouteData(context: ApplicationContext<RouteId>): Promise<NodesRouteData> {
+async function loadNodesRouteData(context: ApplicationContext): Promise<NodesRouteData> {
   const gateway = context.gateway.snapshot;
   const nodes = createInitialNodesState(gateway);
   if (!gateway.connected || !gateway.client) {

@@ -166,12 +166,12 @@ export function resolveApplicationStartupSettings(
   };
 
   const nativeAuth =
-    typeof window === "undefined" ? undefined : window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+    typeof window === "undefined" ? undefined : window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
   if (nativeAuth) {
     try {
-      delete window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+      delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
     } catch {
-      window.__OPENCLAW_NATIVE_CONTROL_AUTH__ = undefined;
+      window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = undefined;
     }
 
     const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
@@ -347,7 +347,7 @@ function tokenSessionKeyForGateway(gatewayUrl: string): string {
 function resolveScopedSessionSelection(
   gatewayUrl: string,
   parsed: PersistedUiSettings,
-  defaults: UiSettings,
+  fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
   const scope = normalizeGatewayTokenScope(gatewayUrl);
   const scoped = parsed.sessionsByGateway?.[scope];
@@ -360,16 +360,30 @@ function resolveScopedSessionSelection(
     };
   }
 
-  const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? defaults.sessionKey;
+  const legacySessionKey = normalizeOptionalString(parsed.sessionKey) ?? fallback.sessionKey;
   const legacyLastActiveSessionKey =
     normalizeOptionalString(parsed.lastActiveSessionKey) ??
     legacySessionKey ??
-    defaults.lastActiveSessionKey;
+    fallback.lastActiveSessionKey;
 
   return {
     sessionKey: legacySessionKey,
     lastActiveSessionKey: legacyLastActiveSessionKey,
   };
+}
+
+export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSelection {
+  const fallback = { sessionKey: "main", lastActiveSessionKey: "main" };
+  try {
+    const storage = getSafeLocalStorage();
+    const raw =
+      storage?.getItem(settingsKeyForGateway(gatewayUrl)) ?? storage?.getItem(LEGACY_SETTINGS_KEY);
+    return raw
+      ? resolveScopedSessionSelection(gatewayUrl, JSON.parse(raw) as PersistedUiSettings, fallback)
+      : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function loadSessionToken(gatewayUrl: string): string {

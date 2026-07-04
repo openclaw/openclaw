@@ -29,11 +29,15 @@ export type ApplicationGatewayConnection = {
   password: string;
 };
 
+export type ApplicationGatewayConnectOptions = Partial<ApplicationGatewayConnection> & {
+  sessionKey?: string;
+};
+
 export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
   readonly eventLog: readonly EventLogEntry[];
-  connect: (connection?: Partial<ApplicationGatewayConnection>) => void;
+  connect: (connection?: ApplicationGatewayConnectOptions) => void;
   start: () => void;
   stop: () => void;
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;

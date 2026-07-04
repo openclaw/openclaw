@@ -9,7 +9,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
@@ -32,8 +32,8 @@ type ShellRouteState = {
   data?: unknown;
 };
 
-function selectShellRouteState(state: RouterState<RouteId, unknown, unknown>): ShellRouteState {
-  const match = state.pendingMatches[0] ?? state.matches[0];
+function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
+  const match = routerState.pendingMatches[0] ?? routerState.matches[0];
   return match
     ? {
         routeId: match.routeId,
@@ -103,11 +103,14 @@ export class OpenClawApp extends LitElement {
     this.context = this.runtime.context;
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
     this.contextProvider.setValue(this.context);
-    this.loginGatewayUrl = this.context.gateway.connection.gatewayUrl;
-    this.loginToken = this.context.gateway.connection.token;
-    this.loginPassword = this.context.gateway.connection.password;
+    this.syncLoginConnection();
+    let gatewayClient = this.context.gateway.snapshot.client;
     this.updateGatewayStatus(this.context.gateway.snapshot);
     this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
+      if (snapshot.client !== gatewayClient) {
+        gatewayClient = snapshot.client;
+        this.syncLoginConnection();
+      }
       this.updateGatewayStatus(snapshot);
     });
     void this.runtime.start().catch((error: unknown) => {
@@ -123,6 +126,16 @@ export class OpenClawApp extends LitElement {
     this.context = undefined;
     this.pendingGatewayUrl = null;
     super.disconnectedCallback();
+  }
+
+  private syncLoginConnection() {
+    const connection = this.context?.gateway.connection;
+    if (!connection) {
+      return;
+    }
+    this.loginGatewayUrl = connection.gatewayUrl;
+    this.loginToken = connection.token;
+    this.loginPassword = connection.password;
   }
 
   private readonly updateGatewayStatus = (snapshot: {
@@ -305,7 +318,9 @@ class OpenClawShell extends LitElement {
 
   private readonly handleThemeChange = (event: CustomEvent<ThemeModeChangeDetail>) => {
     const context = this.context;
-    if (!context) return;
+    if (!context) {
+      return;
+    }
     context.theme.setMode(event.detail.mode, event.detail.element);
     this.requestUpdate();
   };
@@ -438,7 +453,7 @@ class OpenClawShell extends LitElement {
           .routeId=${activeRoute}
           .basePath=${context.basePath}
           .agentLabel=${agentLabel}
-          .overviewHref=${""}
+          .overviewHref=${pathForRoute("overview", context.basePath)}
           .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
           .themeMode=${context.theme.mode}

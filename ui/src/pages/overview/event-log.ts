@@ -7,7 +7,7 @@ import { formatTimeMs } from "../../lib/format.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
 
 export type OverviewEventLogProps = {
-  events: EventLogEntry[];
+  events: readonly EventLogEntry[];
 };
 
 export function renderOverviewEventLog(props: OverviewEventLogProps) {

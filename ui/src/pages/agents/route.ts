@@ -1,10 +1,9 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { AgentsRouteData } from "./agents-page.ts";
 
-async function loadAgentsRouteData(context: ApplicationContext<RouteId>): Promise<AgentsRouteData> {
+async function loadAgentsRouteData(context: ApplicationContext): Promise<AgentsRouteData> {
   const gateway = context.gateway.snapshot;
   const agentsList = context.agents.state.agentsList;
   return {

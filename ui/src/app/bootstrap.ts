@@ -13,7 +13,6 @@ import {
   pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
-  type AppRouteModule,
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
@@ -28,6 +27,7 @@ import { createBrowserHistory } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationGateway,
+  ApplicationGatewayConnectOptions,
   ApplicationGatewayConnection,
   ApplicationNavigationOptions,
   ApplicationGatewaySnapshot,
@@ -263,21 +263,31 @@ function createApplicationGateway(
     publishEventLog();
   };
 
-  const connect = (overrides: Partial<ApplicationGatewayConnection> = {}) => {
-    const nextConnection = { ...connection, ...overrides };
+  const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
+    const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
+    const nextConnection = { ...connection, ...connectionOverrides };
+    const hasRequestedSessionKey = requestedSessionKey !== undefined;
+    const nextSessionKey = hasRequestedSessionKey
+      ? requestedSessionKey.trim()
+      : snapshot.sessionKey;
     connection = nextConnection;
     settings = {
       ...settings,
       gatewayUrl: nextConnection.gatewayUrl,
       token: nextConnection.token,
+      ...(hasRequestedSessionKey
+        ? {
+            sessionKey: nextSessionKey,
+            lastActiveSessionKey: nextSessionKey,
+          }
+        : {}),
     };
     saveSettings(settings);
     client?.stop();
     stopClientEvents?.();
     stopClientEvents = undefined;
 
-    let nextClient!: GatewayBrowserClient;
-    nextClient = new GatewayBrowserClient({
+    const nextClient = new GatewayBrowserClient({
       url: nextConnection.gatewayUrl,
       token: nextConnection.token.trim() ? nextConnection.token : undefined,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
@@ -347,6 +357,7 @@ function createApplicationGateway(
       client: nextClient,
       connected: false,
       hello: null,
+      sessionKey: nextSessionKey,
       lastError: null,
       lastErrorCode: null,
     });
@@ -483,7 +494,6 @@ export function bootstrapApplication(): ApplicationRuntime {
           token: startup.pendingGatewayToken ?? "",
         }
       : null;
-  let context!: ApplicationContext<RouteId>;
   let lastConfigRefreshClient: GatewayBrowserClient | null = null;
   const stopConfigRefresh = gateway.subscribe((snapshot) => {
     if (!snapshot.connected || !snapshot.client) {
@@ -513,20 +523,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     }
     return location;
   };
-  const navigate = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
-    void router
-      .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
-      .catch((error) => {
-        console.error("[openclaw] route navigation failed", error);
-      });
-  };
-  const replace = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
-    void router
-      .navigate(routeId, context, { history: "replace" }, routeLocation(routeId, options))
-      .catch((error) => {
-        console.error("[openclaw] route replacement failed", error);
-      });
-  };
   const confirmPendingGatewayConnection = () => {
     const pending = pendingGatewayConnection;
     if (!pending) {
@@ -541,7 +537,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const cancelPendingGatewayConnection = () => {
     pendingGatewayConnection = null;
   };
-  context = {
+  const context: ApplicationContext<RouteId> = {
     basePath,
     assistantName: identity.name || "OpenClaw",
     gateway,
@@ -556,8 +552,20 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     skillWorkshopRevision,
-    navigate,
-    replace,
+    navigate: (routeId, options) => {
+      void router
+        .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
+        .catch((error: unknown) => {
+          console.error("[openclaw] route navigation failed", error);
+        });
+    },
+    replace: (routeId, options) => {
+      void router
+        .navigate(routeId, context, { history: "replace" }, routeLocation(routeId, options))
+        .catch((error: unknown) => {
+          console.error("[openclaw] route replacement failed", error);
+        });
+    },
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
   return {

@@ -10,7 +10,7 @@ import type {
   CronStatus,
   ModelAuthStatusResult,
 } from "../../api/types.ts";
-import type { RouteId } from "../../app-routes.ts";
+import type { NavigationRouteId } from "../../app-navigation.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../../lib/format.ts";
@@ -30,8 +30,8 @@ export type OverviewCardsProps = {
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
   modelAuthStatus: ModelAuthStatusResult | null;
-  presenceCount: number;
-  onNavigate: (routeId: RouteId) => void;
+  onNavigate: (routeId: NavigationRouteId) => void;
+  canNavigate: (routeId: NavigationRouteId) => boolean;
 };
 
 const DIGIT_RUN = /\d{3,}/g;
@@ -44,20 +44,27 @@ function blurDigits(value: string): TemplateResult {
 
 type StatCard = {
   kind: string;
-  routeId: RouteId;
+  routeId: NavigationRouteId;
   label: string;
   value: string | TemplateResult;
   hint: string | TemplateResult;
 };
 
-function renderStatCard(card: StatCard, onNavigate: (routeId: RouteId) => void) {
-  return html`
-    <button class="ov-card" data-kind=${card.kind} @click=${() => onNavigate(card.routeId)}>
-      <span class="ov-card__label">${card.label}</span>
-      <span class="ov-card__value">${card.value}</span>
-      <span class="ov-card__hint">${card.hint}</span>
-    </button>
+function renderStatCard(card: StatCard, props: OverviewCardsProps) {
+  const content = html`
+    <span class="ov-card__label">${card.label}</span>
+    <span class="ov-card__value">${card.value}</span>
+    <span class="ov-card__hint">${card.hint}</span>
   `;
+  return props.canNavigate(card.routeId)
+    ? html`<button
+        class="ov-card"
+        data-kind=${card.kind}
+        @click=${() => props.onNavigate(card.routeId)}
+      >
+        ${content}
+      </button>`
+    : html`<div class="ov-card" data-kind=${card.kind} style="cursor:default">${content}</div>`;
 }
 
 function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null {
@@ -278,7 +285,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const sessions = props.sessionsResult?.sessions.slice(0, 5) ?? [];
 
   return html`
-    <section class="ov-cards">${cards.map((c) => renderStatCard(c, props.onNavigate))}</section>
+    <section class="ov-cards">${cards.map((card) => renderStatCard(card, props))}</section>
 
     ${sessions.length > 0
       ? html`

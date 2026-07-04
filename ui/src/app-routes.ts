@@ -12,9 +12,9 @@ import { page as debugPage } from "./pages/debug/route.ts";
 // import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
+import { page as overviewPage } from "./pages/overview/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
-// import { page as overviewPage } from "./pages/overview/route.ts";
 // import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 
@@ -28,15 +28,11 @@ export type ApplicationRouter = Router<
   AppRouteModule,
   unknown
 >;
-export type AppRoute = PageDefinition<
-  RouteId,
-  ApplicationContext<RouteId>,
-  AppRouteModule,
-  unknown
->;
+export type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
 
 export const APP_ROUTE_TREE = [
   chatPage,
+  overviewPage,
   agentsPage,
   channelsPage,
   ...configPages,
@@ -58,7 +54,7 @@ export function isRouteId(routeId: string): routeId is RouteId {
 }
 
 export function createApplicationRouter(): ApplicationRouter {
-  return createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule, unknown>({
+  return createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
 }
@@ -131,7 +127,7 @@ export function inferBasePathFromPathname(pathname: string): string {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const firstRouteSegment = routePath.split("/").filter(Boolean)[0];
+    const firstRouteSegment = routePath.split("/").find(Boolean);
     if (index > 0 && previousSegment === firstRouteSegment && candidate === routePath) {
       return "";
     }

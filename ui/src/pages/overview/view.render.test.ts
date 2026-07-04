@@ -8,7 +8,6 @@ import { renderOverview, type OverviewProps } from "./view.ts";
 
 function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
   return {
-    warnQueryToken: false,
     connected: false,
     hello: null,
     settings: {
@@ -29,11 +28,6 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     },
     password: "",
     lastError: null,
-    lastErrorCode: null,
-    presenceCount: 0,
-    sessionsCount: null,
-    cronEnabled: null,
-    cronNext: null,
     lastChannelsRefresh: null,
     modelAuthStatus: null,
     usageResult: null,
@@ -46,7 +40,8 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     overviewLogLines: [],
     showGatewayToken: false,
     showGatewayPassword: false,
-    onSettingsChange: () => undefined,
+    onConnectionChange: () => undefined,
+    onLocaleChange: () => undefined,
     onPasswordChange: () => undefined,
     onSessionKeyChange: () => undefined,
     onToggleGatewayTokenVisibility: () => undefined,
@@ -54,6 +49,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     onConnect: () => undefined,
     onRefresh: () => undefined,
     onNavigate: () => undefined,
+    canNavigate: () => true,
     onRefreshLogs: () => undefined,
     ...overrides,
   };
@@ -93,45 +89,6 @@ describe("overview view rendering", () => {
     expect(select?.selectedOptions[0]?.textContent?.trim()).toBe("简体中文 (简体中文)");
 
     await i18n.setLocale("en");
-  });
-
-  it("renders a dedicated scope-upgrade approval hint with the exact approve command", async () => {
-    const container = document.createElement("div");
-    const props = createOverviewProps({
-      lastError: "scope upgrade pending approval (requestId: req-123)",
-      lastErrorCode: "PAIRING_REQUIRED",
-    });
-
-    render(renderOverview(props), container);
-    await Promise.resolve();
-
-    const hint = container.querySelector(".mono")?.closest(".muted") ?? null;
-    expect(compactText(hint)).toBe(
-      "Scope upgrade pending approval. This device is already paired, but the requested wider scope is waiting for approval. openclaw devices approve req-123 openclaw devices list On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop. Docs: Device pairing",
-    );
-    expect([...container.querySelectorAll(".mono")].map((node) => node.textContent)).toEqual([
-      "openclaw devices approve req-123",
-      "openclaw devices list",
-    ]);
-  });
-
-  it("does not suggest preview-only latest approval when the request id is absent", async () => {
-    const container = document.createElement("div");
-    const props = createOverviewProps({
-      lastError: "scope upgrade pending approval",
-      lastErrorCode: "PAIRING_REQUIRED",
-    });
-
-    render(renderOverview(props), container);
-    await Promise.resolve();
-
-    const hint = container.querySelector(".mono")?.closest(".muted") ?? null;
-    expect(compactText(hint)).toBe(
-      "Scope upgrade pending approval. This device is already paired, but the requested wider scope is waiting for approval. openclaw devices list On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop. Docs: Device pairing",
-    );
-    expect([...container.querySelectorAll(".mono")].map((node) => node.textContent)).toEqual([
-      "openclaw devices list",
-    ]);
   });
 
   it("renders recent session names through the shared display resolver", async () => {

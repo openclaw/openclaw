@@ -1,6 +1,5 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
@@ -9,7 +8,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function loadSkillsRouteData(context: ApplicationContext<RouteId>): Promise<SkillsRouteData> {
+async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsRouteData> {
   const gateway = context.gateway.snapshot;
   const client = gateway.client;
   if (!gateway.connected || !client) {
