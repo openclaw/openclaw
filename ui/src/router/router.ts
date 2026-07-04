@@ -202,7 +202,6 @@ export function createRouter<
             preload: false,
           }
         : undefined;
-    let targetPublished = Boolean(activatedCachedMatch);
     const run: NavigationRun = { controller, matchId, location };
     currentRun = run;
     const hookOptions: RouteHookOptions = {
@@ -217,18 +216,7 @@ export function createRouter<
 
     if (activatedCachedMatch) {
       matches.batch(() => {
-        if (previous && canCacheMatch(previous)) {
-          matches.setCached([
-            ...matches.getState().cachedMatches.filter((candidate) => candidate.id !== previous.id),
-            previous,
-          ]);
-          const previousRoute = compiled.byId.get(previous.routeId);
-          if (previousRoute) {
-            loading.scheduleGc(previous, previousRoute);
-          }
-        }
-        matches.setActive([activatedCachedMatch]);
-        matches.setPending([]);
+        matches.setPending([activatedCachedMatch]);
         matches.setLocation(location, location);
         matches.setStatus("success");
       });
@@ -251,33 +239,6 @@ export function createRouter<
           context,
           hookOptions,
           revalidating || Boolean(cached?.invalid),
-          (module) => {
-            if (!hookOptions.shouldRun() || matches.getActiveMatch()?.id === match.id) {
-              return;
-            }
-            const loadedMatch = matches.getMatch(match.id);
-            if (!loadedMatch) {
-              return;
-            }
-            targetPublished = true;
-            matches.batch(() => {
-              if (previous && canCacheMatch(previous)) {
-                matches.setCached([
-                  ...matches
-                    .getState()
-                    .cachedMatches.filter((candidate) => candidate.id !== previous.id),
-                  previous,
-                ]);
-                const previousRoute = compiled.byId.get(previous.routeId);
-                if (previousRoute) {
-                  loading.scheduleGc(previous, previousRoute);
-                }
-              }
-              matches.setActive([{ ...loadedMatch, module }]);
-              matches.setPending([]);
-              matches.setLocation(location, location);
-            });
-          },
         );
       } catch (error) {
         if (!hookOptions.shouldRun()) {
@@ -301,7 +262,7 @@ export function createRouter<
         const status = isRouteNotFound(error) ? "notFound" : "error";
         const failedMatch = matches.getMatch(match.id);
         if (failedMatch) {
-          const currentActive = targetPublished ? previous : matches.getActiveMatch();
+          const currentActive = matches.getActiveMatch();
           if (!sameRoute) {
             try {
               await runHook(currentActive, "onLeave", context, {
@@ -316,7 +277,7 @@ export function createRouter<
             }
           }
           matches.batch(() => {
-            if (!targetPublished && !sameMatch && currentActive && canCacheMatch(currentActive)) {
+            if (!sameMatch && currentActive && canCacheMatch(currentActive)) {
               matches.setCached([...matches.getState().cachedMatches, currentActive]);
               const currentRoute = compiled.byId.get(currentActive.routeId);
               if (currentRoute) {
@@ -330,9 +291,7 @@ export function createRouter<
               error,
               updatedAt: Date.now(),
             }));
-            if (!targetPublished) {
-              matches.setActive([matches.getMatch(match.id) ?? failedMatch]);
-            }
+            matches.setActive([matches.getMatch(match.id) ?? failedMatch]);
             matches.setPending([]);
             matches.setLocation(location, location);
             matches.setStatus(status);
@@ -359,9 +318,9 @@ export function createRouter<
         invalid: false,
         updatedAt: Date.now(),
       };
-      const currentActive = targetPublished ? previous : matches.getActiveMatch();
+      const currentActive = matches.getActiveMatch();
       matches.batch(() => {
-        if (!targetPublished && !sameMatch && currentActive && canCacheMatch(currentActive)) {
+        if (!sameMatch && currentActive && canCacheMatch(currentActive)) {
           matches.setCached([...matches.getState().cachedMatches, currentActive]);
           const currentRoute = compiled.byId.get(currentActive.routeId);
           if (currentRoute) {

@@ -139,4 +139,50 @@ describe("router lifecycle cleanup", () => {
     expect(router.getState().matches).toEqual([]);
     expect(router.getState().status).toBe("notFound");
   });
+
+  it("retains the previous route cleanup across an aborted intermediate load", async () => {
+    let resolveIntermediate: (value: string) => void = () => undefined;
+    const intermediateData = new Promise<string>((resolve) => {
+      resolveIntermediate = resolve;
+    });
+    const onLeavePage = vi.fn();
+    const onLeaveIntermediate = vi.fn();
+    const page = definePage({
+      id: "page",
+      path: "/page",
+      component: async () => ({ render: () => undefined }),
+      loader: async () => "page",
+      onLeave: onLeavePage,
+    });
+    const intermediate = definePage({
+      id: "intermediate",
+      path: "/intermediate",
+      component: async () => ({ render: () => undefined }),
+      loader: () => intermediateData,
+      onLeave: onLeaveIntermediate,
+    });
+    const final = definePage({
+      id: "final",
+      path: "/final",
+      component: async () => ({ render: () => undefined }),
+      loader: async () => "final",
+    });
+    const router = createRouter({ routes: [page, intermediate, final] });
+
+    await router.start(createHistory(), "", "initial");
+    const intermediateLoad = router.navigateLocation(
+      { pathname: "/intermediate", search: "", hash: "" },
+      "intermediate",
+    );
+    await vi.waitFor(() => expect(router.getState().pendingMatches[0]?.module).toBeDefined());
+    expect(router.getState().matches[0]?.routeId).toBe("page");
+
+    await router.navigateLocation({ pathname: "/final", search: "", hash: "" }, "final");
+    resolveIntermediate("intermediate");
+    await intermediateLoad;
+
+    expect(onLeavePage).toHaveBeenCalledOnce();
+    expect(onLeaveIntermediate).not.toHaveBeenCalled();
+    expect(router.getState().matches[0]?.routeId).toBe("final");
+  });
 });
