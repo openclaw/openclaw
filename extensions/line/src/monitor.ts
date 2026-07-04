@@ -475,6 +475,15 @@ export async function monitorLineProvider(
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
+  recordChannelRuntimeState({
+    channel: "line",
+    accountId: resolvedAccountId,
+    state: {
+      running: true,
+      lastStartAt: Date.now(),
+    },
+  });
+
   let stopped = false;
   const stopHandler = () => {
     if (stopped) {

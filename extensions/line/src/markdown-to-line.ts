@@ -21,7 +21,7 @@ export interface ProcessedLineMessage {
 /**
  * Regex patterns for markdown detection
  */
-const MARKDOWN_TABLE_REGEX = /^\|(.+)\|[\r\n]+\|[-:\s|]+\|[\r\n]+((?:\|.+\|[\r\n]*)+)/gm;
+const MARKDOWN_TABLE_REGEX = /^\s*\|(.+)\|[\r\n]+\s*\|[-:\s|]+\|[\r\n]+((?:\s*\|.+\|[\r\n]*)+)/gm;
 const MARKDOWN_CODE_BLOCK_REGEX = /```(\w*)\n([\s\S]*?)```/g;
 const MARKDOWN_LINK_REGEX = /\[([^\]]+)\]\(([^)]+)\)/g;
 
@@ -153,7 +153,8 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     paddingBottom: "sm",
   } as FlexBox;
 
-  const dataRows: FlexComponent[] = rowCells.slice(0, 10).map((row, rowIndex) => {
+  const maxDisplayRows = 10;
+  const dataRows: FlexComponent[] = rowCells.slice(0, maxDisplayRows).map((row, rowIndex) => {
     const rowContents = table.headers.map((_, colIndex) => {
       const cell = row[colIndex] ?? { text: "-", bold: false, hasMarkup: false };
       return {
@@ -175,12 +176,32 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     } as FlexBox;
   });
 
+  // Add truncation hint if data rows were cut off
+  const truncatedHint: FlexComponent[] =
+    rowCells.length > maxDisplayRows
+      ? [
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              {
+                type: "text",
+                text: `… ${rowCells.length - maxDisplayRows} more ${rowCells.length - maxDisplayRows === 1 ? "row" : "rows"}`,
+                size: "xs",
+                color: "#999999",
+                align: "center",
+              } as FlexText,
+            ],
+          } as FlexBox,
+        ]
+      : [];
+
   return {
     type: "bubble",
     body: {
       type: "box",
       layout: "vertical",
-      contents: [headerRow, { type: "separator", margin: "sm" }, ...dataRows],
+      contents: [headerRow, { type: "separator", margin: "sm" }, ...dataRows, ...truncatedHint],
       paddingAll: "lg",
     },
   };
@@ -234,9 +255,12 @@ export interface CodeBlock {
 export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
 
-  // Truncate very long code to fit LINE's limits
-  const displayCode =
-    block.code.length > 2000 ? truncateUtf16Safe(block.code, 2000) + "\n..." : block.code;
+  const MAX_CODE_LEN = 2000;
+  const needsTruncation = block.code.length > MAX_CODE_LEN;
+  const displayCode = needsTruncation
+    ? truncateUtf16Safe(block.code, MAX_CODE_LEN) +
+      `\n… [${block.code.length - MAX_CODE_LEN} chars truncated]`
+    : block.code;
 
   return {
     type: "bubble",
@@ -252,6 +276,13 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
           color: "#666666",
         } as FlexText,
         {
+          type: "text",
+          text: block.language || "code",
+          size: "xs",
+          color: "#888888",
+          margin: "sm",
+        } as FlexText,
+        {
           type: "box",
           layout: "vertical",
           contents: [
@@ -260,13 +291,13 @@ export function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
               text: displayCode,
               size: "xs",
               color: "#333333",
-              wrap: true,
             } as FlexText,
           ],
           backgroundColor: "#F5F5F5",
           paddingAll: "md",
           cornerRadius: "md",
           margin: "sm",
+          maxHeight: "240px",
         } as FlexBox,
       ],
       paddingAll: "lg",
@@ -355,8 +386,9 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   processedText = textWithoutTables;
 
   for (const table of tables) {
+    const summary = `Table: ${table.rows.length} rows × ${table.headers.length} cols`;
     const bubble = convertTableToFlexBubble(table);
-    flexMessages.push(toFlexMessage("Table", bubble));
+    flexMessages.push(toFlexMessage(summary, bubble));
   }
 
   // 2. Extract and convert code blocks
@@ -377,7 +409,8 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   processedText = stripMarkdown(processedText);
 
   return {
-    text: processedText,
+    // Only remove pipe remnants at line edges (table artifacts), preserving user-intentional pipes like "cat file | grep foo"
+    text: processedText.replace(/^\|+|\|+$/gm, "").replace(/\|{2,}/g, ""),
     flexMessages,
   };
 }
