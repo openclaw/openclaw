@@ -5,7 +5,7 @@ scenario:
   surface: cli-install-update-onboard-doctor
   category: cli-install-update-onboard-doctor.plugin-and-channel-setup
   coverage:
-    primary:
+    secondary:
       - cli.channel-picker
   objective: Link channel onboarding picker e2e coverage to CLI maturity accounting.
   successCriteria:

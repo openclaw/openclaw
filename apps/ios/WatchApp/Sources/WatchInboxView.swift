@@ -610,7 +610,7 @@ private struct WatchClawAvatar: View {
     @ViewBuilder private var fallbackContent: some View {
         if let text = WatchAvatarSource.normalized(self.text) {
             Text(String(text.prefix(3)))
-                .font(.system(size: self.size * 0.42, weight: .bold, design: .rounded))
+                .font(WatchClawType.avatar(size: self.size * 0.42))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
@@ -642,15 +642,15 @@ private struct WatchFaceHeader: View {
                 text: self.avatarText)
             VStack(alignment: .leading, spacing: 1) {
                 Text(self.section)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Text(self.title)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(WatchClawType.title(size: 18))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 Text(self.subtitle)
-                    .font(.caption2)
+                    .font(WatchClawType.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -668,21 +668,21 @@ private struct WatchHeroCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
                 Text(self.label)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 Text(self.accessory)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(WatchClawType.label(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Text(self.title)
-                .font(.system(size: 19, weight: .semibold))
+                .font(WatchClawType.title(size: 19))
                 .lineLimit(3)
                 .minimumScaleFactor(0.75)
             Text(self.subtitle)
-                .font(.system(size: 13))
+                .font(WatchClawType.body(size: 13))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }
@@ -704,7 +704,7 @@ private struct WatchDetailText: View {
 
     var body: some View {
         Text(self.text)
-            .font(.system(size: 12))
+            .font(WatchClawType.body(size: 12))
             .foregroundStyle(.secondary)
             .lineLimit(5)
             .fixedSize(horizontal: false, vertical: true)
@@ -728,7 +728,7 @@ private struct WatchCompactStatusStrip: View {
             WatchCompactMetric(label: "Inbox", value: self.inboxCount)
             WatchCompactMetric(label: "Approvals", value: self.approvalCount)
             Text(self.status)
-                .font(.system(size: 10, weight: .medium))
+                .font(WatchClawType.label(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -750,10 +750,10 @@ private struct WatchCompactMetric: View {
     var body: some View {
         HStack(spacing: 3) {
             Text(self.label)
-                .font(.system(size: 9, weight: .semibold))
+                .font(WatchClawType.label(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text(self.value)
-                .font(.system(size: 10, weight: .bold))
+                .font(WatchClawType.label(size: 10, weight: .bold))
         }
         .lineLimit(1)
     }
@@ -766,7 +766,7 @@ private struct WatchPrimaryLabel: View {
         HStack(spacing: 7) {
             WatchVoiceGlyph()
             Text(self.title)
-                .font(.caption.weight(.bold))
+                .font(WatchClawType.captionBold)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
@@ -813,7 +813,7 @@ private struct WatchSecondaryLabel: View {
 
     var body: some View {
         Text(self.title)
-            .font(.caption.weight(.semibold))
+            .font(WatchClawType.captionSemiBold)
             .lineLimit(1)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
@@ -851,14 +851,14 @@ private struct WatchStackCard: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.label)
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.label(size: 10, weight: .bold))
                     .foregroundStyle(WatchClawStyle.accent)
                     .lineLimit(1)
                 Text(self.title)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(WatchClawType.title(size: 17))
                     .lineLimit(1)
                 Text(self.subtitle)
-                    .font(.system(size: 13))
+                    .font(WatchClawType.body(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
@@ -866,7 +866,7 @@ private struct WatchStackCard: View {
             HStack(spacing: 5) {
                 if let badge {
                     Text(badge)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(WatchClawType.label(size: 10, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(minWidth: 18, minHeight: 18)
                         .background {
@@ -875,7 +875,7 @@ private struct WatchStackCard: View {
                         }
                 }
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(WatchClawType.symbol(size: 10, weight: .bold))
                     .foregroundStyle(.secondary)
             }
         }
@@ -918,7 +918,7 @@ private struct WatchDecisionButton: View {
     var body: some View {
         Button(action: self.action) {
             Text(self.title)
-                .font(.caption.weight(.bold))
+                .font(WatchClawType.captionBold)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 9)
@@ -936,7 +936,7 @@ private struct WatchTinyStatus: View {
 
     var body: some View {
         Text(self.text)
-            .font(.caption2)
+            .font(WatchClawType.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(2)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -961,10 +961,10 @@ private struct WatchChatBubble: View {
 
             VStack(alignment: self.isUser ? .trailing : .leading, spacing: 3) {
                 Text(self.roleTitle)
-                    .font(.system(size: 9, weight: .bold))
+                    .font(WatchClawType.label(size: 9, weight: .bold))
                     .foregroundStyle(self.isUser ? .secondary : WatchClawStyle.accent)
                 Text(self.item.text)
-                    .font(.system(size: 13))
+                    .font(WatchClawType.body(size: 13))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 9)
@@ -1063,14 +1063,14 @@ private struct WatchChatEmptyState: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("No chat synced")
-                .font(.system(size: 16, weight: .semibold))
+                .font(WatchClawType.title(size: 16))
                 .lineLimit(2)
             Text(self.statusText)
-                .font(.system(size: 12))
+                .font(WatchClawType.body(size: 12))
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
             Text("Tap the message pill below to start from your watch.")
-                .font(.system(size: 11, weight: .medium))
+                .font(WatchClawType.body(size: 11, weight: .medium))
                 .foregroundStyle(WatchClawStyle.accent)
                 .lineLimit(2)
         }
@@ -1091,7 +1091,7 @@ private struct WatchChatEmptyState: View {
 private struct WatchMiniUserDot: View {
     var body: some View {
         Text("You")
-            .font(.system(size: 8, weight: .bold))
+            .font(WatchClawType.label(size: 8, weight: .bold))
             .foregroundStyle(.white.opacity(0.86))
             .frame(width: 22, height: 18)
             .background {
@@ -1112,7 +1112,7 @@ private struct WatchChatComposer: View {
         } label: {
             HStack(spacing: 6) {
                 Text("Message OpenClaw")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(WatchClawType.body(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)

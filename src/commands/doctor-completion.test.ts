@@ -1,24 +1,24 @@
 // Doctor completion tests cover final doctor status summaries and completion messaging.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as noteModule from "../../packages/terminal-core/src/note.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
+  doctorShellCompletion,
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
   type ShellCompletionStatus,
 } from "./doctor-completion.js";
 
 const originalEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "SHELL"]);
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   originalEnv.restore();
-  for (const dir of tempDirs.splice(0)) {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+  vi.restoreAllMocks();
 });
 
 function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletionStatus {
@@ -34,9 +34,8 @@ function status(overrides: Partial<ShellCompletionStatus> = {}): ShellCompletion
 
 describe("shell completion health mapping", () => {
   it("checks an explicit shell instead of the detected environment shell", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
-    tempDirs.push(homeDir, stateDir);
+    const homeDir = tempDirs.make("openclaw-completion-home-");
+    const stateDir = tempDirs.make("openclaw-completion-state-");
     setTestEnvValue("HOME", homeDir);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("SHELL", "/bin/zsh");
@@ -100,5 +99,103 @@ describe("shell completion health mapping", () => {
 
     expect(shellCompletionStatusToHealthFindings(current)).toEqual([]);
     expect(shellCompletionStatusToRepairEffects(current)).toEqual([]);
+  });
+});
+
+const installCompletionMock = vi.hoisted(() => vi.fn());
+const spawnSyncMock = vi.hoisted(() => vi.fn(() => ({ status: 0 })));
+vi.mock("node:child_process", () => ({ spawnSync: spawnSyncMock }));
+vi.mock("../cli/completion-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../cli/completion-runtime.js")>();
+  return {
+    ...actual,
+    installCompletion: installCompletionMock,
+  };
+});
+
+function mockPrompter(confirmValue = true) {
+  return {
+    confirm: vi.fn(async () => confirmValue),
+    confirmAutoFix: vi.fn(async () => confirmValue),
+    confirmAggressiveAutoFix: vi.fn(async () => confirmValue),
+    confirmRuntimeRepair: vi.fn(async () => confirmValue),
+    select: vi.fn(async (_params, fallback) => fallback),
+    shouldRepair: true,
+    shouldForce: false,
+    repairMode: {
+      shouldRepair: true,
+      shouldForce: false,
+      nonInteractive: false,
+      canPrompt: true,
+      updateInProgress: false,
+    },
+  } as never;
+}
+
+async function setupDoctorCompletionTest(usesSlowPattern: boolean) {
+  const homeDir = tempDirs.make("openclaw-doctor-home-");
+  const stateDir = tempDirs.make("openclaw-doctor-state-");
+  setTestEnvValue("HOME", homeDir);
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("SHELL", "/bin/bash");
+
+  const profilePath = path.join(homeDir, usesSlowPattern ? ".bashrc" : ".bash_profile");
+  if (usesSlowPattern) {
+    await fs.writeFile(
+      profilePath,
+      '# test bashrc\n[ -f "/tmp/nonexistent" ] && source <(openclaw completion bash)\n',
+      "utf-8",
+    );
+    const cacheDir = path.join(stateDir, "completions");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(path.join(cacheDir, "openclaw.bash"), "# completion cache\n", "utf-8");
+  }
+  return profilePath;
+}
+
+function wrappedFsError(code: string, profilePath: string): Error {
+  const cause = Object.assign(new Error(`${code}: profile write failed`), {
+    code,
+    path: profilePath,
+  });
+  return new Error(`Failed to install completion: ${cause.message}`, { cause });
+}
+
+describe("doctorShellCompletion", () => {
+  beforeEach(() => {
+    installCompletionMock.mockReset();
+    spawnSyncMock.mockClear();
+  });
+
+  it.each([
+    { code: "EACCES", usesSlowPattern: true, action: "upgraded" },
+    { code: "EPERM", usesSlowPattern: true, action: "upgraded" },
+    { code: "EROFS", usesSlowPattern: true, action: "upgraded" },
+    { code: "EACCES", usesSlowPattern: false, action: "installed" },
+    { code: "EPERM", usesSlowPattern: false, action: "installed" },
+    { code: "EROFS", usesSlowPattern: false, action: "installed" },
+  ])("keeps $action completion best-effort for wrapped $code errors", async (testCase) => {
+    const profilePath = await setupDoctorCompletionTest(testCase.usesSlowPattern);
+    installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, profilePath));
+    const noteSpy = vi.spyOn(noteModule, "note");
+
+    await expect(doctorShellCompletion({} as never, mockPrompter())).resolves.not.toThrow();
+
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringMatching(
+        new RegExp(
+          `Shell completion not ${testCase.action}: .* is not writable.*completion --install`,
+        ),
+      ),
+      "Shell completion",
+    );
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(profilePath), "Shell completion");
+  });
+
+  it("re-throws non-permission errors from installCompletion", async () => {
+    const profilePath = await setupDoctorCompletionTest(true);
+    installCompletionMock.mockRejectedValue(wrappedFsError("ENOSPC", profilePath));
+
+    await expect(doctorShellCompletion({} as never, mockPrompter())).rejects.toThrow("ENOSPC");
   });
 });

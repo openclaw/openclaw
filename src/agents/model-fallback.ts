@@ -75,7 +75,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { isAgentRunRestartAbortReason } from "./run-termination.js";
+import { isAgentRunDirectAbortReason, isAgentRunRestartAbortReason } from "./run-termination.js";
 import {
   resolveSessionSuspensionReason,
   runWithDeferredSessionSuspension,
@@ -354,7 +354,7 @@ async function runFallbackCandidate<T>(params: {
     if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
       throw err;
     }
-    if (isAgentRunRestartAbortReason(err)) {
+    if (isAgentRunDirectAbortReason(err) || isAgentRunRestartAbortReason(err)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -1308,6 +1308,7 @@ function shouldDiscardDeferredSessionSuspension(params: {
   return (
     isTerminalAbort(params.abortSignal) ||
     isCallerAbortSignal(params.abortSignal) ||
+    isAgentRunDirectAbortReason(params.error) ||
     isAgentRunRestartAbortReason(params.error) ||
     isCommandLaneTaskTimeoutError(params.error) ||
     isNonProviderRuntimeCoordinationError(params.error) ||

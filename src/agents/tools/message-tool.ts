@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -1268,9 +1269,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     parameters: schema,
     execute: async (toolCallId, args, signal) => {
       if (signal?.aborted) {
-        const err = new Error("Message send aborted");
-        err.name = "AbortError";
-        throw err;
+        throw createAbortError("Message send aborted");
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };

@@ -26,6 +26,7 @@ export type FollowupQueueState = {
     count: number;
     source: FollowupRun;
     sourceRefs: WeakSet<FollowupRun>;
+    allRoomEvents: boolean;
   }>;
   evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];

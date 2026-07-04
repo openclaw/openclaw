@@ -244,6 +244,11 @@ export function deriveSessionTitle(
     return undefined;
   }
 
+  const label = normalizeOptionalString(entry.label);
+  if (label) {
+    return label;
+  }
+
   if (normalizeOptionalString(entry.displayName)) {
     return normalizeOptionalString(entry.displayName);
   }

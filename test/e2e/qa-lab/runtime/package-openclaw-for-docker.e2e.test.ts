@@ -135,7 +135,7 @@ describe("package-openclaw-for-docker", () => {
     );
   });
 
-  it("uses build-all as the single bounded package artifact build step", async () => {
+  it("uses build-all with declaration generation for package artifacts", async () => {
     const calls: Array<{
       command: string;
       args: string[];
@@ -145,7 +145,9 @@ describe("package-openclaw-for-docker", () => {
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
+    const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
     process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
+    process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
 
     try {
       await buildPackageArtifacts("/repo", {
@@ -171,6 +173,11 @@ describe("package-openclaw-for-docker", () => {
       } else {
         process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = previousTimeout;
       }
+      if (previousSkipDts === undefined) {
+        delete process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+      } else {
+        process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
+      }
     }
 
     expect(calls).toEqual([
@@ -179,7 +186,7 @@ describe("package-openclaw-for-docker", () => {
         args: ["scripts/build-all.mjs"],
         cwd: "/repo",
         noPnpm: "1",
-        skipDts: "1",
+        skipDts: "0",
         timeoutMs: 1234,
       },
     ]);
