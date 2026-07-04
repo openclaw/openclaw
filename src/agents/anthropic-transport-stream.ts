@@ -303,13 +303,24 @@ function toClaudeCodeName(name: string): string {
 
 function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
-  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages =
     Array.isArray(content) &&
     content.some(
       (item) =>
         item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
+  const hasExplicitTextBlock =
+    Array.isArray(content) &&
+    content.some(
+      (item) =>
+        item && typeof item === "object" && (item as Record<string, unknown>).type === "text",
+    );
+  // Only use a media placeholder for media-only tool results. If a
+  // toolResult has any text block, even an empty/truncated one, prefer the
+  // normal empty-output fallback over a stale media placeholder (#99241).
+  const mediaPlaceholder = hasExplicitTextBlock
+    ? undefined
+    : describeToolResultMediaPlaceholder(content);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
@@ -343,8 +354,8 @@ function convertContentBlocks(content: readonly unknown[]) {
       },
     });
   }
-  if (!hasTextBlock) {
-    blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
+  if (!hasTextBlock && mediaPlaceholder) {
+    blocks.unshift({ type: "text", text: mediaPlaceholder });
   }
   return blocks;
 }

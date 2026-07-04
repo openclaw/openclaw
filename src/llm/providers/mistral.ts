@@ -693,7 +693,13 @@ function toChatMessages(
 
     const toolContent: ContentChunk[] = [];
     const textResult = extractToolResultText(msg.content);
-    const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
+    // Only use a media placeholder for media-only tool results. If a
+    // toolResult has any text block, even an empty/truncated one, prefer the
+    // normal empty-output fallback over a stale media placeholder (#99241).
+    const hasTextBlock = msg.content.some((part) => part.type === "text");
+    const mediaPlaceholder = hasTextBlock
+      ? undefined
+      : describeToolResultMediaPlaceholder(msg.content);
     const hasImages = msg.content.some((part) => part.type === "image");
     const toolText = buildToolResultText(
       textResult,

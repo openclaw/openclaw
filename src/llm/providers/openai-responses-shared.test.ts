@@ -591,6 +591,55 @@ describe("convertResponsesMessages", () => {
     });
   });
 
+  it("preserves text and avoids generic media placeholders for mixed tool results", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_exec", name: "exec", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_exec",
+            toolName: "exec",
+            content: [
+              { type: "text", text: "OC99241_TEXT_WINS" },
+              { type: "image", mimeType: "image/png", data: "aW1n" },
+            ],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const functionOutput = input.find((item) => item.type === "function_call_output");
+    expect(functionOutput).toMatchObject({ type: "function_call_output" });
+    expect(functionOutput?.output).toContain("OC99241_TEXT_WINS");
+    // Keep the legitimate non-vision omission marker for real mixed text+image
+    // tool results, but never leak the generic stale-media placeholder.
+    expect(functionOutput?.output).toContain("tool image omitted");
+    expect(JSON.stringify(functionOutput)).not.toMatch(/see attached image/i);
+  });
+
   it("preserves image-bearing tool results instead of using no-output text", () => {
     const input = convertResponsesMessages(
       { ...nativeOpenAIModel, input: ["text", "image"] },

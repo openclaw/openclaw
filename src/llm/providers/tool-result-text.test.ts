@@ -160,6 +160,24 @@ describe("extractToolResultText", () => {
 });
 
 describe("describeToolResultMediaPlaceholder", () => {
+  it("does not describe media when tool result already has text", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "image", mimeType: "image/png", data: "img" },
+        { type: "text", text: "PLAIN_TEXT_PROBE_99241" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("does not describe media when tool result has an empty text block", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "text", text: "" },
+        { type: "image", mimeType: "image/png", data: "img" },
+      ]),
+    ).toBeUndefined();
+  });
+
   it("describes image-only tool result media", () => {
     expect(
       describeToolResultMediaPlaceholder([{ type: "image", mimeType: "image/png", data: "img" }]),

@@ -650,13 +650,19 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
 
     if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
+      const hasTextBlock = msg.content.some((item) => item.type === "text");
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
               item.type === "image",
           )
         : [];
-      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
+      // Only use a media placeholder for media-only tool results. If a
+      // toolResult has any text block, even an empty/truncated one, prefer the
+      // normal empty-output fallback over a stale media placeholder (#99241).
+      const mediaPlaceholder = hasTextBlock
+        ? undefined
+        : describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
         : (mediaPlaceholder ?? "");

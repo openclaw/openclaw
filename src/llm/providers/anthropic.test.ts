@@ -462,6 +462,74 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("does not add generic placeholder when image tool results include explicit empty text", async () => {
+    let capturedPayload: unknown;
+    const imageData = Buffer.from("image").toString("base64");
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "screenshot",
+            content: [
+              { type: "text", text: "" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+            ],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result") as {
+      content: unknown[];
+    };
+
+    expect(toolResult.content).toEqual([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+    ]);
+  });
+
   it.each([
     ["anthropic", "sk-ant-provider"],
     ["anthropic-vertex", "vertex-token"],

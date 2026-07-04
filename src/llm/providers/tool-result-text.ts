@@ -123,6 +123,7 @@ function truncateProviderToolText(text: string): string {
 export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
   let hasImage = false;
   let hasAudio = false;
+  let hasText = false;
 
   for (const block of blocks) {
     if (!block || typeof block !== "object") {
@@ -132,6 +133,9 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     const type = typeof record.type === "string" ? record.type : undefined;
     const mimeType = readMimeType(record);
 
+    if (type === "text") {
+      hasText = true;
+    }
     if (
       (type && IMAGE_TOOL_RESULT_TYPES.has(type)) ||
       mimeType?.toLowerCase().startsWith("image/")
@@ -146,6 +150,9 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
     }
   }
 
+  if (hasText) {
+    return undefined;
+  }
   if (hasImage && hasAudio) {
     return "(see attached media)";
   }

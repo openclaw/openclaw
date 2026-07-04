@@ -1289,8 +1289,14 @@ function convertResponsesMessages(
       const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
-      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
+      const hasTextBlock = msg.content.some((item) => item.type === "text");
       const hasImages = msg.content.some((item) => item.type === "image");
+      // Only use a media placeholder for media-only tool results. If a
+      // toolResult has any text block, even an empty/truncated one, prefer the
+      // normal empty-output fallback over a stale media placeholder (#99241).
+      const mediaPlaceholder = hasTextBlock
+        ? undefined
+        : describeToolResultMediaPlaceholder(msg.content);
       const [callId] = msg.toolCallId.split("|");
       messages.push({
         type: "function_call_output",
