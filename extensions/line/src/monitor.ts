@@ -35,7 +35,6 @@ import {
   createQuickReplyItems,
   createTextMessageWithQuickReplies,
   getUserDisplayName,
-  pushMessageLine,
   pushMessagesLine,
   pushTextMessageWithQuickReplies,
   replyMessageLine,
@@ -277,7 +276,6 @@ export async function monitorLineProvider(
                         chunkMarkdownText,
                         sendLineReplyChunks,
                         replyMessageLine,
-                        pushMessageLine,
                         pushTextMessageWithQuickReplies,
                         createQuickReplyItems,
                         createTextMessageWithQuickReplies,
@@ -492,7 +490,7 @@ export async function monitorLineProvider(
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   // One-time quota check on startup (non-blocking)
-  logLineChannelQuota({ cfg: config, accountId: resolvedAccountId }).catch(() => {});
+  logLineChannelQuota({ cfg: config, accountId: resolvedAccountId });
 
   let stopped = false;
   const stopHandler = () => {

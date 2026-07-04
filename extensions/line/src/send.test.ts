@@ -396,10 +396,10 @@ describe("LINE send helpers", () => {
   });
 
   it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
-    // 33-char value with lowercase leading char ??what an upstream session-key
+    // 33-char value with lowercase leading char — what an upstream session-key
     // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
     // anyway; throwing locally keeps the failure permanent so delivery-recovery
-    // moves the entry to failed/ immediately instead of silently retrying 5?.
+    // moves the entry to failed/ immediately instead of silently retrying 5×.
     await expect(
       sendModule.pushMessagesLine(
         "cabcdef0123456789abcdef0123456789",

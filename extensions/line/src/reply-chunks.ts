@@ -17,11 +17,6 @@ export type SendLineReplyChunksParams = {
     messages: messagingApi.Message[],
     opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
-  pushMessageLine: (
-    to: string,
-    text: string,
-    opts: { cfg: OpenClawConfig; accountId?: string },
-  ) => Promise<unknown>;
   pushMessagesLine: (
     to: string,
     messages: messagingApi.Message[],

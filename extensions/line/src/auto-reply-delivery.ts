@@ -37,7 +37,6 @@ export type LineAutoReplyDeps = {
 } & Pick<
   SendLineReplyChunksParams,
   | "replyMessageLine"
-  | "pushMessageLine"
   | "pushTextMessageWithQuickReplies"
   | "createTextMessageWithQuickReplies"
   | "onReplyError"
@@ -177,7 +176,6 @@ export async function deliverLineAutoReply(params: {
       cfg: params.cfg,
       accountId,
       replyMessageLine: deps.replyMessageLine,
-      pushMessageLine: deps.pushMessageLine,
       pushMessagesLine: deps.pushMessagesLine,
       pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
@@ -215,7 +213,6 @@ export async function deliverLineAutoReply(params: {
         cfg: params.cfg,
         accountId,
         replyMessageLine: deps.replyMessageLine,
-        pushMessageLine: deps.pushMessageLine,
         pushMessagesLine: deps.pushMessagesLine,
         pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
         createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
