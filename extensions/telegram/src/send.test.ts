@@ -1479,6 +1479,24 @@ describe("sendMessageTelegram", () => {
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
+  it("reports the first Telegram chunk before a later chunk fails", async () => {
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const onDeliveryResult = vi.fn();
+    const markdown = `# Long\n\n${"**section** with _style_ and `code`\n".repeat(3000)}`;
+
+    await expect(
+      sendMessageTelegram("123", markdown, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["54"]);
+  });
+
   it("chunks long inline markdown through the HTML text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 52, chat: { id: "123" } });
     const markdown = `**${"A".repeat(70_000)}**`;

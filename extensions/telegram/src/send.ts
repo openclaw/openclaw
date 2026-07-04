@@ -144,6 +144,8 @@ type TelegramSendOpts = {
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
+  /** Persist each concrete platform send before any later chunk can fail. */
+  onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
 };
 
 type TelegramSendResult = {
@@ -715,6 +717,12 @@ export async function sendMessageTelegram(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
+  const reportDelivery = async (messageId: string | number, deliveredChatId: string | number) => {
+    await opts.onDeliveryResult?.({
+      messageId: String(messageId),
+      chatId: String(deliveredChatId),
+    });
+  };
   const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
     opts.maxBytes ??
@@ -892,6 +900,7 @@ export async function sendMessageTelegram(
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
+      await reportDelivery(messageId, res?.chat?.id ?? chatId);
       await recordOutboundMessageForPromptContext({
         cfg,
         account,
@@ -1072,6 +1081,7 @@ export async function sendMessageTelegram(
           );
           const fallbackMessageId = resolveTelegramMessageIdOrThrow(plainResult.result, context);
           recordSentMessage(chatId, fallbackMessageId, cfg);
+          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId);
           await recordOutboundMessageForPromptContext({
             cfg,
             account,
@@ -1095,6 +1105,7 @@ export async function sendMessageTelegram(
       }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
+      await reportDelivery(messageId, result?.chat?.id ?? chatId);
       await recordOutboundMessageForPromptContext({
         cfg,
         account,
@@ -1350,6 +1361,7 @@ export async function sendMessageTelegram(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
+    await reportDelivery(mediaMessageId, resolvedChatId);
     await recordOutboundMessageForPromptContext({
       cfg,
       account,

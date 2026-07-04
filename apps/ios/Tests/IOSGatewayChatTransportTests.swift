@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
@@ -173,5 +174,25 @@ import Testing
             stateversion: nil)
         let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
         #expect(mapped == nil)
+    }
+}
+
+@Suite struct LocalFixtureChatTransportTests {
+    @Test func sentUserTurnCarriesGatewayIdempotencyMetadata() async throws {
+        let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
+
+        _ = try await transport.sendMessage(
+            sessionKey: "main",
+            message: "hello",
+            thinking: "auto",
+            idempotencyKey: "fixture-run",
+            attachments: [])
+        let history = try await transport.requestHistory(sessionKey: "main")
+        let decoded = try #require(history.messages).compactMap { payload -> OpenClawChatMessage? in
+            guard let data = try? JSONEncoder().encode(payload) else { return nil }
+            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        }
+
+        #expect(decoded.last(where: { $0.role == "user" })?.idempotencyKey == "fixture-run:user")
     }
 }
