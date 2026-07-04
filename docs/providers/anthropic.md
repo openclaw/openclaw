@@ -206,6 +206,30 @@ Related Anthropic docs:
 
 </Note>
 
+## Safety refusal fallback (Claude Fable 5)
+
+Claude Fable 5 runs safety classifiers that can decline a request with
+`stop_reason: "refusal"`, including occasional false positives on benign
+security or life-sciences work. For direct API-key requests OpenClaw opts into
+Anthropic's server-side fallback, so a declined request is re-served by
+`claude-opus-4-8` inside the same call instead of failing the turn.
+
+- Applies to `anthropic/claude-fable-5` with API-key auth against
+  `api.anthropic.com`. OAuth (Claude CLI subscription reuse), proxy base URLs,
+  Bedrock, Vertex, and Foundry requests are unchanged.
+- A fallback-served turn records a `provider_fallback` diagnostic naming both
+  models. Partial output produced before a mid-stream decline is kept as the
+  continuation prefix; the declined model's reasoning and tool calls are
+  discarded per Anthropic's replay rules.
+- Billing follows Anthropic's per-attempt rules: a decline before output is not
+  billed, and the rescue bills at Claude Opus 4.8 rates.
+- If the fallback model declines too, the turn surfaces the refusal as an error
+  exactly as before.
+
+See Anthropic's [refusals and fallback
+guide](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
+for the underlying behavior.
+
 ## Prompt caching
 
 OpenClaw supports Anthropic's prompt caching feature for API-key auth.
