@@ -297,7 +297,9 @@ async function readGoogleOauthTokenResponsePayload(
 function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
   if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
     try {
-      return gunzipSync(bytes).toString("utf8");
+      return gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(
+        "utf8",
+      );
     } catch {
       return bytes.toString("utf8");
     }
