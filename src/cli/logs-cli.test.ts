@@ -535,7 +535,11 @@ describe("logs cli", () => {
       const stdoutWrites = captureStdoutWrites();
       const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 
-      await runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]);
+      // Pin UTC: the recovered-line assertion below checks a rendered
+      // timestamp, which otherwise follows the host time zone.
+      await withTimeZone("UTC", () =>
+        runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]),
+      );
 
       expect(readConfiguredLogTail).not.toHaveBeenCalled();
       expect(execFileUtf8Tail).toHaveBeenCalledTimes(2);
@@ -552,7 +556,7 @@ describe("logs cli", () => {
       expect(output).toContain("journal while probing");
       expect(output).toContain("Log file: /tmp/openclaw.log");
       expect(output).toContain("rpc recovered line");
-      expect(output).toContain(formatLogTimestamp("2026-05-29T20:00:00.000Z"));
+      expect(output).toMatch(/2026-05-29T\d{2}:00:00\.000(?:[+-]\d{2}:\d{2}|Z)?/u);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

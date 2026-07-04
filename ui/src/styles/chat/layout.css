@@ -3,6 +3,13 @@
    ============================================= */
 
 /* Main chat card - flex column layout, transparent background */
+openclaw-chat-page {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .chat {
   position: relative;
   display: flex;
@@ -584,7 +591,6 @@
   height: 16px;
   flex-shrink: 0;
 }
-
 .agent-chat__input {
   position: relative;
   display: flex;

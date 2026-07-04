@@ -1942,6 +1942,9 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../packages/normalization-core
+      '@openclaw/uirouter':
+        specifier: 0.1.0
+        version: 0.1.0
       dompurify:
         specifier: 3.4.11
         version: 3.4.11
@@ -3148,6 +3151,10 @@ packages:
     engines: {node: '>=22.19.0'}
     peerDependencies:
       undici: '>=8.3.0 <9'
+
+  '@openclaw/uirouter@0.1.0':
+    resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
+    engines: {node: ^22.18.0 || >=24.11.0}
 
   '@opentelemetry/api-logs@0.219.0':
     resolution: {integrity: sha512-FFx7YnaYJlIjqWW/AG/yAZ0L/NEY724PipXXXQLdtZPbLwBGbUMTGL1i/esI56TWfTUXxhLfpgrnWJCG8aUJyg==}
@@ -8909,6 +8916,8 @@ snapshots:
   '@openclaw/proxyline@0.3.3(undici@8.5.0)':
     dependencies:
       undici: 8.5.0
+
+  '@openclaw/uirouter@0.1.0': {}
 
   '@opentelemetry/api-logs@0.219.0':
     dependencies:

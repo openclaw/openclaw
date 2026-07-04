@@ -148,27 +148,11 @@ describe("scripts/run-vitest", () => {
     ).toContain("[vitest] Vitest is not installed in node_modules.");
   });
 
-  it("routes explicit unit ui tests through the narrow unit ui config", () => {
-    expect(
-      resolveImplicitVitestArgs([
-        "ui/src/ui/controllers/chat.test.ts",
-        "-t",
-        "keeps optimistic user attachment previews",
-      ]),
-    ).toEqual([
-      "--config",
-      "test/vitest/vitest.unit-ui.config.ts",
-      "ui/src/ui/controllers/chat.test.ts",
-      "-t",
-      "keeps optimistic user attachment previews",
-    ]);
-  });
-
   it("does not override explicit vitest configs", () => {
     const argv = [
       "--config",
       "test/vitest/vitest.ui.config.ts",
-      "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/pages/chat/chat-send.test.ts",
     ];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
@@ -400,27 +384,13 @@ describe("scripts/run-vitest", () => {
     ).toEqual([]);
   });
 
-  it("keeps the run subcommand first when routing unit ui tests", () => {
-    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/controllers/chat.test.ts"])).toEqual([
-      "run",
-      "--config",
-      "test/vitest/vitest.unit-ui.config.ts",
-      "ui/src/ui/controllers/chat.test.ts",
-    ]);
-  });
-
   it("routes explicit non-e2e ui tests through the ui config", () => {
-    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/app-gateway.node.test.ts"])).toEqual([
+    expect(resolveImplicitVitestArgs(["run", "ui/src/pages/chat/chat-send.test.ts"])).toEqual([
       "run",
       "--config",
       "test/vitest/vitest.ui.config.ts",
-      "ui/src/ui/app-gateway.node.test.ts",
+      "ui/src/pages/chat/chat-send.test.ts",
     ]);
-  });
-
-  it("keeps mixed unit ui and broader ui targets on existing routing", () => {
-    const argv = ["ui/src/ui/controllers/chat.test.ts", "ui/src/ui/app-gateway.node.test.ts"];
-    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
   it("allows opting back into Maglev explicitly", () => {

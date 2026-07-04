@@ -102,10 +102,15 @@ const withoutGatewayAuthEnv = {
 };
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+// gateway run exports --token/--password into process.env as a side effect
+// (see runGatewayCli auth wiring); snapshot and clear them so shared vitest
+// workers do not leak credentials into later files' gateway connects.
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
 ]);
 
 vi.mock("../../config/config.js", () => ({
@@ -317,6 +322,8 @@ describe("gateway run option collisions", () => {
     // this via their openclaw-gateway systemd unit (caught during cross-host
     // review of PR #844), so stub it empty for hermeticity too.
     vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};

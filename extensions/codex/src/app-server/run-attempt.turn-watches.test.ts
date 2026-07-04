@@ -246,7 +246,18 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params);
 
     await harness.waitForMethod("turn/start");
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), expectedTerminalIdleTimeoutMs);
+    // Real timers: the delay is timeout minus real ms elapsed since the last
+    // activity timestamp, so under suite load it lands slightly below the
+    // configured value. Accept a small window instead of exact equality.
+    const terminalIdleDelays = setTimeoutSpy.mock.calls
+      .map(([, delay]) => delay)
+      .filter((delay): delay is number => typeof delay === "number");
+    expect(
+      terminalIdleDelays.some(
+        (delay) =>
+          delay <= expectedTerminalIdleTimeoutMs && delay > expectedTerminalIdleTimeoutMs - 5_000,
+      ),
+    ).toBe(true);
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -4986,7 +4997,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 200;
+    // Generous overall cap: promptness is proven by the 5ms completion-idle
+    // timeout producing the idle promptError below, not by this bound. A tight
+    // cap races attempt startup under parallel-suite load and turn/start never
+    // happens.
+    params.timeoutMs = 30_000;
 
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 5,
@@ -4995,7 +5010,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
+      { interval: 5, timeout: 10_000 },
     );
     await notify({
       method: "item/started",

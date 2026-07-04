@@ -23,14 +23,11 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/matrix/src/plugin-entry.runtime.js",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
-  "extensions/qa-lab/src/auth-profile.fixture.ts",
-  "extensions/qa-lab/src/codex-plugin.fixture.ts",
   // Continuation-rail subagent-announce runtime entry; bundled separately via
   // tsdown.config.ts:277-278 and loaded by subagent-announce.ts:326 via
   // importRuntimeModule(import.meta.url, ["./subagent-announce.continuation.runtime"]).
   // Knip can't see dynamic-import; mirrors subagent-registry.runtime.ts sibling.
   "src/agents/subagent-announce.continuation.runtime.ts",
-  "ui/src/ui/browser-redact.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
   "src/cli/daemon-cli-compat.ts",

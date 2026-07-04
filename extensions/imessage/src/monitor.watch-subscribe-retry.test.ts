@@ -81,6 +81,10 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     // would otherwise interact badly with the fake timers this suite uses.
     clearIMessageRuntime();
     vi.useFakeTimers();
+    // Sibling suites install the imessage runtime singleton without clearing
+    // it; a leaked runtime resurrects another file's recovery cursor and
+    // watch.subscribe then gains an unexpected since_rowid.
+    clearIMessageRuntime();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});

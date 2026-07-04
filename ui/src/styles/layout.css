@@ -394,67 +394,6 @@
   stroke-linejoin: round;
 }
 
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  position: absolute;
-  left: 50%;
-  pointer-events: none;
-  opacity: 0;
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-  z-index: 60;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before {
-  content: none;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: attr(data-tooltip);
-  top: calc(100% + 6px);
-  min-width: max-content;
-  max-width: min(220px, 60vw);
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: center;
-  white-space: nowrap;
-  transform: translateY(-3px);
-}
-
-@media (hover: hover) {
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    opacity: 1;
-  }
-
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    transform: translateY(0);
-  }
-}
-
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::before,
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: none !important;
-  display: none !important;
-}
-
 /* ===========================================
    Navigation Sidebar
    =========================================== */
@@ -1112,6 +1051,7 @@
 }
 
 .sidebar--collapsed .sidebar-new-session {
+  justify-content: center;
   width: 44px;
   min-height: 44px;
   padding: 0;
@@ -1317,10 +1257,6 @@
   margin-top: 20px;
 }
 
-:root[data-theme-mode="light"] .content {
-  background: var(--bg-content);
-}
-
 .content--chat {
   display: flex;
   flex-direction: column;
@@ -1334,15 +1270,15 @@
   margin-top: 0;
 }
 
-.content--workboard {
+.content--chat > openclaw-router-outlet {
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding-bottom: 16px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
 }
 
-.content--workboard > * + * {
-  margin-top: 14px;
+:root[data-theme-mode="light"] .content {
+  background: var(--bg-content);
 }
 
 /* Content header */
@@ -1360,6 +1296,10 @@
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: 80px;
+}
+
+.content-header--page + * {
+  margin-top: 20px;
 }
 
 .content--chat .content-header.content-header--chat-hidden {
