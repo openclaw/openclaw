@@ -26,6 +26,7 @@ export type ApplicationGateway = {
   readonly connection: ApplicationGatewayConnection;
   readonly eventLog: readonly EventLogEntry[];
   connect: (connection?: ApplicationGatewayConnectOptions) => void;
+  setSessionKey: (sessionKey: string) => void;
   start: () => void;
   stop: () => void;
   subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;

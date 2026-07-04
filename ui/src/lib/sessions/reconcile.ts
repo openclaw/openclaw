@@ -1,5 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
+import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -32,6 +33,7 @@ export type SessionChangedEventInfo = {
   runId: string | null;
   clientRunId: string | null;
   hasActiveRun: boolean | null;
+  archived: boolean | null;
   isChatTurn: boolean;
 };
 
@@ -141,10 +143,6 @@ function sessionAgentId(
   return null;
 }
 
-function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
-  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
-}
-
 function recordValue(record: Record<string, unknown>, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
@@ -199,6 +197,10 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       stringValue(recordValue(source, "clientRunId")) ??
       null,
     hasActiveRun,
+    archived:
+      typeof recordValue(source, "archived") === "boolean"
+        ? (recordValue(source, "archived") as boolean)
+        : null,
     isChatTurn:
       phase === "start" ||
       phase === "message" ||
@@ -220,6 +222,7 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
     runId: parsed.runId,
     clientRunId: parsed.clientRunId,
     hasActiveRun: parsed.hasActiveRun,
+    archived: parsed.archived,
     isChatTurn: parsed.isChatTurn,
   };
 }
@@ -234,6 +237,15 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const { event, source, key, reason } = parsed;
+  if (reason === "delete" && !result) {
+    return {
+      applied: true,
+      key,
+      agentId: parsed.agentId,
+      deletedKey: key,
+      result,
+    };
+  }
   if (!result) {
     return { applied: false, result };
   }
@@ -248,12 +260,13 @@ export function reconcileSessionChanged(
 
   if (reason === "delete") {
     if (!existing) {
-      return { applied: true, result, key, deletedKey: key };
+      return { applied: true, result, key, agentId: parsed.agentId, deletedKey: key };
     }
     const sessions = result.sessions.filter((candidate) => candidate !== existing);
     return {
       applied: true,
       key,
+      agentId: parsed.agentId,
       result: {
         ...result,
         count: sessions.length,
@@ -298,6 +311,12 @@ export function reconcileSessionChanged(
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
   } as GatewaySessionRow;
+  if (rowFields.archivedAt === null) {
+    delete row.archivedAt;
+  }
+  if (rowFields.pinnedAt === null) {
+    delete row.pinnedAt;
+  }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
     selectedGlobalAgentId,
@@ -352,7 +371,7 @@ export function reconcileSessionHistory(
     const sessions =
       isPersistedSessionRow(session) &&
       !isOutsideResultScope &&
-      (showArchived || session.archived !== true)
+      (session.archived === true) === showArchived
         ? [session]
         : [];
     return {
@@ -386,7 +405,7 @@ export function reconcileSessionHistory(
     return { ...result, defaults: nextDefaults };
   }
   const sessions =
-    showArchived || visibleSession.archived !== true
+    (visibleSession.archived === true) === showArchived
       ? [
           ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
           visibleSession,

@@ -15,7 +15,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
-  saveSettings,
+  patchSettings,
   type UiSettings,
 } from "../../app/settings.ts";
 import { I18nController, t } from "../../i18n/index.ts";
@@ -251,12 +251,12 @@ export class OverviewPage extends LitElement {
       locale,
     };
     this.settings = nextDraft;
-    saveSettings({
-      ...nextDraft,
+    patchSettings({
       gatewayUrl: gateway.connection.gatewayUrl,
       token: gateway.connection.token,
       sessionKey: gateway.snapshot.sessionKey,
       lastActiveSessionKey: gateway.snapshot.sessionKey,
+      locale,
     });
   }
 

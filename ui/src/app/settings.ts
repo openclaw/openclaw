@@ -548,6 +548,12 @@ export function saveSettings(next: UiSettings) {
   persistSettings(next);
 }
 
+export function patchSettings(patch: Partial<UiSettings>): UiSettings {
+  const next = { ...loadSettings(), ...patch };
+  persistSettings(next);
+  return next;
+}
+
 export function loadLocalUserIdentity(): LocalUserIdentity {
   const storage = getSafeLocalStorage();
   try {

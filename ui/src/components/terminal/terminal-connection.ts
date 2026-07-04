@@ -1,4 +1,4 @@
-// Protocol layer for the operator terminal: wraps the gateway client with typed
+// Terminal protocol layer: wraps the gateway client with typed
 // terminal.* RPCs and fans the terminal.data / terminal.exit event stream out to
 // per-session sinks. Kept DOM-free so it can be unit tested without ghostty-web.
 

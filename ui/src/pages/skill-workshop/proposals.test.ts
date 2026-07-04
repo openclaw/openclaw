@@ -49,6 +49,7 @@ function createFixture(
       connection: { gatewayUrl: "", token: "", password: "" },
       eventLog: [],
       connect: vi.fn(),
+      setSessionKey: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
       subscribe: vi.fn(() => () => {}),

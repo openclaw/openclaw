@@ -227,6 +227,12 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/apps/openclaw/sessions")).toBe("/apps/openclaw");
   });
 
+  it("preserves mount roots without a route suffix", () => {
+    expect(inferBasePathFromPathname("/__openclaw__/")).toBe("/__openclaw__");
+    expect(inferBasePathFromPathname("/apps/openclaw/")).toBe("/apps/openclaw");
+    expect(inferBasePathFromPathname("/typo")).toBe("");
+  });
+
   it("handles index.html suffix", () => {
     expect(inferBasePathFromPathname("/index.html")).toBe("");
     expect(inferBasePathFromPathname("/ui/index.html")).toBe("/ui");

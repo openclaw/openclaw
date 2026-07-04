@@ -4,11 +4,11 @@ import { property, state } from "lit/decorators.js";
 import type { FastMode } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { importCustomThemeFromUrl, syncCustomThemeStyleTag } from "../../app/custom-theme.ts";
+import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import {
   loadSettings,
   normalizeTextScale,
-  saveSettings,
+  patchSettings,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -254,25 +254,6 @@ function applyTextScale(value: unknown) {
   );
 }
 
-function applyResolvedTheme(theme: ThemeName, mode: ThemeMode) {
-  if (typeof document === "undefined") {
-    return;
-  }
-  const resolved = resolveTheme(theme, mode);
-  const themeMode = resolved.endsWith("light") ? "light" : "dark";
-  const root = document.documentElement;
-  root.dataset.theme = resolved;
-  root.dataset.themeMode = themeMode;
-  root.style.colorScheme = themeMode;
-}
-
-function applyStoredPresentation(settings: UiSettings) {
-  syncCustomThemeStyleTag(settings.customTheme);
-  applyResolvedTheme(settings.theme, settings.themeMode);
-  applyBorderRadius(settings.borderRadius);
-  applyTextScale(settings.textScale);
-}
-
 export class ConfigPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
@@ -331,6 +312,9 @@ export class ConfigPage extends LitElement {
       this.context.config.subscribe(() => this.requestUpdate()),
       this.context.gateway.subscribe(() => this.requestUpdate()),
       this.context.webPush.subscribe(() => this.requestUpdate()),
+      this.context.theme.subscribe(() => {
+        this.settings = loadSettings();
+      }),
     ];
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
@@ -377,9 +361,16 @@ export class ConfigPage extends LitElement {
   }
 
   private applySettings(next: UiSettings) {
-    this.settings = next;
-    saveSettings(next);
-    applyStoredPresentation(next);
+    this.settings = patchSettings({
+      theme: next.theme,
+      themeMode: next.themeMode,
+      customTheme: next.customTheme,
+      borderRadius: next.borderRadius,
+      textScale: next.textScale,
+    });
+    applyBorderRadius(this.settings.borderRadius);
+    applyTextScale(this.settings.textScale);
+    this.context.theme.refresh();
   }
 
   private setTheme(
@@ -574,8 +565,7 @@ export class ConfigPage extends LitElement {
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setTextScale(value),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      assistantName:
-        this.context.config.current.assistantIdentity.name || this.context.assistantName,
+      assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "config" ? undefined : configPageTitle(this.pageId),
       showRootTab: !includeSections?.length,
@@ -661,7 +651,7 @@ export class ConfigPage extends LitElement {
       },
       connected: runtimeConfig.state.connected,
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      assistantName: appConfig.assistantIdentity.name || this.context.assistantName,
+      assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configObject,

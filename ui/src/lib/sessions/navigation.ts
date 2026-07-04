@@ -177,7 +177,7 @@ export function filterSessionRows(
   options: { showArchived: boolean },
 ): SessionsListResult {
   const sessions = result.sessions.filter(
-    (row) => row.key && (options.showArchived || row.archived !== true),
+    (row) => row.key && (row.archived === true) === options.showArchived,
   );
   return {
     ...result,
@@ -213,6 +213,11 @@ export function getVisibleSessionRows(
   });
 }
 
+export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+  return pinnedDiff !== 0 ? pinnedDiff : (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
 export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
   const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
@@ -239,7 +244,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     filterByAgent: shouldFilterByAgent,
   })
     .filter((row) => !matchesCurrentSession(row))
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .toSorted(compareSessionRowsByUpdatedAt)
     .slice(0, 9);
   return {
     currentSessionKey,

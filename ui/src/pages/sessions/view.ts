@@ -22,10 +22,10 @@ import {
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
-import { parseAgentSessionKey } from "../../lib/session-key.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

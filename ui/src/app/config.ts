@@ -231,10 +231,7 @@ export function createApplicationConfigCapability(params: {
       });
       if (next && version === refreshVersion) {
         const documentTerminalEnabled = readDocumentTerminalEnabled();
-        if (
-          documentTerminalEnabled !== null &&
-          next.terminalEnabled !== documentTerminalEnabled
-        ) {
+        if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
           // CSP headers cannot change on a live document. Reload in either
           // direction so the document and accepted terminal state stay aligned.
           window.location.reload();

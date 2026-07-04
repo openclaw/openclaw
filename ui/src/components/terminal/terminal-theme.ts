@@ -1,4 +1,4 @@
-// Maps the Control UI's light/dark surfaces onto ghostty-web's 16-color theme.
+// Maps the Control UI light/dark surfaces onto ghostty-web's 16-color theme.
 import type { ITheme } from "ghostty-web";
 
 // ANSI palette tuned to sit on the Control UI's near-black / near-white surfaces.

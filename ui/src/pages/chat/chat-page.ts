@@ -12,6 +12,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette.ts";
 import "../../components/tooltip.ts";
+import { t } from "../../i18n/index.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   resolveSessionKey,
@@ -19,9 +20,12 @@ import {
   scopedAgentParamsForSession,
 } from "../../lib/sessions/index.ts";
 import {
+  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
+  uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { refreshSlashCommands } from "./chat-commands.ts";
@@ -109,6 +113,7 @@ export class ChatPage extends LitElement {
     }
     state.sessionKey = nextSessionKey;
     saveRouteSessionSettings(state, nextSessionKey);
+    this.context.gateway.setSessionKey(nextSessionKey);
     const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
     if (agentId) {
       this.context.agentSelection.set(agentId);
@@ -125,6 +130,7 @@ export class ChatPage extends LitElement {
     const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
     resetChatStateForRouteSession(state, nextSessionKey);
+    this.context.gateway.setSessionKey(nextSessionKey);
     if (previousSessionKey !== nextSessionKey) {
       state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
     }
@@ -436,13 +442,48 @@ export class ChatPage extends LitElement {
     if (!state) {
       return;
     }
-    for (const sessionKey of stateValue.deletedKeys) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+    const selectedSessionDeleted = stateValue.deletedSessions.some(({ key, agentId }) =>
+      uiSessionEventMatches(
+        {
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+          sessionKey: state.sessionKey,
+        },
+        key,
+        agentId,
+      ),
+    );
+    for (const { key } of stateValue.deletedSessions) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key });
     }
     state.sessionsResult = stateValue.result;
     state.sessionsResultAgentId = stateValue.agentId;
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
+    const selectedSession = stateValue.result?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
+    if (selectedSession) {
+      state.selectedChatSessionArchived = selectedSession.archived === true;
+    }
+    if (selectedSessionDeleted) {
+      const agentId =
+        parseAgentSessionKey(state.sessionKey)?.agentId ??
+        this.context.agentSelection.state.selectedId ??
+        "main";
+      this.context.replace("chat", {
+        search: searchForSession(
+          buildAgentMainSessionKey({
+            agentId,
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: this.context.agents.state.agentsList,
+              hello: this.context.gateway.snapshot.hello,
+            }),
+          }),
+        ),
+      });
+      return;
+    }
     state.requestUpdate?.();
   }
 
@@ -497,7 +538,7 @@ export class ChatPage extends LitElement {
       state.requestUpdate?.();
       return;
     }
-    state.assistantName = this.context.assistantName;
+    state.assistantName = this.context.config.current.assistantIdentity.name;
     if (!snapshot.connected) {
       if (wasConnected) {
         this.connectionGeneration += 1;
@@ -564,6 +605,16 @@ export class ChatPage extends LitElement {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const currentAgentId = resolveChatAgentId(state);
+    const selectedSessionArchived =
+      state.selectedChatSessionArchived ||
+      state.sessionsResult?.sessions.some(
+        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+      ) === true;
+    const disabledReason = !state.connected
+      ? t("chat.disconnected")
+      : selectedSessionArchived
+        ? t("chat.archivedSessionDisabled")
+        : null;
     const props: ChatProps = {
       sessionKey: state.sessionKey,
       onSessionKeyChange: (next) => {
@@ -599,8 +650,8 @@ export class ChatPage extends LitElement {
       realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
       realtimeTalkOptions: state.realtimeTalkOptions,
       connected: state.connected,
-      canSend: state.connected,
-      disabledReason: state.connected ? null : "Disconnected",
+      canSend: state.connected && !selectedSessionArchived,
+      disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
       composerControls: renderChatControls({
@@ -667,6 +718,13 @@ export class ChatPage extends LitElement {
       },
       onSend: () => void state.handleSendChat(),
       onCompact: () => void state.handleSendChat("/compact"),
+      onOpenSessionCheckpoints: () => {
+        const search = new URLSearchParams({ session: state.sessionKey });
+        if (selectedSessionArchived) {
+          search.set("showArchived", "1");
+        }
+        this.context.navigate("sessions", { search: `?${search.toString()}` });
+      },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeTalkOptions: () => {
         state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;

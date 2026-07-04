@@ -66,6 +66,7 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
+  const isMountRoot = pathname.trim().endsWith("/");
   const normalizedPath = normalizePath(pathname);
   if (normalizedPath.toLowerCase().endsWith("/index.html")) {
     return normalizeBasePath(normalizedPath.slice(0, -"/index.html".length));
@@ -95,7 +96,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     }
     return index ? `/${segments.slice(0, index).join("/")}` : "";
   }
-  return "";
+  return isMountRoot && segments.length ? `/${segments.join("/")}` : "";
 }
 
 export function locationForRoute(routeId: RouteId, basePath: string): RouteLocation {

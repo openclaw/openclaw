@@ -42,8 +42,8 @@ import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
-  loadLocalUserIdentity,
   loadSettings,
+  patchSettings,
   resolveApplicationStartupSettings,
   saveSettings,
   type UiSettings,
@@ -91,6 +91,14 @@ function createApplicationTheme(
 ): ApplicationTheme & { dispose: () => void } {
   let settings = initialSettings;
   let systemThemeCleanup: (() => void) | undefined;
+  const listeners = new Set<() => void>();
+
+  const publish = () => {
+    applyStartupPresentation(settings);
+    for (const listener of listeners) {
+      listener();
+    }
+  };
 
   const detachSystemThemeListener = () => {
     systemThemeCleanup?.();
@@ -105,7 +113,7 @@ function createApplicationTheme(
     const mediaQuery = globalThis.matchMedia("(prefers-color-scheme: light)");
     const onChange = () => {
       if (settings.themeMode === "system") {
-        applyStartupPresentation(settings);
+        publish();
       }
     };
     if (typeof mediaQuery.addEventListener === "function") {
@@ -124,22 +132,34 @@ function createApplicationTheme(
       return settings.themeMode;
     },
     setMode(mode: ThemeMode, element) {
-      const nextSettings = { ...settings, themeMode: mode };
-      const currentTheme = resolveTheme(settings.theme, settings.themeMode);
+      const currentSettings = loadSettings();
+      const nextSettings = { ...currentSettings, themeMode: mode };
+      const currentTheme = resolveTheme(currentSettings.theme, currentSettings.themeMode);
       const nextTheme = resolveTheme(nextSettings.theme, nextSettings.themeMode);
       startThemeTransition({
         nextTheme,
         currentTheme,
         context: { element },
         applyTheme: () => {
-          settings = nextSettings;
-          saveSettings(settings);
-          applyStartupPresentation(settings);
+          settings = patchSettings({ themeMode: mode });
+          publish();
           syncSystemThemeListener();
         },
       });
     },
-    dispose: detachSystemThemeListener,
+    refresh() {
+      settings = loadSettings();
+      publish();
+      syncSystemThemeListener();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    dispose() {
+      detachSystemThemeListener();
+      listeners.clear();
+    },
   };
 }
 
@@ -167,14 +187,12 @@ function createApplicationNavigationPreferences(
       ) {
         return;
       }
-      settings = {
-        ...settings,
+      settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
         navGroupsCollapsed: nextSnapshot.navGroupsCollapsed,
         recentSessionsCollapsed: nextSnapshot.recentSessionsCollapsed,
-      };
+      });
       snapshot = nextSnapshot;
-      saveSettings(settings);
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -274,8 +292,7 @@ function createApplicationGateway(
       ? requestedSessionKey.trim()
       : snapshot.sessionKey;
     connection = nextConnection;
-    settings = {
-      ...settings,
+    settings = patchSettings({
       gatewayUrl: nextConnection.gatewayUrl,
       token: nextConnection.token,
       ...(hasRequestedSessionKey
@@ -284,8 +301,7 @@ function createApplicationGateway(
             lastActiveSessionKey: nextSessionKey,
           }
         : {}),
-    };
-    saveSettings(settings);
+    });
     client?.stop();
     stopClientEvents?.();
     stopClientEvents = undefined;
@@ -302,6 +318,7 @@ function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        settings = loadSettings();
         const sessionDefaults = readSessionDefaults(hello);
         const sessionKey = resolveSessionKey(snapshot.sessionKey, hello);
         const lastActiveSessionKey = resolveSessionKey(settings.lastActiveSessionKey, hello);
@@ -309,12 +326,10 @@ function createApplicationGateway(
           sessionKey !== settings.sessionKey ||
           lastActiveSessionKey !== settings.lastActiveSessionKey
         ) {
-          settings = {
-            ...settings,
+          settings = patchSettings({
             sessionKey,
             lastActiveSessionKey,
-          };
-          saveSettings(settings);
+          });
         }
         setSnapshot({
           ...snapshot,
@@ -378,6 +393,17 @@ function createApplicationGateway(
       return eventLog;
     },
     connect,
+    setSessionKey: (sessionKey) => {
+      const nextSessionKey = sessionKey.trim();
+      if (!nextSessionKey || nextSessionKey === snapshot.sessionKey) {
+        return;
+      }
+      settings = patchSettings({
+        sessionKey: nextSessionKey,
+        lastActiveSessionKey: nextSessionKey,
+      });
+      setSnapshot({ ...snapshot, sessionKey: nextSessionKey });
+    },
     start: () => connect(),
     stop: () => {
       stopClientEvents?.();
@@ -403,15 +429,11 @@ function createApplicationGateway(
     },
     subscribeEvents: (listener) => {
       eventListeners.add(listener);
-      if (client) {
-        const remove = client.addEventListener(listener);
-        return () => {
-          eventListeners.delete(listener);
-          remove();
-        };
-      }
+      syncClientEvents(client);
       return () => {
-        eventListeners.delete(listener);
+        if (eventListeners.delete(listener)) {
+          syncClientEvents(client);
+        }
       };
     },
   };
@@ -491,7 +513,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
-  const identity = loadLocalUserIdentity();
   const router = createApplicationRouter();
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
@@ -545,7 +566,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   };
   const context: ApplicationContext<RouteId> = {
     basePath,
-    assistantName: identity.name || "OpenClaw",
     gateway,
     agents,
     agentIdentity,

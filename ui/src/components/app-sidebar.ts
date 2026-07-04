@@ -27,8 +27,18 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  compareSessionRowsByUpdatedAt,
+  resolveSessionNavigation,
+  searchForSession,
+} from "../lib/sessions/index.ts";
+import {
+  buildAgentMainSessionKey,
+  canArchiveSessionRow,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../lib/sessions/session-key.ts";
 import {
   resolvePreferredSessionForAgent,
   resolveSessionAgentFilterOptions,
@@ -44,6 +54,9 @@ type SidebarRecentSession = {
   href: string;
   active: boolean;
   hasActiveRun: boolean;
+  kind?: string;
+  pinned: boolean;
+  pinnedAt?: number | null;
 };
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
@@ -227,12 +240,16 @@ export class AppSidebar extends LitElement {
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.currentSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
+      kind: row.kind,
+      pinned: row.pinned === true,
+      pinnedAt: row.pinnedAt,
     });
     const activeSession = navigation.selectedSession
       ? toSidebarSession(navigation.selectedSession)
       : null;
     const recentSessions = navigation.recentSessions
       .slice(activeSession ? 1 : 0)
+      .toSorted(compareSessionRowsByUpdatedAt)
       .map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
@@ -252,9 +269,19 @@ export class AppSidebar extends LitElement {
   }
 
   private readonly selectSession = (sessionKey: string) => {
+    this.context?.gateway.setSessionKey(sessionKey);
     this.onNavigate?.("chat", {
       search: searchForSession(sessionKey),
     });
+  };
+
+  private readonly replaceCurrentSession = (sessionKey: string) => {
+    this.context?.gateway.setSessionKey(sessionKey);
+    if (this.activeRouteId === "chat") {
+      this.onNavigate?.("chat", {
+        search: searchForSession(sessionKey),
+      });
+    }
   };
 
   private readonly selectAgent = (agentId: string) => {
@@ -297,6 +324,35 @@ export class AppSidebar extends LitElement {
     });
     if (nextSessionKey) {
       this.selectSession(nextSessionKey);
+    }
+  };
+
+  private readonly patchSession = async (
+    session: SidebarRecentSession,
+    patch: { archived?: boolean; pinned?: boolean },
+  ) => {
+    const context = this.context;
+    if (!context || !this.connected) {
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    const agentId = parseAgentSessionKey(session.key)?.agentId;
+    try {
+      const patched = await context.sessions.patch(session.key, patch, agentId ? { agentId } : {});
+      if (!patched || patch.archived !== true || !session.active) {
+        return;
+      }
+      this.replaceCurrentSession(
+        buildAgentMainSessionKey({
+          agentId: agentId ?? selectedAgentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          }),
+        }),
+      );
+    } catch {
+      // Session capability publishes the actionable error for the owning page.
     }
   };
 
@@ -379,33 +435,80 @@ export class AppSidebar extends LitElement {
   }
 
   private renderRecentSession(session: SidebarRecentSession) {
+    const context = this.context;
+    const archiveAllowed = canArchiveSessionRow(
+      session,
+      resolveUiConfiguredMainKey({
+        agentsList: context?.agents.state.agentsList,
+        hello: context?.gateway.snapshot.hello,
+      }),
+    );
+    const rowClass = [
+      "sidebar-recent-session",
+      "session-row-host",
+      session.active ? "sidebar-recent-session--active" : "",
+      session.pinned ? "session-row-host--pinned" : "",
+      session.hasActiveRun ? "session-row-host--running" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return html`
-      <a
-        href=${session.href}
-        class="sidebar-recent-session ${session.active ? "sidebar-recent-session--active" : ""}"
-        data-session-key=${session.key}
-        title=${`${session.label} · ${session.key}`}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.selectSession(session.key);
-        }}
-      >
-        <span class="sidebar-recent-session__body">
+      <div class=${rowClass} data-session-key=${session.key}>
+        <a
+          href=${session.href}
+          class="sidebar-recent-session__link"
+          title=${`${session.label} · ${session.key}`}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.selectSession(session.key);
+          }}
+        >
           <span class="sidebar-recent-session__name">${session.label}</span>
-          ${session.meta
-            ? html`<span class="sidebar-recent-session__meta">${session.meta}</span>`
-            : nothing}
+        </a>
+        <span class="sidebar-recent-session__aside session-row-aside">
+          <span class="session-row-trail">
+            ${session.hasActiveRun
+              ? html`<span
+                  class="session-run-spinner"
+                  role="img"
+                  aria-label=${t("sessionsView.activeRun")}
+                  title=${t("sessionsView.activeRun")}
+                ></span>`
+              : session.meta}
+          </span>
+          <span class="session-row-actions">
+            <button
+              class="session-action"
+              data-sidebar-session-archive="true"
+              type="button"
+              title=${t("sessionsView.archiveSession")}
+              aria-label=${t("sessionsView.archiveSession")}
+              ?disabled=${!this.connected || !archiveAllowed}
+              @click=${() => void this.patchSession(session, { archived: true })}
+            >
+              ${icons.archive}
+            </button>
+            <button
+              class="session-action session-action--pin"
+              data-sidebar-session-pin="true"
+              type="button"
+              title=${session.pinned
+                ? t("sessionsView.unpinSession")
+                : t("sessionsView.pinSession")}
+              aria-label=${session.pinned
+                ? t("sessionsView.unpinSession")
+                : t("sessionsView.pinSession")}
+              ?disabled=${!this.connected}
+              @click=${() => void this.patchSession(session, { pinned: !session.pinned })}
+            >
+              ${icons.pin}
+            </button>
+          </span>
         </span>
-        ${session.hasActiveRun
-          ? html`<span
-              class="sidebar-recent-session__live"
-              aria-label=${t("sessions.sessionDetails.activeRun")}
-            ></span>`
-          : nothing}
-      </a>
+      </div>
     `;
   }
 
@@ -470,8 +573,13 @@ export class AppSidebar extends LitElement {
                     .currentSessionKey=${routeSessionKey}
                     .agentId=${selectedAgentId}
                     .defaultAgentId=${defaultAgentId}
+                    .mainKey=${resolveUiConfiguredMainKey({
+                      agentsList: context?.agents.state.agentsList,
+                      hello: context?.gateway.snapshot.hello,
+                    })}
                     .connected=${this.connected}
                     .onSelectSession=${this.selectSession}
+                    .onReplaceCurrentSession=${this.replaceCurrentSession}
                   ></openclaw-session-picker>
                 </div>
                 ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}

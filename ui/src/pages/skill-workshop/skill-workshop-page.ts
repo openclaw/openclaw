@@ -254,7 +254,7 @@ export function renderSkillWorkshopPage(
           actionNotice: state.skillWorkshopActionNotice,
           revisionKey: state.skillWorkshopRevisionKey,
           revisionDraft: state.skillWorkshopRevisionDraft,
-          assistantName: context.assistantName,
+          assistantName: context.config.current.assistantIdentity.name,
           workshopAgentName,
           counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
           onStatusFilterChange: (status) => {
@@ -351,6 +351,7 @@ export class SkillWorkshopPage extends LitElement {
 
   private state?: SkillWorkshopState;
   private stopGatewaySubscription?: () => void;
+  private stopConfigSubscription?: () => void;
   private stopAgentSelectionSubscription?: () => void;
   private stopAgentIdentitySubscription?: () => void;
 
@@ -398,6 +399,7 @@ export class SkillWorkshopPage extends LitElement {
 
   override updated() {
     this.startGatewaySubscription();
+    this.startConfigSubscription();
     this.startAgentSelectionSubscription();
     this.startAgentIdentitySubscription();
     this.ensureWorkshopAgentIdentity();
@@ -433,6 +435,14 @@ export class SkillWorkshopPage extends LitElement {
     this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(this.requestPageUpdate);
   }
 
+  private startConfigSubscription(): void {
+    const context = this.context;
+    if (!context || this.stopConfigSubscription) {
+      return;
+    }
+    this.stopConfigSubscription = context.config.subscribe(this.requestPageUpdate);
+  }
+
   private startAgentSelectionSubscription(): void {
     const context = this.context;
     if (!context || !this.state || this.stopAgentSelectionSubscription) {
@@ -458,6 +468,8 @@ export class SkillWorkshopPage extends LitElement {
   override disconnectedCallback() {
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    this.stopConfigSubscription?.();
+    this.stopConfigSubscription = undefined;
     this.stopAgentSelectionSubscription?.();
     this.stopAgentSelectionSubscription = undefined;
     this.stopAgentIdentitySubscription?.();

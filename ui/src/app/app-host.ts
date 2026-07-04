@@ -9,6 +9,7 @@ import "../components/app-topbar.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
+import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
@@ -18,6 +19,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -27,6 +29,7 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "./context.ts";
+import { hasOperatorAdminAccess } from "./operator-access.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
 
@@ -69,6 +72,23 @@ function resolveAgentLabel(sessionKey: string, agentsList: AgentsListResult | nu
 function resolveOnboardingMode(): boolean {
   const raw = new URLSearchParams(globalThis.location?.search ?? "").get("onboarding");
   return raw !== null && /^(?:1|true|yes|on)$/iu.test(raw.trim());
+}
+
+function resolveTerminalThemeMode(): "dark" | "light" {
+  return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
+}
+
+function isTerminalAvailable(
+  snapshot: ApplicationContext["gateway"]["snapshot"],
+  terminalEnabled: boolean,
+): boolean {
+  if (!snapshot.connected || !terminalEnabled) {
+    return false;
+  }
+  return (
+    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(snapshot, "terminal.open") === true
+  );
 }
 
 export class OpenClawApp extends LitElement {
@@ -232,6 +252,8 @@ class OpenClawShell extends LitElement {
   @state() private recentSessionsCollapsed = false;
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
+  @state() private terminalAvailable = false;
+  @state() private terminalClient: GatewayBrowserClient | null = null;
   @state() private activeSessionKey = "";
   @state() private agentLabel = "";
   @state() private routeState: ShellRouteState = {};
@@ -249,10 +271,12 @@ class OpenClawShell extends LitElement {
   private agentsListClient: GatewayBrowserClient | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private stopAgentsSubscription: (() => void) | undefined;
+  private stopConfigSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
   private stopRouteSubscription: (() => void) | undefined;
   private stopOverlaySubscription: (() => void) | undefined;
+  private stopThemeSubscription: (() => void) | undefined;
 
   override createRenderRoot() {
     return this;
@@ -275,10 +299,12 @@ class OpenClawShell extends LitElement {
       !runtime ||
       !context ||
       this.stopAgentsSubscription ||
+      this.stopConfigSubscription ||
       this.stopGatewaySubscription ||
       this.stopNavigationSubscription ||
       this.stopRouteSubscription ||
-      this.stopOverlaySubscription
+      this.stopOverlaySubscription ||
+      this.stopThemeSubscription
     ) {
       return;
     }
@@ -288,13 +314,19 @@ class OpenClawShell extends LitElement {
     });
     this.updateGatewaySessionKey(context.gateway.snapshot);
     this.updateGatewayStatus(context.gateway.snapshot);
+    this.updateTerminalSurface(context.gateway.snapshot);
     this.updateAgentLabel();
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
       this.updateGatewaySessionKey(snapshot);
       this.updateGatewayStatus(snapshot);
+      this.updateTerminalSurface(snapshot);
       this.updateAgentLabel();
       this.ensureAgentsList(snapshot);
     });
+    this.stopConfigSubscription = context.config.subscribe(() => {
+      this.updateTerminalSurface(context.gateway.snapshot);
+    });
+    this.stopThemeSubscription = context.theme.subscribe(() => this.requestUpdate());
     this.stopAgentsSubscription = context.agents.subscribe(() => {
       this.updateAgentLabel();
     });
@@ -316,6 +348,8 @@ class OpenClawShell extends LitElement {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     this.stopAgentsSubscription?.();
     this.stopAgentsSubscription = undefined;
+    this.stopConfigSubscription?.();
+    this.stopConfigSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
     this.stopNavigationSubscription?.();
@@ -324,8 +358,11 @@ class OpenClawShell extends LitElement {
     this.stopRouteSubscription = undefined;
     this.stopOverlaySubscription?.();
     this.stopOverlaySubscription = undefined;
+    this.stopThemeSubscription?.();
+    this.stopThemeSubscription = undefined;
     this.agentsListClient = null;
     this.sessionKeyClient = null;
+    this.terminalClient = null;
     this.navDrawerTrigger = null;
     super.disconnectedCallback();
   }
@@ -429,6 +466,14 @@ class OpenClawShell extends LitElement {
     this.gatewayConnected = snapshot.connected;
   };
 
+  private updateTerminalSurface(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    this.terminalClient = snapshot.connected ? snapshot.client : null;
+    this.terminalAvailable = isTerminalAvailable(
+      snapshot,
+      this.context?.config.current.terminalEnabled ?? false,
+    );
+  }
+
   private ensureAgentsList(snapshot: { client: GatewayBrowserClient | null; connected: boolean }) {
     if (!snapshot.connected || !snapshot.client) {
       this.agentsListClient = null;
@@ -449,11 +494,11 @@ class OpenClawShell extends LitElement {
     client: GatewayBrowserClient | null;
     sessionKey: string;
   }) {
-    if (snapshot.client === this.sessionKeyClient && this.activeSessionKey) {
+    const sessionKey = snapshot.sessionKey.trim();
+    if (snapshot.client === this.sessionKeyClient && sessionKey === this.activeSessionKey) {
       return;
     }
     this.sessionKeyClient = snapshot.client;
-    const sessionKey = snapshot.sessionKey.trim();
     if (sessionKey) {
       this.activeSessionKey = sessionKey;
     }
@@ -533,6 +578,9 @@ class OpenClawShell extends LitElement {
           .themeMode=${context.theme.mode}
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
+          .terminalAvailable=${this.terminalAvailable}
+          .onToggleTerminal=${() =>
+            window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavDrawer(trigger)}
           .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
             this.navigate(routeId, options)}
@@ -593,6 +641,11 @@ class OpenClawShell extends LitElement {
             .onNotFound=${() => this.replaceChatWithCurrentSession()}
           ></openclaw-router-outlet>
         </main>
+        <openclaw-terminal-panel
+          .client=${this.terminalClient}
+          .available=${this.terminalAvailable}
+          .themeMode=${resolveTerminalThemeMode()}
+        ></openclaw-terminal-panel>
         <openclaw-exec-approval
           .props=${{
             queue: this.overlaySnapshot.approvalQueue,

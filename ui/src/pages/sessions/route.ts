@@ -1,17 +1,33 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SessionsRouteData } from "./sessions-page.ts";
 
-async function loadSessionsRoute(context: ApplicationContext): Promise<SessionsRouteData> {
+function routeOptions(location: RouteLocation) {
+  const search = new URLSearchParams(location.search);
+  const expandedCheckpointKey = search.get("session")?.trim() || null;
+  const showArchived = ["1", "true"].includes(search.get("showArchived")?.toLowerCase() ?? "");
+  return { expandedCheckpointKey, showArchived };
+}
+
+async function loadSessionsRoute(
+  context: ApplicationContext,
+  location: RouteLocation,
+): Promise<SessionsRouteData> {
+  const options = routeOptions(location);
+  const checkpointAgentId = parseAgentSessionKey(options.expandedCheckpointKey)?.agentId;
   const [sessions] = await Promise.all([
     context.sessions
       .list({
-        activeMinutes: 60,
+        activeMinutes: options.expandedCheckpointKey || options.showArchived ? 0 : 60,
         limit: 50,
+        search: options.expandedCheckpointKey ?? undefined,
         includeGlobal: true,
-        includeUnknown: false,
-        showArchived: false,
+        includeUnknown: Boolean(options.expandedCheckpointKey),
+        showArchived: options.showArchived,
+        ...(checkpointAgentId ? { agentId: checkpointAgentId } : {}),
       })
       .then(
         (result) => ({ result, error: null }),
@@ -25,13 +41,18 @@ async function loadSessionsRoute(context: ApplicationContext): Promise<SessionsR
     connected: gateway.connected,
     result: sessions.result,
     error: sessions.error,
+    ...options,
   };
 }
 
 export const page = definePage({
   id: "sessions",
   path: "/sessions",
-  loader: loadSessionsRoute,
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+    const options = routeOptions(location);
+    return `${options.expandedCheckpointKey ?? ""}\u0000${options.showArchived ? "1" : "0"}`;
+  },
+  loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
   component: () =>
     import("./sessions-page.ts").then(() => ({
       header: true,

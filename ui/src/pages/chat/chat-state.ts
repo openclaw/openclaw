@@ -16,7 +16,7 @@ import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
-  saveSettings,
+  patchSettings,
   type UiSettings,
 } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
@@ -151,6 +151,7 @@ export type ChatPageHost = ChatHost &
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
     sessionsShowArchived: boolean;
+    selectedChatSessionArchived: boolean;
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     refreshSessionsAfterChat: Map<string, { sessionKey: string; agentId?: string }>;
@@ -309,12 +310,10 @@ export function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string
   ) {
     return;
   }
-  state.settings = {
-    ...state.settings,
+  state.settings = patchSettings({
     sessionKey,
     lastActiveSessionKey: sessionKey,
-  };
-  saveSettings(state.settings);
+  });
 }
 
 export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: string) {
@@ -323,6 +322,10 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  state.selectedChatSessionArchived =
+    state.sessionsResult?.sessions.some(
+      (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
+    ) === true;
   state.currentSessionId = null;
   state.reconnectResumeSessionId = null;
   state.chatMessage = "";
@@ -567,6 +570,9 @@ export async function refreshChat(
     if (!history?.sessionInfo) {
       return;
     }
+    if (areUiSessionKeysEquivalent(history.sessionInfo.key, refreshedSessionKey)) {
+      host.selectedChatSessionArchived = history.sessionInfo.archived === true;
+    }
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
@@ -741,6 +747,9 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     return;
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
+  if (matchesChat && event.archived !== null) {
+    state.selectedChatSessionArchived = event.archived;
+  }
   const runIdBeforeApply = state.chatRunId;
   const result = reconcileSessionEvent(state, payload);
   if (runIdBeforeApply && matchesChat) {
@@ -798,6 +807,14 @@ function replayPendingSessionMessageReload(
 function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
+  if (
+    event &&
+    globalSessionEventMatchesChat(state, event) &&
+    sessionMessageMatchesChat(state, event) &&
+    event.archived !== null
+  ) {
+    state.selectedChatSessionArchived = event.archived;
+  }
   const result = reconcileSessionEvent(state, payload);
   if (
     result.applied &&
@@ -865,7 +882,7 @@ export function createPageState(
     settings,
     password: "",
     onboarding: false,
-    assistantName: context.assistantName,
+    assistantName: appConfig.assistantIdentity.name,
     assistantAvatar: null,
     assistantAvatarStatus: null,
     assistantAvatarReason: null,
@@ -915,6 +932,7 @@ export function createPageState(
     sessionsLoading: false,
     sessionsError: null,
     sessionsShowArchived: false,
+    selectedChatSessionArchived: false,
     agentsList: context.agents.state.agentsList,
     agentsSelectedId: context.agentSelection.state.selectedId,
     onAgentsList: (agentsList: AgentsListResult, client: GatewayBrowserClient) => {
@@ -929,7 +947,6 @@ export function createPageState(
     chatQueueBySession: {} as Record<string, ChatQueueItem[]>,
     chatMessagesBySession: new Map<string, unknown[]>(),
     eventLogBuffer: [] as unknown[],
-    tab: "chat",
     basePath: context.basePath,
     chatNewMessagesBelow: false,
     chatManualRefreshInFlight: false,
@@ -980,9 +997,14 @@ export function createPageState(
   state.handleChatDraftChange = (next) => handleChatDraftChange(state, next);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
   state.applySettings = (next) => {
-    state.settings = next;
-    state.splitRatio = next.splitRatio;
-    saveSettings(next);
+    state.settings = patchSettings({
+      chatShowThinking: next.chatShowThinking,
+      chatShowToolCalls: next.chatShowToolCalls,
+      chatPersistCommentary: next.chatPersistCommentary,
+      chatAutoScroll: next.chatAutoScroll,
+      splitRatio: next.splitRatio,
+    });
+    state.splitRatio = state.settings.splitRatio;
     requestUpdate();
   };
   state.setChatMobileControlsOpen = (open, options) => {

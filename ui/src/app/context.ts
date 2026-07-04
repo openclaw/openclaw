@@ -25,6 +25,8 @@ export type {
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
+  refresh: () => void;
+  subscribe: (listener: () => void) => () => void;
 };
 
 export type ApplicationNavigationPreferencesSnapshot = {
@@ -56,7 +58,6 @@ export type ApplicationSkillWorkshopRevisionHandoff = {
 
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
-  readonly assistantName: string;
   readonly gateway: ApplicationGateway;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;

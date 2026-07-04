@@ -17,15 +17,22 @@ import {
   scopedAgentParamsForSession,
   searchForSession,
 } from "../../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
-import { renderSessions } from "./view.ts";
+import { renderSessions, type SessionsProps } from "./view.ts";
 
 export type SessionsRouteData = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   result: SessionsListResult | null;
   error: string | null;
+  expandedCheckpointKey: string | null;
+  showArchived: boolean;
 };
 
 function parseFilterInteger(value: string): number | undefined {
@@ -70,6 +77,7 @@ export class SessionsPage extends LitElement {
   private checkpointRequestId = 0;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
+  private appliedRouteData?: SessionsRouteData;
   private ignorePendingSharedRefresh = false;
   private sessionMutationPending = false;
   private sessionReloadQueued = false;
@@ -214,22 +222,50 @@ export class SessionsPage extends LitElement {
     if (!data || !context) {
       return;
     }
+    if (data !== this.appliedRouteData) {
+      this.appliedRouteData = data;
+      this.routeDataEnabled = true;
+    }
     this.routeDataInitialized = true;
     if (!this.routeDataEnabled) {
       return;
     }
+    this.showArchived = data.showArchived;
+    if (data.expandedCheckpointKey) {
+      this.activeMinutes = "";
+      this.limit = "";
+      this.includeGlobal = true;
+      this.includeUnknown = true;
+      this.searchQuery = "";
+      this.page = 0;
+      this.selectedKeys = new Set();
+    } else {
+      this.activeMinutes = "60";
+      this.limit = "50";
+      this.includeGlobal = true;
+      this.includeUnknown = false;
+    }
+    this.expandedCheckpointKey = data.expandedCheckpointKey;
     const gateway = context.gateway.snapshot;
     if (data.client !== gateway.client || data.connected !== gateway.connected) {
       this.routeDataEnabled = false;
       void this.loadSessions();
+      if (data.expandedCheckpointKey) {
+        void this.loadCheckpoint(data.expandedCheckpointKey);
+      }
       return;
     }
-    this.result = data.result ? filterSessionRows(data.result, { showArchived: false }) : null;
+    this.result = data.result
+      ? filterSessionRows(data.result, { showArchived: data.showArchived })
+      : null;
     this.error = data.error;
     this.loading = false;
     const sharedSessions = context.sessions.state;
     this.ignorePendingSharedRefresh = sharedSessions.loading;
     this.ensureAgentIdentities(this.result);
+    if (data.expandedCheckpointKey) {
+      void this.loadCheckpoint(data.expandedCheckpointKey);
+    }
   }
 
   private scheduleSessionReload() {
@@ -269,12 +305,16 @@ export class SessionsPage extends LitElement {
   }
 
   private sessionListOptions() {
+    const checkpointKey = this.expandedCheckpointKey;
     return {
-      activeMinutes: this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
-      limit: parseFilterInteger(this.limit),
-      includeGlobal: this.includeGlobal,
-      includeUnknown: this.includeUnknown,
+      activeMinutes:
+        checkpointKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
+      limit: checkpointKey ? 50 : parseFilterInteger(this.limit),
+      search: checkpointKey ?? undefined,
+      includeGlobal: checkpointKey ? true : this.includeGlobal,
+      includeUnknown: checkpointKey ? true : this.includeUnknown,
       showArchived: this.showArchived,
+      ...(checkpointKey ? { agentId: this.sessionAgentId(checkpointKey) } : {}),
     };
   }
 
@@ -444,6 +484,44 @@ export class SessionsPage extends LitElement {
     }
   }
 
+  private async patchSession(key: string, patch: Parameters<SessionsProps["onPatch"]>[1]) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    try {
+      const patched = await context.sessions.patch(key, patch, {
+        agentId: this.sessionAgentId(key),
+      });
+      if (!patched) {
+        this.error = context.sessions.state.error;
+        return;
+      }
+      const selectedKeys = new Set(this.selectedKeys);
+      selectedKeys.delete(key);
+      this.selectedKeys = selectedKeys;
+      if (
+        patch.archived === true &&
+        areUiSessionKeysEquivalent(key, context.gateway.snapshot.sessionKey)
+      ) {
+        context.gateway.setSessionKey(
+          buildAgentMainSessionKey({
+            agentId:
+              parseAgentSessionKey(key)?.agentId ??
+              context.agentSelection.state.selectedId ??
+              "main",
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            }),
+          }),
+        );
+      }
+    } catch (error) {
+      this.error = String(error);
+    }
+  }
+
   private async toggleCheckpointDetails(sessionKey: string) {
     const context = this.context;
     if (!context) {
@@ -570,6 +648,10 @@ export class SessionsPage extends LitElement {
         includeGlobal: this.includeGlobal,
         includeUnknown: this.includeUnknown,
         showArchived: this.showArchived,
+        mainKey: resolveUiConfiguredMainKey({
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+        }),
         filtersCollapsed: this.filtersCollapsed,
         basePath: context.basePath,
         searchQuery: this.searchQuery,
@@ -599,7 +681,7 @@ export class SessionsPage extends LitElement {
           this.limit = "";
           this.includeGlobal = true;
           this.includeUnknown = true;
-          this.showArchived = true;
+          this.showArchived = false;
           this.searchQuery = "";
           this.page = 0;
           this.selectedKeys = new Set();
@@ -622,15 +704,7 @@ export class SessionsPage extends LitElement {
           this.page = 0;
         },
         onRefresh: () => void this.loadSessions(),
-        onPatch: (key, patch) => {
-          void context.sessions
-            .patch(key, patch, {
-              agentId: this.sessionAgentId(key),
-            })
-            .catch((error: unknown) => {
-              this.error = String(error);
-            });
-        },
+        onPatch: (key, patch) => void this.patchSession(key, patch),
         onToggleSelect: (key) => {
           const next = new Set(this.selectedKeys);
           if (next.has(key)) {

@@ -1,5 +1,5 @@
 import type { FitAddon, Terminal } from "ghostty-web";
-// Dockable operator terminal panel for the Control UI.
+// Dockable operator terminal panel for the Control UI shell.
 //
 // Renders a VS Code-style shell dock (bottom by default, or right) with session
 // tabs. Each tab hosts one ghostty-web terminal wired to a gateway PTY session.

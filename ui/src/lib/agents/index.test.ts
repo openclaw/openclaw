@@ -29,7 +29,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         modelOverrides: {},
         loading: false,
         error: null,
-        deletedKeys: [],
+        deletedSessions: [],
       },
     },
     toolsCatalogLoading: false,

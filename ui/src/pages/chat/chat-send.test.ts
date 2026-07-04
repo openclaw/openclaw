@@ -26,6 +26,7 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   chatAvatarReason?: string | null;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
+  sessionsShowArchived?: boolean;
   password?: string;
   settings?: Partial<UiSettings>;
 };
@@ -1358,9 +1359,7 @@ describe("handleSendChat", () => {
         return { messages: [] };
       }
       if (method === "sessions.list") {
-        return createSessionsResult([
-          row("agent:main", { hasActiveRun: false, status: "done" }),
-        ]);
+        return createSessionsResult([row("agent:main", { hasActiveRun: false, status: "done" })]);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1371,7 +1370,6 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/reset",
       sessionKey: "agent:main",
-      tab: "sessions",
       sessionsShowArchived: true,
       sessionsResult: archivedSessions,
     });

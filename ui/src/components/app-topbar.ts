@@ -23,9 +23,11 @@ export class AppTopbar extends LitElement {
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleTerminal?: () => void;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
   @property({ attribute: false }) overviewHref = "";
   @property({ attribute: false }) searchDisabled = false;
+  @property({ attribute: false }) terminalAvailable = false;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -79,6 +81,20 @@ export class AppTopbar extends LitElement {
                 <kbd class="topbar-search__kbd">⌘K</kbd>
               </button>
             </openclaw-tooltip>
+            ${this.terminalAvailable
+              ? html`
+                  <openclaw-tooltip .content=${t("terminal.toggle")}>
+                    <button
+                      class="topbar-icon-btn"
+                      type="button"
+                      @click=${() => this.onToggleTerminal?.()}
+                      aria-label=${t("terminal.toggle")}
+                    >
+                      ${icons.terminal}
+                    </button>
+                  </openclaw-tooltip>
+                `
+              : nothing}
             <div class="topbar-status">
               ${this.routeOwnsHeader && this.headerError
                 ? html`<div class="pill danger">${this.headerError}</div>`

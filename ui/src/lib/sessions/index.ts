@@ -44,7 +44,7 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
-  deletedKeys: readonly string[];
+  deletedSessions: readonly SessionDeleteTarget[];
 };
 
 export type SessionListOptions = {
@@ -189,6 +189,7 @@ export { requestSessionCreate } from "./create.ts";
 export type { SessionCreateParams } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
+  compareSessionRowsByUpdatedAt,
   filterSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
@@ -244,6 +245,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   }
   if (options.configuredAgentsOnly !== undefined) {
     params.configuredAgentsOnly = options.configuredAgentsOnly;
+  }
+  if (options.showArchived === true) {
+    params.archived = true;
   }
   const activeMinutes =
     options.showArchived === true
@@ -482,7 +486,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     modelOverrides: {},
     loading: false,
     error: null,
-    deletedKeys: [],
+    deletedSessions: [],
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
@@ -541,7 +545,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
     lastListOptions = requestOptions;
     if (!backgroundHydrate) {
-      publish({ ...state, loading: true, error: null, deletedKeys: [] });
+      publish({ ...state, loading: true, error: null, deletedSessions: [] });
     }
     try {
       const result = await requestList(requestOptions);
@@ -583,7 +587,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         modelOverrides: state.modelOverrides,
         loading: backgroundHydrate ? state.loading : false,
         error: null,
-        deletedKeys: [],
+        deletedSessions: [],
       });
     } catch (error) {
       if (!disposed && gateway.snapshot.client === client) {
@@ -591,7 +595,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           ...state,
           loading: backgroundHydrate ? state.loading : false,
           error: String(error),
-          deletedKeys: [],
+          deletedSessions: [],
         });
       }
     }
@@ -709,7 +713,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
     const reconciled = reconcileSessionChanged(state.result, payload, options);
-    if (reconciled.applied && reconciled.result !== state.result) {
+    if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
       publish({
         ...state,
         result: reconciled.result,
@@ -717,7 +721,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
         error: null,
-        deletedKeys: reconciled.deletedKey ? [reconciled.deletedKey] : [],
+        deletedSessions: reconciled.deletedKey
+          ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
+          : [],
       });
     }
     return reconciled;
@@ -733,7 +739,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (disposed || gateway.snapshot.client !== client) {
         return false;
       }
-      publish({ ...state, deletedKeys: [key] });
+      publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refresh({ agentId: options.agentId, force: true });
       return true;
@@ -767,7 +773,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
     }
     if (deleted.length > 0 && !disposed && gateway.snapshot.client === client) {
-      publish({ ...state, deletedKeys: deleted });
+      publish({
+        ...state,
+        deletedSessions: targets.filter((target) => deleted.includes(target.key)),
+      });
       for (const key of deleted) {
         setModelOverride(key, undefined);
       }
@@ -929,7 +938,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         modelOverrides: state.modelOverrides,
         loading: false,
         error: null,
-        deletedKeys: [],
+        deletedSessions: [],
       });
       return;
     }
@@ -974,7 +983,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             ...state,
             result: reconciled.result,
             error: null,
-            deletedKeys: reconciled.deletedKey ? [reconciled.deletedKey] : [],
+            deletedSessions: reconciled.deletedKey
+              ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
+              : [],
           });
         }
         return;
