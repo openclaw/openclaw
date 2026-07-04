@@ -13,6 +13,7 @@ import {
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -24,6 +25,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -401,9 +403,16 @@ async function sendOutboundText(params: {
     });
   }
 
-  // Post-md path: upgrade single newlines to paragraph breaks. Feishu
-  // post messages ignore single \n, so we expand them to \n\n.
-  const normalizedText = normalizeFeishuPostMarkdownNewlines(text);
+  // Post-md path: convert markdown tables before normalizing newlines.
+  // Normalization inserts blank lines between consecutive non-empty lines,
+  // which breaks markdown table row contiguity for the converter. Converting
+  // first preserves table structure; then single newlines are upgraded to
+  // paragraph breaks for Feishu post rendering.  sendMessageFeishu will
+  // run convertMarkdownTables again internally, but that is a no-op on
+  // already-converted text.
+  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const tableConvertedText = convertMarkdownTables(text, tableMode);
+  const normalizedText = normalizeFeishuPostMarkdownNewlines(tableConvertedText);
 
   // The outbound chunker measures raw text before expansion, so a chunk
   // that was within the 4000-character boundary can exceed it after

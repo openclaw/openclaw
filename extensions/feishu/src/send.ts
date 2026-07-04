@@ -783,7 +783,7 @@ export async function editMessageFeishu(params: {
  * Cards render markdown properly (code blocks, tables, links, etc.)
  * Uses schema 2.0 format for proper markdown rendering.
  */
-function buildMarkdownCard(text: string): Record<string, unknown> {
+export function buildMarkdownCard(text: string): Record<string, unknown> {
   return {
     schema: "2.0",
     config: {
