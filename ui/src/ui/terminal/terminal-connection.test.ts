@@ -55,6 +55,20 @@ describe("TerminalConnection", () => {
     expect(data).toEqual(["hello", "!"]);
   });
 
+  it("forwards the selected agent when opening a session", async () => {
+    const client = makeFakeClient();
+    const conn = new TerminalConnection(client);
+    await conn.open(
+      { agentId: "ops", cols: 100, rows: 30 },
+      { onData: () => {}, onExit: () => {} },
+    );
+
+    expect(client.requests[0]).toEqual({
+      method: "terminal.open",
+      params: { agentId: "ops", cols: 100, rows: 30 },
+    });
+  });
+
   it("does not deliver data to the wrong session", async () => {
     const client = makeFakeClient();
     const conn = new TerminalConnection(client);

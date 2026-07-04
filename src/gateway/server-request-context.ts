@@ -16,6 +16,8 @@ export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
+  isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
@@ -90,6 +92,8 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
+    isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
     pluginApprovalManager: params.pluginApprovalManager,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,

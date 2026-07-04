@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+} from "../../../../src/gateway/control-ui-contract.js";
 import { resolveUiHourCycleOptions, setUiTimeFormatPreference } from "../format.ts";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
@@ -17,6 +20,7 @@ describe("loadControlUiBootstrapConfig", () => {
   afterEach(() => {
     setUiTimeFormatPreference("auto");
     document.documentElement.removeAttribute("style");
+    document.documentElement.removeAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE);
   });
 
   it("threads agents.defaults.timeFormat into the UI hour-cycle preference", async () => {
@@ -248,6 +252,7 @@ describe("loadControlUiBootstrapConfig", () => {
   });
 
   it("reloads the document when the terminal flips from disabled to enabled", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "false");
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce({
@@ -288,6 +293,70 @@ describe("loadControlUiBootstrapConfig", () => {
     // The flag stays false until the reload delivers the fresh document.
     expect(state.terminalEnabled).toBe(false);
 
+    vi.unstubAllGlobals();
+  });
+
+  it("enables the terminal without reloading when the document CSP already allows it", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: true }),
+      }) as unknown as typeof fetch,
+    );
+    const reload = vi.fn();
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost", reload },
+    } as unknown as Window & typeof globalThis);
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      terminalEnabled: false,
+    };
+
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+
+    expect(state.terminalEnabled).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("reloads the document when disabling removes the terminal CSP allowance", async () => {
+    document.documentElement.setAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE, "true");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ basePath: "", terminalEnabled: false }),
+      }) as unknown as typeof fetch,
+    );
+    const reload = vi.fn();
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost", reload },
+    } as unknown as Window & typeof globalThis);
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      terminalEnabled: true,
+    };
+
+    await loadControlUiBootstrapConfig(state, { applyIdentity: false });
+
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(state.terminalEnabled).toBe(true);
     vi.unstubAllGlobals();
   });
 

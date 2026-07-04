@@ -29,6 +29,7 @@ import type {
 } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 
 /**
@@ -68,6 +69,8 @@ export type GatewayRequestContext = {
   cron: CronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
+  isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;

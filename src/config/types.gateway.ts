@@ -269,7 +269,7 @@ export type GatewayRemoteConfig = {
  * host terminal is allowed.
  */
 export type GatewayTerminalConfig = {
-  /** Master switch for the operator terminal. Default: true. */
+  /** Master switch for the operator terminal. Default: false. */
   enabled?: boolean;
   /**
    * Shell executable to launch. When unset the host login shell is used

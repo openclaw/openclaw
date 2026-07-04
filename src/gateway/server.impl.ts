@@ -823,6 +823,8 @@ export async function startGatewayServer(
       log,
     }),
   );
+  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -910,6 +912,7 @@ export async function startGatewayServer(
       strictTransportSecurityHeader,
       resolvedAuth,
       rateLimiter: authRateLimiter,
+      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       gatewayTls,
       getResolvedAuth,
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
@@ -1424,6 +1427,8 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
+          isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           pluginApprovalManager,
           loadGatewayModelCatalog,
@@ -1756,6 +1761,13 @@ export async function startGatewayServer(
       onCronRestart: () => {
         gatewayCronStartHandled = true;
       },
+      reconcileTerminalSessions: (plan, nextConfig) => {
+        terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+        terminalSessions.closeDisallowedAgents(
+          (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
+        );
+      },
+      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
       channelManager,
       activateRuntimeSecrets,
       resolveSharedGatewaySessionGenerationForConfig,

@@ -22,6 +22,8 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => ({}) as never),
+    resolveTerminalLaunchPolicy: vi.fn(() => ({ ok: false, block: { kind: "disabled" } })),
+    isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),

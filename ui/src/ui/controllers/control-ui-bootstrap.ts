@@ -1,6 +1,7 @@
 // Control UI controller manages control ui bootstrap gateway state.
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -189,16 +190,17 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
-    // Default true when older gateways omit the flag; only an explicit false hides it.
-    const terminalEnabled = parsed.terminalEnabled !== false;
-    if (terminalEnabled && state.terminalEnabled === false) {
-      // Only a refetch (reconnect after the enabling gateway restart) can flip
-      // an explicit false to true, which means the document was served while
-      // the terminal was disabled and its CSP lacks ghostty-web's WASM
-      // allowances. Headers cannot change on a live document, so reload once
-      // to pick up the relaxed policy; the enabled->disabled direction just
-      // hides the panel and needs no reload. Loop-safe: after the reload the
-      // flag starts true, so this branch cannot fire again.
+    // The host shell is opt-in; absent flags from older gateways stay disabled.
+    const terminalEnabled = parsed.terminalEnabled === true;
+    const documentTerminalState = document.documentElement.getAttribute(
+      CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+    );
+    const documentTerminalEnabled =
+      documentTerminalState === "true" ? true : documentTerminalState === "false" ? false : null;
+    if (documentTerminalEnabled !== null && terminalEnabled !== documentTerminalEnabled) {
+      // CSP headers cannot change on a live document. Reload in either
+      // direction so enable gains the WASM allowance and disable removes it.
+      // Loop-safe: the replacement document carries the accepted state.
       window.location.reload();
       return;
     }
