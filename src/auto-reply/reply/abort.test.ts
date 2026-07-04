@@ -4,10 +4,11 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   testing as abortTesting,
+  formatAbortReplyText,
   getAbortMemory,
   getAbortMemorySizeForTest,
   isAbortRequestText,
@@ -810,6 +811,53 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
+  });
+
+  it("does not report /stop success after the active backend freezes its outcome", async () => {
+    const sessionKey = "agent:main:telegram:direct:finalizing";
+    const sessionId = "session-finalizing";
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => false,
+      isAbortable: () => false,
+    });
+    operation.setPhase("running");
+    runtimeAbortMocks.abortEmbeddedAgentRun.mockReturnValue(false);
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
+    const markSessionAbortTarget = vi.fn();
+    abortTesting.setDepsForTests({ markSessionAbortTarget });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:finalizing",
+      to: "telegram:finalizing",
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      aborted: false,
+      rejectionReason: "finalizing",
+    });
+    expect(operation.result).toBeNull();
+    expect(replyRunRegistry.isActive(sessionKey)).toBe(true);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(markSessionAbortTarget).not.toHaveBeenCalled();
+    expect(getAbortMemory(sessionKey)).toBeUndefined();
+    expect(formatAbortReplyText(undefined, result.rejectionReason)).toBe(
+      "Agent reply is already finalizing and can no longer be aborted.",
+    );
+    operation.complete();
   });
 
   it("fast-abort of an ACP target aborts the source stored session when no source reply operation is registered", async () => {

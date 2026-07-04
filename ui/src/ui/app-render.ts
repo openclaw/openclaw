@@ -29,6 +29,7 @@ import {
 } from "./app-render.helpers.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { copyToClipboard } from "./chat/clipboard.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatQuotaPill,
@@ -2341,7 +2342,7 @@ export function renderApp(state: AppViewState) {
     }, 160);
   };
   const copyChatWorkspacePath = (filePath: string) => {
-    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+    void copyToClipboard(filePath);
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {
@@ -2731,22 +2732,14 @@ export function renderApp(state: AppViewState) {
                     : nothing}
                 </a>
                 <div class="sidebar-mode-switch">${renderTopbarThemeModeToggle(state)}</div>
-                ${(() => {
-                  const version = state.hello?.server?.version ?? "";
-                  return version
-                    ? html`
-                        <div class="sidebar-version" title=${`v${version}`}>
-                          ${!navCollapsed
-                            ? html`
-                                <span class="sidebar-version__label">${t("common.version")}</span>
-                                <span class="sidebar-version__text">v${version}</span>
-                                ${renderSidebarConnectionStatus(state)}
-                              `
-                            : html` ${renderSidebarConnectionStatus(state)} `}
-                        </div>
-                      `
-                    : nothing;
-                })()}
+                <div class="sidebar-status">
+                  ${renderSidebarConnectionStatus(state)}
+                  ${navCollapsed
+                    ? nothing
+                    : html`<span class="sidebar-status__text"
+                        >${state.connected ? t("common.online") : t("common.offline")}</span
+                      >`}
+                </div>
               </div>
             </div>
           </div>

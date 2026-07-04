@@ -76,6 +76,8 @@ const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
+const APPLE_LOCALIZED_STRING_CALLS =
+  /\b(?:String\s*\(\s*localized:|LocalizedStringResource\s*\()\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
@@ -170,6 +172,42 @@ const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 
+function isAsciiLowercaseLetter(character: string): boolean {
+  return character >= "a" && character <= "z";
+}
+
+function isAsciiUppercaseLetter(character: string): boolean {
+  return character >= "A" && character <= "Z";
+}
+
+function isAsciiAlphaNumeric(character: string): boolean {
+  return (
+    isAsciiLowercaseLetter(character) ||
+    isAsciiUppercaseLetter(character) ||
+    (character >= "0" && character <= "9")
+  );
+}
+
+export function isConditionalBranchIdentifier(source: string): boolean {
+  let index = 0;
+  while (index < source.length && isAsciiLowercaseLetter(source[index])) {
+    index += 1;
+  }
+
+  // Keep this scanner linear: PR-controlled native source passes through CI,
+  // so a backtracking regex here can become a cheap native-i18n DoS trigger.
+  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source[index])) {
+    return false;
+  }
+
+  for (index += 1; index < source.length; index += 1) {
+    if (!isAsciiAlphaNumeric(source[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isTranslatableCandidate(source: string, kind: string): boolean {
   if (BUILD_SETTING_RE.test(source)) {
     BUILD_SETTING_RE.lastIndex = 0;
@@ -183,7 +221,7 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
   if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
     return false;
   }
-  if (kind === "conditional-branch" && /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/u.test(source)) {
+  if (kind === "conditional-branch" && isConditionalBranchIdentifier(source)) {
     return false;
   }
   if (/[{}[\]]/u.test(source) && !/(?:\\\(|\$\{)/u.test(source)) {
@@ -590,6 +628,7 @@ function extractCandidates(
     surface === "apple"
       ? [
           [APPLE_UI_MULTILINE_CALLS, "ui-call-multiline"],
+          [APPLE_LOCALIZED_STRING_CALLS, "ui-localized-call"],
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
           [APPLE_MODIFIER_MULTILINE_CALLS, "ui-modifier-multiline"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),

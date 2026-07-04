@@ -1,4 +1,5 @@
 // Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 
@@ -39,15 +40,17 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     parsed.password = "";
     parsed.search = "";
     parsed.hash = "";
-    const value = parsed.toString();
+    const value = redactSensitiveUrlLikeString(parsed.toString());
     return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
   } catch {
     const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
-    const cleaned = withoutQueryOrHash
-      .replace(/[\r\n\u2028\u2029]+/g, " ")
-      .replace(/\p{Cc}+/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const cleaned = redactSensitiveUrlLikeString(
+      withoutQueryOrHash
+        .replace(/[\r\n\u2028\u2029]+/g, " ")
+        .replace(/\p{Cc}+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
     if (!cleaned) {
       return undefined;
     }

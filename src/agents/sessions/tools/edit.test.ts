@@ -46,6 +46,23 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
+  it("truncates exact-match mismatch hints without splitting UTF-16 surrogate pairs", async () => {
+    const boundaryEmoji = "🙂";
+    const filePath = await createTempFile(`${"a".repeat(799)}${boundaryEmoji}tail`);
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "replacement" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(`${"a".repeat(799)}\n... (truncated)`);
+  });
+
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.

@@ -5,6 +5,7 @@
  */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "../../utils.js";
+import { isStringOption } from "../../utils/string-readers.js";
 
 // "on-exit" is recognized (not synthesized) so an explicit on-exit kind
 // survives canonicalization and reaches the assertNoCronShellExecution
@@ -60,7 +61,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
-  return typeof value === "string" && (CRON_SCHEDULE_KINDS as readonly string[]).includes(value);
+  return isStringOption(value, CRON_SCHEDULE_KINDS);
 }
 
 function isCronPayloadKind(value: unknown): value is (typeof CRON_PAYLOAD_KINDS)[number] {

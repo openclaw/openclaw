@@ -5,12 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
-import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
@@ -20,6 +14,12 @@ import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -2372,6 +2372,29 @@ describe("gateway agent handler", () => {
     expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
       false,
     );
+  });
+
+  it("enables Gateway-bound plugin runtimes for ingress agent runs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "plugin runtime check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-gateway-plugin-runtime-binding",
+      },
+      {
+        reqId: "gateway-plugin-runtime-binding",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect(
+      (await waitForAgentCommandCall<{ allowGatewaySubagentBinding?: boolean }>())
+        .allowGatewaySubagentBinding,
+    ).toBe(true);
   });
 
   it("rejects public transcriptMessage overrides", async () => {

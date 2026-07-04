@@ -354,6 +354,7 @@ type IMessageInboundDispatchDecision = {
   createdAt?: number;
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
+  groupRequireMention: boolean;
   commandAuthorized: boolean;
   hasControlCommand: boolean;
   // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
@@ -855,6 +856,7 @@ export async function resolveIMessageInboundDecision(params: {
     createdAt,
     replyContext: filteredReplyContext,
     effectiveWasMentioned,
+    groupRequireMention: requireMention,
     commandAuthorized,
     hasControlCommand: hasControlCommandInMessage,
     groupSystemPrompt,
@@ -1042,6 +1044,7 @@ export async function buildIMessageInboundContext(params: {
     },
     extra: {
       GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+      GroupRequireMention: decision.isGroup ? decision.groupRequireMention : undefined,
       GroupMembers: decision.isGroup
         ? (params.message.participants ?? []).filter(Boolean).join(", ")
         : undefined,

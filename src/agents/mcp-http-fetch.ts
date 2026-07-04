@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import {
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type PinnedDispatcherPolicy,
@@ -25,11 +26,6 @@ const fetchWithUndiciGuard = async (
 ): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
-const managedMcpResponseCleanupRegistry = new FinalizationRegistry<{
-  finalize: () => Promise<void>;
-}>((held) => {
-  void held.finalize();
-});
 
 function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   if (input instanceof Request) {
@@ -82,47 +78,11 @@ async function buildManagedMcpResponse(
     return await ensureGlobalFetchResponse(response);
   }
 
-  const source = response.body;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let released = false;
-  const cleanupRegistrationToken = {};
-  const finalize = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    managedMcpResponseCleanupRegistry.unregister(cleanupRegistrationToken);
-    await reader?.cancel().catch(() => undefined);
-    await release().catch(() => undefined);
-  };
-  const wrappedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
-      try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          await finalize();
-          return;
-        }
-        refreshTimeout?.();
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        await finalize();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader?.cancel(reason);
-      } finally {
-        await finalize();
-      }
-    },
+  const wrappedBody = wrapGuardedBodyStream({
+    body: response.body,
+    cleanup: release,
+    refreshTimeout,
   });
-  managedMcpResponseCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return await ensureGlobalFetchResponse(
     new Response(wrappedBody, {
       status: response.status,

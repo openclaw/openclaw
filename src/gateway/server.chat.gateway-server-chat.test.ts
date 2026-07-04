@@ -1741,6 +1741,41 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send does not persist one-turn thinking metadata", async () => {
+    await withMainSessionStore(async () => {
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello from phone",
+        thinking: "low",
+        idempotencyKey: "idem-chat-thinking-no-persist",
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const waitRes = await rpcReq(ws, "agent.wait", {
+        runId: "idem-chat-thinking-no-persist",
+        timeoutMs: 1_000,
+      });
+      expect(waitRes.ok).toBe(true);
+      expect(waitRes.payload?.status).toBe("ok");
+
+      const sessionStorePath = testState.sessionStorePath;
+      if (!sessionStorePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const raw = await fs.readFile(sessionStorePath, "utf-8");
+      const stored = JSON.parse(raw) as {
+        "agent:main:main"?: {
+          thinkingLevel?: string;
+        };
+        main?: {
+          thinkingLevel?: string;
+        };
+      };
+      expect(stored["agent:main:main"]?.thinkingLevel).toBeUndefined();
+      expect(stored.main?.thinkingLevel).toBeUndefined();
+    });
+  });
+
   test("chat.send does not rotate sessions for operator.write reset triggers", async () => {
     await withGatewayServer(async ({ port: portLocal }) => {
       await withMainSessionStore(async () => {

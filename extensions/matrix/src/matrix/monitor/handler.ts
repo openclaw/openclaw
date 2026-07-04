@@ -1649,6 +1649,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 mentions: {
                   canDetectMention: true,
                   wasMentioned,
+                  requireMention: shouldRequireMention,
                 },
               }
             : {}),

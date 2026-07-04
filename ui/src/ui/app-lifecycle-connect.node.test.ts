@@ -2,12 +2,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "./ui-types.ts";
 
-const { applySettingsFromUrlMock, connectGatewayMock, loadBootstrapMock, restoreComposerMock } =
-  vi.hoisted(() => ({
+const {
+  applySettingsFromUrlMock,
+  connectGatewayMock,
+  loadBootstrapMock,
+  restoreComposerMock,
+  scheduleChatScrollMock,
+  startNodesPollingMock,
+} = vi.hoisted(() => ({
     applySettingsFromUrlMock: vi.fn(),
     connectGatewayMock: vi.fn(),
     loadBootstrapMock: vi.fn(),
     restoreComposerMock: vi.fn<(...args: unknown[]) => boolean>(() => false),
+    scheduleChatScrollMock: vi.fn(),
+    startNodesPollingMock: vi.fn(),
   }));
 
 vi.mock("./app-gateway.ts", () => ({
@@ -34,7 +42,7 @@ vi.mock("./app-settings.ts", () => ({
 
 vi.mock("./app-polling.ts", () => ({
   startLogsPolling: vi.fn(),
-  startNodesPolling: vi.fn(),
+  startNodesPolling: startNodesPollingMock,
   stopLogsPolling: vi.fn(),
   stopNodesPolling: vi.fn(),
   startDebugPolling: vi.fn(),
@@ -43,16 +51,12 @@ vi.mock("./app-polling.ts", () => ({
 
 vi.mock("./app-scroll.ts", () => ({
   observeTopbar: vi.fn(),
-  scheduleChatScroll: vi.fn(),
+  scheduleChatScroll: scheduleChatScrollMock,
   scheduleLogsScroll: vi.fn(),
 }));
 
-import { handleConnected, handleUpdated } from "./app-lifecycle.ts";
-import { startNodesPolling } from "./app-polling.ts";
-import { scheduleChatScroll } from "./app-scroll.ts";
-
-const startNodesPollingMock = vi.mocked(startNodesPolling);
-const scheduleChatScrollMock = vi.mocked(scheduleChatScroll);
+let handleConnected: typeof import("./app-lifecycle.ts").handleConnected;
+let handleUpdated: typeof import("./app-lifecycle.ts").handleUpdated;
 
 function createDeferred() {
   let resolve: (() => void) | undefined;
@@ -100,7 +104,8 @@ function createHost() {
 }
 
 describe("handleConnected", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
@@ -111,6 +116,7 @@ describe("handleConnected", () => {
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
     });
+    ({ handleConnected, handleUpdated } = await import("./app-lifecycle.ts"));
   });
 
   it("starts the first gateway connect without waiting for bootstrap", async () => {

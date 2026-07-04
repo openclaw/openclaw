@@ -23,6 +23,7 @@ const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
   "dist/plugin-sdk/webhook-path.js",

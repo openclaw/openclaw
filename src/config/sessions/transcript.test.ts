@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
@@ -513,6 +514,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const message = event.message as
       | {
           role?: string;
+          api?: string;
           provider?: string;
           model?: string;
           content?: unknown;
@@ -522,6 +524,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(event?.sessionKey).toBe(sessionKey);
     expect(event?.messageId).toBeTypeOf("string");
     expect(message?.role).toBe("assistant");
+    expect(message?.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
     expect(message?.provider).toBe("openclaw");
     expect(message?.model).toBe("delivery-mirror");
     expect(message?.content).toEqual([{ type: "text", text: "Hello from delivery mirror!" }]);
@@ -982,6 +985,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(lines.length).toBe(4);
 
       const messageLine = JSON.parse(lines[3]);
+      expect(messageLine.message.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
       expect(messageLine.message.provider).toBe("openclaw");
       expect(messageLine.message.model).toBe("delivery-mirror");
       expect(messageLine.message.content[0].text).toBe("Repeated answer");
@@ -1023,6 +1027,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
     expect(linesAfterMirror).toHaveLength(3);
     const mirrorLine = JSON.parse(linesAfterMirror[2]);
+    expect(mirrorLine.message.api).toBe(OPENCLAW_TRANSCRIPT_ARTIFACT_API);
     expect(mirrorLine.message.model).toBe("delivery-mirror");
 
     await appendSessionTranscriptMessage({

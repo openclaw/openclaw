@@ -261,7 +261,11 @@ Use this when auditing access or deciding what to back up:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-- **Codex runtime state**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
+- **Codex runtime state (default)**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
+- **Shared Codex runtime state (opt-in)**: `$CODEX_HOME` or `~/.codex` when
+  `plugins.entries.codex.config.appServer.homeScope` is `"user"`. This mode uses
+  the native Codex account, config, plugins, and thread store; enable it only for
+  an owner-controlled local Gateway. See [Codex harness](/plugins/codex-harness#share-threads-with-codex-desktop-and-cli).
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
@@ -998,7 +1002,11 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
 - `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
-- `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
+- `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics (the default).
+- `$CODEX_HOME/**` or `~/.codex/**`: when the Codex plugin explicitly uses
+  `appServer.homeScope: "user"`, the Gateway can read and update the native Codex
+  account, config, plugins, and threads. Treat this as privileged owner access;
+  the mode is local-stdio-only and native thread management is owner-only.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.

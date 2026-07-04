@@ -1863,10 +1863,12 @@ describe("handleFeishuMessage command authorization", () => {
       ChatType?: string;
       CommandAuthorized?: boolean;
       SenderId?: string;
+      GroupRequireMention?: boolean;
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ChatType).toBe("group");
     expect(context.CommandAuthorized).toBe(false);
     expect(context.SenderId).toBe("ou-attacker");
+    expect(context.GroupRequireMention).toBe(false);
   });
 
   it("normalizes group mention-prefixed slash commands before command-auth probing", async () => {

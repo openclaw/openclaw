@@ -3,7 +3,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import { createAgentRunRestartAbortError } from "./run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "./run-termination.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -1174,6 +1177,54 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       fastModeStartedAtMs?: number;
     };
     expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
+  });
+
+  it("reuses durable user-turn proof across live model switch retries", async () => {
+    let fallbackInvocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      fallbackInvocation += 1;
+      const result = await params.run(params.provider, params.model);
+      if (fallbackInvocation === 1) {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      const attempt = attemptParams as {
+        userTurnTranscriptRecorder?: {
+          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
+        };
+      };
+      if (state.runAgentAttemptMock.mock.calls.length === 1) {
+        attempt.userTurnTranscriptRecorder?.markRuntimePersisted({
+          role: "user",
+          content: "hello",
+        });
+      }
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    const firstAttempt = mockCallArg(state.runAgentAttemptMock, 0) as {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: unknown;
+    };
+    const secondAttempt = mockCallArg(state.runAgentAttemptMock, 1) as {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: unknown;
+    };
+    expect(secondAttempt.userTurnTranscriptRecorder).toBe(firstAttempt.userTurnTranscriptRecorder);
+    expect(firstAttempt.suppressPromptPersistenceOnRetry).toBe(false);
+    expect(secondAttempt.suppressPromptPersistenceOnRetry).toBe(true);
   });
 
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
@@ -2775,6 +2826,42 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
   });
 
+  it("keeps a hook-blocked user turn suppressed across model fallback", async () => {
+    type AttemptCall = {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: {
+        markBlocked: () => void;
+      };
+    };
+    const attemptCalls: AttemptCall[] = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const first = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [first],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptCalls.push(attemptParams);
+      if (attemptCalls.length === 1) {
+        attemptParams.userTurnTranscriptRecorder?.markBlocked();
+      }
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    expect(attemptCalls).toHaveLength(2);
+    expect(attemptCalls[1]?.userTurnTranscriptRecorder).toBe(
+      attemptCalls[0]?.userTurnTranscriptRecorder,
+    );
+    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).toBe(false);
+    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
+  });
+
   it("suppresses prompt persistence for internal handoffs on every fallback attempt", async () => {
     type AttemptCall = {
       suppressPromptPersistenceOnRetry?: boolean;
@@ -2792,7 +2879,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
       attemptCalls.push(attemptParams);
-      return makeSuccessResult("openai", "gpt-5.4");
+      const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+        typeof makeSuccessResult
+      > & {
+        meta: Record<string, unknown> & { executionTrace?: Record<string, unknown> };
+      };
+      result.meta.executionTrace = {
+        runner: "cli",
+        fallbackUsed: false,
+        winnerProvider: "openai",
+        winnerModel: "gpt-5.4",
+      };
+      return result;
     });
 
     await agentCommand({
@@ -2804,6 +2902,51 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attemptCalls).toHaveLength(2);
     expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).toBe(true);
     expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
+    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
+      skipUserTurn: true,
+    });
+  });
+
+  it("preserves an explicit empty transcript message as user-turn omission", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await agentCommand({
+      message: "synthetic announce prompt",
+      transcriptMessage: "",
+      to: "+1234567890",
+    });
+
+    const attempt = mockCallArg(state.runAgentAttemptMock) as {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: { message?: unknown };
+    };
+    expect(attempt.suppressPromptPersistenceOnRetry).toBe(true);
+    expect(attempt.userTurnTranscriptRecorder?.message).toBeUndefined();
+  });
+
+  it("uses a tracker-only recorder for text plus image turns", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await agentCommand({
+      message: "inspect this image",
+      transcriptMessage: "canonical image caption",
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      to: "+1234567890",
+    });
+
+    const attempt = mockCallArg(state.runAgentAttemptMock) as {
+      transcriptBody?: string;
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: { message?: unknown };
+    };
+    expect(attempt.transcriptBody).toBe("canonical image caption");
+    expect(attempt.suppressPromptPersistenceOnRetry).toBe(false);
+    expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "canonical image caption",
+    });
   });
 
   it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
@@ -2848,6 +2991,32 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           candidate.stream === "lifecycle" &&
           candidate.data?.phase === "error" &&
           candidate.data.aborted === true
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it("marks direct active-run cancellation aborted without a caller signal", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(createAgentRunDirectAbortError());
+
+    await expect(
+      agentCommand({
+        message: "hello",
+        to: "+1234567890",
+      }),
+    ).rejects.toThrow("agent run aborted");
+
+    expect(
+      state.emitAgentEventMock.mock.calls.some(([event]) => {
+        const candidate = event as {
+          stream?: string;
+          data?: { phase?: string; aborted?: boolean; stopReason?: string };
+        };
+        return (
+          candidate.stream === "lifecycle" &&
+          candidate.data?.phase === "error" &&
+          candidate.data.aborted === true &&
+          candidate.data.stopReason === "aborted"
         );
       }),
     ).toBe(true);
