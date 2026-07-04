@@ -8,8 +8,8 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
@@ -43,8 +43,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     },
   ),
 }));
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
@@ -244,12 +242,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {
-    const root = tempDirs.make("openclaw-codex-user-home-");
-    const agentDir = path.join(root, "agent");
-    const codexHome = path.join(root, "user-codex-home");
-    vi.stubEnv("CODEX_HOME", codexHome);
-    const startOptions = createStartOptions({ homeScope: "user" });
-    try {
+    await withTempDir("openclaw-codex-user-home-", async (root) => {
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(root, "user-codex-home");
+      vi.stubEnv("CODEX_HOME", codexHome);
+      const startOptions = createStartOptions({ homeScope: "user" });
       await expect(
         bridgeCodexAppServerStartOptions({ startOptions, agentDir, authProfileId: null }),
       ).resolves.toEqual({
@@ -258,9 +255,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
       await expectPathMissing(resolveCodexAppServerHomeDir(agentDir));
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {

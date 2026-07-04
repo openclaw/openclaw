@@ -5417,6 +5417,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements
   - H2: Quickstart
+  - H2: Share threads with Codex Desktop and CLI
   - H2: Configuration
   - H2: Verify Codex runtime
   - H2: Routing and model selection

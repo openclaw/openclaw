@@ -1,10 +1,9 @@
 // Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS,
@@ -27,8 +26,6 @@ import {
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
@@ -561,8 +558,7 @@ describe("Codex app-server config", () => {
   });
 
   it("checks shared user config before enabling model-backed approval review", async () => {
-    const codexHome = tempDirs.make("openclaw-codex-user-home-");
-    try {
+    await withTempDir("openclaw-codex-user-home-", async (codexHome) => {
       await fs.writeFile(
         path.join(codexHome, "config.toml"),
         'openai_base_url = "http://localhost:8080/v1"\n',
@@ -576,9 +572,7 @@ describe("Codex app-server config", () => {
           homeScope: "user",
         }),
       ).toBe(false);
-    } finally {
-      await fs.rm(codexHome, { recursive: true, force: true });
-    }
+    });
   });
 
   it("treats only explicit OpenAI model context as safe for Codex-backed auto-review", () => {
