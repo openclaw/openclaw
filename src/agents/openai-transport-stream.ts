@@ -1885,6 +1885,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1907,7 +1908,17 @@ function buildOpenAIClientHeaders(
     callerHeaders: Object.keys(callerHeaders).length > 0 ? callerHeaders : undefined,
     precedence: "caller-wins",
   }).headers;
-  return headers ?? {};
+  const resolvedHeaders = headers ?? {};
+  // The ChatGPT Responses backend routes requests by session_id; without it each
+  // request can land on an arbitrary machine and the provider prompt cache misses.
+  if (
+    sessionId &&
+    resolvedHeaders.session_id === undefined &&
+    usesNativeOpenAICodexResponsesBackend(model)
+  ) {
+    resolvedHeaders.session_id = sessionId;
+  }
+  return resolvedHeaders;
 }
 
 function resolveProviderTransportTurnState(
@@ -1975,12 +1986,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -2024,6 +2036,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         let params = buildOpenAIResponsesParams(
           model,
