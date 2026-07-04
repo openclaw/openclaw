@@ -104,7 +104,7 @@ describe("/claude threads + resume against a real binding sidecar", () => {
       model: "claude-sonnet-4-6",
     });
     const result = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
-    const match = result.text.match(/Updated: (\S+)/);
+    const match = (result.text ?? "").match(/Updated: (\S+)/);
     expect(match).not.toBeNull();
     const year = new Date(match?.[1] ?? "").getUTCFullYear();
     // Seconds-as-ms rendered 1970; ms renders the real year.
