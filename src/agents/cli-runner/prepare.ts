@@ -19,6 +19,7 @@ import {
   resolveMcpLoopbackBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
+import { buildCrestodianToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -486,8 +487,18 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
+  // Ring-zero Crestodian runs replace the bundle MCP surface entirely: no
+  // loopback server, no plugin/user servers. The generated MCP config carries
+  // only the crestodian stdio server, so the CLI harness sees exactly one
+  // OpenClaw tool (its own native tools stay under the harness's policy).
+  const crestodianMcpConfig = params.crestodianTool
+    ? buildCrestodianToolsMcpServerConfig(params.crestodianTool)
+    : undefined;
   const bundleMcpEnabled =
-    !isSideQuestion && backendResolved.bundleMcp && params.disableTools !== true;
+    !isSideQuestion &&
+    !crestodianMcpConfig &&
+    backendResolved.bundleMcp &&
+    params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
@@ -511,11 +522,12 @@ export async function prepareCliRunContext(
     undefined;
   try {
     const preparedBackend = await prepareCliBundleMcpConfig({
-      enabled: bundleMcpEnabled,
+      enabled: bundleMcpEnabled || crestodianMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      ...(crestodianMcpConfig ? { exclusiveConfig: crestodianMcpConfig } : {}),
       additionalConfig: mcpLoopbackRuntime
         ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
         : undefined,

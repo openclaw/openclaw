@@ -36,6 +36,39 @@ export function hashCrestodianOperation(operation: CrestodianOperation): string 
   return JSON.stringify(operation, Object.keys(operation).toSorted());
 }
 
+/** Result markers shared with out-of-process hosts (CLI MCP runs). */
+export const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
+export const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
+
+/**
+ * Mirror a proposalRef transition from an out-of-process tool result. CLI MCP
+ * runs execute this tool in a stdio subprocess whose proposalRef dies with the
+ * run; the host replays the same lifecycle from harness tool events: denial
+ * registers the exact-operation hash, mismatch voids it, execution consumes it.
+ */
+export function resolveCrestodianProposalTransition(params: {
+  args: Record<string, unknown>;
+  resultText: string;
+}): { proposal: string | undefined } | null {
+  let operation: CrestodianOperation;
+  try {
+    operation = operationForAction(params.args);
+  } catch {
+    return null;
+  }
+  if (!isPersistentCrestodianOperation(operation)) {
+    return null;
+  }
+  if (params.resultText.startsWith(CRESTODIAN_APPROVAL_MISMATCH_PREFIX)) {
+    return { proposal: undefined };
+  }
+  if (params.resultText.startsWith(CRESTODIAN_NEEDS_APPROVAL_PREFIX)) {
+    return { proposal: hashCrestodianOperation(operation) };
+  }
+  // Executed or errored mutation: an armed approval is single-use either way.
+  return { proposal: undefined };
+}
+
 const CRESTODIAN_TOOL_ACTIONS = [
   "status",
   "models",
@@ -233,7 +266,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
               options.proposalRef.current = undefined;
             }
             return textResult(
-              "approval-mismatch: this call is not the operation the user approved. The approval is void; describe the new change and get a fresh yes before retrying.",
+              `${CRESTODIAN_APPROVAL_MISMATCH_PREFIX} this call is not the operation the user approved. The approval is void; describe the new change and get a fresh yes before retrying.`,
               { needsApproval: true },
             );
           }
@@ -241,7 +274,7 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
             options.proposalRef.current = operationHash;
           }
           return textResult(
-            "needs-approval: this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).",
+            `${CRESTODIAN_NEEDS_APPROVAL_PREFIX} this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).`,
             { needsApproval: true },
           );
         }
