@@ -317,7 +317,7 @@ async function executeThink(
 }
 
 async function executeVerbose(
-  client: GatewayBrowserClient,
+  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -359,7 +359,7 @@ async function executeVerbose(
 }
 
 async function executeFast(
-  client: GatewayBrowserClient,
+  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -727,7 +727,7 @@ async function executeSteer(
 
 /** Hard redirect — aborts the active run and restarts with a new message. */
 async function executeRedirect(
-  client: GatewayBrowserClient,
+  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,

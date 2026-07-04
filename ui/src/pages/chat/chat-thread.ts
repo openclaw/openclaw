@@ -909,7 +909,17 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
-  if (props.stream !== null) {
+  const hasPendingResponse =
+    props.stream === null &&
+    queuedSends.some(
+      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+    );
+  if (hasPendingResponse) {
+    items.push({
+      kind: "reading-indicator",
+      key: `stream:${props.sessionKey}:pending`,
+    });
+  } else if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);

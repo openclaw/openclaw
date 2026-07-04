@@ -4,7 +4,6 @@ import {
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
-import type { ApplicationGateway } from "./context.ts";
 import {
   clearResolvedExecApprovalPrompt,
   dismissExecApprovalPrompt,
@@ -13,12 +12,12 @@ import {
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   parsePluginApprovalRequested,
-  pruneExecApprovalQueue,
   refreshPendingApprovalQueue,
   type ExecApprovalDecision,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 
 export type ApplicationStatusBanner = {
   tone: "danger" | "warn" | "info";

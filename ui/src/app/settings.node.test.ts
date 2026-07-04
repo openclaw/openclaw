@@ -19,17 +19,18 @@ function setTestLocation(params: { protocol: string; host: string; pathname: str
 }
 
 function setControlUiBasePath(value: string | undefined) {
+  type TestWindow = Window & typeof globalThis & { [key: string]: unknown };
   if (typeof window === "undefined") {
     vi.stubGlobal(
       "window",
       value == null
-        ? ({} as Window & typeof globalThis)
-        : ({ __OPENCLAW_CONTROL_UI_BASE_PATH__: value } as Window & typeof globalThis),
+        ? ({} as TestWindow)
+        : ({ __OPENCLAW_CONTROL_UI_BASE_PATH__: value } as unknown as TestWindow),
     );
     return;
   }
   if (value == null) {
-    delete window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+    delete (window as TestWindow)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
     return;
   }
   Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {

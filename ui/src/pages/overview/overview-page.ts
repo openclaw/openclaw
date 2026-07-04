@@ -9,7 +9,7 @@ import type {
   SkillStatusReport,
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { isRouteId } from "../../app-routes.ts";
+import { isRouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
@@ -59,7 +59,7 @@ function addNamedAttention(
 export class OverviewPage extends LitElement {
   readonly i18nController = new I18nController(this);
 
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 

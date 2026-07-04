@@ -19,7 +19,7 @@ import { renderActivity } from "./view.ts";
 let activityClearBoundary: EventLogEntry | undefined;
 
 export class ActivityPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 

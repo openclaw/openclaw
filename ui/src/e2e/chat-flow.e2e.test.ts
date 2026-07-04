@@ -831,7 +831,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps a delayed chat.send ACK visible as pending until the ACK resolves", async () => {
+  it("replaces the pending reading indicator with the streamed response", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -857,14 +857,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
-      await page.locator(".chat-queue").getByText("Sending").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-reading-indicator").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
 
-      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-reading-indicator").waitFor({ timeout: 10_000 });
+
+      const response = "The streamed response is now visible.";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: response,
+        message: {
+          content: [{ text: response, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+
+      await page.getByText(response).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-reading-indicator").waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }

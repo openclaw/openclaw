@@ -1,8 +1,6 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { EventLogEntry } from "../api/event-log.ts";
-import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability } from "../lib/channels/index.ts";
@@ -11,42 +9,18 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
-export type ApplicationGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  hello: GatewayHelloOk | null;
-  assistantAgentId: string | null;
-  sessionKey: string;
-  lastError: string | null;
-  lastErrorCode: string | null;
-};
-
-export type ApplicationGatewayConnection = {
-  gatewayUrl: string;
-  token: string;
-  password: string;
-};
-
-export type ApplicationGatewayConnectOptions = Partial<ApplicationGatewayConnection> & {
-  sessionKey?: string;
-};
-
-export type ApplicationGateway = {
-  readonly snapshot: ApplicationGatewaySnapshot;
-  readonly connection: ApplicationGatewayConnection;
-  readonly eventLog: readonly EventLogEntry[];
-  connect: (connection?: ApplicationGatewayConnectOptions) => void;
-  start: () => void;
-  stop: () => void;
-  subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
-  subscribeEventLog: (listener: (events: readonly EventLogEntry[]) => void) => () => void;
-  subscribeEvents: (listener: GatewayEventListener) => () => void;
-};
+export type {
+  ApplicationGateway,
+  ApplicationGatewayConnection,
+  ApplicationGatewayConnectOptions,
+  ApplicationGatewaySnapshot,
+} from "./gateway.ts";
 
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
@@ -65,7 +39,7 @@ export type ApplicationNavigationPreferences = {
   subscribe: (listener: (snapshot: ApplicationNavigationPreferencesSnapshot) => void) => () => void;
 };
 
-export type ApplicationNavigationOptions = Pick<RouteLocation, "search" | "hash">;
+export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
 
 export type SkillWorkshopRevisionHandoff = {
   sessionKey: string;

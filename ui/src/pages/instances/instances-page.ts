@@ -22,7 +22,7 @@ function readPresence(value: unknown): PresenceEntry[] | null {
 }
 
 export class InstancesPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 

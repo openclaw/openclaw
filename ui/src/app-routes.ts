@@ -1,5 +1,6 @@
-import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
-import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
+import { createRouter } from "@openclaw/uirouter";
+import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
+import { routeIdFromPath, type RouteId } from "./app-route-paths.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
@@ -50,51 +51,13 @@ export const APP_ROUTE_TREE = [
   nodesPage,
   dreamsPage,
 ] as const;
-export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
-export const APP_ROUTE_IDS = APP_ROUTE_TREE.map((route) => route.id) as readonly RouteId[];
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
-
-export function isRouteId(routeId: string): routeId is RouteId {
-  return APP_ROUTE_IDS.includes(routeId as RouteId);
-}
 
 export function createApplicationRouter(): ApplicationRouter {
   return createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-}
-
-export function normalizeBasePath(basePath: string): string {
-  return normalizeRouteBasePath(basePath);
-}
-
-export function normalizePath(path: string): string {
-  return normalizeRoutePath(path);
-}
-
-export function pathForRoute(routeId: RouteId, basePath = ""): string {
-  const route = appRoutes.find((candidate) => candidate.id === routeId);
-  if (!route) {
-    throw new Error(`Unknown route id "${routeId}".`);
-  }
-  const normalizedBasePath = normalizeBasePath(basePath);
-  return normalizedBasePath ? `${normalizedBasePath}${route.path}` : route.path;
-}
-
-export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
-  const normalizedPath = normalizePath(pathname);
-  const normalizedBasePath = normalizeBasePath(basePath);
-  const routePath = normalizedBasePath
-    ? normalizedPath.slice(normalizedBasePath.length) || "/"
-    : normalizedPath;
-  return (
-    appRoutes.find((route) =>
-      [route.path, ...(route.aliases ?? [])].some(
-        (candidate) => normalizePath(candidate) === routePath,
-      ),
-    )?.id ?? null
-  );
 }
 
 export async function startApplicationRouter(
@@ -122,37 +85,15 @@ export function startAppRouter(
   return startApplicationRouter(router, history, basePath, context);
 }
 
-export function inferBasePathFromPathname(pathname: string): string {
-  const normalizedPath = normalizePath(pathname);
-  if (normalizedPath.toLowerCase().endsWith("/index.html")) {
-    return normalizeBasePath(normalizedPath.slice(0, -"/index.html".length));
-  }
-  const normalized = normalizedPath;
-  if (normalized === "/") {
-    return "";
-  }
-  const segments = normalized.split("/").filter(Boolean);
-  const routePaths = appRoutes.flatMap((route) => [route.path].concat(route.aliases ?? []));
-  for (let index = 0; index < segments.length; index += 1) {
-    const candidate = `/${segments.slice(index).join("/")}`;
-    const routePath = routePaths.find((path) => normalizePath(path) === candidate);
-    if (!routePath) {
-      continue;
-    }
-    const previousSegment = segments[index - 1];
-    const firstRouteSegment = routePath.split("/").find(Boolean);
-    if (index > 0 && previousSegment === firstRouteSegment && candidate === routePath) {
-      return "";
-    }
-    return index ? `/${segments.slice(0, index).join("/")}` : "";
-  }
-  return "";
-}
-
-export function locationForRoute(routeId: RouteId, basePath: string): RouteLocation {
-  return {
-    pathname: pathForRoute(routeId, basePath),
-    search: "",
-    hash: "",
-  };
-}
+export {
+  APP_ROUTE_DEFINITIONS,
+  APP_ROUTE_IDS,
+  inferBasePathFromPathname,
+  isRouteId,
+  locationForRoute,
+  normalizeBasePath,
+  normalizePath,
+  pathForRoute,
+  routeIdFromPath,
+  type RouteId,
+} from "./app-route-paths.ts";

@@ -29,9 +29,9 @@ export type ChatModelControlsProps = {
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
-  onFastModeSelect?: (value: ChatFastModeSelectValue) => Promise<unknown> | unknown;
-  onModelSelect?: (value: string) => Promise<unknown> | unknown;
-  onThinkingSelect?: (value: string) => Promise<unknown> | unknown;
+  onFastModeSelect?: (value: ChatFastModeSelectValue) => unknown;
+  onModelSelect?: (value: string) => unknown;
+  onThinkingSelect?: (value: string) => unknown;
 };
 
 export function renderChatModelControls(props: ChatModelControlsProps) {

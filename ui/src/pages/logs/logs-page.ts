@@ -21,7 +21,7 @@ const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
 export class LogsPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 
@@ -229,7 +229,8 @@ export class LogsPage extends LitElement {
     if (!container) {
       return;
     }
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
     this.logsAtBottom = distanceFromBottom < 80;
   }
 

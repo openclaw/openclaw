@@ -573,7 +573,6 @@ type RenderMessageGroupOptions = {
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
-  onAssistantAttachmentLoaded?: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;

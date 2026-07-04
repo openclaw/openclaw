@@ -112,7 +112,7 @@ export type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
-    hello?: GatewayHelloOk | null;
+    hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
   };

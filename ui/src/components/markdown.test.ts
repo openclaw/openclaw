@@ -28,6 +28,7 @@ function escapedCodeBlockCopyAttribute(value: string): string {
 }
 
 function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
+  const testWindow = window as Window & typeof globalThis & { [key: string]: unknown };
   Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
     value: basePath,
     writable: true,
@@ -36,7 +37,7 @@ function withControlUiBasePath<T>(basePath: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    delete window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+    delete testWindow["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
   }
 }
 

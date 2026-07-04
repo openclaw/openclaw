@@ -56,7 +56,7 @@ function unique(values: string[]): string[] {
 }
 
 export class CronPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 
@@ -150,18 +150,18 @@ export class CronPage extends LitElement {
     }
   }
 
-  private requestCronUpdate(state: CronState = this.cron) {
-    if (this.cron === state) {
+  private requestCronUpdate(cronState: CronState = this.cron) {
+    if (this.cron === cronState) {
       this.requestUpdate();
     }
   }
 
   private async refreshCron(options: { tableFilters: boolean }) {
-    const state = this.cron;
-    if (!state.connected || !state.client) {
+    const cronState = this.cron;
+    if (!cronState.connected || !cronState.client) {
       return;
     }
-    const activeCronJobId = state.cronRunsScope === "job" ? state.cronRunsJobId : null;
+    const activeCronJobId = cronState.cronRunsScope === "job" ? cronState.cronRunsJobId : null;
     void this.loadRuns(activeCronJobId);
     void this.context.channels.refresh(false);
     await Promise.all([
@@ -173,29 +173,29 @@ export class CronPage extends LitElement {
   }
 
   private loadRuns(jobId: string | null) {
-    return this.runCronTask((state) => loadCronRuns(state, jobId));
+    return this.runCronTask((cronState) => loadCronRuns(cronState, jobId));
   }
 
   private async loadModelSuggestions() {
-    const state: CronModelSuggestionsState = {
+    const suggestionState: CronModelSuggestionsState = {
       client: this.cron.client,
       connected: this.cron.connected,
       cronModelSuggestions: this.cronModelSuggestions,
     };
-    await loadCronModelSuggestions(state);
-    if (state.client === this.cron.client) {
-      this.cronModelSuggestions = state.cronModelSuggestions;
+    await loadCronModelSuggestions(suggestionState);
+    if (suggestionState.client === this.cron.client) {
+      this.cronModelSuggestions = suggestionState.cronModelSuggestions;
     }
   }
 
-  private async runCronTask<T>(task: (state: CronState) => Promise<T>): Promise<T> {
-    const state = this.cron;
+  private async runCronTask<T>(task: (cronState: CronState) => Promise<T>): Promise<T> {
+    const cronState = this.cron;
     try {
-      const result = task(state);
-      this.requestCronUpdate(state);
+      const result = task(cronState);
+      this.requestCronUpdate(cronState);
       return await result;
     } finally {
-      this.requestCronUpdate(state);
+      this.requestCronUpdate(cronState);
     }
   }
 
@@ -222,7 +222,7 @@ export class CronPage extends LitElement {
 
   private async createFromQuickCreate() {
     this.draftToForm();
-    const saved = await this.runCronTask((state) => addCronJob(state));
+    const saved = await this.runCronTask((cronState) => addCronJob(cronState));
     if (saved) {
       this.quickCreateOpen = false;
       this.quickCreateStep = "what";
@@ -371,9 +371,9 @@ export class CronPage extends LitElement {
             },
             onRefresh: () => void this.refreshCron({ tableFilters: true }),
             onAdd: () =>
-              void this.runCronTask(async (state) => {
-                if (await addCronJob(state)) {
-                  state.cronFormCollapsed = true;
+              void this.runCronTask(async (cronState) => {
+                if (await addCronJob(cronState)) {
+                  cronState.cronFormCollapsed = true;
                 }
               }),
             onEdit: (job) => this.editJob(job),
@@ -388,28 +388,28 @@ export class CronPage extends LitElement {
               this.requestCronUpdate();
             },
             onToggle: (job, enabled) =>
-              void this.runCronTask((state) => toggleCronJob(state, job, enabled)),
+              void this.runCronTask((cronState) => toggleCronJob(cronState, job, enabled)),
             onRun: (job, mode) =>
-              void this.runCronTask((state) => runCronJob(state, job, mode ?? "force")),
-            onRemove: (job) => void this.runCronTask((state) => removeCronJob(state, job)),
+              void this.runCronTask((cronState) => runCronJob(cronState, job, mode ?? "force")),
+            onRemove: (job) => void this.runCronTask((cronState) => removeCronJob(cronState, job)),
             onQuickCreate: () => this.openQuickCreate(),
             onLoadRuns: (jobId) =>
-              void this.runCronTask(async (state) => {
-                updateCronRunsFilter(state, { cronRunsScope: "job" });
-                await loadCronRuns(state, jobId);
+              void this.runCronTask(async (cronState) => {
+                updateCronRunsFilter(cronState, { cronRunsScope: "job" });
+                await loadCronRuns(cronState, jobId);
               }),
             onLoadMoreJobs: () =>
-              void this.runCronTask((state) =>
-                loadCronJobsPage(state, { append: true, tableFilters: true }),
+              void this.runCronTask((cronState) =>
+                loadCronJobsPage(cronState, { append: true, tableFilters: true }),
               ),
             onJobsFiltersChange: (patch) =>
-              void this.runCronTask(async (state) => {
-                updateCronJobsFilter(state, patch);
-                await loadCronJobsPage(state, { append: false, tableFilters: true });
+              void this.runCronTask(async (cronState) => {
+                updateCronJobsFilter(cronState, patch);
+                await loadCronJobsPage(cronState, { append: false, tableFilters: true });
               }),
             onJobsFiltersReset: () =>
-              void this.runCronTask(async (state) => {
-                updateCronJobsFilter(state, {
+              void this.runCronTask(async (cronState) => {
+                updateCronJobsFilter(cronState, {
                   cronJobsQuery: "",
                   cronJobsEnabledFilter: "all",
                   cronJobsScheduleKindFilter: "all",
@@ -417,15 +417,15 @@ export class CronPage extends LitElement {
                   cronJobsSortBy: "nextRunAtMs",
                   cronJobsSortDir: "asc",
                 });
-                await loadCronJobsPage(state, { append: false, tableFilters: true });
+                await loadCronJobsPage(cronState, { append: false, tableFilters: true });
               }),
-            onLoadMoreRuns: () => void this.runCronTask((state) => loadMoreCronRuns(state)),
+            onLoadMoreRuns: () => void this.runCronTask((cronState) => loadMoreCronRuns(cronState)),
             onRunsFiltersChange: (patch) =>
-              void this.runCronTask(async (state) => {
-                updateCronRunsFilter(state, patch);
+              void this.runCronTask(async (cronState) => {
+                updateCronRunsFilter(cronState, patch);
                 await loadCronRuns(
-                  state,
-                  state.cronRunsScope === "all" ? null : state.cronRunsJobId,
+                  cronState,
+                  cronState.cronRunsScope === "all" ? null : cronState.cronRunsJobId,
                 );
               }),
             onNavigateToChat: (sessionKey) =>

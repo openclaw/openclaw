@@ -4,7 +4,7 @@ import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessio
 import { generateUUID } from "../../lib/uuid.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { cloneChatAttachmentsMetadata } from "./attachment-payload-store.ts";
-import { persistStoredChatComposerQueue } from "./composer-persistence.ts";
+import { persistStoredChatComposerQueue, type ChatComposerScope } from "./composer-persistence.ts";
 
 type ChatQueueStoreHost = {
   chatQueue: ChatQueueItem[];
@@ -13,9 +13,10 @@ type ChatQueueStoreHost = {
   requestUpdate?: () => void;
 };
 
-type ChatQueueSessionHost = ChatQueueStoreHost & {
-  sessionKey: string;
-};
+type ChatQueueSessionHost = ChatQueueStoreHost &
+  ChatComposerScope & {
+    sessionKey: string;
+  };
 
 type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;
 

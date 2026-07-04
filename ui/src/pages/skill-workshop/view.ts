@@ -6,7 +6,6 @@ import "../../components/file-preview-modal.ts";
 import "../../components/tooltip.ts";
 import {
   filterSkillWorkshopProposals,
-  type SkillWorkshopAction,
   type SkillWorkshopActionBusy,
   type SkillWorkshopActionNotice,
   type SkillWorkshopMode,

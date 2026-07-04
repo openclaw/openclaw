@@ -282,11 +282,7 @@ function beginOpenRequest(
   return request;
 }
 
-function isCurrentOpenRequest(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-  request: OpenRequest,
-): boolean {
+function isCurrentOpenRequest(state: SessionWorkspaceHost, request: OpenRequest): boolean {
   const currentRequest = state.sessionWorkspaceOpenRequest;
   const current = currentWorkspaceState(state);
   return (
@@ -317,17 +313,17 @@ function openWorkspaceItem<T>(
       const result = await load(request);
       const content = result == null ? null : render(result);
       if (!content) {
-        if (isCurrentOpenRequest(state, workspace, request)) {
+        if (isCurrentOpenRequest(state, request)) {
           workspace.error = missingMessage;
           requestUpdate(state);
         }
         return;
       }
-      if (isCurrentOpenRequest(state, workspace, request)) {
+      if (isCurrentOpenRequest(state, request)) {
         state.handleOpenSidebar(content);
       }
     } catch (error) {
-      if (isCurrentOpenRequest(state, workspace, request)) {
+      if (isCurrentOpenRequest(state, request)) {
         workspace.error = String(error);
       }
     } finally {

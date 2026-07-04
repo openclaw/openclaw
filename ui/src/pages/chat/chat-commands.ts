@@ -1,6 +1,8 @@
 // Control UI Chat page owns slash command metadata loading.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -8,11 +10,10 @@ import {
   replaceSlashCommands,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { scopedAgentIdForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
-import type { ChatHost } from "./chat-send.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
@@ -38,6 +39,18 @@ export type ChatCommandResetOptions = {
 export type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
+
+export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
+  Parameters<typeof clearChatHistory>[0] & {
+    sessions: SessionCapability;
+    chatQueue: ChatQueueItem[];
+    chatModelCatalog: ModelCatalogEntry[];
+    sessionsResult?: SessionsListResult | null;
+    createChatSession?: () => Promise<void>;
+    exportCurrentChat?: () => Promise<void> | void;
+    refreshCurrentSessionTools?: () => Promise<void>;
+    refreshCurrentChat?: () => Promise<void>;
+  };
 
 function setChatCommandError(
   host: { lastError?: string | null; chatError?: string | null },
@@ -172,7 +185,7 @@ export function shouldQueueLocalSlashCommand(name: string): boolean {
 }
 
 export async function dispatchChatSlashCommand(
-  host: ChatHost,
+  host: ChatCommandHost,
   name: string,
   args: string,
   opts: ChatCommandSendOptions,
@@ -254,7 +267,7 @@ export async function dispatchChatSlashCommand(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
-function injectCommandResult(host: ChatHost, content: string) {
+function injectCommandResult(host: ChatCommandHost, content: string) {
   host.chatMessages = [
     ...host.chatMessages,
     {

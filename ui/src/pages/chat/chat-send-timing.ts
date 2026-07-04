@@ -1,8 +1,8 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
 import { readChatQueueForSession } from "./chat-queue.ts";
-import type { ChatHost, ChatSendAck } from "./chat-send.ts";
+import type { ChatSendAck, ChatSendTimingEntry } from "./chat-send-contract.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -28,17 +28,14 @@ export type ChatSendTimingPhase =
   | "waiting-reconnect"
   | "failed";
 
-export type ChatSendTimingEntry = {
-  runId: string;
-  sessionKey?: string;
-  agentId?: string;
-  sendAttempts: number;
-  sendState?: ChatQueueItem["sendState"];
-  submittedAtMs: number;
-  requestStartedAtMs?: number;
-  ackAtMs?: number;
-  ackStatus?: ChatSendAck["status"];
-  firstAssistantVisibleRecorded?: boolean;
+type ChatSendTimingHost = SessionScopeHost & {
+  sessionKey: string;
+  chatStream: string | null;
+  chatQueue: ChatQueueItem[];
+  chatQueueBySession?: Record<string, ChatQueueItem[]>;
+  chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
+  eventLogBuffer?: unknown[];
+  updateComplete?: Promise<unknown>;
 };
 
 type ChatSendServerTimingPhase =
@@ -60,7 +57,7 @@ const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
 const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
 
 export function recordChatSendTiming(
-  host: ChatHost,
+  host: ChatSendTimingHost,
   item: Pick<
     ChatQueueItem,
     "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
@@ -100,7 +97,7 @@ function readChatSendTimingNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
+export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: unknown) {
   if (!payload || typeof payload !== "object") {
     return;
   }
@@ -164,7 +161,7 @@ export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
   );
 }
 
-function ensureChatSendTimingEntries(host: ChatHost): Map<string, ChatSendTimingEntry> {
+function ensureChatSendTimingEntries(host: ChatSendTimingHost): Map<string, ChatSendTimingEntry> {
   if (host.chatSendTimingsByRun) {
     return host.chatSendTimingsByRun;
   }
@@ -174,7 +171,7 @@ function ensureChatSendTimingEntries(host: ChatHost): Map<string, ChatSendTiming
 }
 
 export function registerChatSendTiming(
-  host: ChatHost,
+  host: ChatSendTimingHost,
   item: Pick<
     ChatQueueItem,
     "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
@@ -194,7 +191,7 @@ export function registerChatSendTiming(
 }
 
 export function updateChatSendAckTiming(
-  host: ChatHost,
+  host: ChatSendTimingHost,
   requestedRunId: string,
   ack: ChatSendAck,
   item: Pick<
@@ -251,7 +248,7 @@ function chatEventHasVisibleTerminalPayload(payload: ChatEventPayload): boolean 
 }
 
 function resolveFirstAssistantTimingPhase(
-  host: ChatHost,
+  host: ChatSendTimingHost,
   payload: ChatEventPayload,
   entry: ChatSendTimingEntry,
 ): Extract<ChatSendTimingPhase, "first-assistant-visible" | "terminal-before-delta"> | null {
@@ -270,7 +267,7 @@ function resolveFirstAssistantTimingPhase(
 }
 
 export function recordFirstAssistantChatTiming(
-  host: ChatHost,
+  host: ChatSendTimingHost,
   payload: ChatEventPayload | undefined,
   handledState: ChatEventPayload["state"] | null,
 ) {
@@ -342,7 +339,7 @@ function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
 }
 
 export function schedulePendingSendPaintTiming(
-  host: ChatHost,
+  host: ChatSendTimingHost,
   item: ChatQueueItem,
   startedAtMs = item.sendSubmittedAtMs,
 ) {

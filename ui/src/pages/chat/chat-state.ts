@@ -2,6 +2,7 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
+  GatewaySessionRow,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   SessionsListResult,
@@ -10,6 +11,7 @@ import {
   fetchAssistantIdentity,
   loadLocalAssistantIdentity,
 } from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import {
   loadLocalUserIdentity,
@@ -17,7 +19,6 @@ import {
   saveSettings,
   type UiSettings,
 } from "../../app/settings.ts";
-import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/tools-effective.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
@@ -57,6 +58,7 @@ import {
   resetChatRealtimeConversation,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
+import type { ChatSendTimingEntry } from "./chat-send-contract.ts";
 import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import {
   flushChatQueueForEvent,
@@ -135,6 +137,11 @@ export type ChatPageHost = ChatHost &
     chatQueue: ChatQueueItem[];
     chatQueueBySession: Record<string, ChatQueueItem[]>;
     chatMessagesBySession: Map<string, unknown[]>;
+    basePath: string;
+    chatAvatarUrl: string | null;
+    chatAvatarSource: string | null;
+    chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
+    chatAvatarReason: string | null;
     chatSideResultTerminalRuns: Set<string>;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
@@ -150,7 +157,7 @@ export type ChatPageHost = ChatHost &
     pendingAbort: { runId?: string | null; sessionKey: string; agentId?: string } | null;
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
-    chatSendTimingsByRun: Map<string, unknown>;
+    chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     chatStreamSegments: Array<{ text: string; ts: number }>;
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
@@ -160,9 +167,12 @@ export type ChatPageHost = ChatHost &
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatManualRefreshInFlight: boolean;
+    chatModelsLoading: boolean;
     chatMobileControlsOpen: boolean;
     chatMobileControlsTrigger: HTMLElement | null;
     sessionsHideCron: boolean;
+    sessionsLoading: boolean;
+    lastErrorCode: string | null;
     chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
     chatInputHistorySessionKey: string | null;
     chatInputHistoryItems: string[] | null;
@@ -183,9 +193,10 @@ export type ChatPageHost = ChatHost &
     querySelector: (selectors: string) => Element | null;
     updateComplete: Promise<unknown>;
     requestUpdate: () => void;
-    onModelChanged: () => Promise<void> | undefined;
+    onModelChanged: () => Promise<void> | void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
+    resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
     setChatMobileControlsOpen: (
       open: boolean,
@@ -205,6 +216,10 @@ export type ChatPageHost = ChatHost &
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
+    createChatSession?: () => Promise<void>;
+    exportCurrentChat?: () => Promise<void> | void;
+    refreshCurrentSessionTools?: () => Promise<void>;
+    refreshCurrentChat?: () => Promise<void>;
   };
 
 type PendingCreatedSessionComposer = {
@@ -389,7 +404,10 @@ export function resolveChatAvatarUrl(
   if (state.chatAvatarUrl) {
     return state.chatAvatarUrl;
   }
-  const identity = state.agentsList?.agents?.find((agent) => agent.id === agentId)?.identity;
+  const agent = state.agentsList?.agents?.find((candidate) => candidate.id === agentId) as
+    | { identity?: { avatar?: string; avatarUrl?: string } }
+    | undefined;
+  const identity = agent?.identity;
   const avatar = identity?.avatarUrl ?? identity?.avatar;
   return typeof avatar === "string" && isRenderableControlUiAvatarUrl(avatar) ? avatar : null;
 }
@@ -559,7 +577,7 @@ export async function refreshChat(
       host.sessionsResult = sessionsResult;
     }
     const sessionInfo = sessionsResult?.sessions.find(
-      (row) =>
+      (row: GatewaySessionRow) =>
         areUiSessionKeysEquivalent(row.key, history.sessionInfo?.key) ||
         row.key === refreshedSessionKey,
     );
@@ -835,7 +853,7 @@ async function loadPageAssistantIdentity(
 }
 
 export function createPageState(
-  context: ChatPageContext,
+  context: ApplicationContext,
   requestUpdate: () => void,
   page: ChatPageElement,
 ): ChatPageHost {
@@ -897,13 +915,16 @@ export function createPageState(
     sessionsLoading: false,
     sessionsError: null,
     sessionsShowArchived: false,
-    agentsList: null,
-    agentsSelectedId: null,
+    agentsList: context.agents.state.agentsList,
+    agentsSelectedId: context.agentSelection.state.selectedId,
+    onAgentsList: (agentsList: AgentsListResult, client: GatewayBrowserClient) => {
+      context.agents.adoptList(agentsList, client);
+    },
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Map<string, Promise<void>>(),
-    chatSendTimingsByRun: new Map<string, unknown>(),
+    chatSendTimingsByRun: new Map<string, ChatSendTimingEntry>(),
     chatQueue: [] as ChatQueueItem[],
     chatQueueBySession: {} as Record<string, ChatQueueItem[]>,
     chatMessagesBySession: new Map<string, unknown[]>(),
@@ -942,12 +963,13 @@ export function createPageState(
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
   Object.defineProperty(state, "updateComplete", {
+    configurable: true,
     enumerable: false,
     get: () => page.updateComplete,
   });
 
   state.resetToolStream = () => resetToolStream(state as never);
-  state.onModelChanged = () => refreshVisibleToolsEffectiveForCurrentSession(state);
+  state.onModelChanged = () => undefined;
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
@@ -987,10 +1009,8 @@ export function createPageState(
   state.loadAssistantIdentity = async () => {
     await loadPageAssistantIdentity(state);
   };
-  state.handleSendChat = async (messageOverride, options) => {
-    await handleSendChat(state, messageOverride, options as never);
-    requestUpdate();
-  };
+  state.handleSendChat = (messageOverride, options) =>
+    handleSendChat(state, messageOverride, options as never);
   state.handleAbortChat = async (options) => {
     await handleAbortChat(state, options as never);
     requestUpdate();
@@ -1071,6 +1091,13 @@ function requestPageUpdate(state: ChatPageHost) {
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
   private readonly composerPersistence: ChatComposerPersistenceController;
   private stateValue: TState | undefined;
+  private previousChatLoading = false;
+  private previousChatMessages: unknown[] = [];
+  private previousChatToolMessages: Record<string, unknown>[] = [];
+  private previousChatStream: string | null = null;
+  private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
+  private scrollAfterUpdate = false;
+  private forceScrollAfterUpdate = false;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
   private readonly cleanups: Array<() => void> = [];
 
@@ -1085,7 +1112,22 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   attach(state: TState) {
     this.stateValue = state;
+    this.previousChatLoading = state.chatLoading;
+    this.previousChatMessages = state.chatMessages;
+    this.previousChatToolMessages = state.chatToolMessages;
+    this.previousChatStream = state.chatStream;
+    this.previousRealtimeConversation = state.realtimeTalkConversation;
     state.requestUpdate = this.requestUpdate;
+    const sendChat = state.handleSendChat;
+    state.handleSendChat = async (messageOverride, options) => {
+      const pending = sendChat(messageOverride, options);
+      this.requestUpdate();
+      try {
+        await pending;
+      } finally {
+        this.requestUpdate();
+      }
+    };
     const commitDraftChange = state.handleChatDraftChange;
     state.handleChatDraftChange = (next) => {
       commitDraftChange(next);
@@ -1099,8 +1141,48 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   readonly requestUpdate = () => {
     this.composerPersistence.persistQueueIfChanged();
+    this.captureRenderLifecycleChanges();
     this.host.requestUpdate();
   };
+
+  private captureRenderLifecycleChanges() {
+    const state = this.stateValue;
+    if (!state) {
+      return;
+    }
+    const messagesChanged =
+      this.previousChatMessages !== state.chatMessages ||
+      this.previousChatToolMessages !== state.chatToolMessages ||
+      this.previousRealtimeConversation !== state.realtimeTalkConversation;
+    const streamChanged = this.previousChatStream !== state.chatStream;
+    const loadingChanged = this.previousChatLoading !== state.chatLoading;
+    const loadFinished = this.previousChatLoading && !state.chatLoading;
+    const streamStarted = this.previousChatStream == null && typeof state.chatStream === "string";
+    this.previousChatLoading = state.chatLoading;
+    this.previousChatMessages = state.chatMessages;
+    this.previousChatToolMessages = state.chatToolMessages;
+    this.previousChatStream = state.chatStream;
+    this.previousRealtimeConversation = state.realtimeTalkConversation;
+    if (!messagesChanged && !streamChanged && !loadingChanged) {
+      return;
+    }
+    this.scrollAfterUpdate = true;
+    this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
+  }
+
+  hostUpdated() {
+    if (!this.scrollAfterUpdate) {
+      return;
+    }
+    const state = this.stateValue;
+    const force = this.forceScrollAfterUpdate;
+    this.scrollAfterUpdate = false;
+    this.forceScrollAfterUpdate = false;
+    if (!state || state.chatManualRefreshInFlight) {
+      return;
+    }
+    scheduleChatScroll(state, force);
+  }
 
   restoreComposer(options: { preserveCurrent?: boolean } = {}) {
     this.composerPersistence.restore(options);
@@ -1153,6 +1235,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   hostDisconnected() {
     this.stopChatEffects();
     this.stateValue = undefined;
+    this.scrollAfterUpdate = false;
+    this.forceScrollAfterUpdate = false;
     this.pendingCreatedSessionComposer = null;
   }
 }

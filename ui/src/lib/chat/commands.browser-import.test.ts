@@ -49,7 +49,6 @@ describe("slash command browser import", () => {
     expect(importDeclarations(commands)).toEqual([
       'import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";',
       'import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";',
-      'import type { IconName } from "../../components/icons.ts";',
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
     ]);
     expect(importDeclarations(sharedRegistry)).toEqual([

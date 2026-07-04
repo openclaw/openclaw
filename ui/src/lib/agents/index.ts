@@ -76,6 +76,7 @@ export type AgentCapabilityState = {
 
 export type AgentCapability = {
   readonly state: AgentCapabilityState;
+  adoptList: (result: AgentsListResult, client: GatewayBrowserClient) => void;
   ensureList: () => Promise<AgentsListResult | null>;
   refreshList: () => Promise<AgentsListResult | null>;
   files: (agentId: string | null | undefined) => AgentFilesStatus;
@@ -273,7 +274,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         }
         return state.client === client ? result : state.agentsList;
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (state.client === client) {
           state.agentsError = isMissingOperatorReadScopeError(err)
             ? formatMissingOperatorReadScopeMessage("agent list")
@@ -322,7 +323,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         }
         return state.client === client ? status.list : null;
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (state.client === client) {
           status.error = String(err);
         }
@@ -364,6 +365,14 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   return {
     get state() {
       return state;
+    },
+    adoptList(result, client) {
+      if (state.client !== client || !state.connected) {
+        return;
+      }
+      state.agentsList = result;
+      state.agentsError = null;
+      publish();
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),

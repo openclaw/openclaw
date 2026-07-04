@@ -33,6 +33,7 @@ import {
 } from "./attachment-payload-store.ts";
 import {
   dispatchChatSlashCommand,
+  type ChatCommandHost,
   type ChatCommandResetOptions,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
@@ -47,6 +48,11 @@ import {
   updateQueuedMessage,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import type {
+  ChatSendAck,
+  ChatSendAckServerTiming,
+  ChatSendTimingEntry,
+} from "./chat-send-contract.ts";
 import {
   chatSendAckServerTimingEventFields,
   recordChatSendTiming,
@@ -81,29 +87,32 @@ import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-export type ChatHost = ChatInputHistoryState & {
-  sessions: SessionCapability;
-  client: GatewayBrowserClient | null;
-  chatStream: string | null;
-  connected: boolean;
-  chatAttachments: ChatAttachment[];
-  chatQueue: ChatQueueItem[];
-  chatQueueBySession?: Record<string, ChatQueueItem[]>;
-  chatRunId: string | null;
-  chatSending: boolean;
-  lastError?: string | null;
-  chatError?: string | null;
-  hello: GatewayHelloOk | null;
-  chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-  updateComplete?: Promise<unknown>;
-  requestUpdate?: () => void;
-  refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
-  chatSubmitGuards?: Map<string, Promise<void>>;
-  assistantAgentId?: string | null;
-  agentsList?: ChatAgentsListSnapshot | null;
-  /** Selected message to reply to (right-click / keyboard shortcut). */
-  chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
-};
+export type ChatHost = ChatInputHistoryState &
+  ChatCommandHost & {
+    sessions: SessionCapability;
+    client: GatewayBrowserClient | null;
+    chatStream: string | null;
+    connected: boolean;
+    chatAttachments: ChatAttachment[];
+    chatQueue: ChatQueueItem[];
+    chatQueueBySession?: Record<string, ChatQueueItem[]>;
+    chatRunId: string | null;
+    chatSending: boolean;
+    lastError?: string | null;
+    chatError?: string | null;
+    hello: GatewayHelloOk | null;
+    chatModelSwitchPromises?: Record<string, Promise<boolean>>;
+    updateComplete?: Promise<unknown>;
+    requestUpdate?: () => void;
+    refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
+    chatSubmitGuards?: Map<string, Promise<void>>;
+    chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
+    eventLogBuffer?: unknown[];
+    assistantAgentId?: string | null;
+    agentsList?: ChatAgentsListSnapshot | null;
+    /** Selected message to reply to (right-click / keyboard shortcut). */
+    chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+  };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -194,23 +203,15 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
-
-export type ChatSendAckServerTiming = {
-  receivedToAckMs?: number;
-  loadSessionMs?: number;
-  prepareAttachmentsMs?: number;
-};
-
-export type ChatSendAck = {
-  runId: string;
-  status: ChatSendAckStatus;
-  serverTiming?: ChatSendAckServerTiming;
-};
-
 function normalizeAckTimingValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
+
+export type {
+  ChatSendAck,
+  ChatSendAckServerTiming,
+  ChatSendAckStatus,
+} from "./chat-send-contract.ts";
 
 function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
   if (!value || typeof value !== "object") {
@@ -1247,9 +1248,6 @@ export async function handleSendChat(
     );
     if (!queued) {
       return;
-    }
-    if (waitingForModel) {
-      host.requestUpdate?.();
     }
 
     if (modelSwitchReady !== true && !(await modelSwitchReady)) {

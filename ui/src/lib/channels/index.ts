@@ -299,7 +299,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     get state() {
       return state;
     },
-    refresh: (probe = false, options) => run(() => loadChannels(state, probe, options)),
+    refresh: (probe, options) => run(() => loadChannels(state, probe ?? false, options)),
     startWhatsApp: (force) =>
       run(async () => {
         await startWhatsAppLogin(state, force);

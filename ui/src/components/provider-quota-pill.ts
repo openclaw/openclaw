@@ -1,6 +1,6 @@
 import { html } from "lit";
 import type { ModelAuthStatusResult } from "../api/types.ts";
-import { normalizeBasePath } from "../app-routes.ts";
+import { normalizeBasePath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { isMonitoredAuthProvider } from "../lib/model-auth.ts";
 import {

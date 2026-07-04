@@ -24,7 +24,7 @@ export async function loadAgentSkills(state: AgentSkillsState, agentId: string) 
   try {
     const res = await loadSkillStatusReport(state.client, agentId);
     if (res) {
-      state.agentSkillsReport = res as SkillStatusReport;
+      state.agentSkillsReport = res;
       state.agentSkillsAgentId = agentId;
     }
   } catch (err) {

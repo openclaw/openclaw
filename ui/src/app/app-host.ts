@@ -289,7 +289,6 @@ class OpenClawShell extends LitElement {
     this.updateGatewaySessionKey(context.gateway.snapshot);
     this.updateGatewayStatus(context.gateway.snapshot);
     this.updateAgentLabel();
-    this.ensureAgentsList(context.gateway.snapshot);
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
       this.updateGatewaySessionKey(snapshot);
       this.updateGatewayStatus(snapshot);
@@ -435,13 +434,15 @@ class OpenClawShell extends LitElement {
       this.agentsListClient = null;
       return;
     }
+    const routeId = this.routeState.routeId;
+    if (!routeId || routeId === "chat" || this.context?.agents.state.agentsList) {
+      return;
+    }
     if (this.agentsListClient === snapshot.client) {
       return;
     }
     this.agentsListClient = snapshot.client;
-    if (!this.context?.agents.state.agentsList) {
-      void this.context?.agents.ensureList();
-    }
+    void this.context?.agents.ensureList();
   }
 
   private updateGatewaySessionKey(snapshot: {
@@ -460,6 +461,10 @@ class OpenClawShell extends LitElement {
 
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
+    const context = this.context;
+    if (context) {
+      this.ensureAgentsList(context.gateway.snapshot);
+    }
     if (routeState.routeId !== "chat") {
       return;
     }

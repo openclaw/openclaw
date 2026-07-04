@@ -36,7 +36,7 @@ export type SkillsRouteData = {
 };
 
 export class SkillsPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 
@@ -134,13 +134,13 @@ export class SkillsPage extends LitElement {
   }
 
   private syncAgentState() {
-    const state = this.context.agents.state;
-    this.agentsLoading = state.agentsLoading;
-    this.agentsError = state.agentsError;
-    this.agentsList = state.agentsList;
-    if (state.agentsList) {
+    const agentState = this.context.agents.state;
+    this.agentsLoading = agentState.agentsLoading;
+    this.agentsError = agentState.agentsError;
+    this.agentsList = agentState.agentsList;
+    if (agentState.agentsList) {
       const previousAgentId = this.skillsAgentId;
-      reconcileSkillsAgentId(this, state.agentsList);
+      reconcileSkillsAgentId(this, agentState.agentsList);
       if (previousAgentId !== this.skillsAgentId) {
         this.skillsDetailKey = null;
         this.skillsDetailTab = "overview";

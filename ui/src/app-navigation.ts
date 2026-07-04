@@ -1,31 +1,9 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
+import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
 
-export type NavigationRouteId =
-  | "chat"
-  | "overview"
-  | "activity"
-  | "workboard"
-  | "instances"
-  | "sessions"
-  | "usage"
-  | "cron"
-  | "agents"
-  | "skills"
-  | "skill-workshop"
-  | "nodes"
-  | "dreams"
-  | "config"
-  | "communications"
-  | "appearance"
-  | "automation"
-  | "mcp"
-  | "infrastructure"
-  | "ai-agents"
-  | "channels"
-  | "debug"
-  | "logs";
+export type NavigationRouteId = RouteId;
 
 type SidebarSection = {
   label: string;

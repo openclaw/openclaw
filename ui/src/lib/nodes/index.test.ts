@@ -38,8 +38,12 @@ describe("device pairing setup state", () => {
   it("ignores a setup response from a replaced Gateway client", async () => {
     const oldResponse = deferred<DevicePairSetup>();
     const newResponse = deferred<DevicePairSetup>();
-    const oldClient = { request: vi.fn(() => oldResponse.promise) };
-    const newClient = { request: vi.fn(() => newResponse.promise) };
+    const oldClient = {
+      request: vi.fn(() => oldResponse.promise),
+    } as unknown as DevicePairSetupState["client"];
+    const newClient = {
+      request: vi.fn(() => newResponse.promise),
+    } as unknown as DevicePairSetupState["client"];
     const state = stateWithClient(oldClient);
 
     const oldRequest = refreshDevicePairSetup(state);
@@ -68,7 +72,7 @@ describe("device pairing setup state", () => {
         .fn()
         .mockReturnValueOnce(oldResponse.promise)
         .mockReturnValueOnce(newResponse.promise),
-    };
+    } as unknown as DevicePairSetupState["client"];
     const state = stateWithClient(client);
 
     const oldRequest = refreshDevicePairSetup(state);

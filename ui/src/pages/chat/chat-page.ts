@@ -26,6 +26,7 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { refreshSlashCommands } from "./chat-commands.ts";
 import {
+  applyChatAgentsList,
   clearChatHistory,
   loadChatHistory,
   syncSelectedSessionMessageSubscription,
@@ -95,6 +96,7 @@ export class ChatPage extends LitElement {
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
+  private connectionGeneration = 0;
 
   private applyRouteSessionKey(sessionKey: string) {
     const state = this.state;
@@ -498,6 +500,7 @@ export class ChatPage extends LitElement {
     state.assistantName = this.context.assistantName;
     if (!snapshot.connected) {
       if (wasConnected) {
+        this.connectionGeneration += 1;
         const currentSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
         if (currentSessionId) {
@@ -514,13 +517,40 @@ export class ChatPage extends LitElement {
       state.requestUpdate?.();
       return;
     }
-    if (clientChanged) {
-      this.connectedClient = snapshot.client;
+    if (clientChanged && snapshot.client) {
+      const startupClient = snapshot.client;
+      const startupGeneration = ++this.connectionGeneration;
+      const startupSessionKey = state.sessionKey;
+      const agentsListBeforeStartup = this.context.agents.state.agentsList;
+      const clientIsCurrent = () =>
+        this.connectionGeneration === startupGeneration &&
+        this.connectedClient === startupClient &&
+        state.client === startupClient &&
+        state.connected;
+      const finishStartup = async () => {
+        if (!clientIsCurrent()) {
+          return;
+        }
+        let agentsList = this.context.agents.state.agentsList;
+        if (agentsList === agentsListBeforeStartup) {
+          agentsList = await this.context.agents.ensureList();
+        }
+        if (!clientIsCurrent()) {
+          return;
+        }
+        if (agentsList) {
+          applyChatAgentsList(state, agentsList, startupClient);
+        }
+        state.requestUpdate?.();
+        if (state.sessionKey === startupSessionKey) {
+          this.sendPendingSkillWorkshopRevision(startupSessionKey);
+        }
+      };
+      this.connectedClient = startupClient;
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
-      void refreshPageChat(state, { startup: true }).finally(() => {
-        state.requestUpdate?.();
-        this.sendPendingSkillWorkshopRevision(state.sessionKey);
+      void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
+        void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();

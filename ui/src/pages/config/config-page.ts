@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { FastMode } from "../../api/types.ts";
-import type { RouteId } from "../../app-routes.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { importCustomThemeFromUrl, syncCustomThemeStyleTag } from "../../app/custom-theme.ts";
 import {

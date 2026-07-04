@@ -39,7 +39,7 @@ export type NodesRouteData = {
 const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
 export class NodesPage extends LitElement implements NodesPageDataState, DevicePairSetupState {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 

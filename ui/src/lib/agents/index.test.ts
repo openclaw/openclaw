@@ -22,7 +22,16 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
     agentsError: null,
     agentsList: null,
     agentsSelectedId: "main",
-    sessions: { state: { modelOverrides: {} } },
+    sessions: {
+      state: {
+        result: null,
+        agentId: null,
+        modelOverrides: {},
+        loading: false,
+        error: null,
+        deletedKeys: [],
+      },
+    },
     toolsCatalogLoading: false,
     toolsCatalogError: null,
     toolsCatalogResult: null,
@@ -55,7 +64,13 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
 
 function createSaveState(): {
   state: AgentsState;
-  config: AgentsConfigCapability;
+  config: AgentsConfigCapability & {
+    state: {
+      configFormDirty: boolean;
+      configForm: Record<string, unknown>;
+      configFormOriginal: Record<string, unknown>;
+    };
+  };
   request: ReturnType<typeof vi.fn<TestRequest>>;
 } {
   const { state, request } = createState();
@@ -63,12 +78,12 @@ function createSaveState(): {
     configFormDirty: true,
     configForm: { agents: { list: [{ id: "main" }] } },
     configFormOriginal: { agents: { list: [{ id: "main" }] } },
-  } as AgentsConfigCapability["state"];
-  const config: AgentsConfigCapability = {
+  };
+  const config = {
     state: configState,
     save: vi.fn(async () => true),
     stageDefaultAgent: vi.fn(() => false),
-  };
+  } satisfies AgentsConfigCapability;
   return {
     state,
     config,

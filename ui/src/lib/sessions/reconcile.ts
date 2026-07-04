@@ -89,7 +89,7 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
     ...incoming,
     thinkingLevels: existingLevels,
     ...(existing?.thinkingOptions ? { thinkingOptions: existing.thinkingOptions } : {}),
-    ...(incoming.thinkingDefault === undefined && existing.thinkingDefault !== undefined
+    ...(incoming.thinkingDefault === undefined && existing?.thinkingDefault !== undefined
       ? { thinkingDefault: existing.thinkingDefault }
       : {}),
   };

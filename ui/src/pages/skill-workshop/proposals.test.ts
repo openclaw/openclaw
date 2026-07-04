@@ -47,10 +47,12 @@ function createFixture(
         return snapshot;
       },
       connection: { gatewayUrl: "", token: "", password: "" },
+      eventLog: [],
       connect: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
       subscribe: vi.fn(() => () => {}),
+      subscribeEventLog: vi.fn(() => () => {}),
       subscribeEvents: vi.fn(() => () => {}),
     },
   };

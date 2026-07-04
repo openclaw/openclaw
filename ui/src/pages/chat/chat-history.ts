@@ -14,7 +14,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -414,26 +414,27 @@ export type ChatState = {
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatVerboseLevel: string | null;
   lastError: string | null;
   chatError?: string | null;
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
+  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
-  hello?: GatewayHelloOk | null;
-  settings?: { chatPersistCommentary?: boolean };
+  hello: GatewayHelloOk | null;
+  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
-  agents?: Array<{ id: string }>;
+  agents?: AgentsListResult["agents"];
 };
 
 type ChatSessionMessageSubscriptionState = ChatState & {
@@ -816,12 +817,17 @@ export async function loadChatHistory(
   return promise;
 }
 
-function applyChatStartupAgentsList(state: ChatState, agentsList: AgentsListResult | undefined) {
-  if (!agentsList) {
+export function applyChatAgentsList(
+  state: ChatState,
+  agentsList: AgentsListResult | undefined,
+  client: GatewayBrowserClient,
+) {
+  if (!agentsList || state.client !== client || !state.connected) {
     return;
   }
   state.agentsList = agentsList;
   state.agentsError = null;
+  state.onAgentsList?.(agentsList, client);
   const selectedId =
     typeof state.agentsSelectedId === "string" && state.agentsSelectedId.trim()
       ? normalizeAgentId(state.agentsSelectedId)
@@ -907,7 +913,7 @@ async function loadChatHistoryUncached(
       return undefined;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    applyChatStartupAgentsList(state, res.agentsList);
+    applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     const lateOptimisticTail = collectLateOptimisticTailMessages(
       previousMessages,

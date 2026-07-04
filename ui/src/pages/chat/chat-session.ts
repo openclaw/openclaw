@@ -40,7 +40,7 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatThinkingLevel: string | null;
-  onModelChanged?: () => Promise<unknown> | unknown;
+  onModelChanged?: () => unknown;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   requestUpdate?: () => void;
@@ -288,7 +288,7 @@ export async function switchChatModel(
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
     sessionKey: host.sessionKey,
-    sessionsResult: host.sessionsResult,
+    sessionsResult: host.sessionsResult ?? null,
   });
   if (currentOverride === nextModel) {
     return true;

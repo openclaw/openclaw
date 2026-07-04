@@ -2,6 +2,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   getChatAttachmentDataUrl,
@@ -14,8 +15,20 @@ import { refreshChatAvatar } from "./chat-avatar.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import type { ChatHost } from "./chat-send.ts";
 import { buildChatSessionListOptions } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
+type TestChatHost = Omit<ChatHost, "settings"> & {
+  basePath: string;
+  chatAvatarUrl: string | null;
+  chatAvatarSource?: string | null;
+  chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
+  chatAvatarReason?: string | null;
+  sessionsError?: string | null;
+  sessionsResultAgentId?: string | null;
+  password?: string;
+  settings?: Partial<UiSettings>;
+};
 
 const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() => ({
   executeSlashCommandMock: vi.fn(),
@@ -50,7 +63,10 @@ let steerQueuedChatMessage: typeof import("./chat-send.ts").steerQueuedChatMessa
 let navigateChatInputHistory: typeof import("./chat-send.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
-let refreshChat: typeof import("./chat-state.ts").refreshChat;
+let refreshChat: (
+  host: TestChatHost,
+  options?: Parameters<typeof import("./chat-state.ts").refreshChat>[1],
+) => Promise<void>;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./chat-queue.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
@@ -67,7 +83,8 @@ async function loadChatHelpers(): Promise<void> {
   } = await import("./chat-send.ts"));
   ({ recordChatSendServerTiming, recordFirstAssistantChatTiming } =
     await import("./chat-send-timing.ts"));
-  ({ refreshChat } = await import("./chat-state.ts"));
+  const chatState = await import("./chat-state.ts");
+  refreshChat = (host, options) => chatState.refreshChat(host as unknown as ChatPageHost, options);
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({ clearPendingQueueItemsForRun, removeQueuedMessage, markQueuedChatSendsWaitingForReconnect } =
     await import("./chat-queue.ts"));
@@ -112,7 +129,7 @@ function findRequestPayload(source: MockCallSource, method: string, label: strin
   return requireRecord(call[1], label);
 }
 
-function eventPayloads(host: ChatHost, event: string): Array<Record<string, unknown>> {
+function eventPayloads(host: TestChatHost, event: string): Array<Record<string, unknown>> {
   return (host.eventLogBuffer ?? [])
     .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
       if (!entry || typeof entry !== "object") {
@@ -139,7 +156,7 @@ function fetchUrl(source: MockCallSource, callIndex: number) {
   throw new Error(`expected fetch input ${callIndex}`);
 }
 
-function makeHost(overrides?: Partial<ChatHost>): ChatHost {
+function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
   const host = {
     client: null,
     chatMessages: [],
@@ -188,6 +205,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     snapshot: {
       client: host.client,
       connected: host.connected,
+      hello: host.hello,
     },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -198,7 +216,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
       showArchived: host.sessionsShowArchived,
     });
   }
-  return { ...host, sessions } as ChatHost;
+  return { ...host, sessions } as TestChatHost;
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -514,7 +532,8 @@ describe("refreshChat", () => {
       sessionsResult: previousSessionsResult,
       chatQueue: [{ id: "queued-1", text: "after scoped reload", createdAt: 1 }],
     });
-    (host as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId = "main";
+    (host as unknown as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId =
+      "main";
 
     await refreshChat(host, { scheduleScroll: false });
     await new Promise<void>((resolve) => {
@@ -556,7 +575,8 @@ describe("refreshChat", () => {
       sessionsResult: previousSessionsResult,
       chatQueue: [{ id: "queued-1", text: "after global alias reload", createdAt: 1 }],
     });
-    (host as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId = "main";
+    (host as unknown as ChatHost & { sessionsResultAgentId: string }).sessionsResultAgentId =
+      "main";
 
     await refreshChat(host, { scheduleScroll: false });
     await new Promise<void>((resolve) => {

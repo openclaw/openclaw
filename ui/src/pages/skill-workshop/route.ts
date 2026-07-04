@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
@@ -18,7 +19,7 @@ export const page = definePage({
         ></openclaw-skill-workshop-page>
       `,
     })),
-  loader: async (context) => {
+  loader: async (context: ApplicationContext) => {
     const state = createSkillWorkshopState();
     await loadSkillWorkshopProposals(state, context);
     return skillWorkshopRouteData(state);

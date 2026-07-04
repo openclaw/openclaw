@@ -6,6 +6,11 @@ const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
+type WindowWithControlUiBasePath = Window &
+  typeof globalThis & {
+    [key: string]: unknown;
+  };
+
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
@@ -22,7 +27,7 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-routes.ts";
+import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
@@ -305,7 +310,9 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
     typeof window !== "undefined" &&
-    normalizeOptionalString(window["__OPENCLAW_CONTROL_UI_BASE_PATH__"]);
+    normalizeOptionalString(
+      (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"],
+    );
   const basePath = configured
     ? normalizeBasePath(configured)
     : inferBasePathFromPathname(location.pathname);

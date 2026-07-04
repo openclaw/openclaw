@@ -77,7 +77,7 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
   const sharedOverrides = state.modelOverrides;
   if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
     const shared = sharedOverrides[state.sessionKey];
-    return shared === null
+    return shared == null
       ? ""
       : normalizeChatModelOverrideValue(createChatModelOverride(shared), catalog);
   }

@@ -34,7 +34,6 @@ import {
   loadCronJobsPage,
   loadCronStatus,
   runCronJob,
-  type CronState,
 } from "../../lib/cron/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
@@ -50,7 +49,7 @@ export type AgentsRouteData = {
 };
 
 export class AgentsPage extends LitElement implements AgentsState {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 
@@ -177,12 +176,12 @@ export class AgentsPage extends LitElement implements AgentsState {
   }
 
   private syncAgentState() {
-    const state = this.context.agents.state;
-    this.agentsLoading = state.agentsLoading;
-    this.agentsError = state.agentsError;
-    this.agentsList = state.agentsList;
-    if (state.agentsList) {
-      this.ensureSelectedAgentInList(state.agentsList);
+    const agentState = this.context.agents.state;
+    this.agentsLoading = agentState.agentsLoading;
+    this.agentsError = agentState.agentsError;
+    this.agentsList = agentState.agentsList;
+    if (agentState.agentsList) {
+      this.ensureSelectedAgentInList(agentState.agentsList);
     }
     this.syncCurrentAgentFiles();
   }
@@ -287,7 +286,7 @@ export class AgentsPage extends LitElement implements AgentsState {
     this.agentIdentityError = null;
     void this.context.agentIdentity
       .ensure(ids)
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.agentIdentityError = String(err);
       })
       .finally(() => {
@@ -365,13 +364,16 @@ export class AgentsPage extends LitElement implements AgentsState {
   }
 
   private async refreshCron() {
-    const state = this.cron;
-    if (!state.connected || !state.client) {
+    const cronState = this.cron;
+    if (!cronState.connected || !cronState.client) {
       return;
     }
-    await Promise.all([loadCronStatus(state), loadCronJobsPage(state, { tableFilters: true })]);
-    if (this.cron === state) {
-      this.cron = { ...state, cronJobs: [...state.cronJobs] };
+    await Promise.all([
+      loadCronStatus(cronState),
+      loadCronJobsPage(cronState, { tableFilters: true }),
+    ]);
+    if (this.cron === cronState) {
+      this.cron = { ...cronState, cronJobs: [...cronState.cronJobs] };
     }
   }
 
@@ -589,9 +591,11 @@ export class AgentsPage extends LitElement implements AgentsState {
             if (!path) {
               return;
             }
-            profile
-              ? this.context.runtimeConfig.patchForm([...path, "profile"], profile)
-              : this.context.runtimeConfig.removeFormValue([...path, "profile"]);
+            if (profile) {
+              this.context.runtimeConfig.patchForm([...path, "profile"], profile);
+            } else {
+              this.context.runtimeConfig.removeFormValue([...path, "profile"]);
+            }
             if (clearAllow) {
               this.context.runtimeConfig.removeFormValue([...path, "allow"]);
             }
@@ -601,12 +605,16 @@ export class AgentsPage extends LitElement implements AgentsState {
             if (!path) {
               return;
             }
-            alsoAllow.length
-              ? this.context.runtimeConfig.patchForm([...path, "alsoAllow"], alsoAllow)
-              : this.context.runtimeConfig.removeFormValue([...path, "alsoAllow"]);
-            deny.length
-              ? this.context.runtimeConfig.patchForm([...path, "deny"], deny)
-              : this.context.runtimeConfig.removeFormValue([...path, "deny"]);
+            if (alsoAllow.length) {
+              this.context.runtimeConfig.patchForm([...path, "alsoAllow"], alsoAllow);
+            } else {
+              this.context.runtimeConfig.removeFormValue([...path, "alsoAllow"]);
+            }
+            if (deny.length) {
+              this.context.runtimeConfig.patchForm([...path, "deny"], deny);
+            } else {
+              this.context.runtimeConfig.removeFormValue([...path, "deny"]);
+            }
           },
           onConfigReload: () => this.reloadConfig(),
           onConfigSave: () => this.saveAgentConfig(),
@@ -636,7 +644,11 @@ export class AgentsPage extends LitElement implements AgentsState {
               ? normalizeStringEntries(entry.skills)
               : (this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ?? []);
             const next = new Set(base);
-            enabled ? next.add(skillName.trim()) : next.delete(skillName.trim());
+            if (enabled) {
+              next.add(skillName.trim());
+            } else {
+              next.delete(skillName.trim());
+            }
             this.context.runtimeConfig.patchForm(["agents", "list", index, "skills"], [...next]);
           },
           onAgentSkillsClear: (agentId) => {
@@ -701,9 +713,11 @@ export class AgentsPage extends LitElement implements AgentsState {
                   ? (entry.existing as { primary: string }).primary.trim()
                   : "";
             if (normalized.length === 0) {
-              currentPrimary || primary
-                ? this.context.runtimeConfig.patchForm(entry.path, currentPrimary || primary)
-                : this.context.runtimeConfig.removeFormValue(entry.path);
+              if (currentPrimary || primary) {
+                this.context.runtimeConfig.patchForm(entry.path, currentPrimary || primary);
+              } else {
+                this.context.runtimeConfig.removeFormValue(entry.path);
+              }
             } else if (currentPrimary || primary) {
               this.context.runtimeConfig.patchForm(entry.path, {
                 primary: currentPrimary || primary,

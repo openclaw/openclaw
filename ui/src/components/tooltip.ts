@@ -11,6 +11,11 @@ const TOOLTIP_GAP = 8;
 
 let nextTooltipId = 0;
 
+function createTooltipId() {
+  nextTooltipId += 1;
+  return `openclaw-tooltip-${nextTooltipId}`;
+}
+
 export class TooltipProvider extends LitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
@@ -107,7 +112,7 @@ export class Tooltip extends LitElement {
   private open = false;
   private pointerDown = false;
   private describedBy: string | null = null;
-  private readonly tooltipId = `openclaw-tooltip-${++nextTooltipId}`;
+  private readonly tooltipId = createTooltipId();
 
   override connectedCallback() {
     super.connectedCallback();
@@ -435,7 +440,7 @@ export class Tooltip extends LitElement {
   }
 
   override render() {
-    return html`<slot @slotchange=${this.attachTrigger}></slot>`;
+    return html`<slot @slotchange=${() => this.attachTrigger()}></slot>`;
   }
 }
 

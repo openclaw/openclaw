@@ -38,7 +38,7 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
 }
 
 export class ChannelsPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 

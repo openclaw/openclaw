@@ -32,6 +32,11 @@ type ChatComposerPersistenceState = {
   chatQueue: ChatQueueItem[];
 };
 
+export type ChatComposerScope = Pick<
+  ChatComposerPersistenceState,
+  "settings" | "assistantAgentId" | "agentsList" | "hello"
+>;
+
 type StoredComposerSession = {
   draft?: string;
   queue?: ChatQueueItem[];
@@ -434,10 +439,7 @@ export function removeStoredChatComposerQueueItem(
 }
 
 export function persistStoredChatComposerQueue(
-  state: Pick<
-    ChatComposerPersistenceState,
-    "settings" | "assistantAgentId" | "agentsList" | "hello"
-  >,
+  state: ChatComposerScope,
   sessionKey: string,
   queue: ChatQueueItem[],
 ): void {

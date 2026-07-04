@@ -697,8 +697,6 @@ function sendStateLabel(item: ChatQueueItem): string | null {
   switch (item.sendState) {
     case "waiting-model":
       return "Waiting for model";
-    case "sending":
-      return "Sending";
     case "waiting-reconnect":
       return "Waiting for reconnect";
     case "failed":
@@ -709,14 +707,15 @@ function sendStateLabel(item: ChatQueueItem): string | null {
 }
 
 export function renderChatQueue(props: ChatQueueProps) {
-  if (!props.queue.length) {
+  const visibleQueue = props.queue.filter((item) => item.sendState !== "sending");
+  if (!visibleQueue.length) {
     return nothing;
   }
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      <div class="chat-queue__title">Queued (${props.queue.length})</div>
+      <div class="chat-queue__title">Queued (${visibleQueue.length})</div>
       <div class="chat-queue__list">
-        ${props.queue.map((item) => {
+        ${visibleQueue.map((item) => {
           const stateLabel = sendStateLabel(item);
           return html`
             <div
@@ -1272,7 +1271,9 @@ export function renderContextNotice(
       ${canRenderCompact
         ? html`
             <button
-              class="context-ring__action ${options.compactBusy ? "context-ring__action--busy" : ""}"
+              class="context-ring__action ${options.compactBusy
+                ? "context-ring__action--busy"
+                : ""}"
               type="button"
               aria-label="Compact recommended session context"
               ?disabled=${compactDisabled}

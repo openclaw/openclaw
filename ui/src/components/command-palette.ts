@@ -2,7 +2,7 @@
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
-import type { RouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons, type IconName } from "./icons.ts";
@@ -128,7 +128,6 @@ function groupItems(items: PaletteItem[]): Array<[string, PaletteItem[]]> {
 
 let previouslyFocused: Element | null = null;
 let activeDialog: HTMLDialogElement | null = null;
-let activeProps: CommandPaletteProps | null = null;
 
 const FOCUSABLE_SELECTOR = [
   "a[href]",
@@ -311,8 +310,6 @@ function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  activeProps = props;
-
   const items = filteredItems(props.query, Boolean(props.onSlashCommand));
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
@@ -430,7 +427,6 @@ export class CommandPalette extends LitElement {
       activeDialog.close();
       restoreFocus();
     }
-    activeProps = null;
     super.disconnectedCallback();
   }
 

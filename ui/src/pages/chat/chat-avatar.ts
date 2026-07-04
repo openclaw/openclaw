@@ -1,7 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import { normalizeBasePath } from "../../app-routes.ts";
+import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
   resolveLocalUserAvatarText,

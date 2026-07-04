@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import type { RouteLocation } from "@openclaw/uirouter";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -13,8 +12,12 @@ import {
   SIDEBAR_SECTIONS,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-routes.ts";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationNavigationOptions,
+} from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
 import "./session-picker.ts";
@@ -72,10 +75,7 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
   @property({ attribute: false })
-  onNavigate?: (
-    routeId: NavigationRouteId,
-    options?: Pick<RouteLocation, "search" | "hash">,
-  ) => void;
+  onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: false })
@@ -341,7 +341,7 @@ export class AppSidebar extends LitElement {
     const href =
       routeSessionKey && routeId === "chat"
         ? `${pathForRoute("chat", this.basePath)}${searchForSession(routeSessionKey)}`
-        : pathForRoute(routeId as RouteId, this.basePath);
+        : pathForRoute(routeId, this.basePath);
     const label = titleForRoute(routeId);
     const link = html`
       <a

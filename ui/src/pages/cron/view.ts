@@ -12,7 +12,7 @@ import type {
   CronRunsStatusFilter,
   CronSortDir,
 } from "../../api/types.ts";
-import { pathForRoute } from "../../app-routes.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";

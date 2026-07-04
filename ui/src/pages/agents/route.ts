@@ -21,6 +21,7 @@ export const page = definePage({
   component: () =>
     import("./agents-page.ts").then(() => ({
       header: true,
-      render: (data) => html`<openclaw-agents-page .routeData=${data}></openclaw-agents-page>`,
+      render: (data: AgentsRouteData | undefined) =>
+        html`<openclaw-agents-page .routeData=${data}></openclaw-agents-page>`,
     })),
 });

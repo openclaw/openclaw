@@ -7,7 +7,7 @@ import {
   scheduleRoutePreload,
   titleForRoute,
 } from "../app-navigation.ts";
-import { isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
+import { isRouteId, pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 

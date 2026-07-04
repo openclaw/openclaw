@@ -50,6 +50,7 @@ export const page = definePage({
   component: () =>
     import("./skills-page.ts").then(() => ({
       header: true,
-      render: (data) => html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>`,
+      render: (data: SkillsRouteData | undefined) =>
+        html`<openclaw-skills-page .routeData=${data}></openclaw-skills-page>`,
     })),
 });

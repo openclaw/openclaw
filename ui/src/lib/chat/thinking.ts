@@ -68,7 +68,7 @@ export function listThinkingLevelLabels(
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
-  catalog?: ThinkingCatalogEntry[];
+  catalog?: readonly ThinkingCatalogEntry[];
 }): string {
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,

@@ -27,6 +27,7 @@ import {
   getChatAttachmentDataUrl,
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
+import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import { renderChat, resetChatViewState } from "./chat-view.ts";
 import { renderChatQueue } from "./components/chat-composer.ts";
 import {
@@ -132,16 +133,27 @@ const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 type ChatHeaderTestState = {
   basePath?: string;
   chatLoading: boolean;
+  chatMessage: string;
+  chatMessages: unknown[];
   chatModelCatalog: ModelCatalogEntry[];
   chatModelsLoading?: boolean;
+  chatQueue: ChatQueueItem[];
   chatRunId: string | null;
   chatSending: boolean;
   chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  chatThinkingLevel: string | null;
+  chatVerboseLevel: string | null;
+  chatAvatarUrl: string | null;
   client: GatewayBrowserClient;
   connected: boolean;
+  hello: null;
+  lastError: string | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   sessionKey: string;
   sessionsResult: SessionsListResult | null;
+  agentsList: null;
+  agentsPanel: string;
   agentsSelectedId: string | null;
   settings: UiSettings;
   sessions: SessionCapability;
@@ -152,7 +164,11 @@ type ChatHeaderTestState = {
   toolsEffectiveResultKey: string | null;
   toolsEffectiveResult: unknown;
   applySettings(next: UiSettings): void;
+  loadAssistantIdentity(): void;
   onModelChanged(): void | Promise<void>;
+  resetChatInputHistoryNavigation(): void;
+  resetChatScroll(): void;
+  resetToolStream(): void;
 };
 
 function requireFirstAttachmentsChange(
@@ -377,7 +393,7 @@ function createChatHeaderState(
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createSessionCapability({
-    snapshot: { client, connected: true },
+    snapshot: { client, connected: true, hello: null },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
   });
@@ -388,7 +404,7 @@ function createChatHeaderState(
     thinkingDefault: overrides.thinkingDefault,
     omitSessionFromList,
   });
-  const state = {
+  const state: ChatHeaderTestState = {
     sessionKey: "main",
     connected: true,
     sessionsResult: initialSessionsResult,
@@ -442,8 +458,8 @@ function createChatHeaderState(
     resetChatInputHistoryNavigation: vi.fn(),
     resetToolStream: vi.fn(),
     resetChatScroll: vi.fn(),
-    onModelChanged: () => refreshVisibleToolsEffectiveForCurrentSessionMock(state),
-  } satisfies ChatHeaderTestState;
+    onModelChanged: (): Promise<void> => refreshVisibleToolsEffectiveForCurrentSessionMock(state),
+  };
   sessions.subscribe((next) => {
     state.sessionsResult = next.result;
   });
@@ -473,6 +489,15 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     sessionKey: state.sessionKey,
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
+    onFastModeSelect: (value) =>
+      switchChatFastMode(state as unknown as Parameters<typeof switchChatFastMode>[0], value),
+    onModelSelect: (value) =>
+      switchChatModel(state as unknown as Parameters<typeof switchChatModel>[0], value),
+    onThinkingSelect: (value) =>
+      switchChatThinkingLevel(
+        state as unknown as Parameters<typeof switchChatThinkingLevel>[0],
+        value,
+      ),
   };
 }
 
@@ -1501,9 +1526,6 @@ describe("chat loading skeleton", () => {
       expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
       expect(container.querySelector(".chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
-      expect(container.querySelector<HTMLButtonElement>(".context-notice__action")?.disabled).toBe(
-        false,
-      );
     } finally {
       nowSpy.mockRestore();
     }
@@ -2789,7 +2811,7 @@ describe("chat model controls", () => {
       thinkingDefault: "medium",
     });
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     const slider = getThinkingSlider(container);
     expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(false);
@@ -2809,7 +2831,7 @@ describe("chat model controls", () => {
       },
     ]);
     const container = document.createElement("div");
-    render(renderChatModelSelect(state), container);
+    render(renderChatModelControls(createChatModelControlsProps(state)), container);
 
     expect(getThinkingSlider(container)).toBeNull();
     const only = container.querySelector<HTMLButtonElement>(

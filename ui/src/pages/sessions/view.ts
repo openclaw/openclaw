@@ -9,7 +9,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import { pathForRoute } from "../../app-routes.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
