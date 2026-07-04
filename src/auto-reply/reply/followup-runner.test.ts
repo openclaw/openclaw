@@ -4116,6 +4116,17 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("keeps accepted child-session spawn-only followup completions silent", async () => {
+    const { onBlockReply } = await runEmptyInteractiveCase({
+      agentResult: {
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+      },
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("keeps cron and approval side-effect followups silent", async () => {
     await runEmptyInteractiveCase({
       agentResult: {

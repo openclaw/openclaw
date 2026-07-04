@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -1465,6 +1466,7 @@ export function createFollowupRunner(params: {
             hasNonEmptyStringArray(runResult.messagingToolSentTexts) ||
             hasNonEmptyStringArray(runResult.messagingToolSentMediaUrls) ||
             hasCommittedMessagingTargetDeliveryEvidence(runResult.messagingToolSentTargets) ||
+            hasAcceptedSessionSpawn(runResult.acceptedSessionSpawns) ||
             (runResult.successfulCronAdds ?? 0) > 0 ||
             runResult.didSendDeterministicApprovalPrompt === true,
           allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,

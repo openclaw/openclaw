@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -268,12 +269,14 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
   didSendViaMessagingTool?: boolean;
+  acceptedSessionSpawns?: unknown[];
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
     params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
   );
@@ -1977,6 +1980,7 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
