@@ -45,10 +45,8 @@ export type SlackChannelConfig = {
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /**
-   * Drop channel messages that mention another user/subteam but not this bot.
-   * Only takes effect in channel/group contexts (not DMs or MPIMs). Requires
-   * that the bot's user id is resolvable (e.g. via `auth.test`) so the
-   * bot/non-bot mention split can be detected reliably. Default: false.
+   * Ignore room messages that mention another user or user group but not this bot.
+   * Requires a resolved bot user ID. Default: false.
    */
   ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
