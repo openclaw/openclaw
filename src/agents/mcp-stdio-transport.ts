@@ -86,6 +86,7 @@ export class OpenClawStdioClientTransport implements Transport {
       });
       child.stdout?.on("error", (error: Error) => this.onerror?.(error));
       if (this.stderrStream && child.stderr) {
+        child.stderr.on("error", () => {});
         child.stderr.pipe(this.stderrStream);
       }
     });
