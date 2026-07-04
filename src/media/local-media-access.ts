@@ -93,7 +93,16 @@ export async function assertLocalMediaAllowed(
   try {
     resolved = await fs.realpath(mediaPath);
   } catch {
-    resolved = path.resolve(mediaPath);
+    // Missing files (e.g. staged outbound media served via host-read
+    // callbacks) cannot be realpathed directly; realpath the parent so a
+    // path reaching an allowed root through a symlink (macOS /var ->
+    // /private/var tmp dirs) still compares as inside the resolved roots
+    // instead of failing closed. The containment check below is unchanged.
+    try {
+      resolved = path.join(await fs.realpath(path.dirname(mediaPath)), path.basename(mediaPath));
+    } catch {
+      resolved = path.resolve(mediaPath);
+    }
   }
 
   if (localRoots === undefined) {

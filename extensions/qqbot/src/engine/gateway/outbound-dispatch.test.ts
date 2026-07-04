@@ -35,6 +35,9 @@ const sendTextMock = vi.hoisted(() =>
 const audioFileToSilkBase64Mock = vi.hoisted(() => vi.fn(async () => "silk-base64"));
 
 vi.mock("../messaging/sender.js", () => ({
+  // Prod catch blocks do instanceof checks against this class; the mock must
+  // export it or any error inside the try masks itself as a mock hole.
+  UploadDailyLimitExceededError: class UploadDailyLimitExceededError extends Error {},
   accountToCreds: (account: GatewayAccount) => ({
     appId: account.appId,
     clientSecret: account.clientSecret,
@@ -372,7 +375,7 @@ describe("dispatchOutbound", () => {
   it("lets missing voice files inside scoped outbound roots reach the voice wait path", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-voice-"));
     try {
-      const missingVoicePath = path.join(tmpRoot, "pending.wav");
+      const missingVoicePath = path.join(await fs.realpath(tmpRoot), "pending.wav");
       const runtime = makeRuntime({
         onDeliver: async (deliver) => {
           await deliver({ text: `<qqvoice>${missingVoicePath}</qqvoice>` }, { kind: "block" });

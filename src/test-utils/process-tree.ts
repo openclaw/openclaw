@@ -39,8 +39,26 @@ export async function waitForPidToExit(pid: number, timeoutMs = 2000): Promise<b
   return !isPidAlive(pid);
 }
 
-export async function readPidFile(pidPath: string): Promise<number> {
-  return Number((await fs.readFile(pidPath, "utf8")).trim());
+export async function readPidFile(pidPath: string, timeoutMs = 5000): Promise<number> {
+  // Forked helpers write their pid file at startup; under load the parent's
+  // assertions can run first, so poll instead of racing a single read.
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const pid = Number((await fs.readFile(pidPath, "utf8")).trim());
+      if (Number.isFinite(pid) && pid > 0) {
+        return pid;
+      }
+    } catch {
+      // Keep polling until the child has written the file.
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`pid file not written in time: ${pidPath}`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
 }
 
 export function killPidIfAlive(pid: number | undefined): void {

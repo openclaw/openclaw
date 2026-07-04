@@ -483,6 +483,14 @@ describe("logs cli", () => {
 
     it("switches back to Gateway logs.tail after temporary journal fallback", async () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      // The CLI renders log timestamps in the host timezone; derive the
+      // expected rendering with the CLI's own formatter instead of assuming a
+      // UTC host (CI is UTC, dev machines often are not).
+      const renderedRecoveredTimestamp = formatLogTimestamp(
+        "2026-05-29T20:00:00.000Z",
+        "plain",
+        true,
+      );
       const recoveredPayload = {
         file: "/tmp/openclaw.log",
         cursor: 10,
@@ -552,7 +560,7 @@ describe("logs cli", () => {
       expect(output).toContain("journal while probing");
       expect(output).toContain("Log file: /tmp/openclaw.log");
       expect(output).toContain("rpc recovered line");
-      expect(output).toContain("2026-05-29T20:00:00.000");
+      expect(output).toContain(renderedRecoveredTimestamp);
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
 

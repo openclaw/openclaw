@@ -246,10 +246,12 @@ describe("trySendViaHostRead error handling", () => {
 
     expect(result).toMatchObject({ channel: "qqbot", messageId: "media-1" });
     expect(mockedLoadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    // Trusted-path fallback realpaths the media path; compare resolved forms
+    // so macOS /var -> /private/var tmp dirs do not fail the assertion.
     expect(mockedSenderSendMedia).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "file",
-        source: { localPath: trustedMediaPath },
+        source: { localPath: await fs.realpath(trustedMediaPath) },
       }),
     );
   });
