@@ -49,6 +49,17 @@ function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }):
   return path.join(params.gitDir, `git-${hash}`, "repo");
 }
 
+function createFsError(code: string, message = code): NodeJS.ErrnoException {
+  return Object.assign(new Error(message), { code });
+}
+
+function normalizeComparablePath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const basename =
+    process.platform === "win32" ? path.basename(resolved).toLowerCase() : path.basename(resolved);
+  return path.join(path.dirname(resolved), basename);
+}
+
 function expectParsedGitSpec(spec: string) {
   const parsed = parseGitPluginSpec(spec);
   if (!parsed) {
@@ -207,7 +218,7 @@ describe("installPluginFromGitSpec", () => {
     expect(result.git.commit).toBe("abc123");
     const cloneArgv = commandArgvAt(0);
     expect(cloneArgv.slice(0, 3)).toEqual(["git", "clone", "https://github.com/acme/demo.git"]);
-    expect(cloneArgv[3]).toContain("/repo");
+    expect(path.basename(cloneArgv[3] ?? "")).toBe("repo");
     expect(commandArgvAt(1)).toEqual(["git", "switch", "--detach", "--", "v1.2.3"]);
     expect(commandArgvAt(3)).toEqual([
       "npm",
@@ -220,7 +231,7 @@ describe("installPluginFromGitSpec", () => {
     ]);
     const installOptions = firstInstallOptions();
     expect(installOptions?.expectedPluginId).toBe("demo");
-    expect(installOptions?.packageDir).toContain("/repo");
+    expect(path.basename(installOptions?.packageDir ?? "")).toBe("repo");
     expect(installOptions?.installPolicyRequest?.kind).toBe("plugin-git");
     expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
       "git:github.com/acme/demo@v1.2.3",
@@ -285,6 +296,75 @@ describe("installPluginFromGitSpec", () => {
     }
   });
 
+  it("publishes the managed repo through copy fallback when the final rename crosses devices", async () => {
+    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-exdev-"));
+    const normalizedSpec = "git:https://github.com/acme/demo.git";
+    const expectedRepoDir = expectedGitRepoDir({ gitDir, normalizedSpec });
+    try {
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      installPluginFromInstalledPackageDirMock.mockImplementation(
+        async (params: { packageDir: string }) => {
+          await fs.mkdir(params.packageDir, { recursive: true });
+          await fs.writeFile(path.join(params.packageDir, "package.json"), "{}", "utf8");
+          await fs.writeFile(path.join(params.packageDir, "marker.txt"), "published", "utf8");
+          return {
+            ok: true,
+            pluginId: "demo",
+            targetDir: params.packageDir,
+            version: "1.2.3",
+            extensions: ["index.js"],
+          };
+        },
+      );
+      const realRename = fs.rename.bind(fs);
+      let exdevMoves = 0;
+      vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+        const [from, to] = args;
+        if (
+          exdevMoves === 0 &&
+          path.basename(String(from)) === "repo" &&
+          normalizeComparablePath(String(to)) === normalizeComparablePath(expectedRepoDir)
+        ) {
+          exdevMoves += 1;
+          throw createFsError("EXDEV", "cross-device link not permitted");
+        }
+        return await realRename(...args);
+      });
+      const captured = captureSecurityEvents();
+
+      let result: Awaited<ReturnType<typeof installPluginFromGitSpec>>;
+      try {
+        result = await installPluginFromGitSpec({
+          spec: "git:https://github.com/acme/demo.git",
+          gitDir,
+        });
+      } finally {
+        captured.stop();
+      }
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(exdevMoves).toBe(1);
+      expect(result.targetDir).toBe(expectedRepoDir);
+      await expect(fs.readFile(path.join(expectedRepoDir, "marker.txt"), "utf8")).resolves.toBe(
+        "published",
+      );
+      expect(captured.events).toHaveLength(1);
+      expect(captured.events[0]).toMatchObject({
+        action: "plugin.installed",
+        outcome: "success",
+        target: { kind: "plugin", name: "demo" },
+      });
+    } finally {
+      await fs.rm(gitDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses a shallow clone when no ref is requested", async () => {
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
@@ -317,7 +397,7 @@ describe("installPluginFromGitSpec", () => {
       "1",
       "https://github.com/acme/demo.git",
     ]);
-    expect(cloneArgv[5]).toContain("/repo");
+    expect(path.basename(cloneArgv[5] ?? "")).toBe("repo");
   });
 
   it("runs install policy preflight before npm installs git dependencies", async () => {
@@ -360,7 +440,7 @@ describe("installPluginFromGitSpec", () => {
         pluginId: "demo",
         requestedSpecifier: "git:github.com/acme/demo",
         source: { kind: "git", authority: "third-party", mutable: true, network: true },
-        sourcePath: expect.stringContaining("/repo"),
+        sourcePath: expect.stringMatching(new RegExp(`${path.sep === "\\" ? "\\\\" : "/"}repo$`)),
       }),
     );
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 /** Parses, clones, verifies, and installs plugin packages from Git specs. */
 import "../infra/fs-safe-defaults.js";
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -8,7 +9,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { withTempDir } from "../infra/install-source-utils.js";
-import { replaceDirectoryAtomic } from "../infra/replace-file.js";
+import { movePathWithCopyFallback } from "../infra/replace-file.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -247,11 +248,35 @@ async function replaceManagedGitRepo(params: {
   persistentRepoDir: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    await replaceDirectoryAtomic({
-      stagedDir: params.stagedRepoDir,
-      targetDir: params.persistentRepoDir,
-      backupPrefix: ".repo-backup-",
-    });
+    const targetDir = path.resolve(params.persistentRepoDir);
+    const stagedDir = path.resolve(params.stagedRepoDir);
+    const parentDir = path.dirname(targetDir);
+    const backupDir = path.join(parentDir, `.repo-backup-${process.pid}-${Date.now()}`);
+    let backupCreated = false;
+
+    await fs.mkdir(parentDir, { recursive: true });
+    try {
+      await movePathWithCopyFallback({ from: targetDir, to: backupDir });
+      backupCreated = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+
+    try {
+      await movePathWithCopyFallback({ from: stagedDir, to: targetDir });
+    } catch (err) {
+      if (backupCreated) {
+        await movePathWithCopyFallback({ from: backupDir, to: targetDir }).catch(() => undefined);
+        backupCreated = false;
+      }
+      throw err;
+    }
+
+    if (backupCreated) {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
     return { ok: true };
   } catch (err) {
     return {
