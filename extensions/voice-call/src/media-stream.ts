@@ -61,6 +61,8 @@ export interface MediaStreamConfig {
   onDisconnect?: (callId: string, streamSid: string) => void;
   /** Callback for common Talk events emitted by the telephony STT/TTS adapter. */
   onTalkEvent?: (callId: string, streamSid: string, event: TalkEvent) => void;
+  /** Pluggable frame parser. Defaults to parseTwilioMediaMessage. */
+  parseMessage?: (data: RawData) => TwilioMediaMessage;
 }
 
 /**
@@ -131,6 +133,40 @@ export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
   }
 }
 
+export function parseTelnyxMediaMessage(data: RawData): TwilioMediaMessage {
+  const raw = normalizeWsMessageData(data);
+  try {
+    const parsed = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+    const event = typeof parsed.event === "string" ? parsed.event : "";
+
+    if (event === "start") {
+      const streamId = typeof parsed.stream_id === "string" ? parsed.stream_id : "";
+      const startData =
+        typeof parsed.start === "object" && parsed.start !== null
+          ? (parsed.start as Record<string, unknown>)
+          : {};
+      const callControlId =
+        typeof startData.call_control_id === "string" ? startData.call_control_id : "";
+      return {
+        event: "start",
+        streamSid: streamId,
+        start: {
+          streamSid: streamId,
+          accountSid: "",
+          callSid: callControlId,
+          tracks: [],
+          customParameters: {},
+          mediaFormat: { encoding: "audio/x-mulaw", sampleRate: 8000, channels: 1 },
+        },
+      } as TwilioMediaMessage;
+    }
+
+    return parsed as unknown as TwilioMediaMessage;
+  } catch (cause) {
+    throw new Error("Telnyx media stream message was malformed JSON", { cause });
+  }
+}
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -164,6 +200,10 @@ export class MediaStreamHandler {
     this.maxPendingConnectionsPerIp =
       config.maxPendingConnectionsPerIp ?? DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP;
     this.maxConnections = config.maxConnections ?? DEFAULT_MAX_CONNECTIONS;
+  }
+
+  setParseMessage(parseMessage: (data: RawData) => TwilioMediaMessage): void {
+    this.config.parseMessage = parseMessage;
   }
 
   /**
@@ -234,7 +274,8 @@ export class MediaStreamHandler {
 
     ws.on("message", (data: RawData) => {
       try {
-        const message = parseTwilioMediaMessage(data);
+        const parseMessage = this.config.parseMessage ?? parseTwilioMediaMessage;
+        const message = parseMessage(data);
 
         switch (message.event) {
           case "connected":

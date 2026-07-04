@@ -315,7 +315,7 @@ export async function speak(
 }
 
 function shouldStartListeningAfterInitialMessage(ctx: ConversationContext): boolean {
-  if (ctx.provider?.name !== "twilio") {
+  if (ctx.provider?.name !== "twilio" && ctx.provider?.name !== "telnyx") {
     return true;
   }
   if (!ctx.config.streaming.enabled) {

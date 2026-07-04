@@ -35,6 +35,7 @@ import {
   isProviderUnreachableWebhookUrl,
   providerRequiresPublicWebhook,
 } from "./webhook-exposure.js";
+import { parseTelnyxMediaMessage } from "./media-stream.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
@@ -178,6 +179,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
         },
         {
           skipVerification: config.skipSignatureVerification,
+          streamPath: config.streaming?.enabled ? config.streaming.streamPath : undefined,
         },
       );
     }
@@ -475,6 +477,16 @@ export async function createVoiceCallRuntime(params: {
       if (mediaHandler) {
         twilioProvider.setMediaStreamHandler(mediaHandler);
         log.info("[voice-call] Media stream handler wired to provider");
+      }
+    }
+
+    if (provider.name === "telnyx" && config.streaming?.enabled) {
+      const mediaHandler = webhookServer.getMediaStreamHandler();
+      if (mediaHandler) {
+        mediaHandler.setParseMessage(parseTelnyxMediaMessage);
+        log.info("[voice-call] Telnyx classic streaming: media stream handler wired");
+      } else {
+        log.warn("[voice-call] Telnyx classic streaming: media stream handler not available");
       }
     }
 

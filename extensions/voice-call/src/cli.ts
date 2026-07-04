@@ -343,7 +343,7 @@ function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
           : config.realtime.enabled
             ? `Realtime voice enabled (${config.realtime.provider ?? "first registered provider"})`
             : config.streaming.enabled
-              ? `Streaming transcription enabled (${config.streaming.provider ?? "first registered provider"})`
+              ? `Streaming transcription enabled — STT: ${config.streaming.provider ?? "first registered"}, telephony: ${config.provider ?? "default"}`
               : "Notify/conversation calls use normal TTS/STT flow",
     },
   ];

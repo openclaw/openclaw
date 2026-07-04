@@ -238,6 +238,15 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
                 direction: "inbound",
               })
             : undefined;
+        const classicStreamUrl =
+          !inboundStreamSession &&
+          !ctx.config.realtime?.enabled &&
+          ctx.config.streaming?.enabled &&
+          ctx.provider.name === "telnyx" &&
+          typeof (ctx.provider as { getClassicStreamUrl?: () => string | null }).getClassicStreamUrl ===
+            "function"
+            ? (ctx.provider as { getClassicStreamUrl: () => string | null }).getClassicStreamUrl()
+            : null;
         void ctx.provider
           .answerCall({
             callId: call.callId,
@@ -247,7 +256,9 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
                   streamUrl: inboundStreamSession.streamUrl,
                   streamAuthToken: inboundStreamSession.token,
                 }
-              : {}),
+              : classicStreamUrl
+                ? { streamUrl: classicStreamUrl }
+                : {}),
           })
           .catch((err: unknown) => {
             const message = formatErrorMessage(err);

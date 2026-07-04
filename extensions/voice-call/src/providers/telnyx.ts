@@ -31,6 +31,7 @@ import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 export interface TelnyxProviderOptions {
   /** Skip webhook signature verification (development only, NOT for production) */
   skipVerification?: boolean;
+  streamPath?: string;
 }
 
 function normalizeTelnyxDirection(
@@ -69,6 +70,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly options: TelnyxProviderOptions;
   private readonly baseUrl = "https://api.telnyx.com/v2";
   private readonly apiHost = "api.telnyx.com";
+  private currentPublicUrl: string | undefined;
 
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     if (!config.apiKey) {
@@ -82,6 +84,28 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.connectionId = config.connectionId;
     this.publicKey = config.publicKey;
     this.options = options;
+  }
+
+  setPublicUrl(url: string): void {
+    this.currentPublicUrl = url;
+  }
+
+  isConversationStreamConnectEnabled(): boolean {
+    return Boolean(this.currentPublicUrl && this.options.streamPath);
+  }
+
+  getClassicStreamUrl(): string | null {
+    if (!this.currentPublicUrl || !this.options.streamPath) {
+      return null;
+    }
+    const wsOrigin = this.currentPublicUrl
+      .replace(/^https:\/\//u, "wss://")
+      .replace(/^http:\/\//u, "ws://")
+      .replace(/\/+$/u, "");
+    const path = this.options.streamPath.startsWith("/")
+      ? this.options.streamPath
+      : `/${this.options.streamPath}`;
+    return `${wsOrigin}${path}`;
   }
 
   /**

@@ -10,7 +10,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler, parseTwilioMediaMessage, parseTelnyxMediaMessage, sanitizeLogText } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -1018,3 +1018,69 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 });
+
+describe("parseTelnyxMediaMessage", () => {
+  it("correctly parses a Telnyx start message", () => {
+    const raw = JSON.stringify({
+      event: "start",
+      stream_id: "stream-xyz",
+      start: {
+        call_control_id: "call-123",
+      },
+    });
+    const parsed = parseTelnyxMediaMessage(Buffer.from(raw));
+    expect(parsed.event).toBe("start");
+    expect(parsed.streamSid).toBe("stream-xyz");
+    expect(parsed.start?.callSid).toBe("call-123");
+  });
+
+  it("passes through media message event properties", () => {
+    const raw = JSON.stringify({
+      event: "media",
+      streamSid: "stream-xyz",
+      media: {
+        payload: "base64audio",
+      },
+    });
+    const parsed = parseTelnyxMediaMessage(Buffer.from(raw));
+    expect(parsed.event).toBe("media");
+    expect(parsed.streamSid).toBe("stream-xyz");
+    expect(parsed.media?.payload).toBe("base64audio");
+  });
+});
+
+describe("MediaStreamHandler with custom parseMessage parser", () => {
+  it("handles Telnyx start message and connects the stream", async () => {
+    const onConnect = vi.fn();
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      parseMessage: parseTelnyxMediaMessage,
+      onConnect,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          stream_id: "stream-xyz",
+          start: {
+            call_control_id: "call-123",
+          },
+        }),
+      );
+
+      // wait a bit for ws processing
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(onConnect).toHaveBeenCalledWith("call-123", "stream-xyz");
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+});
+

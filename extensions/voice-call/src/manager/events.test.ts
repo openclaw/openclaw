@@ -51,7 +51,11 @@ afterEach(async () => {
     }
     ctx.transcriptWaiters.clear();
     await flushPendingCallRecordWritesForTest();
-    fs.rmSync(ctx.storePath, { recursive: true, force: true });
+    try {
+      fs.rmSync(ctx.storePath, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup EPERM errors on Windows due to file locks
+    }
   }
   clearVoiceCallStateRuntime();
   resetPluginStateStoreForTests();
@@ -757,4 +761,83 @@ describe("processEvent (functional)", () => {
     expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
     expect(call.processedEventIds).toStrictEqual([]);
   });
+
+  it("injects classic streamUrl into answerCall for Telnyx inbound calls with streaming enabled", async () => {
+    const answeredCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      name: "telnyx",
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answeredCalls.push(input);
+      },
+    }) as VoiceCallProvider & { getClassicStreamUrl?: () => string | null };
+    provider.getClassicStreamUrl = () => "wss://example.com/voice/stream";
+
+    const ctx = createContext({
+      provider,
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        streaming: {
+          enabled: true,
+          provider: "deepgram",
+        },
+      }),
+    });
+
+    const event = createInboundInitiatedEvent({
+      id: "evt-telnyx-inbound",
+      providerCallId: "call-control-telnyx",
+      from: "+15559999999",
+    });
+
+    processEvent(ctx, event);
+
+    expect(answeredCalls).toHaveLength(1);
+    expect(answeredCalls[0]?.streamUrl).toBe("wss://example.com/voice/stream");
+  });
+
+  it("ignores classic streamUrl if realtime is enabled on Telnyx", async () => {
+    const answeredCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      name: "telnyx",
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answeredCalls.push(input);
+      },
+    }) as VoiceCallProvider & { getClassicStreamUrl?: () => string | null };
+    provider.getClassicStreamUrl = () => "wss://example.com/voice/stream";
+
+    const ctx = createContext({
+      provider,
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        streaming: {
+          enabled: true,
+          provider: "deepgram",
+        },
+        realtime: {
+          enabled: true,
+          provider: "openai",
+        },
+      }),
+    });
+
+    const event = createInboundInitiatedEvent({
+      id: "evt-telnyx-inbound-realtime",
+      providerCallId: "call-control-telnyx-realtime",
+      from: "+15559999999",
+    });
+
+    processEvent(ctx, event);
+
+    expect(answeredCalls).toHaveLength(1);
+    // Realtime doesn't have a streamSessionIssuer in this mock ctx so streamUrl is undefined,
+    // but the key point is that it did NOT use the classicStreamUrl "wss://example.com/voice/stream".
+    expect(answeredCalls[0]?.streamUrl).toBeUndefined();
+  });
 });
+

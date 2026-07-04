@@ -488,3 +488,54 @@ describe("TelnyxProvider speak control", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TelnyxProvider classic streaming options", () => {
+  it("returns null for getClassicStreamUrl by default", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+    });
+    expect(provider.getClassicStreamUrl()).toBeNull();
+    expect(provider.isConversationStreamConnectEnabled()).toBe(false);
+  });
+
+  it("returns null for getClassicStreamUrl if streamPath is missing", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456" },
+      {},
+    );
+    provider.setPublicUrl("https://example.com");
+    expect(provider.getClassicStreamUrl()).toBeNull();
+    expect(provider.isConversationStreamConnectEnabled()).toBe(false);
+  });
+
+  it("returns null for getClassicStreamUrl if publicUrl is missing", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456" },
+      { streamPath: "/voice/stream" },
+    );
+    expect(provider.getClassicStreamUrl()).toBeNull();
+    expect(provider.isConversationStreamConnectEnabled()).toBe(false);
+  });
+
+  it("returns wss URL when both publicUrl and streamPath are configured", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456" },
+      { streamPath: "/voice/stream" },
+    );
+    provider.setPublicUrl("https://example.com/");
+    expect(provider.getClassicStreamUrl()).toBe("wss://example.com/voice/stream");
+    expect(provider.isConversationStreamConnectEnabled()).toBe(true);
+  });
+
+  it("normalizes path slashes and non-secure http to ws", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456" },
+      { streamPath: "voice/stream" },
+    );
+    provider.setPublicUrl("http://example.com");
+    expect(provider.getClassicStreamUrl()).toBe("ws://example.com/voice/stream");
+    expect(provider.isConversationStreamConnectEnabled()).toBe(true);
+  });
+});
+
