@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
+const CONTENT_INVENTORY_COMPAT_PATH = "scripts/lib/content-inventory-compat.mjs";
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
 
@@ -27,6 +28,7 @@ function withTarball(
   version = "0.0.0",
   options: {
     includeContentInventory?: boolean;
+    includeContentInventoryCompat?: boolean;
     includeControlUi?: boolean;
     includeShrinkwrap?: boolean;
     contentInventoryModes?: Record<string, number>;
@@ -42,6 +44,14 @@ function withTarball(
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
     writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw", version }));
+    if (options.includeContentInventoryCompat !== false) {
+      const helperPath = join(packageRoot, CONTENT_INVENTORY_COMPAT_PATH);
+      mkdirSync(dirname(helperPath), { recursive: true });
+      writeFileSync(
+        helperPath,
+        "export const isLegacyContentInventoryCompatVersion = () => false;\n",
+      );
+    }
     if (options.includeShrinkwrap !== false) {
       writeFileSync(
         join(packageRoot, "npm-shrinkwrap.json"),
@@ -1100,6 +1110,23 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.4.27",
       { includeControlUi: false },
+    );
+  });
+
+  it("rejects package tarballs missing the content inventory compatibility helper", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `missing required tar entry ${CONTENT_INVENTORY_COMPAT_PATH}`,
+        );
+      },
+      "2026.7.1",
+      { includeContentInventoryCompat: false },
     );
   });
 

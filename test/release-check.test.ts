@@ -60,6 +60,7 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const CONTENT_INVENTORY_COMPAT_PATH = "scripts/lib/content-inventory-compat.mjs";
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -653,6 +654,12 @@ describe("collectForbiddenPackPaths", () => {
 });
 
 describe("collectMissingPackPaths", () => {
+  it("keeps the content inventory compatibility helper in the package allowlist", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    expect(pkg.files).toContain(CONTENT_INVENTORY_COMPAT_PATH);
+  });
+
   it("requires the shipped channel catalog, control ui, and optional bundled metadata", () => {
     const missing = collectMissingPackPaths([
       "dist/index.js",
@@ -674,6 +681,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-plugin-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
+      CONTENT_INVENTORY_COMPAT_PATH,
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/agents/compaction-planning.worker.js",
@@ -707,6 +715,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/official-external-channel-catalog.json",
         "scripts/lib/official-external-plugin-catalog.json",
         "scripts/lib/official-external-provider-catalog.json",
+        CONTENT_INVENTORY_COMPAT_PATH,
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
