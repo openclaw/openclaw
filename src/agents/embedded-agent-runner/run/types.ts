@@ -55,6 +55,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
+  /** True when the previous attempt detected replay_invalid so thinking signature
+   * stripping may be needed before the next replay. */
+  replayInvalid?: boolean;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */

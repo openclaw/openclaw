@@ -400,6 +400,60 @@ function shouldPreserveCurrentToolTurnReasoning(
   return false;
 }
 
+/**
+ * Strip thinking signatures from all assistant messages unconditionally.
+ *
+ * Unlike stripStaleThinkingSignaturesForCompactionReplay which only strips
+ * pre-compaction messages, this strips signatures regardless of compaction
+ * state. Used when replay_invalid errors indicate that thinking signatures
+ * from a prior provider context are no longer valid (e.g. after process
+ * restart with thinking disabled).
+ *
+ * When preserveLatestAssistant is true, the last assistant message is kept
+ * unchanged to avoid modifying the most recent thinking block (Anthropic
+ * rejects modified latest thinking blocks).
+ *
+ * Returns the original array reference when nothing was changed.
+ */
+export function stripAllThinkingSignatures(
+  messages: AgentMessage[],
+  options?: { preserveLatestAssistant?: boolean },
+): AgentMessage[] {
+  const preserveLatestAssistant = options?.preserveLatestAssistant ?? false;
+
+  let latestAssistantIndex = -1;
+  if (preserveLatestAssistant) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (isAssistantMessageWithContent(messages[i])) {
+        latestAssistantIndex = i;
+        break;
+      }
+    }
+  }
+
+  let touched = false;
+  const out: AgentMessage[] = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    if (i === latestAssistantIndex) {
+      out.push(message);
+      continue;
+    }
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    const stripped = stripThinkingSignaturesFromMessage(message);
+    if (stripped !== message) {
+      touched = true;
+    }
+    out.push(stripped);
+  }
+
+  return touched ? out : messages;
+}
+
 export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
   let latestAssistantIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {

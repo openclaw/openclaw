@@ -2283,6 +2283,7 @@ async function runEmbeddedAgentInternal(
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
             onUserMessagePersisted,
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+            replayInvalid: accumulatedReplayState.replayInvalid ? true : undefined,
           })
             .catch((err: unknown): never => {
               throw postCompactionAbortError ?? err;

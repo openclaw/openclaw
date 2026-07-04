@@ -61,6 +61,7 @@ import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   shouldPreserveLatestAssistantThinking,
+  stripAllThinkingSignatures,
   stripInvalidThinkingSignatures,
   stripStaleThinkingSignaturesForCompactionReplay,
 } from "./thinking.js";
@@ -682,6 +683,10 @@ export async function sanitizeSessionHistory(params: {
   sessionId: string;
   policy?: TranscriptPolicy;
   preserveLatestAssistantThinking?: boolean;
+  /** When true, strip thinking signatures from all assistant messages before the
+   * normal stripping chain. Used on retries after replay_invalid thinking errors
+   * to recover from stale thinking signatures. */
+  replayInvalid?: boolean;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -732,9 +737,18 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
+  // When replay_invalid was detected on the previous attempt, strip thinking
+  // signatures from all assistant messages before the normal stripping chain.
+  // This recovers from thinking signature rejection on process restart or
+  // thinking policy change where valid-but-stale signatures survive the
+  // compaction-only strip step.
+  const replayedStripped =
+    params.replayInvalid && !policy.dropThinkingBlocks
+      ? stripAllThinkingSignatures(sanitizedImages)
+      : sanitizedImages;
   const preserveLatestAssistantThinking =
     params.preserveLatestAssistantThinking ??
-    shouldPreserveLatestAssistantThinking(sanitizedImages);
+    shouldPreserveLatestAssistantThinking(replayedStripped);
   // Strip thinking signatures that are stale due to compaction context changes before
   // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
   // bound to the original prefix; after compaction the prefix changes and Anthropic
@@ -742,8 +756,8 @@ export async function sanitizeSessionHistory(params: {
   // the affected messages regardless of path (standard or truncateAfterCompaction).
   const compactionStaleStripped =
     signedThinkingProvider || policy.preserveSignatures
-      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
-      : sanitizedImages;
+      ? stripStaleThinkingSignaturesForCompactionReplay(replayedStripped)
+      : replayedStripped;
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound

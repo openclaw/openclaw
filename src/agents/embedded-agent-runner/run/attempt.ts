@@ -3276,6 +3276,7 @@ export async function runEmbeddedAttempt(
             sessionManager,
             sessionId: params.sessionId,
             policy: transcriptPolicy,
+            replayInvalid: params.replayInvalid,
           });
           cacheTrace?.recordStage("session:sanitized", { messages: prior });
           const validated = await validateReplayTurns({
