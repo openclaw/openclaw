@@ -354,6 +354,15 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
   return scopes.includes("chat:write.customize");
 }
 
+function isSlackCustomIdentityRejectedError(err: unknown): boolean {
+  if (isSlackCustomizeScopeError(err)) {
+    return true;
+  }
+  const data = getSlackWebApiErrorData(err);
+  const code = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.error));
+  return code === "invalid_arguments" || code === "invalid_arg_name";
+}
+
 async function postSlackMessageBestEffort(params: {
   client: WebClient;
   channelId: string;
@@ -396,10 +405,10 @@ async function postSlackMessageBestEffort(params: {
       }),
     );
   } catch (err) {
-    if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
+    if (!hasCustomIdentity(params.identity) || !isSlackCustomIdentityRejectedError(err)) {
       throw err;
     }
-    logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
+    logVerbose("slack send: custom identity rejected, retrying without custom identity");
     return withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(basePayload));
   }
 }
