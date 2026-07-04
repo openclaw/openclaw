@@ -2693,4 +2693,80 @@ describe("sanitizeSessionHistory", () => {
       "sig_bedrock",
     );
   });
+
+  it("strips stale thinking signatures on replayInvalid but preserves active tool-turn", async () => {
+    setNonGoogleModelApi();
+    const messages = castAgentMessages([
+      { role: "user", content: "first query" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old reasoning", signature: "old_sig" },
+          { type: "text", text: "old answer" },
+        ],
+      },
+      { role: "user", content: "follow up" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "tool reasoning", thinkingSignature: "tool_sig" },
+          { type: "tool_use", name: "exec", input: { command: "ls" } },
+        ],
+      },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openrouter",
+      modelId: "openai/gpt-5.5",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+      policy: {
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: false,
+        toolCallIdMode: undefined,
+        duplicateToolCallIdStyle: undefined,
+        preserveNativeAnthropicToolUseIds: false,
+        repairToolUseResultPairing: true,
+        preserveSignatures: false,
+        sanitizeThinkingSignatures: false,
+        dropThinkingBlocks: false,
+        applyGoogleTurnOrdering: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+        allowSyntheticToolResults: false,
+      },
+      replayInvalid: true,
+    });
+
+    // Latest assistant (index 3, tool-use turn) — signature preserved
+    const latestAssistant = result[3] as {
+      content: Array<{ type: string; thinking?: string; thinkingSignature?: string }>;
+    };
+    const latestThinking = latestAssistant.content.find(
+      (b: { type: string }) => b.type === "thinking",
+    );
+    expect(latestThinking?.thinkingSignature).toBe("tool_sig");
+    expect(latestThinking?.thinking).toBe("tool reasoning");
+
+    // Earlier assistant (index 1) — stripped first by stripAllThinkingSignatures,
+    // then the unsigned thinking block is converted to placeholder text by
+    // downstream stripInvalidThinkingSignatures. Text blocks survive.
+    const earlierAssistant = result[1] as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const earlierThinking = earlierAssistant.content.find(
+      (b: { type: string }) => b.type === "thinking",
+    );
+    expect(earlierThinking).toBeUndefined();
+    const earlierText = earlierAssistant.content.find((b: { type: string }) => b.type === "text");
+    expect(earlierText?.text).toBe("old answer");
+
+    // Non-thinking content on latest assistant preserved
+    const toolUseBlock = latestAssistant.content.find(
+      (b: { type: string }) => b.type === "tool_use",
+    );
+    expect(toolUseBlock).toBeDefined();
+  });
 });
