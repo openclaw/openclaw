@@ -13,6 +13,7 @@ import { gunzipSync } from "node:zlib";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 type CollectorMode = "local" | "docker";
 type OtelLogsExporter = "otlp" | "stdout" | "both";
@@ -58,6 +59,13 @@ type CliOptions = {
   alternateModel?: string;
   help: boolean;
 };
+
+type OtelSmokeEvidenceContext = {
+  startedAt: number;
+  writer: ReturnType<typeof createQaScriptEvidenceWriter>;
+};
+
+let activeEvidenceContext: OtelSmokeEvidenceContext | undefined;
 
 type CapturedRequest = {
   path: string;
@@ -1809,11 +1817,38 @@ async function main() {
   }
 
   await mkdir(options.outputDir, { recursive: true });
+  const writer = createQaScriptEvidenceWriter({
+    artifactBase: options.outputDir,
+    logFileName: "qa-otel-smoke.log",
+    primaryModel: options.primaryModel ?? "gpt-5.5",
+    providerMode: options.providerMode as "mock-openai" | "live-frontier",
+    repoRoot: process.cwd(),
+    target: {
+      id: "qa-otel-smoke",
+      title: "QA OTEL smoke evidence",
+      sourcePath: "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
+      primaryCoverageIds: ["telemetry.otel"],
+      secondaryCoverageIds: ["harness.qa-lab", "telemetry.plugin-sdk-runtime-exports"],
+      docsRefs: ["docs/gateway/opentelemetry.md", "docs/concepts/qa-e2e-automation.md"],
+      codeRefs: [
+        "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
+        "extensions/diagnostics-otel/src/service.ts",
+      ],
+    },
+  });
+  const startedAt = Date.now();
+  activeEvidenceContext = { startedAt, writer };
+  const writeStdout = (chunk: unknown) => {
+    writer.appendLog(chunk);
+    process.stdout.write(String(chunk));
+  };
+  const writeStderr = (chunk: unknown) => {
+    writer.appendLog(chunk);
+    process.stderr.write(String(chunk));
+  };
   const receiver = startLocalOtlpReceiver(disallowedBodyNeedles(options));
   const port = await receiver.listen();
-  process.stdout.write(
-    `qa-otel-smoke: local OTLP receiver listening on http://127.0.0.1:${port}\n`,
-  );
+  writeStdout(`qa-otel-smoke: local OTLP receiver listening on http://127.0.0.1:${port}\n`);
 
   let collector: Awaited<ReturnType<typeof startDockerOtelCollector>> | undefined;
   let childExitCode = 1;
@@ -1823,7 +1858,7 @@ async function main() {
     if (options.collectorMode === "docker") {
       collector = await startDockerOtelCollector(port);
       exportPort = collector.port;
-      process.stdout.write(
+      writeStdout(
         `qa-otel-smoke: OpenTelemetry Collector ${collector.image} listening on http://127.0.0.1:${exportPort} (${collector.network} network)\n`,
       );
     }
@@ -1832,9 +1867,9 @@ async function main() {
     const cleanupSignalRelay = relayParentSignalsToChild(child);
     child.stdout?.on("data", (chunk) => {
       stdoutDiagnosticLogs.append(chunk);
-      process.stdout.write(chunk);
+      writeStdout(chunk);
     });
-    child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
+    child.stderr?.on("data", writeStderr);
     try {
       childExitCode = await waitForChild(child);
     } finally {
@@ -1922,40 +1957,47 @@ async function main() {
   };
   const summaryPath = path.join(options.outputDir, "otel-smoke-summary.json");
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-  process.stdout.write(`qa-otel-smoke: summary ${summaryPath}\n`);
+  writeStdout(`qa-otel-smoke: summary ${summaryPath}\n`);
 
   if (!assertion.passed) {
     for (const failure of assertion.failures) {
-      process.stderr.write(`qa-otel-smoke: ${failure}\n`);
+      writeStderr(`qa-otel-smoke: ${failure}\n`);
     }
-    process.stderr.write(
+    writeStderr(
       `qa-otel-smoke: captured request counts traces=${assertion.signalRequestCounts.traces} ` +
         `metrics=${assertion.signalRequestCounts.metrics} logs=${assertion.signalRequestCounts.logs}\n`,
     );
-    process.stderr.write(
+    writeStderr(
       `qa-otel-smoke: captured decoded counts spans=${receiver.capturedSpans.length} ` +
         `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length} ` +
         `stdoutLogs=${stdoutDiagnosticLogs.records.length}\n`,
     );
-    process.stderr.write(
+    writeStderr(
       `qa-otel-smoke: captured span names: ${formatBoundedList(assertion.spanNames, 40)}\n`,
     );
-    process.stderr.write(
+    writeStderr(
       `qa-otel-smoke: captured metric names: ${formatBoundedList(assertion.metricNames, 40)}\n`,
     );
     for (const [signal, contexts] of Object.entries(assertion.leakContexts)) {
       for (const context of contexts ?? []) {
-        process.stderr.write(`qa-otel-smoke: ${signal} leak context: ${context}\n`);
+        writeStderr(`qa-otel-smoke: ${signal} leak context: ${context}\n`);
       }
     }
     const collectorOutput = collector?.output();
     if (collectorOutput) {
-      process.stderr.write(`qa-otel-smoke: collector output:\n${collectorOutput}\n`);
+      writeStderr(`qa-otel-smoke: collector output:\n${collectorOutput}\n`);
     }
+    await writer.write({
+      artifacts: [{ kind: "summary", filePath: path.resolve(summaryPath) }],
+      details: assertion.failures.join("\n"),
+      durationMs: Math.max(1, Date.now() - startedAt),
+      status: "fail",
+    });
+    activeEvidenceContext = undefined;
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(
+  writeStdout(
     `qa-otel-smoke: passed spans=${receiver.capturedSpans.length} ` +
       `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length} ` +
       `stdoutLogs=${stdoutDiagnosticLogs.records.length} ` +
@@ -1963,6 +2005,13 @@ async function main() {
       `metricRequests=${assertion.signalRequestCounts.metrics} ` +
       `logRequests=${assertion.signalRequestCounts.logs}\n`,
   );
+  await writer.write({
+    artifacts: [{ kind: "summary", filePath: path.resolve(summaryPath) }],
+    details: `captured spans=${receiver.capturedSpans.length} metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length}`,
+    durationMs: Math.max(1, Date.now() - startedAt),
+    status: "pass",
+  });
+  activeEvidenceContext = undefined;
 }
 
 export const testing = {
@@ -1985,10 +2034,21 @@ export const testing = {
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((error: unknown) => {
-    process.stderr.write(
-      `qa-otel-smoke: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
-    );
+  main().catch(async (error: unknown) => {
+    const details = error instanceof Error ? error.stack || error.message : String(error);
+    process.stderr.write(`qa-otel-smoke: ${details}\n`);
+    const evidenceContext = activeEvidenceContext;
+    if (evidenceContext) {
+      evidenceContext.writer.appendLog(`qa-otel-smoke: ${details}\n`);
+      await evidenceContext.writer
+        .write({
+          details,
+          durationMs: Math.max(1, Date.now() - evidenceContext.startedAt),
+          status: "fail",
+        })
+        .catch(() => undefined);
+      activeEvidenceContext = undefined;
+    }
     process.exitCode = 1;
   });
 }

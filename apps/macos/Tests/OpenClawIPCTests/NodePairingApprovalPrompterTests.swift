@@ -1,10 +1,22 @@
-import Testing
 import AppKit
+import Testing
 @testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
 struct NodePairingApprovalPrompterTests {
+    @Test func `silent pairing requires a trusted SSH host key`() {
+        let options = NodePairingApprovalPrompter._testSilentPairingSSHOptions()
+
+        #expect(options.contains("BatchMode=yes"))
+        #expect(options.contains("ControlMaster=no"))
+        #expect(options.contains("ControlPath=none"))
+        #expect(options.contains("ControlPersist=no"))
+        #expect(options.contains("ForkAfterAuthentication=no"))
+        #expect(options.contains("StrictHostKeyChecking=yes"))
+        #expect(!options.contains("StrictHostKeyChecking=accept-new"))
+    }
+
     @Test func `node pairing approval prompter exercises`() async {
         await NodePairingApprovalPrompter.exerciseForTesting()
     }

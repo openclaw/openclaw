@@ -24,6 +24,9 @@ export type OllamaPluginConfig = {
   discovery?: {
     enabled?: boolean;
   };
+  nodeInference?: {
+    enabled?: boolean;
+  };
 };
 
 type OllamaDiscoveryContext = {

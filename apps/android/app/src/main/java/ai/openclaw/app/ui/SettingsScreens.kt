@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
@@ -7,17 +8,24 @@ import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
+import ai.openclaw.app.GatewayTalkSetupReadiness
+import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.gatewayTalkSetupDescription
+import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.isReady
+import ai.openclaw.app.loadAndroidLicenseNotices
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
+import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -42,6 +50,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -104,6 +113,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -135,6 +146,7 @@ internal enum class SettingsRoute {
   Appearance,
   Health,
   About,
+  Licenses,
 }
 
 /**
@@ -166,6 +178,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Licenses -> LicensesSettingsScreen(onBack = onBack)
   }
 }
 
@@ -399,14 +412,16 @@ private fun VoiceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val speakerEnabled by viewModel.speakerEnabled.collectAsState()
-  val micEnabled by viewModel.micEnabled.collectAsState()
-  val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
+  val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) viewModel.refreshTalkSetupReadiness()
+  }
 
   SettingsDetailFrame(title = "Talk Provider Setup", subtitle = "Configure voice, transport, and playback.", icon = Icons.Default.Mic, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      VoiceSetupPanel(
-        voiceActive = micEnabled || talkModeEnabled,
-      )
+      VoiceSetupPanel(talkSetupReadiness)
       Text(text = "Audio Test", style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = "Check that OpenClaw can speak clearly on this phone.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       SettingsWaveformPanel(active = speakerEnabled, onClick = ::playVoiceSetupTone)
@@ -425,31 +440,27 @@ private fun VoiceSettingsScreen(
 
 @Composable
 private fun VoiceSetupPanel(
-  voiceActive: Boolean,
+  readiness: GatewayTalkSetupReadiness,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-    VoiceSetupActionRow(
-      title = "Realtime Provider",
-      subtitle = "Gateway voice relay",
-      icon = Icons.Default.GraphicEq,
-      statusText = if (voiceActive) "Live" else "Ready",
-      ready = true,
-    )
-    VoiceSetupActionRow(
-      title = "Voice",
-      subtitle = "Voice input",
-      icon = Icons.Default.Mic,
-      statusText = "Configured",
-      ready = true,
-    )
-    VoiceSetupActionRow(
-      title = "Transport",
-      subtitle = "Socket relay",
-      icon = Icons.Default.Bolt,
-      statusText = "Configured",
-      ready = true,
-    )
+    VoiceSetupReadinessRow(title = "Realtime Talk", state = readiness.realtimeTalk, icon = Icons.Default.GraphicEq)
+    VoiceSetupReadinessRow(title = "Dictation", state = readiness.dictation, icon = Icons.Default.Mic)
   }
+}
+
+@Composable
+private fun VoiceSetupReadinessRow(
+  title: String,
+  state: GatewayTalkSetupState,
+  icon: ImageVector,
+) {
+  VoiceSetupActionRow(
+    title = title,
+    subtitle = gatewayTalkSetupDescription(state),
+    icon = icon,
+    statusText = gatewayTalkSetupStatusText(state),
+    ready = state.isReady,
+  )
 }
 
 @Composable
@@ -1131,6 +1142,68 @@ private fun AboutSettingsScreen(
   }
 }
 
+@Composable
+private fun LicensesSettingsScreen(onBack: () -> Unit) {
+  val context = LocalContext.current
+  val licenses = remember(context) { loadAndroidLicenseNotices(context.assets) }
+  var selectedLicense by remember { mutableStateOf<AndroidLicenseNotice?>(null) }
+  val backToListOrSettings = {
+    if (selectedLicense == null) {
+      onBack()
+    } else {
+      selectedLicense = null
+    }
+  }
+
+  BackHandler(enabled = selectedLicense != null) {
+    selectedLicense = null
+  }
+
+  SettingsDetailFrame(
+    title = "Licenses",
+    subtitle = if (selectedLicense == null) "OpenClaw appreciates its partners in the open-source community." else "",
+    subtitleTextAlign = TextAlign.Center,
+    icon = Icons.Default.Info,
+    onBack = backToListOrSettings,
+  ) {
+    val selected = selectedLicense
+    if (selected == null) {
+      if (licenses.isEmpty()) {
+        ClawPanel {
+          Text(text = "No license notices are packaged in this build.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      } else {
+        ClawListPanel(items = licenses) { license ->
+          LicenseListRow(license = license, onClick = { selectedLicense = license })
+        }
+      }
+    } else {
+      ClawPanel {
+        Text(text = selected.text, style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace), color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
+@Composable
+private fun LicenseListRow(
+  license: AndroidLicenseNotice,
+  onClick: () -> Unit,
+) {
+  ClawListItem(
+    title = license.title,
+    onClick = onClick,
+    trailing = {
+      Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = "Open ${license.title}",
+        modifier = Modifier.size(20.dp),
+        tint = ClawTheme.colors.text,
+      )
+    },
+  )
+}
+
 internal fun androidDistributionChannel(flavor: String = BuildConfig.FLAVOR): String =
   when (flavor.trim()) {
     "play" -> "Play"
@@ -1179,6 +1252,7 @@ internal fun SettingsDetailFrame(
   subtitle: String,
   icon: ImageVector,
   onBack: () -> Unit,
+  subtitleTextAlign: TextAlign = TextAlign.Start,
   content: @Composable () -> Unit,
 ) {
   ClawScaffold(
@@ -1197,8 +1271,16 @@ internal fun SettingsDetailFrame(
           SettingsIconMark(icon = icon)
         }
       }
-      item {
-        Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      if (subtitle.isNotBlank()) {
+        item {
+          Text(
+            text = subtitle,
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = subtitleTextAlign,
+          )
+        }
       }
       item {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {

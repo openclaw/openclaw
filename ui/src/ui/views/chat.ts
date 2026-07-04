@@ -1815,6 +1815,29 @@ function getActiveSlashMenuOptionLabel(): string {
   return `${command} ${cmd.description}`;
 }
 
+function scrollActiveSlashMenuOptionIntoView(): void {
+  const activeId = getActiveSlashMenuOptionId();
+  if (!activeId) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const activeOption = document.getElementById(activeId);
+    const menu = activeOption?.closest<HTMLElement>(".slash-menu");
+    if (!activeOption || !menu) {
+      return;
+    }
+    const menuBounds = menu.getBoundingClientRect();
+    const optionBounds = activeOption.getBoundingClientRect();
+    // scrollIntoView also moves the short-landscape composer and page. Keep
+    // keyboard navigation owned by the menu so textarea focus stays stable.
+    if (optionBounds.top < menuBounds.top) {
+      menu.scrollTop -= menuBounds.top - optionBounds.top;
+    } else if (optionBounds.bottom > menuBounds.bottom) {
+      menu.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    }
+  });
+}
+
 function tokenEstimate(draft: string): string | null {
   if (draft.length < 100) {
     return null;
@@ -2507,11 +2530,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -2538,11 +2563,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -2723,13 +2750,7 @@ export function renderChat(props: ChatProps) {
         : nothing}
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !props.connected || isBusy || showAbortableUi,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatGoal(activeSession?.goal)}
+        ${renderCompactionIndicator(props.compactionStatus)} ${renderChatGoal(activeSession?.goal)}
       </div>
 
       <input
@@ -2874,6 +2895,11 @@ export function renderChat(props: ChatProps) {
         ${composerControls && composerControls !== nothing
           ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
           : nothing}
+        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+          compactBusy,
+          compactDisabled: !props.connected || isBusy || showAbortableUi,
+          onCompact: props.onCompact,
+        })}
         ${renderChatRunControls({
           canAbort: showAbortableUi,
           connected: props.connected,

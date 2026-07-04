@@ -22,16 +22,6 @@
     <string name="password">Passwort</string>
     <string name="run_onboarding_again">Onboarding erneut ausführen</string>
     <string name="resolved_endpoint">Aufgelöster Endpunkt</string>
-    <string name="gateway_setup">Gateway-Einrichtung</string>
-    <string name="connect_to_gateway">Mit Ihrem Gateway verbinden</string>
-    <string name="scan_setup_code">Einrichtungscode scannen</string>
-    <string name="use_gateway_qr">Verwenden Sie Ihren Gateway-QR- oder Einrichtungscode</string>
-    <string name="nearby_gateway">Gateway in der Nähe</string>
-    <string name="enter_gateway_url">Gateway-URL eingeben</string>
-    <string name="connect_manual_url">Über eine manuelle URL verbinden</string>
-    <string name="permissions">Berechtigungen</string>
-    <string name="done">Fertig</string>
     <string name="gateway_trust_first_seen">Überprüfen Sie den Zertifikatfingerabdruck, bevor Sie diesem Gateway vertrauen.\n\n%1$s</string>
     <string name="gateway_trust_changed">Das Gateway-Zertifikat wurde geändert. Fahren Sie nur fort, wenn Sie diese Änderung erwartet haben.\n\nAlter SHA-256-Wert:\n%1$s\n\nNeuer SHA-256-Wert:\n%2$s</string>
-    <string name="gateway_recovery">Gateway-Wiederherstellung</string>
 </resources>

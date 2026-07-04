@@ -2131,6 +2131,149 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.abortSignal).toBe(fallbackCall.abortSignal);
   });
 
+  it("suppresses a settled followup result after an accepted user abort", async () => {
+    let releaseFallback: () => void = () => undefined;
+    let releaseProgressRoute: () => void = () => undefined;
+    let markCandidateSettled: () => void = () => undefined;
+    const candidateSettled = new Promise<void>((resolve) => {
+      markCandidateSettled = resolve;
+    });
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+    const progressRouteStarted = new Promise<void>((resolve) => {
+      routeReplyMock.mockImplementationOnce(
+        async () =>
+          await new Promise<{ ok: true }>((release) => {
+            releaseProgressRoute = () => release({ ok: true });
+            resolve();
+          }),
+      );
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: { onToolResult?: (payload: { text: string }) => Promise<void> }) => {
+        void args.onToolResult?.({ text: "queued progress" });
+        return {
+          payloads: [{ text: "late followup" }],
+          meta: {},
+        };
+      },
+    );
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        run: (
+          provider: string,
+          model: string,
+          options?: { isFinalFallbackAttempt?: boolean },
+        ) => Promise<{
+          payloads: Array<{ text: string }>;
+          meta: object;
+        }>;
+      }) => {
+        const result = await params.run("openai", "gpt-5.4", {
+          isFinalFallbackAttempt: false,
+        });
+        markCandidateSettled();
+        await fallbackRelease;
+        return {
+          result,
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "chat-1",
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          messageProvider: "telegram",
+          verboseLevel: "on",
+        },
+      }),
+    );
+    await candidateSettled;
+    await progressRouteStarted;
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      isFinalFallbackAttempt: false,
+    });
+    expect(replyRunRegistryForTest.abort("main")).toBe(true);
+    releaseFallback();
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    releaseProgressRoute();
+    await pending;
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: "queued progress",
+    });
+  });
+
+  it("keeps a direct cancellation error from becoming a followup failure", async () => {
+    let rejectAttempt: (error: Error) => void = () => undefined;
+    let markAttemptStarted: () => void = () => undefined;
+    const attemptStarted = new Promise<void>((resolve) => {
+      markAttemptStarted = resolve;
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectAttempt = reject;
+          markAttemptStarted();
+        }),
+    );
+    let operationResultDuringCompletion:
+      | import("./reply-run-registry.js").ReplyOperation["result"]
+      | undefined;
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        originatingTo: "chat-1",
+        queuedLifecycle: {
+          onComplete: () => {
+            operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
+          },
+        },
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          messageProvider: "telegram",
+        },
+      }),
+    );
+    await attemptStarted;
+    expect(replyRunRegistryForTest.abort("main")).toBe(true);
+    rejectAttempt(Object.assign(new Error("agent run aborted"), { name: "AbortError" }));
+    await pending;
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(operationResultDuringCompletion).toEqual({
+      kind: "aborted",
+      code: "aborted_by_user",
+    });
+  });
+
   it("keeps queued delivery correlations active during followup agent runs", async () => {
     const events: string[] = [];
     runEmbeddedAgentMock.mockImplementationOnce(async () => {

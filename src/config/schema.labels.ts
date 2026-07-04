@@ -157,6 +157,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
+  "gateway.remote.sshHostKeyPolicy": "Remote Gateway SSH Host-Key Policy",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",

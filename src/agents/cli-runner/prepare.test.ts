@@ -6,6 +6,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -2007,6 +2008,327 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "automatic config",
+      stableMode: "automatic",
+      staticPrompt: "group:telegram:group:automatic",
+      expectedStrongPrompt: false,
+    },
+    {
+      name: "message-tool config",
+      stableMode: "message_tool_only",
+      staticPrompt: "group:telegram:group:message_tool_only",
+      expectedStrongPrompt: true,
+    },
+  ] as const)(
+    "reuses CLI session bindings across new inbound messages with stable binding facts for $name",
+    async ({ stableMode, staticPrompt, expectedStrongPrompt }) => {
+      const { dir, sessionFile } = createSessionFile();
+      try {
+        const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        }));
+        const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+          agentId: "main",
+          tools: [
+            {
+              name: "message",
+              label: "Message",
+              description: "Send a message",
+              parameters: { type: "object", properties: {} },
+              execute: vi.fn(),
+            },
+          ],
+        }));
+        setCliRunnerPrepareTestDeps({
+          getActiveMcpLoopbackRuntime,
+          resolveMcpLoopbackScopedTools,
+        });
+        const cliSessionBindingFacts = {
+          extraSystemPromptStatic: staticPrompt,
+          sourceReplyDeliveryMode: stableMode,
+        };
+        const first = await prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "first ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-stable-binding-facts-a",
+          extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
+          sourceReplyDeliveryMode: "message_tool_only",
+          currentMessageId: "msg-1",
+          cliSessionBindingFacts,
+          config: createCliBackendConfig({ bundleMcp: true }),
+        });
+        const second = await prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "second ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-stable-binding-facts-b",
+          extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
+          sourceReplyDeliveryMode: stableMode,
+          currentMessageId: "msg-2",
+          cliSessionBindingFacts,
+          cliSessionBinding: {
+            sessionId: "cli-session",
+            extraSystemPromptHash: first.extraSystemPromptHash,
+            messageToolPolicyHash: first.messageToolPolicyHash,
+            promptToolNamesHash: first.promptToolNamesHash,
+            cwdHash: hashCliSessionText(dir),
+          },
+          config: createCliBackendConfig({ bundleMcp: true }),
+        });
+
+        expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
+        expect(first.messageToolPolicyHash).toBeDefined();
+        expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+        expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
+        expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+        if (expectedStrongPrompt) {
+          expect(first.systemPrompt).toContain(
+            "use `message(action=send)` for visible source-channel output",
+          );
+        } else {
+          expect(first.systemPrompt).toContain("final text normally routes to the source channel");
+          expect(first.systemPrompt).toContain(
+            "if current-turn context says final text stays private, use `message(action=send)`",
+          );
+        }
+        expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("reuses CLI session bindings across explicit mention toggles with stable group prompt facts", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const baseGroupCtx = {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "SirPinchALotBot",
+      } as const;
+      const mentionedStaticPrompt = [
+        buildGroupChatContext({
+          sessionCtx: {
+            ...baseGroupCtx,
+            ExplicitlyMentionedBot: true,
+          },
+          sourceReplyDeliveryMode: "automatic",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+        buildGroupIntro({
+          defaultActivation: "mention",
+        }),
+      ].join("\n\n");
+      const unmentionedStaticPrompt = [
+        buildGroupChatContext({
+          sessionCtx: {
+            ...baseGroupCtx,
+            ExplicitlyMentionedBot: false,
+          },
+          sourceReplyDeliveryMode: "automatic",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+        buildGroupIntro({
+          defaultActivation: "mention",
+        }),
+      ].join("\n\n");
+      expect(unmentionedStaticPrompt).toBe(mentionedStaticPrompt);
+
+      const first = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "first ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-mention-binding-a",
+        extraSystemPrompt: [
+          "The incoming message explicitly mentions your channel identity @SirPinchALotBot.",
+          mentionedStaticPrompt,
+        ].join("\n\n"),
+        sourceReplyDeliveryMode: "automatic",
+        cliSessionBindingFacts: {
+          extraSystemPromptStatic: mentionedStaticPrompt,
+          sourceReplyDeliveryMode: "automatic",
+        },
+        config: createCliBackendConfig(),
+      });
+      const second = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "second ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-mention-binding-b",
+        extraSystemPrompt: unmentionedStaticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+        cliSessionBindingFacts: {
+          extraSystemPromptStatic: unmentionedStaticPrompt,
+          sourceReplyDeliveryMode: "automatic",
+        },
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: first.extraSystemPromptHash,
+          messageToolPolicyHash: first.messageToolPolicyHash,
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+      expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses CLI session bindings across owner sender flips with stable prompt tool scope", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      }));
+      const resolveMcpLoopbackScopedTools = vi.fn((scope: { senderIsOwner?: boolean }) => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "message",
+            label: "Message",
+            description: "Send a message",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+          ...(scope.senderIsOwner === false
+            ? []
+            : [
+                {
+                  name: "gateway",
+                  label: "Gateway",
+                  description: "Manage the gateway",
+                  parameters: { type: "object", properties: {} },
+                  execute: vi.fn(),
+                },
+              ]),
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const cliSessionBindingFacts = {
+        extraSystemPromptStatic: "group:telegram:group:message_tool_only",
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      };
+      const first = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "first ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-tool-scope-a",
+        extraSystemPrompt: "volatile owner turn",
+        currentMessageId: "owner-message",
+        senderIsOwner: true,
+        cliSessionBindingFacts,
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
+      const second = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "second ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-owner-tool-scope-b",
+        extraSystemPrompt: "volatile non-owner turn",
+        currentMessageId: "non-owner-message",
+        senderIsOwner: false,
+        cliSessionBindingFacts,
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: first.extraSystemPromptHash,
+          messageToolPolicyHash: first.messageToolPolicyHash,
+          promptToolNamesHash: first.promptToolNamesHash,
+          cwdHash: hashCliSessionText(dir),
+          mcpConfigHash: first.preparedBackend.mcpConfigHash,
+          mcpResumeHash: first.preparedBackend.mcpResumeHash,
+        },
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
+
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledTimes(2);
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          senderIsOwner: undefined,
+          currentMessageId: undefined,
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      );
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          senderIsOwner: undefined,
+          currentMessageId: undefined,
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      );
+      expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
+      expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
