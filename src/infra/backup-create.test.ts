@@ -768,6 +768,11 @@ describe("createBackupArchive", () => {
           await fs.mkdir(outputDir, { recursive: true });
 
           const originalReaddir = fs.readdir.bind(fs);
+          // Snapshot discovery scans the realpathed state dir; on macOS the
+          // tmpdir-based stateDir reaches it through the /var -> /private/var
+          // symlink, so compare against the resolved path or the late file is
+          // never injected and the guard has nothing to catch.
+          const resolvedStateDir = await fs.realpath(state.stateDir);
           let createdLatePath = false;
           const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
             ...args: unknown[]
@@ -775,9 +780,10 @@ describe("createBackupArchive", () => {
             const entries = await (
               originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>
             )(...args);
+            const scannedDir = path.resolve(String(args[0]));
             if (
               !createdLatePath &&
-              path.resolve(String(args[0])) === path.resolve(state.stateDir)
+              (scannedDir === path.resolve(state.stateDir) || scannedDir === resolvedStateDir)
             ) {
               createdLatePath = true;
               await fs.writeFile(latePath, "late SQLite state");
