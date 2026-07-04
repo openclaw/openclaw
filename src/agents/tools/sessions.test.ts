@@ -35,6 +35,28 @@ vi.mock("../../config/config.js", async () => {
     getRuntimeConfig: () => loadConfigMock() as never,
   };
 });
+const bundledFallbackState = vi.hoisted(() => ({
+  activeDirName: null as string | null,
+  loadCalls: 0,
+  resolveSessionConversation: null as NonNullable<
+    ChannelMessagingAdapter["resolveSessionConversation"]
+  > | null,
+}));
+vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
+    "../../plugin-sdk/facade-runtime.js",
+  );
+  return {
+    ...actual,
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => {
+      bundledFallbackState.loadCalls += 1;
+      return dirName === bundledFallbackState.activeDirName &&
+        bundledFallbackState.resolveSessionConversation
+        ? { resolveSessionConversation: bundledFallbackState.resolveSessionConversation }
+        : null;
+    },
+  };
+});
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(),
 }));
@@ -350,6 +372,9 @@ beforeEach(() => {
     tools: { agentToAgent: { enabled: false } },
   });
   setActivePluginRegistry(createTestRegistry([]));
+  bundledFallbackState.activeDirName = null;
+  bundledFallbackState.loadCalls = 0;
+  bundledFallbackState.resolveSessionConversation = null;
 });
 
 describe("extractAssistantText", () => {
@@ -1019,7 +1044,8 @@ describe("sessions_send gating", () => {
   });
 
   it("rejects Telegram topic session targets before dispatching an agent run", async () => {
-    await installRegistry();
+    bundledFallbackState.activeDirName = "telegram";
+    bundledFallbackState.resolveSessionConversation = resolveTelegramSessionConversationStub;
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1042,6 +1068,7 @@ describe("sessions_send gating", () => {
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
+    expect(bundledFallbackState.loadCalls).toBeGreaterThan(0);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
