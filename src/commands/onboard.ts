@@ -17,11 +17,27 @@ import {
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
-import { runInteractiveSetup } from "./onboard-interactive.js";
+import { runConversationalOnboarding, runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
+
+/**
+ * Interactive onboarding defaults to the bootstrap flow (inference-first, then
+ * the Crestodian conversation). Explicit step flags keep the classic wizard —
+ * those flags are a public automation contract. `--modern` never reaches this
+ * dispatch; it routes straight to Crestodian in the command layer.
+ */
+export function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
+  return (
+    opts.classic === true ||
+    opts.flow !== undefined ||
+    opts.mode === "remote" ||
+    opts.importFrom !== undefined ||
+    opts.authChoice !== undefined
+  );
+}
 
 /** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
@@ -115,7 +131,12 @@ export async function setupWizardCommand(
     return;
   }
 
-  await runInteractiveSetup(normalizedOpts, runtime);
+  if (wantsClassicInteractiveSetup(normalizedOpts)) {
+    await runInteractiveSetup(normalizedOpts, runtime);
+    return;
+  }
+
+  await runConversationalOnboarding(normalizedOpts, runtime);
 }
 
 export const onboardCommand = setupWizardCommand;

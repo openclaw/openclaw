@@ -5,13 +5,13 @@ import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-type WizardStepOption = {
+export type WizardStepOption = {
   value: unknown;
   label: string;
   hint?: string;
 };
 
-type WizardStep = {
+export type WizardStep = {
   id: string;
   type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
   title?: string;

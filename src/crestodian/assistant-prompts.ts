@@ -1,28 +1,41 @@
-// Crestodian assistant prompts constrain fuzzy requests to one validated command.
+// Crestodian assistant prompts drive the conversational custodian with typed-command output.
 import type { CrestodianOverview } from "./overview.js";
 
 /**
- * Prompt construction and response parsing for Crestodian assistant planning.
+ * Prompt construction and response parsing for Crestodian's AI turns.
  *
- * The assistant is constrained to return one safe Crestodian command as JSON;
- * parsing stays deliberately narrow so free-form model text does not execute.
+ * The assistant carries the conversation (personality included) but can only
+ * touch the system through Crestodian's typed command vocabulary; parsing
+ * stays deliberately narrow so free-form model text never executes directly.
  */
-/** Timeout for one assistant planner call. */
-export const CRESTODIAN_ASSISTANT_TIMEOUT_MS = 10_000;
-/** Maximum assistant planner response budget. */
-export const CRESTODIAN_ASSISTANT_MAX_TOKENS = 512;
+/** Timeout for one assistant turn (local CLI backends cold-start slowly). */
+export const CRESTODIAN_ASSISTANT_TIMEOUT_MS = 30_000;
+/** Maximum assistant response budget. */
+export const CRESTODIAN_ASSISTANT_MAX_TOKENS = 700;
 
-/** System prompt that limits the assistant to Crestodian's command vocabulary. */
+/** System prompt: persona plus the closed command vocabulary. */
 export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
-  "You are Crestodian, OpenClaw's ring-zero setup helper.",
-  "Turn the user's request into exactly one safe OpenClaw Crestodian command.",
-  "Return only compact JSON with keys reply and command.",
-  "Do not invent commands. Do not claim a write was applied.",
-  "Do not use tools, shell commands, file edits, or network lookups; plan only from the supplied overview.",
+  "You are Crestodian, OpenClaw's setup custodian: a small, tidy hermit crab that lives in the config shell.",
+  "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
+  "You are talking to someone setting up or repairing OpenClaw. Your goals, in order: working inference (reuse a detected Claude Code/Codex login or API key), a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent (`talk to agent`).",
+  'Return only compact JSON: {"reply": string, "command"?: string}.',
+  "reply: your message to the user, under 120 words, plain text (light markdown ok).",
+  "command: include it ONLY when an action should run now, chosen from the allowed list. Omit it for questions, explanations, or when you need more information from the user.",
+  "Persistent commands ask the user for approval before applying; phrase your reply accordingly (you propose, the user confirms).",
+  "Never invent commands, values, tokens, or state. Never claim a write was applied. Ask for secrets instead of guessing them.",
+  "Do not use tools, shell commands, file edits, or network lookups; work only from the supplied overview and conversation.",
   "Use the provided OpenClaw docs/source references when the user's request needs behavior, config, or architecture details.",
-  "If local source is available, prefer inspecting it. Otherwise point to GitHub and strongly recommend reviewing source when docs are not enough.",
+  "",
+  "Config knowledge — the file is ~/.openclaw/openclaw.json (JSON5). You change it ONLY through `config set` / `config set-ref` / `setup` / `set default model` / `connect <channel>`.",
+  "Top-level areas: agents (defaults.workspace, defaults.model.primary), gateway (port, bind, auth.mode/token), channels.<id> (enabled plus per-channel credentials, e.g. channels.telegram.botToken), plugins (allow, entries.<id>.enabled), tools, models.",
+  "Before writing a path you are not certain about, FIRST send `config schema <path>` (or `config get <path>`) and use the result in your next turn; the schema is the source of truth, not memory.",
+  "Secrets (tokens, API keys, passwords) must not be written as plaintext when the user prefers env storage: use `config set-ref <path> env <ENV_VAR>`. Never echo secret values back.",
+  "Values for `config set` are parsed as JSON5 when they look like objects/arrays/booleans/numbers, otherwise as strings. One write per turn; after risky writes suggest `validate config`.",
+  "Every applied write is validated automatically; if validation fails you will see the exact issues — propose a corrective command, do not apologize twice.",
+  "",
   "Allowed commands:",
   "- setup",
+  "- setup workspace <path> model <provider/model>",
   "- status",
   "- health",
   "- doctor",
@@ -33,6 +46,8 @@ export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "- stop gateway",
   "- agents",
   "- models",
+  "- channels",
+  "- connect <channel>",
   "- plugins list",
   "- plugins search <query>",
   "- plugin install <npm-or-clawhub-spec>",
@@ -40,25 +55,55 @@ export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "- audit",
   "- validate config",
   "- set default model <provider/model>",
+  "- config get <path>",
+  "- config schema <path>",
   "- config set <path> <value>",
   "- config set-ref <path> env <ENV_VAR>",
   "- create agent <id> workspace <path> model <provider/model>",
   "- talk to <id> agent",
   "- talk to agent",
-  "If unsure, choose overview.",
 ].join("\n");
 
-/** Parsed assistant plan before it is re-validated as a Crestodian operation. */
+/** One prior conversation turn supplied to the assistant. */
+export type CrestodianAssistantTurn = {
+  role: "user" | "assistant";
+  text: string;
+};
+
+/** Parsed assistant plan before its command is re-validated as an operation. */
 export type CrestodianAssistantPlan = {
-  command: string;
+  command?: string;
   reply?: string;
   modelLabel?: string;
 };
+
+const HISTORY_TURN_LIMIT = 12;
+const HISTORY_TURN_MAX_CHARS = 500;
+
+function formatHistory(history: CrestodianAssistantTurn[] | undefined): string[] {
+  if (!history || history.length === 0) {
+    return [];
+  }
+  const recent = history.slice(-HISTORY_TURN_LIMIT);
+  return [
+    "Conversation so far:",
+    ...recent.map((turn) => {
+      const text =
+        turn.text.length > HISTORY_TURN_MAX_CHARS
+          ? `${turn.text.slice(0, HISTORY_TURN_MAX_CHARS)}…`
+          : turn.text;
+      return `${turn.role === "user" ? "User" : "Crestodian"}: ${text}`;
+    }),
+    "",
+  ];
+}
 
 /** Build the overview-grounded user prompt supplied to assistant planners. */
 export function buildCrestodianAssistantUserPrompt(params: {
   input: string;
   overview: CrestodianOverview;
+  history?: CrestodianAssistantTurn[];
+  pendingOperation?: string;
 }): string {
   const agents = params.overview.agents
     .map((agent) => {
@@ -73,8 +118,12 @@ export function buildCrestodianAssistantUserPrompt(params: {
     })
     .join("\n");
   return [
+    ...formatHistory(params.history),
     `User request: ${params.input}`,
     "",
+    ...(params.pendingOperation
+      ? [`Pending proposal awaiting the user's yes: ${params.pendingOperation}`, ""]
+      : []),
     `Default agent: ${params.overview.defaultAgentId}`,
     `Default model: ${params.overview.defaultModel ?? "not configured"}`,
     `Config valid: ${params.overview.config.valid}`,
@@ -120,12 +169,13 @@ export function parseCrestodianAssistantPlanText(
   }
   const record = parsed as Record<string, unknown>;
   const command = typeof record.command === "string" ? record.command.trim() : "";
-  if (!command) {
+  const reply = typeof record.reply === "string" ? record.reply.trim() : "";
+  // Pure-chat replies are valid; a plan needs at least one of reply/command.
+  if (!command && !reply) {
     return null;
   }
-  const reply = typeof record.reply === "string" ? record.reply.trim() : undefined;
   return {
-    command,
+    ...(command ? { command } : {}),
     ...(reply ? { reply } : {}),
   };
 }
