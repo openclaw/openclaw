@@ -188,7 +188,17 @@ export function discoverCachedAgentStores(
   return stores;
 }
 
-/** Clears the process-local discovery cache between tests that mutate model/auth fixtures. */
-export function resetModelDiscoveryCacheForTest(): void {
+/**
+ * Clears the process-local discovery cache so the next discovery for each agent
+ * directory rebuilds auth/model stores from the current resolved config (including
+ * include-defined models via OPENCLAW_INCLUDE_ROOTS). Called during config hot reload
+ * to ensure includes-resolved model config changes propagate to per-agent registries.
+ */
+export function resetModelDiscoveryCache(): void {
   DISCOVERY_STORE_CACHE.clear();
+}
+
+/** @deprecated Use {@link resetModelDiscoveryCache}; kept for test backward-compat. */
+export function resetModelDiscoveryCacheForTest(): void {
+  resetModelDiscoveryCache();
 }
