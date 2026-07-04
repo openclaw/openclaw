@@ -24,6 +24,8 @@ export type CrestodianAgentTurnRunner = (params: {
   input: string;
   overview: CrestodianOverview;
   surface: "cli" | "gateway";
+  /** Host-verified: the user's current message is an explicit approval. */
+  approvalArmed: boolean;
   session: CrestodianAgentSession;
 }) => Promise<{ text: string; modelLabel?: string } | null>;
 
@@ -114,7 +116,7 @@ export const runCrestodianAgentTurn: CrestodianAgentTurnRunner = async (params) 
       prompt: params.input,
       extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
       toolsAllow: ["crestodian"],
-      crestodianTool: { surface: params.surface },
+      crestodianTool: { surface: params.surface, approvalArmed: params.approvalArmed },
       disableMessageTool: true,
       timeoutMs: AGENT_TURN_TIMEOUT_MS,
       runId: `crestodian-turn-${randomUUID()}`,

@@ -333,6 +333,9 @@ export class CrestodianChatEngine {
           input: text,
           overview,
           surface: this.opts.surface ?? "cli",
+          // Mutations unlock only on an explicit user approval in this exact
+          // message; the model cannot self-approve (see crestodian-tool.ts).
+          approvalArmed: isYes(text),
           session: this.agentSession,
         }).catch(() => null),
         null,

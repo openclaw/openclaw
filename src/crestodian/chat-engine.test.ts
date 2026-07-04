@@ -135,7 +135,12 @@ describe("CrestodianChatEngine", () => {
 
   it("prefers the real agent loop for fuzzy messages", async () => {
     const runAgentTurn = vi.fn(
-      async (_params: { input: string; surface: string; session: { sessionId: string } }) => ({
+      async (_params: {
+        input: string;
+        surface: string;
+        approvalArmed: boolean;
+        session: { sessionId: string };
+      }) => ({
         text: "*click* I checked your shell — all good. Want channels next?",
         modelLabel: "openai/gpt-5.5",
       }),
@@ -155,6 +160,8 @@ describe("CrestodianChatEngine", () => {
     const call = runAgentTurn.mock.calls[0]![0];
     expect(call.input).toContain("setup looking");
     expect(call.surface).toBe("gateway");
+    // A question is not consent: mutations stay locked for this turn.
+    expect(call.approvalArmed).toBe(false);
     expect(call.session.sessionId).toMatch(/^crestodian-/);
     // The same session flows into every turn for real multi-turn memory.
     await engine.handle("and the gateway?");

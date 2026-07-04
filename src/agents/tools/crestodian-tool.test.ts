@@ -53,11 +53,25 @@ describe("crestodian tool", () => {
   });
 
   it("refuses mutating actions without the approved assertion", async () => {
-    const tool = createCrestodianTool({ surface: "cli" });
+    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true });
     const result = await tool.execute("t2", {
       action: "config_set",
       path: "gateway.port",
       value: "18789",
+    });
+    expect(toolText(result)).toContain("needs-approval");
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+  });
+
+  it("refuses model-asserted approval without host-verified consent", async () => {
+    // approved=true from the model alone must never mutate: the host arms
+    // approval only when the user's actual message was an explicit yes.
+    const tool = createCrestodianTool({ surface: "cli" });
+    const result = await tool.execute("t2b", {
+      action: "config_set",
+      path: "gateway.port",
+      value: "18789",
+      approved: true,
     });
     expect(toolText(result)).toContain("needs-approval");
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
@@ -70,7 +84,7 @@ describe("crestodian tool", () => {
         return { applied: true };
       },
     );
-    const tool = createCrestodianTool({ surface: "gateway" });
+    const tool = createCrestodianTool({ surface: "gateway", approvalArmed: true });
     const result = await tool.execute("t3", {
       action: "set_default_model",
       model: "openai/gpt-5.5",
@@ -104,7 +118,7 @@ describe("crestodian tool", () => {
       sourceConfig: {},
       issues: [{ path: "gateway.port", message: "Expected number" }],
     } as never);
-    const tool = createCrestodianTool({ surface: "cli" });
+    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true });
     const result = await tool.execute("t4", {
       action: "config_set",
       path: "gateway.port",
@@ -123,7 +137,7 @@ describe("crestodian tool", () => {
         return { applied: true };
       },
     );
-    const tool = createCrestodianTool({ surface: "cli" });
+    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true });
     await tool.execute("t6", {
       action: "create_agent",
       agentId: "work",

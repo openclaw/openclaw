@@ -26,6 +26,8 @@ final class CrestodianOnboardingChatModel {
     var input = ""
     /// Set when Crestodian hands off to the normal agent ("talk to agent").
     var onAgentHandoff: (() -> Void)?
+    /// Called after every assistant reply (setup may have applied config).
+    var onReplyReceived: (() -> Void)?
 
     private let sessionId = "mac-onboarding-\(UUID().uuidString)"
     private var started = false
@@ -73,6 +75,7 @@ final class CrestodianOnboardingChatModel {
                 timeoutMs: 120_000)
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
             self.messages.append(Message(role: .assistant, text: result.reply))
+            self.onReplyReceived?()
             if result.action == "open-agent" {
                 self.onAgentHandoff?()
             }

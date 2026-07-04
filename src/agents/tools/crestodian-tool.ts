@@ -17,6 +17,12 @@ import { textResult, ToolInputError, readStringParam, type AnyAgentTool } from "
 export type CrestodianToolOptions = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
+  /**
+   * Host-verified consent for THIS turn: true only when the user's actual
+   * message was an explicit approval. The model-supplied `approved` argument
+   * alone must never authorize a mutation (prompt injection, model error).
+   */
+  approvalArmed?: boolean;
 };
 
 const CRESTODIAN_TOOL_ACTIONS = [
@@ -198,9 +204,12 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       const params = (args ?? {}) as Record<string, unknown>;
       const operation = operationForAction(params);
       const persistent = isPersistentCrestodianOperation(operation);
-      if (persistent && params.approved !== true) {
+      if (persistent && (params.approved !== true || options.approvalArmed !== true)) {
+        // Both gates must hold: the model asserts consent AND the host saw an
+        // explicit user approval in the current turn. A model-only `approved`
+        // flag is not consent (prompt injection, model error).
         return textResult(
-          "needs-approval: this action changes state. Ask the user to confirm the exact change, then retry with approved=true.",
+          "needs-approval: this action changes state. Describe the exact change and ask the user to reply yes; their next approving message unlocks the action (then retry with approved=true).",
           { needsApproval: true },
         );
       }

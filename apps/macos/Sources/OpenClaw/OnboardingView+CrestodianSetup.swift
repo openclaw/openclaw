@@ -28,6 +28,7 @@ extension OnboardingView {
     }
 
     func maybeStartCrestodianChat(for pageIndex: Int) {
+        self.refreshCrestodianSetupComplete()
         guard pageIndex == self.crestodianPageIndex else { return }
         // Local mode reaches this page only after the CLI/gateway install page,
         // so the gateway is up before the first RPC.
@@ -37,9 +38,34 @@ extension OnboardingView {
                 // "talk to agent": refresh workspace state so the agent chat
                 // page appears, then advance.
                 self.refreshBootstrapStatus()
+                self.refreshCrestodianSetupComplete()
                 self.handleNext()
             }
         }
+        if self.crestodianChat.onReplyReceived == nil {
+            self.crestodianChat.onReplyReceived = { [self] in
+                // Setup applies mid-conversation; re-check so Next unlocks.
+                self.refreshCrestodianSetupComplete()
+            }
+        }
         Task { await self.crestodianChat.startIfNeeded() }
+    }
+
+    /// Setup is complete once the config carries authored wizard/gateway-auth
+    /// state — the same signal the old step wizard used to skip itself.
+    func refreshCrestodianSetupComplete() {
+        let root = OpenClawConfigFile.loadDict()
+        if let wizard = root["wizard"] as? [String: Any], !wizard.isEmpty {
+            self.crestodianSetupComplete = true
+            return
+        }
+        if let gateway = root["gateway"] as? [String: Any],
+           let auth = gateway["auth"] as? [String: Any],
+           auth["mode"] != nil || auth["token"] != nil || auth["password"] != nil
+        {
+            self.crestodianSetupComplete = true
+            return
+        }
+        self.crestodianSetupComplete = false
     }
 }

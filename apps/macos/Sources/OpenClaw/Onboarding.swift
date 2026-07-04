@@ -95,6 +95,7 @@ struct OnboardingView: View {
     @State var onboardingChatModel: OpenClawChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
     @State var crestodianChat = CrestodianOnboardingChatModel()
+    @State var crestodianSetupComplete = false
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
@@ -170,8 +171,18 @@ struct OnboardingView: View {
         self.activePageIndex == self.cliPageIndex && !self.cliInstalled
     }
 
+    // Local onboarding must not finish with nothing configured: the Crestodian
+    // page blocks Next until setup authored the config (the conversation's
+    // "yes"), mirroring the old wizard-completion gate. "Configure later" on
+    // the connection page remains the explicit skip path.
+    var isCrestodianBlocking: Bool {
+        self.activePageIndex == self.crestodianPageIndex &&
+            self.state.connectionMode == .local &&
+            !self.crestodianSetupComplete
+    }
+
     var canAdvance: Bool {
-        !self.isCLIBlocking
+        !self.isCLIBlocking && !self.isCrestodianBlocking
     }
 
     struct LocalGatewayProbe: Equatable {
