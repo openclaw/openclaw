@@ -8,7 +8,7 @@
       "name": "@openclaw/llama-cpp-provider",
       "version": "2026.6.11",
       "dependencies": {
-        "node-llama-cpp": "^3.19.0"
+        "node-llama-cpp": "3.19.0"
       }
     },
     "node_modules/@huggingface/jinja": {
@@ -48,9 +48,9 @@
       "license": "MIT"
     },
     "node_modules/@node-llama-cpp/linux-arm64": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-arm64/-/linux-arm64-3.18.1.tgz",
-      "integrity": "sha512-rXMgZxUay78FOJV/fJ67apYP9eElH5jd4df5YRKPlLhLHHchuOSyDn+qtyW/L/EnPzpogoLkmULqCkdXU39XsQ==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-arm64/-/linux-arm64-3.19.0.tgz",
+      "integrity": "sha512-wWI2XhsOYWfxCV6A8LdDWF8m/UrM6OeE0pYing4j4YshcZIRhlBKhJK7/Dm5UvSzMyfsd/L1OpPrR0rDiVemZw==",
       "cpu": [
         "arm64",
         "x64"
@@ -65,9 +65,9 @@
       }
     },
     "node_modules/@node-llama-cpp/linux-armv7l": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-armv7l/-/linux-armv7l-3.18.1.tgz",
-      "integrity": "sha512-BrJL2cGo0pN5xd5nw+CzTn2rFMpz9MJyZZPUY81ptGkF2uIuXT2hdCVh56i9ImQrTwBfq1YcZL/l/Qe/1+HR/Q==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-armv7l/-/linux-armv7l-3.19.0.tgz",
+      "integrity": "sha512-MtupbpWjl2ccMssyAh6ZjJr9rE1P5moHNRAXparzjmKT2l69QyfVmr984503PPWXsAGhvVETqdDDpaFJOdNh4g==",
       "cpu": [
         "arm",
         "x64"
@@ -81,10 +81,26 @@
         "node": ">=20.0.0"
       }
     },
+    "node_modules/@node-llama-cpp/linux-riscv64": {
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-riscv64/-/linux-riscv64-3.19.0.tgz",
+      "integrity": "sha512-XdNZJxpnLsjt1E+y+HZcjTUxRd5fBzUA9L1NqFkJOYizRjYbuK1z/pDr0wqcsndmkB7IHu6ay9XqfCnM5AeY8w==",
+      "cpu": [
+        "riscv64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
     "node_modules/@node-llama-cpp/linux-x64": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64/-/linux-x64-3.18.1.tgz",
-      "integrity": "sha512-tRmWcsyvAcqJHQHXHsaOkx6muGbcirA9nRdNgH6n7bjGUw4VuoBD3dChyNF3/Ktt7ohB9kz+XhhyZjbDHpXyMA==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64/-/linux-x64-3.19.0.tgz",
+      "integrity": "sha512-cFnXjyRmFJ+lVq0QQFqflGDdF5UnMPzHLIQ4i2Xg5526QpWOw3IC0APiZluKvyqXCtU+g44ZH4YPQNUKqsZG6A==",
       "cpu": [
         "x64"
       ],
@@ -98,9 +114,9 @@
       }
     },
     "node_modules/@node-llama-cpp/linux-x64-cuda": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64-cuda/-/linux-x64-cuda-3.18.1.tgz",
-      "integrity": "sha512-qOaYP4uwsUoBHQ/7xSOvyJIuXapS57Al+Sudgi00f96ldNZLKe1vuSGptAi5LTM2lIj66PKm6h8PlRWctwsZ2g==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64-cuda/-/linux-x64-cuda-3.19.0.tgz",
+      "integrity": "sha512-lqx8CZcLxXimz3vOsFwRdyUs8VdceT0MMYMjmYvvTRRae8q047yM3mk0Ys6Hi6+31Lzw5MpQTFvO8RAxxJEnng==",
       "cpu": [
         "x64"
       ],
@@ -114,9 +130,9 @@
       }
     },
     "node_modules/@node-llama-cpp/linux-x64-cuda-ext": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64-cuda-ext/-/linux-x64-cuda-ext-3.18.1.tgz",
-      "integrity": "sha512-VqyKhAVHPCpFzh0f1koCBgpThL+04QOXwv0oDQ8s8YcpfMMOXQlBhTB0plgTh0HrPExoObfTS4ohkrbyGgmztQ==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64-cuda-ext/-/linux-x64-cuda-ext-3.19.0.tgz",
+      "integrity": "sha512-CLewIjUH0ag/W3R3/lBV/2ABMoTewcDJOQ3SIIGYXuARu4AwMi62cVfBxUtDONW/rWb9EdMQIhCggdTdkI63iA==",
       "cpu": [
         "x64"
       ],
@@ -130,9 +146,9 @@
       }
     },
     "node_modules/@node-llama-cpp/linux-x64-vulkan": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64-vulkan/-/linux-x64-vulkan-3.18.1.tgz",
-      "integrity": "sha512-SIaNTK5pUPhwJD0gmiQfHa8OrRctVMmnqu+slJrz2Mzgg/XrwFndJlS9hvc+jSjTXCouwf7sYeQaaJWvQgBh/A==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/linux-x64-vulkan/-/linux-x64-vulkan-3.19.0.tgz",
+      "integrity": "sha512-dFtqAV8GTZN08LoDHk0BFh+y/zZDscb/QbIbKtoR/JJyLwLNFEOIuKfHl/ay8K3bYxg4QWHnQz8r5coEwIBECQ==",
       "cpu": [
         "x64"
       ],
@@ -146,9 +162,9 @@
       }
     },
     "node_modules/@node-llama-cpp/mac-arm64-metal": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/mac-arm64-metal/-/mac-arm64-metal-3.18.1.tgz",
-      "integrity": "sha512-cyZTdsUMlvuRlGmkkoBbN3v/DT6NuruEqoQYd9CqIrPyLa1xLNBTSKIZ9SgRnw23iCOj4URfITvRP+2pu63LuQ==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/mac-arm64-metal/-/mac-arm64-metal-3.19.0.tgz",
+      "integrity": "sha512-mBIM9ZOMBiexxvE5I9Py5rhdtaPZVbtWec0oA5UefBmhcmcQdAp+fcy3R9zNUlEn8BbBDU4TPNc7Nr8UkSyqzw==",
       "cpu": [
         "arm64",
         "x64"
@@ -163,9 +179,9 @@
       }
     },
     "node_modules/@node-llama-cpp/mac-x64": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/mac-x64/-/mac-x64-3.18.1.tgz",
-      "integrity": "sha512-GfCPgdltaIpBhEnQ7WfsrRXrZO9r9pBtDUAQMXRuJwOPP5q7xKrQZUXI6J6mpc8tAG0//CTIuGn4hTKoD/8V8w==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/mac-x64/-/mac-x64-3.19.0.tgz",
+      "integrity": "sha512-Z/+kSll5Fc5eyt9WawC5Zq5CP2/f0W6VJ7mfoDQSgwbZym4Vc3K9Hrlswf4j6NBcqbA0dylVkkirfCvIi6MFzQ==",
       "cpu": [
         "x64"
       ],
@@ -179,9 +195,9 @@
       }
     },
     "node_modules/@node-llama-cpp/win-arm64": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-arm64/-/win-arm64-3.18.1.tgz",
-      "integrity": "sha512-S05YUzBMVSRS5KNbOS26cDYugeQHqogI3uewtTUBVC0tPbTHRSKjsdicmgWru1eNAry399LWWhzOf/3St/qsAw==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-arm64/-/win-arm64-3.19.0.tgz",
+      "integrity": "sha512-MReCDQcBQ649xluUMyeaUwrEXlb4Ffaxu8JQBpX0FzCUpVW/LVXRoa9ZJuAtshij0OE/6aR0peyF1VoOH6Qd4w==",
       "cpu": [
         "arm64",
         "x64"
@@ -196,9 +212,9 @@
       }
     },
     "node_modules/@node-llama-cpp/win-x64": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64/-/win-x64-3.18.1.tgz",
-      "integrity": "sha512-QLDVphPl+YDI+x/VYYgIV1N9g0GMXk3PqcoopOUG3cBRUtce7FO+YX903YdRJezs4oKbIp8YaO+xYBgeUSqhpA==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64/-/win-x64-3.19.0.tgz",
+      "integrity": "sha512-z5zsRXW2tlR4e93aiVxon15t4h9xKFjlbKnKBN1NNX8YxaUgqp8rflfBYi1SO9Nk6JlKBLnftNYaI53Vy0u7HQ==",
       "cpu": [
         "x64"
       ],
@@ -212,9 +228,9 @@
       }
     },
     "node_modules/@node-llama-cpp/win-x64-cuda": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64-cuda/-/win-x64-cuda-3.18.1.tgz",
-      "integrity": "sha512-drgJmBhnxGQtB/SLo4sf4PPSuxRv3MdNP0FF6rKPY9TtzEOV293bRQyYEu/JYwvXfVApAIsRaJUTGvCkA9Qobw==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64-cuda/-/win-x64-cuda-3.19.0.tgz",
+      "integrity": "sha512-Y/mnB8suxOzMnvD3w0TCkQSdSUIIvJ7DYFrvj4P4uXMsKE46NMtgoAVT7k9sIIvE5V1UfwbAcCqhbvfAR/frug==",
       "cpu": [
         "x64"
       ],
@@ -228,9 +244,9 @@
       }
     },
     "node_modules/@node-llama-cpp/win-x64-cuda-ext": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64-cuda-ext/-/win-x64-cuda-ext-3.18.1.tgz",
-      "integrity": "sha512-u0FzJBQsJA355ksKERxwPJhlcWl3ZJSNkU2ZUwDEiKNOCbv3ybvSCIEyDvB63wdtkfVUuCRJWijZnpDZxrCGqg==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64-cuda-ext/-/win-x64-cuda-ext-3.19.0.tgz",
+      "integrity": "sha512-WQ46P50bYWpRsksPR+ilrCkJ8qqk2nHnjrMGQp5o2JUhP/KR3ChorefKrEsjwG5v9AViq9hBxqaOc88WvZL3bg==",
       "cpu": [
         "x64"
       ],
@@ -244,9 +260,9 @@
       }
     },
     "node_modules/@node-llama-cpp/win-x64-vulkan": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64-vulkan/-/win-x64-vulkan-3.18.1.tgz",
-      "integrity": "sha512-PjmxrnPToi7y0zlP7l+hRIhvOmuEv94P6xZ11vjqICEJu8XdAJpvTfPKgDW4W0p0v4+So8ZiZYLUuwIHcsseyQ==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/@node-llama-cpp/win-x64-vulkan/-/win-x64-vulkan-3.19.0.tgz",
+      "integrity": "sha512-1zL5XjxohAh47qRPnrhEgdRRvALuC+ukMyPyu88po6BHL8yWhmnR6aSzrgxfvgzvTZycGpAm+hajinIPKD2yNg==",
       "cpu": [
         "x64"
       ],
@@ -1114,9 +1130,9 @@
       "license": "MIT"
     },
     "node_modules/node-llama-cpp": {
-      "version": "3.18.1",
-      "resolved": "https://registry.npmjs.org/node-llama-cpp/-/node-llama-cpp-3.18.1.tgz",
-      "integrity": "sha512-w0zfuy/IKS2fhrbed5SylZDXJHTVz4HnkwZ4UrFPgSNwJab3QIPwIl4lyCKHHy9flLrtxsAuV5kXfH3HZ6bb8w==",
+      "version": "3.19.0",
+      "resolved": "https://registry.npmjs.org/node-llama-cpp/-/node-llama-cpp-3.19.0.tgz",
+      "integrity": "sha512-OZKc6IUsu6pNRPFKV0vgqJmagbGWFPhVsrMIj4pdxcglcSzDwzX5TmaIlikT6Ue9081uXOsocPFUBERHgHgJvg==",
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
@@ -1161,19 +1177,20 @@
         "url": "https://github.com/sponsors/giladgd"
       },
       "optionalDependencies": {
-        "@node-llama-cpp/linux-arm64": "3.18.1",
-        "@node-llama-cpp/linux-armv7l": "3.18.1",
-        "@node-llama-cpp/linux-x64": "3.18.1",
-        "@node-llama-cpp/linux-x64-cuda": "3.18.1",
-        "@node-llama-cpp/linux-x64-cuda-ext": "3.18.1",
-        "@node-llama-cpp/linux-x64-vulkan": "3.18.1",
-        "@node-llama-cpp/mac-arm64-metal": "3.18.1",
-        "@node-llama-cpp/mac-x64": "3.18.1",
-        "@node-llama-cpp/win-arm64": "3.18.1",
-        "@node-llama-cpp/win-x64": "3.18.1",
-        "@node-llama-cpp/win-x64-cuda": "3.18.1",
-        "@node-llama-cpp/win-x64-cuda-ext": "3.18.1",
-        "@node-llama-cpp/win-x64-vulkan": "3.18.1"
+        "@node-llama-cpp/linux-arm64": "3.19.0",
+        "@node-llama-cpp/linux-armv7l": "3.19.0",
+        "@node-llama-cpp/linux-riscv64": "3.19.0",
+        "@node-llama-cpp/linux-x64": "3.19.0",
+        "@node-llama-cpp/linux-x64-cuda": "3.19.0",
+        "@node-llama-cpp/linux-x64-cuda-ext": "3.19.0",
+        "@node-llama-cpp/linux-x64-vulkan": "3.19.0",
+        "@node-llama-cpp/mac-arm64-metal": "3.19.0",
+        "@node-llama-cpp/mac-x64": "3.19.0",
+        "@node-llama-cpp/win-arm64": "3.19.0",
+        "@node-llama-cpp/win-x64": "3.19.0",
+        "@node-llama-cpp/win-x64-cuda": "3.19.0",
+        "@node-llama-cpp/win-x64-cuda-ext": "3.19.0",
+        "@node-llama-cpp/win-x64-vulkan": "3.19.0"
       },
       "peerDependencies": {
         "typescript": ">=5.0.0"

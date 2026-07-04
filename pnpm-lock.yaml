@@ -935,7 +935,7 @@ importers:
   extensions/llama-cpp:
     dependencies:
       node-llama-cpp:
-        specifier: ^3.19.0
+        specifier: 3.19.0
         version: 3.19.0(typescript@6.0.3)
     devDependencies:
       '@openclaw/plugin-sdk':
