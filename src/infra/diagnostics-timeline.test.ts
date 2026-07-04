@@ -1,9 +1,9 @@
 // Covers diagnostics timeline event writing and spans.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   emitDiagnosticsTimelineEvent,
   isDiagnosticsTimelineEnabled,
@@ -11,11 +11,10 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "./diagnostics-timeline.js";
 
-const tempDirs: string[] = [];
+const suiteTracker = createSuiteTempRootTracker({ prefix: "openclaw-diagnostics-timeline-" });
 
 async function createTimelineEnv() {
-  const dir = await mkdtemp(join(tmpdir(), "openclaw-diagnostics-timeline-"));
-  tempDirs.push(dir);
+  const dir = await suiteTracker.make("timeline");
   return {
     env: {
       OPENCLAW_DIAGNOSTICS: "timeline",
@@ -54,8 +53,12 @@ function attributesRecord(event: Record<string, unknown>): Record<string, unknow
   return event.attributes as Record<string, unknown>;
 }
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+beforeAll(async () => {
+  await suiteTracker.setup();
+});
+
+afterAll(async () => {
+  await suiteTracker.cleanup();
 });
 
 describe("diagnostics timeline", () => {
