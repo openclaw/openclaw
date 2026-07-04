@@ -1505,7 +1505,15 @@ function buildQaEnv(port: number): NodeJS.ProcessEnv {
   return env;
 }
 
-function buildQaArgs(options: CliOptions): string[] {
+function resolveQaOutputDir(outputDir: string, repoRoot = process.cwd()): string {
+  const relative = path.relative(repoRoot, path.resolve(repoRoot, outputDir));
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("--output-dir must stay within the repo root");
+  }
+  return relative ? relative.split(path.sep).join("/") : ".";
+}
+
+function buildQaArgs(options: CliOptions, repoRoot = process.cwd()): string[] {
   const args = [
     "qa",
     "suite",
@@ -1516,7 +1524,7 @@ function buildQaArgs(options: CliOptions): string[] {
     "--concurrency",
     "1",
     "--output-dir",
-    options.outputDir,
+    resolveQaOutputDir(options.outputDir, repoRoot),
     "--fast",
   ];
   if (options.primaryModel) {
@@ -2018,6 +2026,7 @@ export const testing = {
   appendGatewayStdoutArtifactLogs,
   appendCapturedBodyText,
   assertSmoke,
+  buildQaArgs,
   buildQaEnv,
   createBoundedTextAccumulator,
   createStdoutDiagnosticLogCapture,
