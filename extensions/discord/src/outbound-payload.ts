@@ -192,6 +192,7 @@ export async function sendDiscordOutboundPayload(params: {
         async () =>
           await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+            replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
             onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
           }),
       );
@@ -202,6 +203,7 @@ export async function sendDiscordOutboundPayload(params: {
           async () =>
             await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
               ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+              replyToFirstChunkOnly: sendContext.replyToFirstChunkOnly,
               onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
             }),
         );

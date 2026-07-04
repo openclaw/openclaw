@@ -601,6 +601,7 @@ describe("discordOutbound", () => {
       accountId: "default",
       mediaLocalRoots: ["/tmp/media"],
       replyToId: "reply-1",
+      replyToIdSource: "implicit",
       replyToMode: "first",
     });
 
@@ -623,6 +624,7 @@ describe("discordOutbound", () => {
     expect(componentOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
     expect(componentOptions.accountId).toBe("default");
     expect(componentOptions.replyTo).toBe("reply-1");
+    expect(componentOptions.replyToFirstChunkOnly).toBe(true);
 
     const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
     expect(messageCall[0]).toBe("channel:123456");
