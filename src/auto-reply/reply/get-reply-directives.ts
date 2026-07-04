@@ -9,6 +9,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -516,34 +517,45 @@ export async function resolveReplyDirectives(params: {
         aliasIndex: params.aliasIndex,
       }));
 
-  const modelState = useFastModelSelection
-    ? createFastTestModelSelectionState({
-        agentCfg,
-        provider,
-        model,
-      })
-    : await createModelSelectionState({
-        cfg,
-        agentId,
-        agentCfg,
-        sessionEntry: targetSessionEntry,
-        sessionStore,
-        sessionKey,
-        parentSessionKey:
-          targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
-        storePath,
-        defaultProvider,
-        defaultModel,
-        primaryProvider,
-        primaryModel,
-        provider,
-        model,
-        hasModelDirective: directives.hasModelDirective,
-        hasOneTurnModelOverride,
-        skipStoredModelOverride,
-        hasResolvedHeartbeatModelOverride,
-        isHeartbeat: opts?.isHeartbeat === true,
-      });
+  let modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
+  try {
+    modelState = useFastModelSelection
+      ? createFastTestModelSelectionState({
+          agentCfg,
+          provider,
+          model,
+        })
+      : await createModelSelectionState({
+          cfg,
+          agentId,
+          agentCfg,
+          sessionEntry: targetSessionEntry,
+          sessionStore,
+          sessionKey,
+          parentSessionKey:
+            targetSessionEntry?.parentSessionKey ??
+            ctx.ModelParentSessionKey ??
+            ctx.ParentSessionKey,
+          storePath,
+          defaultProvider,
+          defaultModel,
+          primaryProvider,
+          primaryModel,
+          provider,
+          model,
+          hasModelDirective: directives.hasModelDirective,
+          hasOneTurnModelOverride,
+          skipStoredModelOverride,
+          hasResolvedHeartbeatModelOverride,
+          isHeartbeat: opts?.isHeartbeat === true,
+        });
+  } catch (error) {
+    if (!isSessionWorkStartInvalidatedError(error)) {
+      throw error;
+    }
+    typing.cleanup();
+    return { kind: "reply", reply: { text: error.message } };
+  }
   provider = modelState.provider;
   model = modelState.model;
   const resolvedThinkLevelWithDefault =

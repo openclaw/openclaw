@@ -2,6 +2,7 @@
 // and related session-aware RPC handlers used by UI and operator clients.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -49,6 +50,7 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import {
@@ -73,6 +75,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionLifecycleTimestamps,
+  resolveSessionWorkStartError,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   type SessionEntry,
@@ -121,6 +124,10 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import {
+  beginSessionWorkAdmission,
+  type SessionWorkAdmissionLease,
+} from "../../sessions/session-lifecycle-admission.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import {
@@ -161,6 +168,7 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
+  resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
@@ -258,7 +266,7 @@ function respondDeletedAgentSession(params: {
   return true;
 }
 
-function respondDeletedAgentSessionForKey(params: {
+function respondUnavailableAgentSessionForKey(params: {
   sessionKey: string;
   agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
@@ -267,13 +275,23 @@ function respondDeletedAgentSessionForKey(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     clone: false,
   });
-  return respondDeletedAgentSession({
-    cfg,
-    canonicalKey,
-    entry,
-    acpMetadataSessionKey: legacyKey,
-    respond: params.respond,
-  });
+  if (
+    respondDeletedAgentSession({
+      cfg,
+      canonicalKey,
+      entry,
+      acpMetadataSessionKey: legacyKey,
+      respond: params.respond,
+    })
+  ) {
+    return true;
+  }
+  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  if (!archivedSessionError) {
+    return false;
+  }
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+  return true;
 }
 
 function resolveAllowModelOverrideFromClient(
@@ -792,6 +810,7 @@ function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   expiresAtMs?: unknown;
   ownerConnId?: unknown;
   ownerDeviceId?: unknown;
+  reservationId?: unknown;
   runId?: unknown;
   sessionKey?: unknown;
   status: "accepted";
@@ -1265,6 +1284,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let agentDedupeReserved = false;
     let agentRunAccepted = false;
+    const agentReservationId = randomUUID();
     let committedResetCompletion:
       | {
           reason: "new" | "reset";
@@ -1295,6 +1315,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           ok: true,
           payload: {
             runId,
+            reservationId: agentReservationId,
             status: "accepted" as const,
             sessionKey,
             ...(dedupeSessionResolvesGlobal && dedupeAgentId ? { agentId: dedupeAgentId } : {}),
@@ -1325,6 +1346,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           entry: reservedEntry,
           runId,
         })
+      ) {
+        return;
+      }
+      if (
+        reservedEntry?.ok &&
+        isAcceptedAgentDedupePayload(reservedEntry.payload) &&
+        reservedEntry.payload.reservationId !== agentReservationId
       ) {
         return;
       }
@@ -1493,11 +1521,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    // Keep deleted-agent rejection ahead of dedupe, media offload, reset, and
-    // dispatch so agent RPC shares the chat.send / sessions.send boundary.
+    // Keep unavailable-session rejection ahead of dedupe, media offload, reset,
+    // and dispatch so agent RPC shares the chat.send / sessions.send boundary.
     if (
       requestedSessionKey &&
-      respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+      respondUnavailableAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
     ) {
       return;
     }
@@ -1553,6 +1581,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? "global"
         : requestedSessionKey;
     reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey, agentId);
+    const preAttachmentSession = requestedSessionKey
+      ? (() => {
+          const loaded = loadSessionEntry(requestedSessionKey, {
+            ...(agentId ? { agentId } : {}),
+            clone: false,
+          });
+          return loaded.entry
+            ? {
+                canonicalKey: loaded.canonicalKey,
+                sessionId: loaded.entry.sessionId,
+              }
+            : undefined;
+        })()
+      : undefined;
+    let gatewayWorkAdmission: SessionWorkAdmissionLease | undefined;
+    let gatewayAdmissionTransferred = false;
 
     try {
       let message = (request.message ?? "").trim();
@@ -1723,13 +1767,198 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       let resolvedSessionId = requestedSessionId;
       let sessionEntry: SessionEntry | undefined;
+      let sessionPersistedBeforeGatewayAdmission = false;
       let bestEffortDeliver = requestedBestEffortDeliver ?? false;
       let cfgForAgent: OpenClawConfig | undefined;
       let resolvedSessionKey = requestedSessionKey;
       let resolvedSessionAgentId: string | undefined;
       let isNewSession = false;
+      let supersededSessionId: string | undefined;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
+      let admittedSessionId = resolvedSessionId ?? runId;
+      let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
+      let postAdmissionAbort: ReturnType<typeof readGatewayDedupeEntry>;
+      let postAdmissionTimeout:
+        | {
+            runId: string;
+            status: "timeout";
+            summary: "aborted";
+            stopReason: "timeout";
+            timeoutPhase: "queue";
+            providerStarted: false;
+          }
+        | undefined;
+      let postAdmissionSuperseded = false;
+      let lifecycleRotatedDuringAdmission = false;
+      const admissionAgentId = () =>
+        resolvedSessionKey === "global"
+          ? (resolvedSessionAgentId ?? agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg))
+          : undefined;
+      const assertGatewayWorkAdmissionAllowed = () => {
+        const latestPreRegistrationAbort = readGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          keys: agentDedupeKeys,
+        });
+        if (
+          isPreRegistrationAbortedAgentDedupeEntryForSession({
+            entry: latestPreRegistrationAbort,
+            runId,
+            sessionKey: resolvedSessionKey,
+            alternateSessionKeys: [preAcceptedReservedSessionKey, requestedSessionKey],
+          })
+        ) {
+          postAdmissionAbort = latestPreRegistrationAbort;
+          return;
+        }
+        if (agentDedupeReserved) {
+          if (!latestPreRegistrationAbort) {
+            postAdmissionTimeout = {
+              runId,
+              status: "timeout",
+              summary: "aborted",
+              stopReason: "timeout",
+              timeoutPhase: "queue",
+              providerStarted: false,
+            };
+            setAbortedAgentDedupeEntries({
+              dedupe: context.dedupe,
+              keys: agentDedupeKeys,
+              agentId: admissionAgentId(),
+              sessionKey: resolvedSessionKey,
+              runId,
+              stopReason: "timeout",
+            });
+            return;
+          }
+          if (
+            !latestPreRegistrationAbort.ok ||
+            !isAcceptedAgentDedupePayload(latestPreRegistrationAbort.payload)
+          ) {
+            postAdmissionAbort = latestPreRegistrationAbort;
+            return;
+          }
+          if (latestPreRegistrationAbort.payload.reservationId !== agentReservationId) {
+            postAdmissionSuperseded = true;
+            return;
+          }
+          if (
+            !isFutureDateTimestampMs(latestPreRegistrationAbort.payload.expiresAtMs, {
+              nowMs: Date.now(),
+            })
+          ) {
+            postAdmissionTimeout = {
+              runId,
+              status: "timeout",
+              summary: "aborted",
+              stopReason: "timeout",
+              timeoutPhase: "queue",
+              providerStarted: false,
+            };
+            setAbortedAgentDedupeEntries({
+              dedupe: context.dedupe,
+              keys: agentDedupeKeys,
+              agentId: admissionAgentId(),
+              sessionKey: resolvedSessionKey,
+              runId,
+              stopReason: "timeout",
+            });
+            return;
+          }
+        }
+        lifecycleRotatedDuringAdmission = abortForLifecycleRotation({
+          sessionKey: resolvedSessionKey,
+          agentId: admissionAgentId(),
+        });
+        if (lifecycleRotatedDuringAdmission || !resolvedSessionKey) {
+          return;
+        }
+        const latestEntry = loadSessionEntry(resolvedSessionKey, {
+          ...(resolvedSessionKey === "global" ? { agentId: admissionAgentId() } : {}),
+          clone: false,
+        }).entry;
+        if (sessionPersistedBeforeGatewayAdmission && !latestEntry) {
+          throw new Error(
+            `Session "${resolvedSessionKey}" was deleted while starting work. Retry.`,
+          );
+        }
+        const archivedError = resolveSessionWorkStartError(resolvedSessionKey, latestEntry);
+        if (archivedError) {
+          throw new Error(archivedError);
+        }
+        if (latestEntry?.sessionId && latestEntry.sessionId !== supersededSessionId) {
+          admittedSessionId = latestEntry.sessionId;
+        }
+      };
+      const interruptGatewayWorkAdmission = () => {
+        if (admittedRunAbort?.entry) {
+          admittedRunAbort.entry.abortStopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
+        }
+        if (admittedRunAbort) {
+          admittedRunAbort.controller.abort(createAgentRunRestartAbortError());
+          return;
+        }
+        const reservedEntry = readGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          keys: agentDedupeKeys,
+        });
+        if (
+          reservedEntry?.ok &&
+          isAcceptedAgentDedupePayload(reservedEntry.payload) &&
+          reservedEntry.payload.reservationId === agentReservationId
+        ) {
+          setAbortedAgentDedupeEntries({
+            dedupe: context.dedupe,
+            keys: agentDedupeKeys,
+            agentId: admissionAgentId(),
+            sessionKey: resolvedSessionKey,
+            runId,
+            stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+          });
+        }
+      };
+      const acquireGatewayWorkAdmission = async (scope: string) => {
+        if (gatewayWorkAdmission) {
+          return;
+        }
+        gatewayWorkAdmission = await beginSessionWorkAdmission({
+          scope,
+          identities: [resolvedSessionKey, resolvedSessionId],
+          assertAllowed: assertGatewayWorkAdmissionAllowed,
+          onInterrupt: interruptGatewayWorkAdmission,
+        });
+      };
+      const respondToGatewayAdmissionOutcome = (): boolean => {
+        if (postAdmissionAbort) {
+          gatewayWorkAdmission?.release();
+          agentRunAccepted = true;
+          respond(postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error, {
+            cached: true,
+            runId,
+          });
+          return true;
+        }
+        if (postAdmissionTimeout) {
+          gatewayWorkAdmission?.release();
+          agentRunAccepted = true;
+          respond(true, postAdmissionTimeout, undefined, { cached: true, runId });
+          return true;
+        }
+        if (postAdmissionSuperseded) {
+          gatewayWorkAdmission?.release();
+          agentRunAccepted = true;
+          respond(true, { runId, status: "in_flight" as const }, undefined, {
+            cached: true,
+            runId,
+          });
+          return true;
+        }
+        if (lifecycleRotatedDuringAdmission) {
+          gatewayWorkAdmission?.release();
+          return true;
+        }
+        return false;
+      };
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
@@ -1863,6 +2092,34 @@ export const agentHandlers: GatewayRequestHandlers = {
           legacyKey,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
+        const sessionExistedBeforeAttachmentSetup =
+          preAttachmentSession?.canonicalKey === canonicalKey ? preAttachmentSession : undefined;
+        if (sessionExistedBeforeAttachmentSetup && !entry) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session "${canonicalKey}" was deleted while starting work. Retry.`,
+            ),
+          );
+          return;
+        }
+        if (
+          sessionExistedBeforeAttachmentSetup &&
+          entry?.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session "${canonicalKey}" changed while starting work. Retry.`,
+            ),
+          );
+          return;
+        }
+        sessionPersistedBeforeGatewayAdmission = entry !== undefined;
         if (
           respondDeletedAgentSession({
             cfg: cfgLocal,
@@ -1872,6 +2129,11 @@ export const agentHandlers: GatewayRequestHandlers = {
             respond,
           })
         ) {
+          return;
+        }
+        const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+        if (archivedSessionError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
           return;
         }
         const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
@@ -2216,11 +2478,21 @@ export const agentHandlers: GatewayRequestHandlers = {
         freshness = patchBuild.freshness;
         sessionEntry = mergeSessionEntry(entry, patchBuild.patch);
         resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
+        admittedSessionId = resolvedSessionId ?? runId;
         const canonicalSessionKey = canonicalKey;
         resolvedSessionKey = canonicalSessionKey;
         const sessionAgentId = canonicalSessionAgentId;
         resolvedSessionAgentId = sessionAgentId;
         const mainSessionKey = mainSessionKeyForRequest;
+        try {
+          await acquireGatewayWorkAdmission(storePath ?? `agent:${sessionAgentId}`);
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+          return;
+        }
+        if (respondToGatewayAdmissionOutcome()) {
+          return;
+        }
         // Legacy stores may lack sessionStartedAt entirely. Pre-compute a
         // JSONL-transcript-derived candidate outside the store lock; the
         // updater below only writes it when the freshly-loaded store still
@@ -2247,6 +2519,8 @@ export const agentHandlers: GatewayRequestHandlers = {
               }
             | undefined;
           let persisted: SessionEntry | undefined;
+          let archivedDuringStoreUpdateError: string | undefined;
+          let deletedDuringStoreUpdateError: string | undefined;
           try {
             persisted = await updateSessionStore(
               storePath,
@@ -2261,6 +2535,34 @@ export const agentHandlers: GatewayRequestHandlers = {
                   store,
                   ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
                 });
+                const preMigrationEntry = resolveFreshestSessionEntryFromStoreKeys(
+                  store,
+                  preMigrationTarget.storeKeys,
+                );
+                const initialTarget = resolveGatewaySessionStoreTarget({
+                  cfg: cfgLocal,
+                  key: canonicalSessionKey,
+                  store,
+                  ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+                });
+                const initialEntry = resolveFreshestSessionEntryFromStoreKeys(
+                  store,
+                  initialTarget.storeKeys,
+                );
+                // A completed delete must win over this request's earlier read;
+                // otherwise the initial touch would recreate the removed row.
+                if (entry && !initialEntry) {
+                  deletedDuringStoreUpdateError = `Session "${canonicalSessionKey}" was deleted while starting work. Retry.`;
+                  throw new Error(deletedDuringStoreUpdateError);
+                }
+                const archivedError = resolveSessionWorkStartError(
+                  preMigrationTarget.canonicalKey,
+                  preMigrationEntry,
+                );
+                if (archivedError) {
+                  archivedDuringStoreUpdateError = archivedError;
+                  throw new Error(archivedError);
+                }
                 const hadLegacyStoreKey = preMigrationTarget.storeKeys.some(
                   (storeKey) =>
                     storeKey !== preMigrationTarget.canonicalKey && Object.hasOwn(store, storeKey),
@@ -2317,14 +2619,44 @@ export const agentHandlers: GatewayRequestHandlers = {
             if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
               return;
             }
+            if (archivedDuringStoreUpdateError) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.INVALID_REQUEST, archivedDuringStoreUpdateError),
+              );
+              return;
+            }
+            if (deletedDuringStoreUpdateError) {
+              respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+              return;
+            }
             throw err;
-          }
-          if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
-            return;
           }
           if (persisted) {
             sessionEntry = persisted;
             resolvedSessionId = sessionEntry.sessionId;
+            sessionPersistedBeforeGatewayAdmission = true;
+          }
+          if (
+            patchBuild.isNewSession &&
+            entry?.sessionId &&
+            resolvedSessionId !== entry.sessionId
+          ) {
+            supersededSessionId = entry.sessionId;
+          }
+          admittedSessionId = resolvedSessionId ?? runId;
+          try {
+            assertGatewayWorkAdmissionAllowed();
+          } catch (err) {
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+            return;
+          }
+          if (respondToGatewayAdmissionOutcome()) {
+            return;
+          }
+          if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
+            return;
           }
           skipAgentInitialSessionTouch = touchInteraction;
           if (deniedBySendPolicy) {
@@ -2344,6 +2676,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedGroupId = patchBuild.groupId;
         resolvedGroupChannel = patchBuild.groupChannel;
         resolvedGroupSpace = patchBuild.groupSpace;
+        if (isNewSession && entry?.sessionId && resolvedSessionId !== entry.sessionId) {
+          supersededSessionId = entry.sessionId;
+        }
         if (
           !suppressVisibleSessionEffects &&
           isNewSession &&
@@ -2622,27 +2957,64 @@ export const agentHandlers: GatewayRequestHandlers = {
       const activeAuthProvider = resolveProviderIdForAuth(activeModelProvider, {
         config: cfgForAgent ?? cfg,
       });
-      const activeRunAbort = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
-        runId,
-        sessionId: resolvedSessionId ?? runId,
-        sessionKey: resolvedSessionKey,
-        agentId: resolvedSessionKey === "global" ? activeSessionAgentId : undefined,
-        timeoutMs,
-        now,
-        expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs }),
-        ownerConnId,
-        ownerDeviceId,
-        providerId: activeModelProvider,
-        authProviderId: activeAuthProvider,
-        isAbortable: () => isEmbeddedAgentRunAbortableForRunId(runId),
-        onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(runId),
-        controlUiVisible: !suppressVisibleSessionEffects,
-        kind: "agent",
-        lifecycleGeneration,
-      });
+      const lifecycleStorePath = resolvedSessionKey
+        ? loadSessionEntry(resolvedSessionKey, {
+            ...(resolvedSessionKey === "global" ? { agentId: activeSessionAgentId } : {}),
+            clone: false,
+          }).storePath
+        : `agent:${activeSessionAgentId}`;
+      try {
+        await acquireGatewayWorkAdmission(lifecycleStorePath);
+        assertGatewayWorkAdmissionAllowed();
+        const hasAdmissionOutcome = Boolean(
+          postAdmissionAbort ||
+          postAdmissionTimeout ||
+          postAdmissionSuperseded ||
+          lifecycleRotatedDuringAdmission,
+        );
+        if (!hasAdmissionOutcome) {
+          admittedRunAbort = registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId,
+            sessionId: admittedSessionId,
+            sessionKey: resolvedSessionKey,
+            agentId: admissionAgentId(),
+            timeoutMs,
+            now,
+            expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs }),
+            ownerConnId,
+            ownerDeviceId,
+            providerId: activeModelProvider,
+            authProviderId: activeAuthProvider,
+            isAbortable: () => isEmbeddedAgentRunAbortableForRunId(runId),
+            onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(runId),
+            controlUiVisible: !suppressVisibleSessionEffects,
+            kind: "agent",
+            lifecycleGeneration,
+          });
+        }
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        return;
+      }
+      if (respondToGatewayAdmissionOutcome()) {
+        return;
+      }
+      const activeGatewayWorkAdmission = gatewayWorkAdmission;
+      if (!activeGatewayWorkAdmission) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "agent run admission failed"));
+        return;
+      }
+      const activeRunAbort = admittedRunAbort;
+      if (!activeRunAbort) {
+        activeGatewayWorkAdmission.release();
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "agent run admission failed"));
+        return;
+      }
+      resolvedSessionId = admittedSessionId;
       const existingRunAbort = context.chatAbortControllers.get(runId);
       if (!activeRunAbort.registered && existingRunAbort) {
+        activeGatewayWorkAdmission.release();
         agentRunAccepted = existingRunAbort.kind === "agent";
         respond(true, { runId, status: "in_flight" as const }, undefined, {
           cached: true,
@@ -2650,6 +3022,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         return;
       }
+      if (!activeRunAbort.registered) {
+        activeGatewayWorkAdmission.release();
+      }
+      const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
+        activeRunAbort.cleanup(options);
+        activeGatewayWorkAdmission.release();
+      };
       if (activeRunAbort.registered) {
         retainEmbeddedAgentRunAbortabilityForRunId(runId);
         if (pendingChatRun) {
@@ -2663,13 +3042,13 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             suppressVisibleSessionEffects
               ? { isControlUiVisible: false, lifecycleGeneration }
-              : { sessionKey: resolvedSessionKey, lifecycleGeneration },
+              : {
+                  sessionKey: resolvedSessionKey,
+                  lifecycleGeneration,
+                },
           );
         }
       }
-      const cleanupActiveRunAbort = (opts?: { force?: boolean }) => {
-        activeRunAbort.cleanup(opts);
-      };
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
       // Confirmed only when the caller is the trusted in-process backend ACP
@@ -2745,7 +3124,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       // starts potentially heavy synchronous prompt/context setup. The dispatch
       // is scheduled out of this request handler so immediate agent.wait calls
       // can reach the gateway before the pre-turn runner monopolizes the loop.
-      void (async () => {
+      gatewayAdmissionTransferred = true;
+      void activeGatewayWorkAdmission.run(async () => {
         await yieldAfterAgentAcceptedAck();
 
         let dispatched = false;
@@ -2927,7 +3307,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
-            cleanupAbortController: cleanupActiveRunAbort,
+            cleanupAbortController: cleanupAdmittedRun,
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
@@ -2956,11 +3336,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           });
         } finally {
           if (!dispatched) {
-            cleanupActiveRunAbort({ force: true });
+            cleanupAdmittedRun({ force: true });
           }
         }
-      })();
+      });
     } finally {
+      if (!gatewayAdmissionTransferred) {
+        gatewayWorkAdmission?.release();
+      }
       clearUnacceptedExecApprovalFollowupDedupe();
     }
   },

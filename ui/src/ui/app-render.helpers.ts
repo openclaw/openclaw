@@ -28,6 +28,7 @@ import type { ChatState } from "./controllers/chat.ts";
 import {
   createSessionAndRefresh,
   loadSessions,
+  patchSession,
   syncSelectedSessionMessageSubscription,
 } from "./controllers/sessions.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
@@ -35,6 +36,8 @@ import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -180,6 +183,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  state.selectedChatSessionArchived = false;
   if (previousSessionKey !== sessionKey) {
     resetChatSessionPickerState(state);
   }
@@ -725,6 +729,7 @@ function switchChatSessionInternal(
     state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
+  state.selectedChatSessionArchived = nextSessionRow?.archived === true;
   if (previousSessionKey !== nextSessionKey) {
     state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
   }
@@ -773,6 +778,69 @@ export function switchChatSessionAndWait(
     switchChatSessionInternal(state, nextSessionKey, { awaitInitialLoad: true }) ??
     Promise.resolve()
   );
+}
+
+export function isCurrentChatSessionArchived(state: AppViewState): boolean {
+  if (state.selectedChatSessionArchived === true) {
+    return true;
+  }
+  return [
+    ...(state.sessionsResult?.sessions ?? []),
+    ...Object.values(state.chatAgentSessionRowsByAgent ?? {}).flat(),
+  ].some(
+    (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+  );
+}
+
+export function openCurrentSessionCheckpoints(state: AppViewState): void {
+  const showArchived = isCurrentChatSessionArchived(state);
+  state.sessionsExpandedCheckpointKey = state.sessionKey;
+  state.sessionsFilterActive = "";
+  state.sessionsFilterLimit = "";
+  state.sessionsIncludeGlobal = true;
+  state.sessionsIncludeUnknown = true;
+  state.sessionsShowArchived = showArchived;
+  state.sessionsSearchQuery = "";
+  state.sessionsSelectedKeys = new Set();
+  state.sessionsPage = 0;
+  state.setTab("sessions");
+  void loadSessions(state, {
+    activeMinutes: 0,
+    limit: 0,
+    includeGlobal: true,
+    includeUnknown: true,
+    showArchived,
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
+  });
+}
+
+export async function patchSessionFromSessionsView(
+  state: AppViewState,
+  key: string,
+  patch: { label?: string | null; archived?: boolean; pinned?: boolean },
+): Promise<boolean> {
+  const patched = await patchSession(state, key, patch);
+  if (patched && patch.archived !== undefined && state.sessionsSelectedKeys?.has(key)) {
+    const selectedKeys = new Set(state.sessionsSelectedKeys);
+    selectedKeys.delete(key);
+    state.sessionsSelectedKeys = selectedKeys;
+  }
+  const patchesSelectedArchiveState =
+    patch.archived !== undefined && areUiSessionKeysEquivalent(key, state.sessionKey);
+  if (!patched || !patchesSelectedArchiveState) {
+    return patched;
+  }
+  state.selectedChatSessionArchived = patch.archived;
+  if (!patch.archived) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(key);
+  const fallbackKey = buildAgentMainSessionKey({
+    agentId: parsed?.agentId ?? state.agentsList?.defaultId ?? "main",
+    mainKey: state.agentsList?.mainKey ?? undefined,
+  });
+  switchChatSession(state, fallbackKey);
+  return true;
 }
 
 export function dismissRealtimeTalkError(state: AppViewState) {

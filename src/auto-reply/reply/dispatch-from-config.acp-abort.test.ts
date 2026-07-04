@@ -196,6 +196,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.loadSessionEntry
+      .mockReset()
+      .mockImplementation(() => sessionStoreMocks.currentEntry);
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
@@ -514,6 +517,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       },
     };
     sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversation);
+    sessionStoreMocks.currentEntry = sessionStore[sourceSessionKey];
     sessionStoreMocks.loadSessionStore.mockReturnValue(sessionStore);
     sessionStoreMocks.resolveSessionStoreEntry.mockImplementation((...args: unknown[]) => {
       const params = args[0] as { store?: Record<string, unknown>; sessionKey?: string };

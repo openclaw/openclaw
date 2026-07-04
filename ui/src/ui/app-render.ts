@@ -9,7 +9,6 @@ import {
   hasAbortableSessionRun,
   refreshChat,
   refreshChatCommands,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -25,7 +24,10 @@ import {
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
+  isCurrentChatSessionArchived,
   isTerminalAvailable,
+  openCurrentSessionCheckpoints,
+  patchSessionFromSessionsView,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
@@ -1496,7 +1498,12 @@ export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
+  const chatSessionArchived = isCurrentChatSessionArchived(state);
+  const chatDisabledReason = !state.connected
+    ? t("chat.disconnected")
+    : chatSessionArchived
+      ? t("chat.archivedSessionDisabled")
+      : null;
   const isChat = state.tab === "chat";
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
@@ -2994,6 +3001,7 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 showArchived: state.sessionsShowArchived,
+                mainKey: state.agentsList?.mainKey ?? "main",
                 filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
@@ -3038,7 +3046,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = "";
                   state.sessionsIncludeGlobal = true;
                   state.sessionsIncludeUnknown = true;
-                  state.sessionsShowArchived = true;
+                  state.sessionsShowArchived = false;
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
@@ -3047,7 +3055,7 @@ export function renderApp(state: AppViewState) {
                     limit: 0,
                     includeGlobal: true,
                     includeUnknown: true,
-                    showArchived: true,
+                    showArchived: false,
                   });
                 },
                 onSearchChange: (q) => {
@@ -3067,7 +3075,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionsPage = 0;
                 },
                 onRefresh: () => void loadSessions(state),
-                onPatch: (key, patch) => void patchSession(state, key, patch),
+                onPatch: (key, patch) => void patchSessionFromSessionsView(state, key, patch),
                 onToggleSelect: (key) => {
                   const next = new Set(state.sessionsSelectedKeys);
                   if (next.has(key)) {
@@ -3931,7 +3939,7 @@ export function renderApp(state: AppViewState) {
                   realtimeTalkOptions: state.realtimeTalkOptions,
                   realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
                   connected: state.connected,
-                  canSend: state.connected,
+                  canSend: state.connected && !chatSessionArchived,
                   disabledReason: chatDisabledReason,
                   error: chatViewError,
                   runStatus: state.chatRunStatus,
@@ -3973,14 +3981,7 @@ export function renderApp(state: AppViewState) {
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
                   onSend: () => void state.handleSendChat(),
                   onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
-                  onOpenSessionCheckpoints: () => {
-                    state.sessionsExpandedCheckpointKey = state.sessionKey;
-                    state.setTab("sessions" as import("./navigation.ts").Tab);
-                    void loadSessions(state, {
-                      ...createChatSessionsLoadOverrides(state),
-                      ...scopedAgentListParamsForSession(state, state.sessionKey),
-                    });
-                  },
+                  onOpenSessionCheckpoints: () => openCurrentSessionCheckpoints(state),
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {
                     state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;

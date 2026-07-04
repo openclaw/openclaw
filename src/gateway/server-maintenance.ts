@@ -20,7 +20,7 @@ import {
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
-import type { DedupeEntry } from "./server-shared.js";
+import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 
@@ -122,8 +122,8 @@ export function startGatewayMaintenanceTimers(params: {
           : undefined
         : undefined;
     };
-    const isPendingAcceptedAgentDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
-      if (!key.startsWith("agent:")) {
+    const isPendingAcceptedRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      if (!key.startsWith("agent:") && !key.startsWith(PENDING_CHAT_SEND_DEDUPE_PREFIX)) {
         return false;
       }
       const payload = dedupeEntry.payload;
@@ -139,7 +139,9 @@ export function startGatewayMaintenanceTimers(params: {
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       // Keep idempotency records for active runs so retries cannot create
       // duplicate chat/agent work while a command is still draining.
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
+      const isAgentKey = key.startsWith("agent:");
+      const isChatKey = key.startsWith("chat:");
+      if (!isAgentKey && !isChatKey) {
         return false;
       }
       const runId = resolveDedupeRunId(key, dedupeEntry);
@@ -147,10 +149,10 @@ export function startGatewayMaintenanceTimers(params: {
       if (!entry) {
         return false;
       }
-      return key.startsWith("agent:") ? entry.kind === "agent" : entry.kind !== "agent";
+      return isAgentKey ? entry.kind === "agent" : entry.kind !== "agent";
     };
     for (const [k, v] of params.dedupe) {
-      if (isActiveRunDedupeKey(k, v) || isPendingAcceptedAgentDedupeKey(k, v)) {
+      if (isActiveRunDedupeKey(k, v) || isPendingAcceptedRunDedupeKey(k, v)) {
         continue;
       }
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -162,7 +164,7 @@ export function startGatewayMaintenanceTimers(params: {
       const oldestKeys = [...params.dedupe.entries()]
         .filter(
           ([key, entry]) =>
-            !isActiveRunDedupeKey(key, entry) && !isPendingAcceptedAgentDedupeKey(key, entry),
+            !isActiveRunDedupeKey(key, entry) && !isPendingAcceptedRunDedupeKey(key, entry),
         )
         .toSorted(([, left], [, right]) => left.ts - right.ts)
         .slice(0, excess)

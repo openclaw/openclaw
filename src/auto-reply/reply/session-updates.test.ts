@@ -1,5 +1,9 @@
 // Tests session update fanout and persisted lifecycle records.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
 
@@ -66,6 +70,7 @@ vi.mock("../../routing/session-key.js", () => ({
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
+const tempDirs = useAutoCleanupTempDirTracker();
 
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {
@@ -115,5 +120,58 @@ describe("ensureSkillSnapshot", () => {
     expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a concurrent rename and unpin while persisting a skill snapshot", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const root = tempDirs.make("openclaw-session-updates-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:reply";
+    const staleEntry: SessionEntry = {
+      sessionId: "reply-session",
+      updatedAt: 1,
+      label: "Before rename",
+      pinnedAt: 100,
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: staleEntry.sessionId,
+          updatedAt: 2,
+          label: "After rename",
+          sendPolicy: "deny",
+        },
+      }),
+      "utf8",
+    );
+    const sessionStore = { [sessionKey]: staleEntry };
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry: staleEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isFirstTurnInSession: true,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(result.sessionEntry).toMatchObject({
+      sessionId: "reply-session",
+      label: "After rename",
+      sendPolicy: "deny",
+      systemSent: true,
+    });
+    expect(result.sessionEntry?.pinnedAt).toBeUndefined();
+    expect(sessionStore[sessionKey]).toBe(result.sessionEntry);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.label).toBe("After rename");
+    expect(persisted[sessionKey]?.pinnedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.sendPolicy).toBe("deny");
+    expect(persisted[sessionKey]?.skillsSnapshot).toBeDefined();
   });
 });

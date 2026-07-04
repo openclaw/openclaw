@@ -102,11 +102,12 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
+    dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
     loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
     getRuntimeConfig,
-  } as never;
+  };
   async function directSessionReq<TPayload = unknown>(
     method: keyof typeof sessionsHandlers,
     params: Record<string, unknown>,
@@ -134,7 +135,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
           error,
         };
       },
-      context: directContext,
+      context: directContext as never,
       client: null,
       isWebchatConnect: () => false,
     });
@@ -240,6 +241,100 @@ test("lists and patches session store via sessions.* RPC", async () => {
     label: "Briefing",
   });
   expect(labelPatchedDuplicate.ok).toBe(false);
+
+  const mainArchive = await directSessionReq("sessions.patch", {
+    key: "agent:main:main",
+    archived: true,
+  });
+  expect(mainArchive.ok).toBe(false);
+
+  const pinned = await directSessionReq<{
+    entry: { pinnedAt?: number };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    pinned: true,
+  });
+  expect(pinned.ok).toBe(true);
+  expect(pinned.payload?.entry.pinnedAt).toEqual(expect.any(Number));
+
+  const pinnedList = await directSessionReq<{
+    sessions: Array<{ key: string; pinned?: boolean }>;
+  }>("sessions.list", {});
+  expect(pinnedList.payload?.sessions[0]).toMatchObject({
+    key: "agent:main:subagent:one",
+    pinned: true,
+  });
+
+  const archived = await directSessionReq<{
+    entry: { archivedAt?: number; pinnedAt?: number };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    archived: true,
+  });
+  expect(archived.ok).toBe(true);
+  expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
+  expect(archived.payload?.entry.pinnedAt).toBeUndefined();
+
+  const activeAfterArchive = await directSessionReq<{
+    sessions: Array<{ key: string }>;
+  }>("sessions.list", {});
+  expect(activeAfterArchive.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:subagent:one",
+  );
+  const archivedList = await directSessionReq<{
+    sessions: Array<{ key: string; archived?: boolean }>;
+  }>("sessions.list", { archived: true });
+  expect(archivedList.payload?.sessions).toMatchObject([
+    { key: "agent:main:subagent:one", archived: true },
+  ]);
+
+  const archivedSend = await directSessionReq("sessions.send", {
+    key: "agent:main:subagent:one",
+    message: "blocked while archived",
+  });
+  expect(archivedSend).toMatchObject({
+    ok: false,
+    error: {
+      message:
+        'Session "agent:main:subagent:one" is archived. Restore it before starting new work.',
+    },
+  });
+
+  const cachedArchivedRunId = "cached-before-archive";
+  directContext.dedupe.set(`chat:${cachedArchivedRunId}`, {
+    ts: Date.now(),
+    ok: true,
+    payload: { runId: cachedArchivedRunId, status: "ok" },
+  });
+  const cachedArchivedSend = await directSessionReq("sessions.send", {
+    key: "agent:main:subagent:one",
+    message: "already completed before archive",
+    idempotencyKey: cachedArchivedRunId,
+  });
+  expect(cachedArchivedSend).toMatchObject({
+    ok: true,
+    payload: { runId: cachedArchivedRunId, status: "ok" },
+  });
+
+  const archivedReset = await directSessionReq("sessions.reset", {
+    key: "agent:main:subagent:one",
+  });
+  expect(archivedReset).toMatchObject({
+    ok: false,
+    error: {
+      message:
+        'Session "agent:main:subagent:one" is archived. Restore it before starting new work.',
+    },
+  });
+
+  const restored = await directSessionReq<{
+    entry: { archivedAt?: number };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    archived: false,
+  });
+  expect(restored.ok).toBe(true);
+  expect(restored.payload?.entry.archivedAt).toBeUndefined();
 
   const list2 = await directSessionReq<{
     sessions: Array<{

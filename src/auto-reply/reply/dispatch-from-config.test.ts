@@ -1,4 +1,5 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
+import { AsyncResource } from "node:async_hooks";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
@@ -28,6 +29,11 @@ import type {
   PluginTargetedInboundClaimOutcome,
 } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  interruptSessionWorkAdmissions,
+  isSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -150,15 +156,21 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
+  loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn((params?: { sessionKey?: string }) => ({
-    existing:
-      (params?.sessionKey
-        ? sessionStoreMocks.entriesBySessionKey.get(params.sessionKey)
-        : undefined) ?? sessionStoreMocks.currentEntry,
-  })),
+  resolveSessionStoreEntry: vi.fn(
+    (params: {
+      store: Record<string, Record<string, unknown>>;
+      sessionKey: string;
+    }): { existing: Record<string, unknown> | undefined } => ({
+      existing:
+        params.store[params.sessionKey] ??
+        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
+        sessionStoreMocks.currentEntry,
+    }),
+  ),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -466,6 +478,13 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   triggerInternalHook: internalHookMocks.triggerInternalHook,
   updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: vi.fn(),
@@ -647,6 +666,8 @@ let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tr
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
+let runWithReplyOperationLifecycleAdmission: typeof import("./reply-turn-admission.js").runWithReplyOperationLifecycleAdmission;
 type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
@@ -665,6 +686,8 @@ beforeAll(async () => {
     replyRunRegistry,
     __testing: replyRunTesting,
   } = await import("./reply-run-registry.js"));
+  ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
+    await import("./reply-turn-admission.js"));
 });
 
 function createDispatcher(): ReplyDispatcher {
@@ -1112,11 +1135,23 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.entriesBySessionKey.clear();
-    sessionStoreMocks.loadSessionStore.mockClear();
+    sessionStoreMocks.loadSessionEntry.mockReset();
+    sessionStoreMocks.loadSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
+    sessionStoreMocks.loadSessionStore.mockReset();
+    sessionStoreMocks.loadSessionStore.mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset();
     sessionStoreMocks.readSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
-    sessionStoreMocks.resolveStorePath.mockClear();
-    sessionStoreMocks.resolveSessionStoreEntry.mockClear();
+    sessionStoreMocks.resolveStorePath.mockReset();
+    sessionStoreMocks.resolveStorePath.mockReturnValue("/tmp/mock-sessions.json");
+    sessionStoreMocks.resolveSessionStoreEntry.mockReset();
+    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
+      (params: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
+        existing:
+          params.store[params.sessionKey] ??
+          sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
+          sessionStoreMocks.currentEntry,
+      }),
+    );
     threadInfoMocks.parseSessionThreadInfo.mockReset();
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
@@ -1642,15 +1677,50 @@ describe("dispatchReplyFromConfig", () => {
   it("lets a different Slack DM routed thread reach reply resolution while another thread is active", async () => {
     setNoAbort();
     const sessionKey = "agent:main:slack:direct:U1";
+    const sessionId = "active-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     const activeOperation = createReplyOperation({
       sessionKey,
-      sessionId: "active-session",
+      sessionId,
       resetTriggered: false,
       routeThreadId: "500.000",
     });
     activeOperation.setPhase("running");
     const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "thread B reply" }) satisfies ReplyPayload);
+    let inBandMutationRan = false;
+    const rotatedSessionId = "rotated-session";
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+        true,
+      );
+      await runExclusiveSessionLifecycleMutation({
+        scope: "/tmp/mock-sessions.json",
+        identities: [sessionKey, sessionId],
+        run: async () => {
+          inBandMutationRan = true;
+          sessionStoreMocks.currentEntry = {
+            sessionId: rotatedSessionId,
+            updatedAt: Date.now(),
+          };
+          (
+            opts as
+              | (GetReplyOptions & {
+                  onSessionPrepared?: (binding: {
+                    sessionKey: string;
+                    sessionId: string;
+                    storePath: string;
+                  }) => void;
+                })
+              | undefined
+          )?.onSessionPrepared?.({
+            sessionKey,
+            sessionId: rotatedSessionId,
+            storePath: "/tmp/mock-sessions.json",
+          });
+        },
+      });
+      return { text: "thread B reply" } satisfies ReplyPayload;
+    });
 
     try {
       const resultPromise = dispatchReplyFromConfig({
@@ -1686,7 +1756,397 @@ describe("dispatchReplyFromConfig", () => {
         counts: { tool: 0, block: 0, final: 0 },
       });
       expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(inBandMutationRan).toBe(true);
       expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    } finally {
+      activeOperation.complete();
+    }
+  });
+
+  it("releases a Slack bypass lease when the competing routed thread changes during admission", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:slack:direct:U2";
+    const sessionId = "active-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const originalOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    originalOperation.setPhase("running");
+    let replacementOperation: ReturnType<typeof createReplyOperation> | undefined;
+    let releaseMutation: () => void = () => {};
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    let signalMutationEntered: () => void = () => {};
+    const mutationEntered = new Promise<void>((resolve) => {
+      signalMutationEntered = resolve;
+    });
+    let lifecycleMutation: Promise<void> | undefined;
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
+    );
+    hookMocks.runner.runBeforeDispatch.mockImplementationOnce(async () => {
+      lifecycleMutation = runExclusiveSessionLifecycleMutation({
+        scope: "/tmp/mock-sessions.json",
+        identities: [sessionKey, sessionId],
+        run: async () => {
+          signalMutationEntered();
+          await mutationGate;
+        },
+      });
+      await mutationEntered;
+      setTimeout(() => {
+        originalOperation.complete();
+        replacementOperation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+          routeThreadId: "501.000",
+        });
+        replacementOperation.setPhase("running");
+        releaseMutation();
+      }, 0);
+      return undefined;
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U2",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          MessageThreadId: "501.000",
+          BodyForAgent: "same routed thread after replacement",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+      await lifecycleMutation;
+
+      expect(result).toMatchObject({ queuedFinal: false });
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+        false,
+      );
+    } finally {
+      releaseMutation();
+      originalOperation.complete();
+      replacementOperation?.complete();
+      await lifecycleMutation;
+    }
+  });
+
+  it("holds a Slack bypass lease until an abort-insensitive resolver settles", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:slack:direct:U3";
+    const sessionId = "active-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    activeOperation.setPhase("running");
+    let releaseResolver: () => void = () => {};
+    const resolverGate = new Promise<void>((resolve) => {
+      releaseResolver = resolve;
+    });
+    let signalResolverEntered: () => void = () => {};
+    const resolverEntered = new Promise<void>((resolve) => {
+      signalResolverEntered = resolve;
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      signalResolverEntered();
+      await resolverGate;
+      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
+      return { text: "late reply" } satisfies ReplyPayload;
+    });
+    const dispatcher = createDispatcher();
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U3",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        BodyForAgent: "abort-insensitive routed thread",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await resolverEntered;
+    activeOperation.complete();
+
+    let mutationRan = false;
+    const externalLifecycleRequest = new AsyncResource("slack-bypass-settle-race");
+    const mutation = externalLifecycleRequest.runInAsyncScope(
+      async () =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: "/tmp/mock-sessions.json",
+          identities: [sessionKey, sessionId],
+          prepare: async () => {
+            await interruptSessionWorkAdmissions({
+              scope: "/tmp/mock-sessions.json",
+              identities: [sessionKey, sessionId],
+            });
+          },
+          run: async () => {
+            mutationRan = true;
+          },
+        }),
+    );
+    const result = await dispatch;
+
+    expect(result.queuedFinal).toBe(false);
+    expect(mutationRan).toBe(false);
+    expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+      true,
+    );
+
+    releaseResolver();
+    await mutation;
+
+    expect(mutationRan).toBe(true);
+    expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+      false,
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    externalLifecycleRequest.emitDestroy();
+  });
+
+  it("bounds Slack bypass lease cleanup when dispatcher idle never settles", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:slack:direct:U4";
+    const sessionId = "active-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    activeOperation.setPhase("running");
+    const dispatcher = createDispatcher();
+    dispatcher.waitForIdle = vi.fn(async () => await new Promise<void>(() => {}));
+    dispatcher.resolveFollowupAdmissionBarrierTimeoutPolicy = () => ({
+      maxTimeoutMs: 25,
+      shouldExtend: () => false,
+    });
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U4",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          MessageThreadId: "501.000",
+          BodyForAgent: "hung delivery barrier",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async () => undefined,
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      await vi.waitFor(
+        () => {
+          expect(
+            isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+          ).toBe(false);
+        },
+        { timeout: 500 },
+      );
+    } finally {
+      activeOperation.complete();
+    }
+  });
+
+  it("holds a Slack bypass lease until queued delivery settles before revalidation", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:slack:direct:U5";
+    const sessionId = "active-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    activeOperation.setPhase("running");
+    let releaseDelivery: () => void = () => {};
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    const dispatcher = createDispatcher();
+    let holdDelivery = false;
+    dispatcher.waitForIdle = vi.fn(async () => {
+      if (holdDelivery) {
+        await deliveryGate;
+      }
+    });
+    const externalLifecycleRequest = new AsyncResource("slack-bypass-delivery-race");
+    let allowLifecycleInterrupt: () => void = () => {};
+    const lifecycleInterruptGate = new Promise<void>((resolve) => {
+      allowLifecycleInterrupt = resolve;
+    });
+    let signalMutationPrepared: () => void = () => {};
+    const mutationPrepared = new Promise<void>((resolve) => {
+      signalMutationPrepared = resolve;
+    });
+    let signalResolverReturning: () => void = () => {};
+    const resolverReturning = new Promise<void>((resolve) => {
+      signalResolverReturning = resolve;
+    });
+    let mutationRan = false;
+    let mutation: Promise<void> | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      holdDelivery = true;
+      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "queued block" });
+      mutation = externalLifecycleRequest.runInAsyncScope(
+        async () =>
+          await runExclusiveSessionLifecycleMutation({
+            scope: "/tmp/mock-sessions.json",
+            identities: [sessionKey, sessionId],
+            prepare: async () => {
+              signalMutationPrepared();
+              await lifecycleInterruptGate;
+              await interruptSessionWorkAdmissions({
+                scope: "/tmp/mock-sessions.json",
+                identities: [sessionKey, sessionId],
+              });
+            },
+            run: async () => {
+              mutationRan = true;
+            },
+          }),
+      );
+      signalResolverReturning();
+      return undefined;
+    });
+
+    try {
+      const dispatch = dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U5",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          MessageThreadId: "501.000",
+          BodyForAgent: "hold queued delivery",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
+      await Promise.all([mutationPrepared, resolverReturning]);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      allowLifecycleInterrupt();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledOnce();
+      expect(mutationRan).toBe(false);
+      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+        true,
+      );
+
+      releaseDelivery();
+      await dispatch;
+      await mutation;
+
+      expect(mutationRan).toBe(true);
+    } finally {
+      allowLifecycleInterrupt();
+      releaseDelivery();
+      activeOperation.complete();
+      await mutation;
+      externalLifecycleRequest.emitDestroy();
+    }
+  });
+
+  it("runs ACP tail dispatch inside a borrowed Slack lifecycle admission", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:slack:direct:U6";
+    const sessionId = "active-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+      routeThreadId: "500.000",
+    });
+    activeOperation.setPhase("running");
+    let initiatingAdmissionExcluded = false;
+    let mutationRan = false;
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "reply_dispatch") as () => boolean,
+    );
+    hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown) => {
+      if (!(event as { isTailDispatch?: boolean }).isTailDispatch) {
+        return undefined;
+      }
+      await runExclusiveSessionLifecycleMutation({
+        scope: "/tmp/mock-sessions.json",
+        identities: [sessionKey, sessionId],
+        prepare: async () => {
+          initiatingAdmissionExcluded = await interruptSessionWorkAdmissions({
+            scope: "/tmp/mock-sessions.json",
+            identities: [sessionKey, sessionId],
+            timeoutMs: 25,
+          });
+        },
+        run: async () => {
+          mutationRan = true;
+        },
+      });
+      return {
+        handled: true,
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    });
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U6",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          MessageThreadId: "501.000",
+          BodyForAgent: "run tail after reset",
+          AcpDispatchTailAfterReset: true,
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => undefined,
+      });
+
+      expect(result.queuedFinal).toBe(false);
+      expect(initiatingAdmissionExcluded).toBe(true);
+      expect(mutationRan).toBe(true);
     } finally {
       activeOperation.complete();
     }
@@ -2031,7 +2491,7 @@ describe("dispatchReplyFromConfig", () => {
     recoveryOperation?.complete();
   });
 
-  it("does not force-clear an active operation whose session id differs from the terminal snapshot", async () => {
+  it("rejects a stale turn without clearing the operation for the rotated session", async () => {
     setNoAbort();
     const sessionKey = "agent:main:telegram:group:-1003774691297";
     // Terminal store snapshot still reports the failed lifecycle's session id.
@@ -2092,20 +2552,16 @@ describe("dispatchReplyFromConfig", () => {
       setTimeout(resolve, 100);
     });
 
-    // The session-id guard kept the rotated op untouched: it still owns the
-    // session key and was never force-failed, so the visible turn simply parks
-    // behind it instead of dropping it.
+    // The session-id guard keeps the rotated op untouched while the stale turn
+    // is invalidated instead of later crossing the reset boundary.
     expect(freshOperation).toBeDefined();
     expect(freshOperation?.result).toBeNull();
     expect(replyRunRegistry.get(sessionKey)).toBe(freshOperation);
     expect(replyResolver).not.toHaveBeenCalled();
 
-    // Releasing the rotated op lets the parked visible turn admit and deliver,
-    // proving the message survived the rotation rather than being silently lost.
     freshOperation?.complete();
-    const result = await turn;
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ queuedFinal: true });
+    await expect(turn).rejects.toThrow(/changed while starting work/i);
+    expect(replyResolver).not.toHaveBeenCalled();
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
   });
 
@@ -5067,15 +5523,36 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("fast-aborts without calling the reply resolver", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "message_received") as () => boolean,
+    );
     mocks.tryFastAbortFromMessage.mockResolvedValue({
       handled: true,
       aborted: true,
     });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-fast-abort",
+      targetSessionKey: "plugin-binding:test:fast-abort",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "direct:stop-hook",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "test-plugin",
+        pluginRoot: "/tmp/test-plugin",
+      },
+    } satisfies SessionBindingRecord);
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
       Body: "/stop",
+      SessionKey: "agent:main:telegram:direct:stop-hook",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
@@ -5085,6 +5562,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
     });
+    expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledOnce();
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-fast-abort");
   });
 
   it("reports when a fast abort is rejected during finalization", async () => {
@@ -5561,7 +6041,32 @@ describe("dispatchReplyFromConfig", () => {
 
   it("retargets reply_dispatch to a bound generic ACP session before model fallback", async () => {
     setNoAbort();
+    const sourceSessionKey = "agent:main:discord:C123";
     const boundSessionKey = "agent:opencode:acp:bound-session";
+    const sourceStorePath = "/tmp/main-sessions.json";
+    const targetStorePath = "/tmp/opencode-sessions.json";
+    const sourceEntry = { sessionId: "source-session-id", updatedAt: Date.now() };
+    const targetEntry = { sessionId: "target-session-id", updatedAt: Date.now() };
+    const stores: Record<string, Record<string, Record<string, unknown>>> = {
+      [sourceStorePath]: { [sourceSessionKey]: sourceEntry },
+      [targetStorePath]: { [boundSessionKey]: targetEntry },
+    };
+    sessionStoreMocks.resolveStorePath.mockImplementation(
+      (_configuredPath?: unknown, options?: { agentId?: string }) =>
+        options?.agentId === "opencode" ? targetStorePath : sourceStorePath,
+    );
+    sessionStoreMocks.loadSessionStore.mockImplementation(
+      (storePath?: string) => (storePath ? stores[storePath] : undefined) ?? {},
+    );
+    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
+      (params?: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
+        existing: params?.store[params.sessionKey],
+      }),
+    );
+    sessionStoreMocks.loadSessionEntry.mockImplementation((paramsUnknown: unknown) => {
+      const params = paramsUnknown as { sessionKey: string; storePath: string };
+      return stores[params.storePath]?.[params.sessionKey];
+    });
     const runtime = createAcpRuntime([
       { type: "text_delta", text: "Bound ACP reply" },
       { type: "done" },
@@ -5623,7 +6128,7 @@ describe("dispatchReplyFromConfig", () => {
       OriginatingTo: "discord:C123",
       To: "discord:C123",
       AccountId: "default",
-      SessionKey: "agent:main:discord:C123",
+      SessionKey: sourceSessionKey,
       BodyForAgent: "continue",
     });
 
@@ -5636,6 +6141,17 @@ describe("dispatchReplyFromConfig", () => {
       conversationId: "C123",
     });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-acp-current");
+    expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
+      storePath: sourceStorePath,
+      sessionKey: sourceSessionKey,
+      readConsistency: "latest",
+    });
+    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: targetStorePath,
+        sessionKey: sourceSessionKey,
+      }),
+    );
     const ensureSessionOptions = firstMockArg(runtime.ensureSession, "ensure session") as
       | { agent?: unknown; sessionKey?: unknown }
       | undefined;
@@ -6824,6 +7340,466 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("holds session lifecycle mutation until an interrupted plugin claim exits", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+      async () =>
+        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+          resolveClaim = resolve;
+        }),
+    );
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-lifecycle-race",
+      targetSessionKey: "plugin-binding:test:race",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:lifecycle-race",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "test-plugin",
+        pluginRoot: "/tmp/test-plugin",
+      },
+    } satisfies SessionBindingRecord);
+    const sessionKey = "agent:main:discord:channel:lifecycle-race";
+    const sessionId = "plugin-lifecycle-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const dispatcher = createDispatcher();
+    const externalLifecycleRequest = new AsyncResource("external-lifecycle-request");
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      To: "discord:channel:lifecycle-race",
+      AccountId: "default",
+      SessionKey: sessionKey,
+      Body: "hold this claim",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const dispatch = dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
+    });
+    expect(replyRunRegistry.get(sessionKey)).toBeDefined();
+    expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+      true,
+    );
+
+    let mutationRan = false;
+    const mutation = externalLifecycleRequest.runInAsyncScope(
+      async () =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: "/tmp/mock-sessions.json",
+          identities: [sessionKey, sessionId],
+          prepare: async () => {
+            await interruptSessionWorkAdmissions({
+              scope: "/tmp/mock-sessions.json",
+              identities: [sessionKey, sessionId],
+            });
+          },
+          run: async () => {
+            mutationRan = true;
+          },
+        }),
+    );
+    await vi.waitFor(() => {
+      expect(replyRunRegistry.get(sessionKey)?.abortSignal.aborted).toBe(true);
+    });
+    expect(mutationRan).toBe(false);
+
+    resolveClaim?.({
+      status: "handled",
+      result: { handled: true, reply: { text: "stale plugin reply" } },
+    });
+    const result = await dispatch;
+    await mutation;
+
+    expect(mutationRan).toBe(true);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    externalLifecycleRequest.emitDestroy();
+  });
+
+  it("holds an owned lifecycle lease until abort-insensitive resolver work settles", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:discord:channel:owned-resolver-race";
+    const sessionId = "owned-resolver-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    let releaseResolver: () => void = () => {};
+    const resolverGate = new Promise<void>((resolve) => {
+      releaseResolver = resolve;
+    });
+    let signalResolverEntered: () => void = () => {};
+    const resolverEntered = new Promise<void>((resolve) => {
+      signalResolverEntered = resolve;
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      signalResolverEntered();
+      await resolverGate;
+      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
+      return { text: "stale late final" } satisfies ReplyPayload;
+    });
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        To: "discord:channel:owned-resolver-race",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "hold this resolver",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await resolverEntered;
+
+    const externalLifecycleRequest = new AsyncResource("external-owned-resolver-lifecycle");
+    let mutationRan = false;
+    const mutation = externalLifecycleRequest.runInAsyncScope(
+      async () =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: "/tmp/mock-sessions.json",
+          identities: [sessionKey, sessionId],
+          prepare: async () => {
+            await interruptSessionWorkAdmissions({
+              scope: "/tmp/mock-sessions.json",
+              identities: [sessionKey, sessionId],
+            });
+          },
+          run: async () => {
+            mutationRan = true;
+          },
+        }),
+    );
+
+    try {
+      const result = await dispatch;
+      expect(result.queuedFinal).toBe(false);
+      expect(mutationRan).toBe(false);
+      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+        true,
+      );
+
+      releaseResolver();
+      await mutation;
+
+      expect(mutationRan).toBe(true);
+      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    } finally {
+      releaseResolver();
+      await mutation;
+      externalLifecycleRequest.emitDestroy();
+    }
+  });
+
+  it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+      async () =>
+        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+          resolveClaim = resolve;
+        }),
+    );
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-active-lifecycle-race",
+      targetSessionKey: "plugin-binding:test:active-race",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:active-lifecycle-race",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "test-plugin",
+        pluginRoot: "/tmp/test-plugin",
+      },
+    } satisfies SessionBindingRecord);
+    const sessionKey = "agent:main:discord:channel:active-lifecycle-race";
+    const sessionId = "plugin-active-lifecycle-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const existingOperation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    const dispatcher = createDispatcher();
+    const externalLifecycleRequest = new AsyncResource("external-active-lifecycle-request");
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      To: "discord:channel:active-lifecycle-race",
+      AccountId: "default",
+      SessionKey: sessionKey,
+      Body: "hold this overlapping claim",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const dispatch = dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
+    });
+    expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+      true,
+    );
+
+    existingOperation.complete();
+    expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+
+    let mutationPrepared = false;
+    let mutationRan = false;
+    const mutation = externalLifecycleRequest.runInAsyncScope(
+      async () =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: "/tmp/mock-sessions.json",
+          identities: [sessionKey, sessionId],
+          prepare: async () => {
+            mutationPrepared = true;
+            await interruptSessionWorkAdmissions({
+              scope: "/tmp/mock-sessions.json",
+              identities: [sessionKey, sessionId],
+            });
+          },
+          run: async () => {
+            mutationRan = true;
+          },
+        }),
+    );
+    await vi.waitFor(() => {
+      expect(mutationPrepared).toBe(true);
+    });
+    expect(mutationRan).toBe(false);
+
+    resolveClaim?.({
+      status: "handled",
+      result: { handled: true, reply: { text: "stale plugin reply" } },
+    });
+    const result = await dispatch;
+    await mutation;
+
+    expect(mutationRan).toBe(true);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    externalLifecycleRequest.emitDestroy();
+  });
+
+  it("does not abort the active owner when its in-band mutation interrupts borrowed work", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+    let resolveClaim: ((outcome: PluginTargetedInboundClaimOutcome) => void) | undefined;
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+      async () =>
+        await new Promise<PluginTargetedInboundClaimOutcome>((resolve) => {
+          resolveClaim = resolve;
+        }),
+    );
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-owner-mutation-race",
+      targetSessionKey: "plugin-binding:test:owner-mutation-race",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:owner-mutation-race",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "test-plugin",
+        pluginRoot: "/tmp/test-plugin",
+      },
+    } satisfies SessionBindingRecord);
+    const sessionKey = "agent:main:discord:channel:owner-mutation-race";
+    const sessionId = "owner-mutation-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const ownerAdmission = await admitReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath: "/tmp/mock-sessions.json",
+      kind: "visible",
+      resetTriggered: false,
+    });
+    expect(ownerAdmission.status).toBe("owned");
+    if (ownerAdmission.status !== "owned") {
+      throw new Error("expected active owner admission");
+    }
+    const ownerOperation = ownerAdmission.operation;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        To: "discord:channel:owner-mutation-race",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "borrow the active lane",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await vi.waitFor(() => {
+      expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
+    });
+
+    let mutationRan = false;
+    const mutation = runWithReplyOperationLifecycleAdmission(ownerOperation, async () =>
+      runExclusiveSessionLifecycleMutation({
+        scope: "/tmp/mock-sessions.json",
+        identities: [sessionKey, sessionId],
+        prepare: async () => {
+          await interruptSessionWorkAdmissions({
+            scope: "/tmp/mock-sessions.json",
+            identities: [sessionKey, sessionId],
+          });
+        },
+        run: async () => {
+          mutationRan = true;
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(ownerOperation.abortSignal.aborted).toBe(false);
+    expect(mutationRan).toBe(false);
+
+    resolveClaim?.({ status: "handled", result: { handled: true } });
+    const result = await dispatch;
+    await mutation;
+
+    expect(result.queuedFinal).toBe(false);
+    expect(ownerOperation.abortSignal.aborted).toBe(false);
+    expect(ownerOperation.result).toBeNull();
+    expect(replyRunRegistry.get(sessionKey)).toBe(ownerOperation);
+    expect(mutationRan).toBe(true);
+    expect(replyResolver).not.toHaveBeenCalled();
+    ownerOperation.complete();
+  });
+
+  it("completes an owned reply operation interrupted during a plugin fallback notice", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "missing_plugin",
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-interrupted-fallback",
+      targetSessionKey: "plugin-binding:test:interrupted-fallback",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:interrupted-fallback",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "missing-plugin",
+        pluginRoot: "/tmp/missing-plugin",
+      },
+    } satisfies SessionBindingRecord);
+    const sessionKey = "agent:main:discord:channel:interrupted-fallback";
+    const sessionId = "interrupted-fallback-session";
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    let resolveNotice: ((result: { ok: true; messageId: string }) => void) | undefined;
+    mocks.routeReply.mockImplementationOnce(
+      async () =>
+        await new Promise<{ ok: true; messageId: string }>((resolve) => {
+          resolveNotice = resolve;
+        }),
+    );
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:interrupted-fallback",
+        To: "discord:channel:interrupted-fallback",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "fall back",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    await vi.waitFor(() => {
+      expect(mocks.routeReply).toHaveBeenCalledOnce();
+    });
+    const operation = replyRunRegistry.get(sessionKey);
+    expect(operation).toBeDefined();
+
+    let mutationRan = false;
+    const externalLifecycleRequest = new AsyncResource("interrupted-fallback-lifecycle");
+    const mutation = externalLifecycleRequest.runInAsyncScope(
+      async () =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: "/tmp/mock-sessions.json",
+          identities: [sessionKey, sessionId],
+          prepare: async () => {
+            await interruptSessionWorkAdmissions({
+              scope: "/tmp/mock-sessions.json",
+              identities: [sessionKey, sessionId],
+            });
+          },
+          run: async () => {
+            mutationRan = true;
+          },
+        }),
+    );
+    await vi.waitFor(() => {
+      expect(operation?.abortSignal.aborted).toBe(true);
+    });
+    expect(mutationRan).toBe(false);
+
+    resolveNotice?.({ ok: true, messageId: "fallback-notice" });
+    const result = await dispatch;
+    await mutation;
+
+    expect(result.queuedFinal).toBe(false);
+    expect(operation?.result).toMatchObject({
+      kind: "aborted",
+      code: "aborted_for_restart",
+    });
+    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+    expect(mutationRan).toBe(true);
+    expect(replyResolver).not.toHaveBeenCalled();
+    externalLifecycleRequest.emitDestroy();
   });
 
   it("stages remote iMessage media before plugin-bound inbound claim metadata reaches Codex", async () => {
@@ -8952,6 +9928,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     hookMocks.registry.plugins = [];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "no_handler",
     });
@@ -9335,6 +10312,59 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
     });
+  });
+
+  it("rejects archived plugin-bound work before the plugin handler runs", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "must not send" } },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-archived",
+      targetSessionKey: "plugin-binding:codex:archived",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:archived-test",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      archivedAt: Date.now(),
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      To: "discord:channel:archived-test",
+      AccountId: "default",
+      SessionKey: "agent:main:discord:channel:archived-test",
+      Body: "start work",
+    });
+
+    await expect(
+      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
+    ).rejects.toThrow(/is archived/i);
+
+    expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {

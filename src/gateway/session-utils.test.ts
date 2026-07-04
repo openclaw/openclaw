@@ -172,6 +172,29 @@ describe("gateway session utils", () => {
     expect(listed.hasMore).toBe(true);
   });
 
+  test("session lists separate archived rows and sort pinned sessions first", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      recent: { sessionId: "recent", updatedAt: 30 },
+      pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
+      archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
+    } satisfies Record<string, SessionEntry>;
+
+    const active = listSessionsFromStore({ cfg, storePath: "", store, opts: {} });
+    expect(active.sessions.map((session) => session.key)).toEqual(["pinned", "recent"]);
+    expect(active.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 40, archived: false });
+
+    const archived = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { archived: true },
+    });
+    expect(archived.sessions).toMatchObject([
+      { key: "archived", archived: true, archivedAt: 50, pinned: false },
+    ]);
+  });
+
   test("session lists page from an offset after filtering and sorting", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
