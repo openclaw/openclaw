@@ -20,6 +20,7 @@ function createCompletionProgram(): Command {
   const gateway = program.command("gateway").description("Gateway commands");
   gateway.option("--force", "Force the action");
   gateway.option("-t, --token <token>", "Gateway token");
+  gateway.alias("gw"); // Add alias for testing
 
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
@@ -39,11 +40,13 @@ describe("completion-cli", () => {
     const script = getCompletionScript("zsh", createCompletionProgram());
 
     expect(script).toContain("_openclaw_gateway()");
-    expect(script).toContain("(status) _openclaw_gateway_status ;;");
-    expect(script).toContain("(restart) _openclaw_gateway_restart ;;");
+    expect(script).toContain("status) _openclaw_gateway_status ;;");
+    expect(script).toContain("restart) _openclaw_gateway_restart ;;");
     expect(script).toContain("--force[Force the action]");
     expect(script).toContain("\\`models status --json\\`");
     expect(script).toContain("\\$OPENCLAW_STATE_DIR");
+    // Test alias support - gateway alias "gw" should be included
+    expect(script).toContain("gw) _openclaw_gateway ;;");
   });
 
   it("escapes zsh option descriptions for double-quoted arguments specs", () => {
@@ -57,6 +60,27 @@ describe("completion-cli", () => {
       "--literal[Use \\$OPENCLAW_STATE_DIR with \\`model/list\\` and John's profile]",
     );
     expect(script).not.toContain("John'\\''s");
+  });
+
+  it("includes command aliases in zsh completion", () => {
+    const program = new Command().name("openclaw").option("-v, --verbose", "Verbose output");
+
+    const gateway = program.command("gateway").description("Gateway commands");
+    gateway.alias("gw");
+    gateway.command("status").description("Show gateway status");
+
+    const script = getCompletionScript("zsh", program);
+
+    // Main command should be in the list
+    expect(script).toContain("gateway[Gateway commands]");
+    // Alias should also be included
+    expect(script).toContain("gw[Gateway commands]");
+    // Case statement should handle both main command and alias
+    expect(script).toContain("(gateway) _openclaw_gateway ;;");
+    expect(script).toContain("(gw) _openclaw_gateway ;;");
+    // Alias function should delegate to main handler
+    expect(script).toContain("_openclaw_gw()");
+    expect(script).toContain("_openclaw_gateway");
   });
 
   it("defers zsh registration until compinit is available", async () => {
