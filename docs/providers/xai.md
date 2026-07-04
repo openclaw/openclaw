@@ -141,28 +141,27 @@ workloads unless you explicitly need a Grok 4.20 beta alias.
 
 The bundled plugin maps xAI's current public API surface onto OpenClaw's shared
 provider and tool contracts. Capabilities that don't fit the shared contract
-(for example streaming TTS and realtime voice) are not exposed - see the table
-below.
+(for example realtime voice) are not exposed - see the table below.
 
-| xAI capability             | OpenClaw surface                          | Status                                                              |
-| -------------------------- | ----------------------------------------- | ------------------------------------------------------------------- |
-| Chat / Responses           | `xai/<model>` model provider              | Yes                                                                 |
-| Server-side web search     | `web_search` provider `grok`              | Yes                                                                 |
-| Server-side X search       | `x_search` tool                           | Yes                                                                 |
-| Server-side code execution | `code_execution` tool                     | Yes                                                                 |
-| Images                     | `image_generate`                          | Yes                                                                 |
-| Videos                     | `video_generate`                          | Yes                                                                 |
-| Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`    | Yes                                                                 |
-| Streaming TTS              | -                                         | Not exposed; OpenClaw's TTS contract returns complete audio buffers |
-| Batch speech-to-text       | `tools.media.audio` / media understanding | Yes                                                                 |
-| Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`    | Yes                                                                 |
-| Realtime voice             | -                                         | Not exposed yet; different session/WebSocket contract               |
-| Files / batches            | Generic model API compatibility only      | Not a first-class OpenClaw tool                                     |
+| xAI capability             | OpenClaw surface                          | Status                                                |
+| -------------------------- | ----------------------------------------- | ----------------------------------------------------- |
+| Chat / Responses           | `xai/<model>` model provider              | Yes                                                   |
+| Server-side web search     | `web_search` provider `grok`              | Yes                                                   |
+| Server-side X search       | `x_search` tool                           | Yes                                                   |
+| Server-side code execution | `code_execution` tool                     | Yes                                                   |
+| Images                     | `image_generate`                          | Yes                                                   |
+| Videos                     | `video_generate`                          | Yes                                                   |
+| Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`    | Yes                                                   |
+| Streaming TTS              | `textToSpeechStream` callers              | Yes, native xAI WebSocket only                        |
+| Batch speech-to-text       | `tools.media.audio` / media understanding | Yes                                                   |
+| Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`    | Yes                                                   |
+| Realtime voice             | -                                         | Not exposed yet; different session/WebSocket contract |
+| Files / batches            | Generic model API compatibility only      | Not a first-class OpenClaw tool                       |
 
 <Note>
 OpenClaw uses xAI's REST image/video/TTS/STT APIs for media generation,
-speech, and batch transcription, xAI's streaming STT WebSocket for live
-voice-call transcription, and the Responses API for model, search, and
+speech, and batch transcription, xAI's streaming TTS/STT WebSockets for shared
+speech streaming contracts, and the Responses API for model, search, and
 code-execution tools. Features that need different OpenClaw contracts, such as
 Realtime voice sessions, are documented here as upstream capabilities rather
 than hidden plugin behavior.
@@ -322,9 +321,13 @@ Legacy aliases still normalize to the canonical bundled ids:
     ```
 
     <Note>
-    OpenClaw uses xAI's batch `/v1/tts` endpoint. xAI also offers streaming TTS
-    over WebSocket, but the OpenClaw speech provider contract currently expects
-    a complete audio buffer before reply delivery.
+    OpenClaw keeps normal attachments and `talk.speak` on xAI's batch
+    `/v1/tts` endpoint. Streaming playback callers use xAI's native
+    `wss://api.x.ai/v1/tts` WebSocket contract with `text.delta` and
+    `text.done` input events and `audio.delta` audio chunks until
+    `audio.done`. That WebSocket path is restricted to the native xAI host so
+    REST-compatible proxy base URLs are not silently treated as xAI streaming
+    endpoints.
     </Note>
 
   </Accordion>
@@ -501,8 +504,8 @@ Legacy aliases still normalize to the canonical bundled ids:
       client-side or custom tools used by OpenClaw's shared agent loop. See the
       [xAI multi-agent limitations](https://docs.x.ai/developers/model-capabilities/text/multi-agent#limitations).
     - xAI Realtime voice is not registered as an OpenClaw provider yet. It
-      needs a different bidirectional voice session contract than batch STT or
-      streaming transcription.
+      needs a different bidirectional voice session contract than streaming
+      TTS, batch STT, or streaming transcription.
     - xAI image `quality`, image `mask`, and extra native-only aspect ratios are
       not exposed until the shared `image_generate` tool has corresponding
       cross-provider controls.

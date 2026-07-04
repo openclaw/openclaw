@@ -2,14 +2,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
 
-const { xaiTTSMock, isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } =
-  vi.hoisted(() => ({
-    xaiTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
-    isProviderAuthProfileConfiguredMock: vi.fn(() => false),
-    resolveApiKeyForProviderMock: vi.fn(
-      async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
-    ),
-  }));
+const {
+  xaiTTSMock,
+  xaiTTSStreamMock,
+  isProviderAuthProfileConfiguredMock,
+  resolveApiKeyForProviderMock,
+} = vi.hoisted(() => ({
+  xaiTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
+  xaiTTSStreamMock: vi.fn(async () => ({
+    audioStream: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    }),
+    release: vi.fn(async () => {}),
+  })),
+  isProviderAuthProfileConfiguredMock: vi.fn(() => false),
+  resolveApiKeyForProviderMock: vi.fn(
+    async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
+  ),
+}));
 
 vi.mock("./tts.js", () => ({
   XAI_BASE_URL: "https://api.x.ai/v1",
@@ -20,6 +33,7 @@ vi.mock("./tts.js", () => ({
   normalizeXaiTtsBaseUrl: (baseUrl?: string) =>
     baseUrl?.trim().replace(/\/+$/, "") || "https://api.x.ai/v1",
   xaiTTS: xaiTTSMock,
+  xaiTTSStream: xaiTTSStreamMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -58,8 +72,36 @@ function requireLastTtsCall(): {
   return params;
 }
 
+function requireLastTtsStreamCall(): {
+  text?: string;
+  apiKey?: string;
+  baseUrl?: string;
+  voiceId?: string;
+  language?: string;
+  speed?: number;
+  responseFormat?: string;
+} {
+  const params = (xaiTTSStreamMock.mock.calls as unknown as Array<[unknown]>).at(-1)?.[0] as
+    | {
+        text?: string;
+        apiKey?: string;
+        baseUrl?: string;
+        voiceId?: string;
+        language?: string;
+        speed?: number;
+        responseFormat?: string;
+      }
+    | undefined;
+  if (!params) {
+    throw new Error("Expected xaiTTSStream call");
+  }
+  return params;
+}
+
 describe("xai speech provider", () => {
   afterEach(() => {
+    xaiTTSMock.mockClear();
+    xaiTTSStreamMock.mockClear();
     isProviderAuthProfileConfiguredMock.mockReset();
     isProviderAuthProfileConfiguredMock.mockReturnValue(false);
     resolveApiKeyForProviderMock.mockReset();
@@ -115,6 +157,45 @@ describe("xai speech provider", () => {
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
     expect(requireLastTtsCall().responseFormat).toBe("wav");
+  });
+
+  it("streams audio through the native xAI TTS helper", async () => {
+    const provider = buildXaiSpeechProvider();
+    const result = await provider.streamSynthesize?.({
+      text: "hello",
+      cfg: {},
+      providerConfig: {
+        apiKey: "xai-key",
+        baseUrl: "https://api.x.ai/v1",
+        voiceId: "eve",
+        language: "en",
+        speed: 1,
+        responseFormat: "wav",
+      },
+      providerOverrides: {
+        voice: "ara",
+        language: "es",
+        speed: 1.2,
+      },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(result?.outputFormat).toBe("wav");
+    expect(result?.fileExtension).toBe(".wav");
+    expect(result?.voiceCompatible).toBe(false);
+    expect(result?.audioStream).toBeInstanceOf(ReadableStream);
+    expect(result?.release).toBeDefined();
+    expect(requireLastTtsStreamCall()).toMatchObject({
+      text: "hello",
+      apiKey: "xai-key",
+      baseUrl: "https://api.x.ai/v1",
+      voiceId: "ara",
+      language: "es",
+      speed: 1.2,
+      responseFormat: "wav",
+    });
+    expect(xaiTTSMock).not.toHaveBeenCalled();
   });
 
   it("honors voice, language, and speed overrides for telephony output", async () => {
