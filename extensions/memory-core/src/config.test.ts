@@ -18,6 +18,7 @@ describe("memory-core manifest config schema", () => {
       value: {
         dreaming: {
           enabled: true,
+          agents: ["main", "researcher"],
           timezone: "Europe/London",
           verboseLogging: true,
           storage: {

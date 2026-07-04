@@ -29,6 +29,11 @@
       "label": "Dreaming Model",
       "placeholder": "anthropic/claude-sonnet-4-6",
       "help": "Optional provider/model override for Dream Diary narrative subagent runs. Requires plugins.entries.memory-core.subagent.allowModelOverride."
+    },
+    "dreaming.agents": {
+      "label": "Dreaming Agents",
+      "placeholder": "main",
+      "help": "Optional allowlist of agent ids whose workspaces are included in dreaming sweeps. Leave unset to process all configured agent workspaces."
     }
   },
   "configSchema": {
@@ -44,6 +49,13 @@
           },
           "frequency": {
             "type": "string"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "model": {
             "type": "string"

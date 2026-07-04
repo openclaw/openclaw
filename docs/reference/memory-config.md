@@ -691,12 +691,13 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key                                    | Type      | Default       | Description                                                                                                                      |
-| -------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                              | `boolean` | `false`       | Enable or disable dreaming entirely                                                                                              |
-| `frequency`                            | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
-| `model`                                | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
-| `phases.deep.maxPromotedSnippetTokens` | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
+| Key                                    | Type       | Default       | Description                                                                                                                      |
+| -------------------------------------- | ---------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                              | `boolean`  | `false`       | Enable or disable dreaming entirely                                                                                              |
+| `frequency`                            | `string`   | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
+| `agents`                               | `string[]` | unset         | Optional allowlist of agent ids whose workspaces are included; unset processes all configured agent workspaces                   |
+| `model`                                | `string`   | default model | Optional Dream Diary subagent model override                                                                                     |
+| `phases.deep.maxPromotedSnippetTokens` | `number`   | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
 
 ### Example
 
@@ -712,6 +713,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
         config: {
           dreaming: {
             enabled: true,
+            agents: ["main"],
             frequency: "0 3 * * *",
             model: "anthropic/claude-sonnet-4-6",
           },
@@ -725,6 +727,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- `dreaming.agents` filters by agent id before workspace resolution. Duplicate workspaces are still deduped, and unknown agent ids are ignored.
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
 - Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.

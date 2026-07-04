@@ -84,6 +84,7 @@ type DoctorMemoryDreamingEntryPayload = {
 
 type DoctorMemoryDreamingPayload = {
   enabled: boolean;
+  agents?: string[];
   timezone?: string;
   verboseLogging: boolean;
   storageMode: "inline" | "separate" | "both";
@@ -295,6 +296,7 @@ function resolveDreamingConfig(
   });
   return {
     enabled: resolved.enabled,
+    ...(Array.isArray(resolved.agents) ? { agents: resolved.agents } : {}),
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
     storageMode: resolved.storage.mode,
@@ -746,8 +748,13 @@ export const doctorHandlers: GatewayRequestHandlers = {
             primaryWorkspaceDir: workspaceDir,
             primaryAgentId: agentId,
           }).map((entry) => entry.workspaceDir);
+      const hasDreamingAgentAllowlist = Array.isArray(dreamingConfig.agents);
       const allWorkspaces =
-        configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
+        configuredWorkspaces.length > 0
+          ? configuredWorkspaces
+          : workspaceDir && !hasDreamingAgentAllowlist
+            ? [workspaceDir]
+            : [];
       const storeStats =
         allWorkspaces.length > 0
           ? mergeDreamingStoreStats(

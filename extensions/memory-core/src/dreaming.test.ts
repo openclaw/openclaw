@@ -2880,4 +2880,89 @@ describe("short-term dreaming trigger", () => {
       "memory-core: dreaming promotion complete (workspaces=3, candidates=3, applied=3, failed=0).",
     );
   });
+
+  it("limits managed dreaming runs to configured dreaming agents", async () => {
+    const logger = createLogger();
+    const workspaceRoot = await createTempWorkspace("memory-dreaming-agent-scope-");
+    const mainWorkspace = path.join(workspaceRoot, "main");
+    const alphaWorkspace = path.join(workspaceRoot, "alpha");
+
+    await writeDailyMemoryNote(mainWorkspace, "2026-04-02", ["Main-only dreaming note."]);
+    await writeDailyMemoryNote(alphaWorkspace, "2026-04-02", ["Alpha should stay untouched."]);
+    await recordShortTermRecalls({
+      workspaceDir: mainWorkspace,
+      query: "main dreaming",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Main-only dreaming note.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir: alphaWorkspace,
+      query: "alpha dreaming",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Alpha should stay untouched.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir: mainWorkspace,
+      cfg: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  agents: ["main"],
+                },
+              },
+            },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "alpha",
+              workspace: alphaWorkspace,
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(await fs.readFile(path.join(mainWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Main-only dreaming note.",
+    );
+    await expectPathMissing(path.join(alphaWorkspace, "MEMORY.md"));
+    expect(logger.info).toHaveBeenCalledWith(
+      "memory-core: dreaming promotion complete (workspaces=1, candidates=1, applied=1, failed=0).",
+    );
+  });
 });

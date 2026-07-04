@@ -957,6 +957,43 @@ describe("doctor.memory.status", () => {
     }
   });
 
+  it("does not fall back to the manager workspace when the dreaming agent allowlist is empty after resolution", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                agents: ["missing"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: "/tmp/openclaw" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    const payload = respondPayload(respond);
+    expectRecordFields(payload.dreaming, {
+      agents: ["missing"],
+      shortTermCount: 0,
+      promotedTotal: 0,
+    });
+    expect(loadShortTermPromotionDreamingStats).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+  });
+
   it("reads dreaming config from the selected memory slot plugin", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {

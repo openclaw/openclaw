@@ -16,6 +16,7 @@ describe("memory dreaming host helpers", () => {
       pluginConfig: {
         dreaming: {
           enabled: true,
+          agents: [" Main ", "ALPHA", "main", "Ops Agent", 42],
           frequency: "0 */4 * * *",
           timezone: "Europe/London",
           model: " anthropic/claude-sonnet-4-6 ",
@@ -38,6 +39,7 @@ describe("memory dreaming host helpers", () => {
     });
 
     expect(resolved.enabled).toBe(true);
+    expect(resolved.agents).toEqual(["main", "alpha", "ops-agent"]);
     expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
     expect(resolved.execution.defaults.model).toBe("anthropic/claude-sonnet-4-6");
@@ -219,6 +221,70 @@ describe("memory dreaming host helpers", () => {
         agentIds: ["main"],
       },
     ]);
+  });
+
+  it("scopes dreaming workspaces to the configured agent allowlist", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                agents: ["alpha", "main", "missing"],
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "alpha", workspace: "/workspace/alpha" },
+          { id: "beta", workspace: "/workspace/beta" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, {
+        primaryWorkspaceDir: "/workspace/main",
+        primaryAgentId: "main",
+      }),
+    ).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
+      },
+      {
+        workspaceDir: "/workspace/main",
+        agentIds: ["main"],
+      },
+    ]);
+  });
+
+  it("ignores unknown dreaming agent allowlist entries", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                agents: ["missing"],
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [{ id: "alpha", workspace: "/workspace/alpha" }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, {
+        primaryWorkspaceDir: "/workspace/main",
+        primaryAgentId: "main",
+      }),
+    ).toEqual([]);
   });
 
   it("uses default agent fallback and timezone-aware day helpers", () => {

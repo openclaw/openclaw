@@ -530,7 +530,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     seenWorkspaces.add(workspaceDir);
     return true;
   });
-  if (workspaces.length === 0 && fallbackWorkspaceDir) {
+  if (workspaces.length === 0 && fallbackWorkspaceDir && !params.cfg) {
     workspaces.push(fallbackWorkspaceDir);
   }
   if (workspaces.length === 0) {

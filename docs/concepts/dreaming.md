@@ -107,7 +107,10 @@ The `memory-core` shadow-trial runner keeps the same report-only contract for co
 
 ## Scheduling
 
-When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep,
+deduped across the primary runtime workspace and any configured agent workspaces
+so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and
+memory state. Set `dreaming.agents` to process only selected agent ids.
 
 | Setting              | Default       |
 | -------------------- | ------------- |

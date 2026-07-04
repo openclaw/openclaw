@@ -6,10 +6,12 @@ import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -132,6 +134,7 @@ export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 export type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
+  agents?: string[];
   timezone?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
@@ -255,6 +258,21 @@ function normalizeStringArray<T extends string>(
   return normalized.length > 0 ? normalized : [...fallback];
 }
 
+function normalizeAgentIdArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    const raw = normalizeOptionalString(entry);
+    const agentId = raw ? normalizeAgentId(raw) : undefined;
+    if (agentId && !normalized.includes(agentId)) {
+      normalized.push(agentId);
+    }
+  }
+  return normalized;
+}
+
 function normalizeStorageMode(value: unknown): MemoryDreamingStorageMode {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "inline" || normalized === "separate" || normalized === "both") {
@@ -367,6 +385,7 @@ export function resolveMemoryDreamingConfig(params: {
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
   const topLevelModel = normalizeTrimmedString(dreaming?.model);
+  const agentIds = normalizeAgentIdArray(dreaming?.agents);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -385,6 +404,7 @@ export function resolveMemoryDreamingConfig(params: {
   return {
     enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
     frequency,
+    ...(Array.isArray(agentIds) ? { agents: agentIds } : {}),
     ...(timezone ? { timezone } : {}),
     verboseLogging: normalizeBoolean(
       dreaming?.verboseLogging,
@@ -608,6 +628,13 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
+  const dreamingConfig = resolveMemoryDreamingConfig({
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+    cfg,
+  });
+  const allowedAgentIds = Array.isArray(dreamingConfig.agents)
+    ? new Set(dreamingConfig.agents)
+    : undefined;
   const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
@@ -615,15 +642,21 @@ export function resolveMemoryDreamingWorkspaces(
     if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
       continue;
     }
-    const id = normalizeOptionalLowercaseString(entry.id);
-    if (!id || seenAgents.has(id)) {
+    const id = normalizeAgentId(entry.id);
+    if (seenAgents.has(id)) {
+      continue;
+    }
+    if (allowedAgentIds && !allowedAgentIds.has(id)) {
       continue;
     }
     seenAgents.add(id);
     agentIds.push(id);
   }
   if (agentIds.length === 0) {
-    agentIds.push(resolveDefaultAgentId(cfg));
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    if (!allowedAgentIds || allowedAgentIds.has(defaultAgentId)) {
+      agentIds.push(defaultAgentId);
+    }
   }
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
@@ -632,7 +665,10 @@ export function resolveMemoryDreamingWorkspaces(
     if (!workspaceDir) {
       return;
     }
-    const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
+    const agentId = normalizeAgentId(agentIdRaw);
+    if (allowedAgentIds && !allowedAgentIds.has(agentId)) {
+      return;
+    }
     const key = normalizePathForComparison(workspaceDir);
     const existing = byWorkspace.get(key);
     if (existing) {
