@@ -128,6 +128,10 @@ Notes:
   verifies the installed version against the registry it came from. `--version`
   and `--tag` override the version selector but keep that installed registry
   when origin metadata exists.
+- For installed-version verification, OpenClaw also compares the installed
+  `SKILL.md` hash against `.clawhub/lock.json` when that integrity metadata is
+  present. Reinstall the skill from ClawHub if this local audit check reports
+  drift.
 - `verify --card` prints the generated Skill Card Markdown instead of JSON. The
   command exits non-zero when ClawHub returns `ok: false` or `decision: "fail"`;
   unsigned signatures are informational unless ClawHub policy changes.

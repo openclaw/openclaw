@@ -534,6 +534,25 @@ async function readInstalledSkillFileLock(
   return undefined;
 }
 
+async function readInstalledSkillFileLockMismatch(params: {
+  trackedSlug: string;
+  skillDir: string;
+  locked: ClawHubSkillLockEntry;
+}): Promise<string | undefined> {
+  const lockedSkillFile = normalizeSkillFileLock(params.locked.skillFile);
+  if (!lockedSkillFile) {
+    return undefined;
+  }
+  const current = await readInstalledSkillFileLock(params.skillDir);
+  if (!current) {
+    return `Skill "${params.trackedSlug}" is tracked by the workspace ClawHub lockfile but its installed skill file is missing. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`;
+  }
+  if (current.path !== lockedSkillFile.path || current.sha256 !== lockedSkillFile.sha256) {
+    return `Skill "${params.trackedSlug}" installed skill file does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`;
+  }
+  return undefined;
+}
+
 export function readClawHubSkillsLockfileStatusSync(
   workspaceDir: string,
 ): ClawHubSkillsLockfileStatusRead {
@@ -1070,6 +1089,16 @@ export async function resolveClawHubSkillVerificationTarget(params: {
         : tag
           ? "tag"
           : "installed-version";
+      if (selector === "installed-version") {
+        const skillFileMismatch = await readInstalledSkillFileLockMismatch({
+          trackedSlug,
+          skillDir,
+          locked,
+        });
+        if (skillFileMismatch) {
+          return { ok: false, error: skillFileMismatch };
+        }
+      }
       return {
         ok: true,
         slug: trackedSlug,
