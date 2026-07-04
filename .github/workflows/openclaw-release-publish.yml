@@ -1543,13 +1543,18 @@ jobs:
       - name: Publish candidates and build protected-selector handoff
         env:
           GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           node --import tsx scripts/orchestrate-extended-stable-plugin-release.ts \
-            --release-tag "${{ inputs.tag }}" \
-            --source-sha "${{ needs.resolve_release_target.outputs.sha }}" \
-            --workflow-ref "${{ github.ref_name }}" \
-            --preflight-run-id "${{ inputs.preflight_run_id }}" \
-            --validation-run-id "${{ inputs.full_release_validation_run_id }}" \
+            --release-tag "${RELEASE_TAG}" \
+            --source-sha "${SOURCE_SHA}" \
+            --workflow-ref "${WORKFLOW_REF}" \
+            --preflight-run-id "${PREFLIGHT_RUN_ID}" \
+            --validation-run-id "${VALIDATION_RUN_ID}" \
             --output "${RUNNER_TEMP}/extended-stable-selector-handoff/extended-stable-selector-handoff.json"
 
       - name: Upload protected-selector handoff
