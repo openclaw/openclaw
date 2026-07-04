@@ -14,7 +14,6 @@ enum OpenClawSpacing {
     static let space3: CGFloat = 12
     static let space4: CGFloat = 16
     static let space6: CGFloat = 24
-    static let space8: CGFloat = 32
 }
 
 enum OpenClawRadius {
@@ -22,7 +21,6 @@ enum OpenClawRadius {
     static let sm: CGFloat = 10
     static let md: CGFloat = 12
     static let lg: CGFloat = 16
-    static let xl: CGFloat = 20
 }
 
 struct OpenClawProBackground: View {

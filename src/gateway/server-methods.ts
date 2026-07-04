@@ -106,6 +106,10 @@ const loadDeviceHandlers = lazyHandlerModule(
   () => import("./server-methods/devices.js"),
   (module) => module.deviceHandlers,
 );
+const loadDevicePairSetupHandlers = lazyHandlerModule(
+  () => import("./server-methods/device-pair-setup.js"),
+  (module) => module.devicePairSetupHandlers,
+);
 const loadDiagnosticsHandlers = lazyHandlerModule(
   () => import("./server-methods/diagnostics.js"),
   (module) => module.diagnosticsHandlers,
@@ -129,6 +133,10 @@ const loadHealthHandlers = lazyHandlerModule(
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
+);
+const loadTerminalHandlers = lazyHandlerModule(
+  () => import("./server-methods/terminal.js"),
+  (module) => module.terminalHandlers,
 );
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
@@ -284,6 +292,18 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadLogsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: [
+      "terminal.open",
+      "terminal.input",
+      "terminal.resize",
+      "terminal.close",
+      "terminal.attach",
+      "terminal.list",
+      "terminal.text",
+    ],
+    loadHandlers: loadTerminalHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
     loadHandlers: loadVoicewakeHandlers,
   }),
@@ -339,6 +359,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.token.revoke",
     ],
     loadHandlers: loadDeviceHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["device.pair.setupCode"],
+    loadHandlers: loadDevicePairSetupHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["diagnostics.stability"],

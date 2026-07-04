@@ -9,6 +9,7 @@ import {
   isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -845,12 +846,6 @@ function isProcessLikelyAlive(pid: number): boolean {
     // EPERM and unknown errors are treated as alive to avoid stealing active locks.
     return true;
   }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
@@ -2272,15 +2267,21 @@ function lineRangeOverlapsDreamingFence(
   let insideFence = false;
   for (let i = 0; i < safeEnd; i += 1) {
     const line = lines[i] ?? "";
-    if (DREAMING_FENCE_START_RE.test(line)) {
-      insideFence = true;
-      continue;
-    }
-    if (DREAMING_FENCE_END_RE.test(line)) {
-      insideFence = false;
-      continue;
-    }
     const oneIndexed = i + 1;
+    const isStart = DREAMING_FENCE_START_RE.test(line);
+    const isEnd = DREAMING_FENCE_END_RE.test(line);
+    if (isStart || isEnd) {
+      // The marker line itself is managed-block content. A relocated range
+      // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
+      // build its snippet from raw lines that contain that marker text and
+      // leak it into MEMORY.md alongside any adjacent fenced content captured
+      // by the same window. (#80613)
+      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+        return true;
+      }
+      insideFence = isStart;
+      continue;
+    }
     if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
       return true;
     }

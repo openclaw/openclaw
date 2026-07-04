@@ -75,6 +75,10 @@ describe("slackOutbound", () => {
       blocks: [
         {
           type: "section",
+          text: { type: "mrkdwn", text: "final text" },
+        },
+        {
+          type: "section",
           text: { type: "mrkdwn", text: "Block body" },
         },
       ],

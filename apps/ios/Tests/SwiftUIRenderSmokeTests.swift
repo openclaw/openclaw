@@ -20,6 +20,7 @@ struct SwiftUIRenderSmokeTests {
         let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
         let root = SettingsProTab()
+            .environment(AppAppearanceModel())
             .environment(appModel)
             .environment(appModel.voiceWake)
             .environment(gatewayController)
@@ -33,6 +34,7 @@ struct SwiftUIRenderSmokeTests {
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             let root = SettingsProTab()
+                .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
@@ -48,6 +50,7 @@ struct SwiftUIRenderSmokeTests {
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             let root = SettingsProTab(directRoute: .about)
+                .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
@@ -66,6 +69,7 @@ struct SwiftUIRenderSmokeTests {
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             let root = SettingsProTab(directRoute: .licenses)
+                .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
@@ -87,6 +91,7 @@ struct SwiftUIRenderSmokeTests {
 
             let root = SettingsProTab()
                 .defaultAppStorage(defaults)
+                .environment(AppAppearanceModel(userDefaults: defaults))
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
@@ -112,6 +117,7 @@ struct SwiftUIRenderSmokeTests {
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             let root = RootTabs()
+                .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
@@ -128,6 +134,7 @@ struct SwiftUIRenderSmokeTests {
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             let root = RootTabs()
+                .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)

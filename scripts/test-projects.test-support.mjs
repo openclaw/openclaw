@@ -42,7 +42,6 @@ import {
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
-import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastTestFiles,
   resolveUnitFastTestIncludePattern,
@@ -158,7 +157,6 @@ const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-t
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
-const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 
 const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [GATEWAY_VITEST_CONFIG, 180],
@@ -212,7 +210,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [COMMANDS_LIGHT_VITEST_CONFIG, 48],
   [PLUGIN_SDK_VITEST_CONFIG, 46],
   [AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG, 45],
-  [UNIT_UI_VITEST_CONFIG, 40],
   [PLUGIN_SDK_LIGHT_VITEST_CONFIG, 38],
   [DAEMON_VITEST_CONFIG, 36],
   [BOUNDARY_VITEST_CONFIG, 34],
@@ -378,7 +375,6 @@ const VITEST_CONFIG_BY_KIND = {
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
   unitSupport: UNIT_SUPPORT_VITEST_CONFIG,
-  unitUi: UNIT_UI_VITEST_CONFIG,
   runtimeConfig: RUNTIME_CONFIG_VITEST_CONFIG,
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
@@ -1234,6 +1230,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "scripts/lib/swift-toolchain.sh",
+    ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
+  ],
+  [
     "scripts/lib/plugin-npm-runtime-build.mjs",
     ["test/scripts/plugin-npm-runtime-build-args.test.ts", "test/plugin-npm-runtime-build.test.ts"],
   ],
@@ -2075,7 +2075,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
-  ["ui/config/control-ui-chunking.ts", ["ui/src/ui/control-ui-chunking.test.ts"]],
+  ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -3020,8 +3020,8 @@ function isVitestConfigTargetForKind(kind, targetArg, cwd) {
 function isControlUiE2eTarget(relative) {
   return (
     relative === "ui/src/test-helpers/control-ui-e2e.ts" ||
-    relative === "ui/src/ui/e2e" ||
-    relative.startsWith("ui/src/ui/e2e/") ||
+    relative === "ui/src/e2e" ||
+    relative.startsWith("ui/src/e2e/") ||
     (relative.startsWith("ui/src/") && relative.endsWith(".e2e.test.ts"))
   );
 }
@@ -3302,10 +3302,7 @@ function shouldCombineSiblingTestWithImportGraph(changedPath) {
 }
 
 function shouldRouteChangedTargetWithoutImportGraph(changedPath) {
-  return (
-    changedPath.endsWith(".live.test.ts") ||
-    (changedPath.startsWith("ui/src/") && !changedPath.startsWith("ui/src/ui/"))
-  );
+  return changedPath.endsWith(".live.test.ts") || changedPath.startsWith("ui/src/");
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath) {
@@ -3459,9 +3456,6 @@ function classifyTarget(arg, cwd) {
     return "uiE2e";
   }
   if (isPathAtOrUnder(relative, "ui/src")) {
-    if (isUnitUiTestTarget(relative)) {
-      return "unitUi";
-    }
     return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-")) {
@@ -3700,7 +3694,7 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
   if (isTestFileTarget(relative)) {
     return false;
   }
-  return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
+  return relative.startsWith("ui/src/");
 }
 
 function createVitestArgs(params) {
@@ -3899,7 +3893,6 @@ export function buildVitestRunPlans(
     "unitSrc",
     "unitSecurity",
     "unitSupport",
-    "unitUi",
     "utils",
     "wizard",
     "e2e",

@@ -54,6 +54,26 @@ trusting the plugin.
 This is intended for package-acceptance and release-candidate proof where a
 local pack artifact should behave like the registry artifact it simulates.
 
+Use `npm-pack:` when testing official or external plugin packages before
+publish. A raw archive or path install is useful for local debugging, but it
+does not prove the same dependency path as an installed npm or ClawHub package.
+`npm-pack:` proves the managed package install shape; it is not, by itself,
+proof that the plugin is catalog-linked official content.
+
+When behavior depends on bundled-plugin or trusted official plugin status, pair
+the local package proof with a catalog-backed official install or a published
+package path that records official trust. Privileged helper access and
+trusted-official scope handling should be validated on that trusted install
+path, not inferred from a local tarball install.
+
+If a plugin fails at runtime with a missing import, fix the package manifest
+instead of repairing the managed project by hand. Runtime imports belong in the
+plugin package `dependencies` or `optionalDependencies`; `devDependencies` are
+not installed for managed runtime projects. A local `npm install` inside
+`~/.openclaw/npm/projects/<encoded-package>` can unblock a temporary diagnostic,
+but it is not package-acceptance proof because the next install or update will
+recreate the project from package metadata.
+
 npm may hoist transitive dependencies to the per-plugin project's
 `node_modules` beside the plugin package. OpenClaw scans the managed project
 root before trusting the install and removes that project during uninstall, so
@@ -75,6 +95,28 @@ policy, and writes `extensions/<id>/npm-shrinkwrap.json` for each
 `publishToNpm` plugin. Third-party plugin packages may also ship shrinkwrap;
 OpenClaw does not require it for community packages, but npm will respect it
 when present.
+
+Before treating a local package as release-candidate proof, inspect the tarball
+that will be installed:
+
+```bash
+npm pack --pack-destination /tmp
+tar -xOf /tmp/<plugin-package>.tgz package/package.json
+tar -tf /tmp/<plugin-package>.tgz | grep '^package/dist/'
+```
+
+For dependency changes, also verify a production install can resolve the
+runtime packages without dev dependencies:
+
+```bash
+tmpdir=$(mktemp -d)
+(
+  cd "$tmpdir"
+  npm init -y >/dev/null
+  npm install --package-lock-only --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts /tmp/<plugin-package>.tgz
+)
+rm -rf "$tmpdir"
+```
 
 OpenClaw-owned npm plugin packages can also publish with explicit
 `bundledDependencies`. The npm publish path overlays the runtime dependency

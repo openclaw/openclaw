@@ -67,6 +67,14 @@ function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     yield current;
+    // Never walk above a node_modules boundary: a package.json up there belongs
+    // to the workspace that installed the tooling (for example an enclosing
+    // checkout hosting a nested git worktree), not to the package owning the
+    // running code. Crossing it made nested worktrees resolve the ancestor
+    // checkout and load its stale bundled plugin manifests.
+    if (path.basename(current) === "node_modules") {
+      break;
+    }
     const parent = path.dirname(current);
     if (parent === current) {
       break;

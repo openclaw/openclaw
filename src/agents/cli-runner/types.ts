@@ -24,6 +24,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
@@ -48,6 +49,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /** Undecorated current-turn prompt used to merge inline and offloaded images. */
+  imagePrompt?: string;
   /**
    * Execution mode for the generic CLI runner. Side questions are one-shot
    * background answers and must not reuse or mutate normal agent sessions.
@@ -167,18 +170,13 @@ export type CliPreparedBackend = {
   env?: Record<string, string>;
 };
 
-/** Reusable CLI session id and the reason it was rejected, when any. */
-export type CliReusableSession = {
-  sessionId?: string;
-  invalidatedReason?:
-    | "auth-profile"
-    | "auth-epoch"
-    | "system-prompt"
-    | "cwd"
-    | "mcp"
-    | "missing-transcript"
-    | "orphaned-tool-use";
-};
+/** Reusable CLI session id, soft content drift, or hard invalidation. */
+export type CliReusableSession =
+  | CliSessionReuseResult
+  | {
+      mode: "invalidate";
+      invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
+    };
 
 export type CliSessionBindingFacts = {
   extraSystemPromptStatic?: string;

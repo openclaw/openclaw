@@ -55,7 +55,7 @@ describe("temp-dir test helpers", () => {
       expect([...autoCleanupTracker.dirs]).toEqual([]);
     });
 
-    const autoCleanupTracker = useAutoCleanupTempDirTracker();
+    const autoCleanupTracker = useAutoCleanupTempDirTracker(afterEach);
 
     it("tracks temp dirs with Vitest cleanup", () => {
       const autoCleanedDir = autoCleanupTracker.make("openclaw-temp-dir-auto-");

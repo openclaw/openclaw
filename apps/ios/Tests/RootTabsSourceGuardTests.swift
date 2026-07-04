@@ -191,6 +191,7 @@ struct RootTabsSourceGuardTests {
 
     @Test func `iOS 26 chrome uses native glass while content cards stay quiet`() throws {
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let cardSurface = try Self.extract(
             componentsSource,
@@ -198,6 +199,8 @@ struct RootTabsSourceGuardTests {
             to: "struct ProIconBadge: View")
 
         #expect(rootSource.contains(".openClawTabBarBehavior()"))
+        #expect(appSource.contains(".preferredColorScheme(self.appearanceModel.preference.colorScheme)"))
+        #expect(!appSource.contains("overrideUserInterfaceStyle"))
         #expect(componentsSource.contains("content.tabBarMinimizeBehavior(.onScrollDown)"))
         #expect(componentsSource.contains(".buttonStyle(.glassProminent)"))
         #expect(componentsSource.contains(".buttonStyle(.glass)"))
@@ -239,11 +242,10 @@ struct RootTabsSourceGuardTests {
             settingsSource,
             from: "func settingsListRow(",
             to: "func destination(for route:")
-        let appearanceRow = try Self.extract(
+        let appearanceScreen = try Self.extract(
             settingsSource,
-            from: "var appearanceRow: some View",
-            to: "var appearanceRowLabel: some View")
-
+            from: "private struct AppearanceSettingsScreen: View",
+            to: "extension SettingsProTab")
         #expect(gatewayStatus.contains("OpenClawStatusBadge(label: self.title, tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
@@ -265,7 +267,8 @@ struct RootTabsSourceGuardTests {
         #expect(settingsRow.contains("NavigationLink(value: route)"))
         #expect(!settingsRow.contains("chevron.right"))
         #expect(settingsSource.contains("settings-appearance-row"))
-        #expect(!appearanceRow.contains(".pickerStyle(.segmented)"))
+        #expect(appearanceScreen.contains("AppearanceSettingsScreen"))
+        #expect(!appearanceScreen.contains(".pickerStyle(.segmented)"))
         #expect(!overviewSource.contains("ProCapsule("))
         #expect(overviewSource.contains("value: self.gatewayConnectionText"))
         #expect(overviewSource.contains("switch self.gatewayDisplayState"))
@@ -280,14 +283,14 @@ struct RootTabsSourceGuardTests {
         let aboutDestination = try Self.extract(
             settingsSource,
             from: "var aboutDestination: some View",
-            to: "func gatewayActionButton(")
+            to: "func toggleCard(")
         let diagnosticsDestination = try Self.extract(
             settingsSource,
             from: "var diagnosticsDestination: some View",
             to: "var privacyDestination: some View")
 
         #expect(!aboutDestination.contains("detailStatusCard("))
-        #expect(aboutDestination.contains("self.detailListCard"))
+        #expect(aboutDestination.contains("detailListCard"))
         #expect(aboutDestination.contains("self.detailRow(\"OpenClaw app version\""))
         #expect(aboutDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(aboutDestination
@@ -322,7 +325,9 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains("if !self.usesNativeNavigationChrome"))
         #expect(overviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(overviewSource.matches(of: /if !self\.usesNativeNavigationChrome/).count == 2)
-        #expect(chatSource.contains("OpenClawAdaptiveHeaderRow("))
+        #expect(chatSource.contains(".navigationTitle(self.headerDisplayTitle)"))
+        #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerLeadingAction)"))
+        #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
     }
@@ -691,7 +696,6 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("let openSettings: (() -> Void)?"))
         #expect(chatSource.contains("private var connectionStatusButton: some View"))
         #expect(chatSource.contains(".buttonStyle(.plain)"))
-        #expect(chatSource.contains(".contentShape(Circle())"))
         #expect(chatSource.contains(".accessibilityIdentifier(\"chat-gateway-status\")"))
         #expect(chatSource.contains("composerChrome: .clean"))
         #expect(docsSource.contains("let gatewayAction: (() -> Void)?"))

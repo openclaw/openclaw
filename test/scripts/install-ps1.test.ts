@@ -89,6 +89,56 @@ describe("install.ps1 failure handling", () => {
     expect(source).toContain("$installSucceeded = Test-BooleanSuccessResult -Results $mainResults");
   });
 
+  it("checks the full supported Node version range", () => {
+    const versionBody = extractFunctionBody(source, "Test-NodeVersionSupported");
+    const checkNodeBody = extractFunctionBody(source, "Check-Node");
+    expect(versionBody).toContain("$major -eq 22");
+    expect(versionBody).toContain("$minor -ge 19");
+    expect(versionBody).toContain("$major -eq 23");
+    expect(versionBody).toContain("$minor -ge 11");
+    expect(versionBody).toContain("$major -gt 23");
+    expect(checkNodeBody).toContain("Test-NodeVersionSupported -Version $nodeVersion");
+  });
+
+  runIfPowerShell("accepts only supported Node versions", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "$cases = @{",
+        "  '22.18.9' = $false",
+        "  '22.19.0' = $true",
+        "  '23.7.0' = $false",
+        "  '23.10.9' = $false",
+        "  '23.11.0' = $true",
+        "  '24.0.0' = $true",
+        "}",
+        "foreach ($entry in $cases.GetEnumerator()) {",
+        "  $actual = Test-NodeVersionSupported -Version $entry.Key",
+        '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it("runs npm install through the resolved command with quiet CI defaults", () => {
     const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
     expect(npmInstallBody).toContain("$npmOutput = Invoke-NpmCommand -Arguments");

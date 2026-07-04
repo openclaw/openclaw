@@ -29,10 +29,6 @@ enum OpenClawType {
         scaledDisplay(weight: Display.opticalBold, size: 17, relativeTo: .headline)
     }
 
-    static func display(size: CGFloat, weight: CGFloat, relativeTo textStyle: UIFont.TextStyle) -> Font {
-        self.scaledDisplay(weight: weight, size: size, relativeTo: textStyle)
-    }
-
     // MARK: - Body — Inter
 
     static var body: Font {

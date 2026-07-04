@@ -17,6 +17,21 @@ struct NodePairingApprovalPrompterTests {
         #expect(!options.contains("StrictHostKeyChecking=accept-new"))
     }
 
+    @Test func `own node is automatically approved only for a local gateway`() {
+        #expect(NodePairingApprovalPrompter.shouldAutoApproveOwnLocalNode(
+            connectionMode: .local,
+            requestNodeId: "node-1",
+            localNodeId: "node-1"))
+        #expect(!NodePairingApprovalPrompter.shouldAutoApproveOwnLocalNode(
+            connectionMode: .remote,
+            requestNodeId: "node-1",
+            localNodeId: "node-1"))
+        #expect(!NodePairingApprovalPrompter.shouldAutoApproveOwnLocalNode(
+            connectionMode: .local,
+            requestNodeId: "node-2",
+            localNodeId: "node-1"))
+    }
+
     @Test func `node pairing approval prompter exercises`() async {
         await NodePairingApprovalPrompter.exerciseForTesting()
     }

@@ -46,7 +46,9 @@ openclaw qr --url wss://gateway.example/ws
   - `gateway.auth.password` resolves when password auth can win (explicit `gateway.auth.mode="password"` or inferred mode with no winning token from auth/env).
 - If both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs) and `gateway.auth.mode` is unset, setup-code resolution fails until mode is set explicitly.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- After scanning, approve device pairing with:
+- Official OpenClaw iOS and Android apps connect automatically when their
+  setup-code metadata matches. If a request remains pending (for example, for a
+  non-official client or mismatched metadata), review and approve it with:
   - `openclaw devices list`
   - `openclaw devices approve <requestId>`
 

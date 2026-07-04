@@ -9,7 +9,7 @@ title: "Update"
 
 # `openclaw update`
 
-Safely update OpenClaw and switch between stable/beta/dev channels.
+Safely update OpenClaw and switch between stable/extended-stable/beta/dev channels.
 
 If you installed via **npm/pnpm/bun** (global install, no git metadata),
 updates happen via the package-manager flow in [Updating](/install/updating).
@@ -21,6 +21,7 @@ openclaw update
 openclaw update status
 openclaw update repair
 openclaw update wizard
+openclaw update --channel extended-stable
 openclaw update --channel beta
 openclaw update --channel dev
 openclaw update --tag beta
@@ -36,8 +37,8 @@ openclaw --update
 ## Options
 
 - `--no-restart`: skip restarting the Gateway service after a successful update. Package-manager updates that do restart the Gateway verify the restarted service reports the expected updated version before the command succeeds.
-- `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
-- `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`; GitHub/git source specs are packed into a temporary tarball before the staged global npm install.
+- `--channel <stable|extended-stable|beta|dev>`: set the update channel and persist it after core update success. Extended-stable is package-only.
+- `--tag <dist-tag|version|spec>`: override the package target for this update only. It cannot be combined with an effective `extended-stable` channel, whose verified exact target is mandatory. For other package installs, `main` maps to `github:openclaw/openclaw#main`; GitHub/git source specs are packed into a temporary tarball before the staged global npm install.
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
 - `--json`: print machine-readable `UpdateRunResult` JSON, including
   `postUpdate.plugins.warnings` when corrupt or unloadable managed plugins need
@@ -72,6 +73,12 @@ Downgrades require confirmation because older versions can break configuration.
 
 Show the active update channel + git tag/branch/SHA (for source checkouts), plus update availability.
 
+For extended-stable package installs, status performs the same public selector
+and exact-package verification as foreground update. It can report
+`ahead of extended-stable` when the installed version is newer. JSON failures
+include `registry.reason` (`selector_missing`, `selector_query_failed`,
+`exact_package_mismatch`, or `unsupported_git_channel`).
+
 ```bash
 openclaw update status
 openclaw update status --json
@@ -100,8 +107,10 @@ openclaw update repair --json
 
 Options:
 
-- `--channel <stable|beta|dev>`: persist the update channel before repair and
-  run plugin convergence against that channel.
+- `--channel <stable|extended-stable|beta|dev>`: persist the core update channel
+  before repair. For extended-stable, plugin convergence temporarily targets
+  the stable/latest plugin line. Extended-stable repair is rejected on Git
+  checkouts without changing config.
 - `--json`: print machine-readable finalization JSON.
 - `--timeout <seconds>`: timeout for repair steps (default `1800`).
 - `--yes`: skip confirmation prompts.
@@ -137,6 +146,9 @@ install method aligned:
   `OPENCLAW_HOME` is set; override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
 - `stable` → installs from npm using `latest`.
+- `extended-stable` → resolves the public npm `extended-stable` selector,
+  verifies the exact selected package, and installs that exact version. It does
+  not fall back to another selector and is rejected for Git checkouts.
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
   missing or older than the current stable release.
 
@@ -150,6 +162,11 @@ from outside the Gateway process tree. If that handoff is unavailable,
 `update.run` returns a structured response with the safe shell command to run
 manually.
 
+Extended-stable is deliberately excluded from startup checks and background
+auto-update scheduling. Explicit foreground updates, bare foreground updates
+with stored `update.channel: "extended-stable"`, on-demand status, and managed
+Gateway handoff remain supported.
+
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
 install: OpenClaw installs the new package into a temporary npm prefix, verifies
@@ -161,6 +178,10 @@ then runs plugin sync, a core-command completion refresh, and restart work. This
 keeps packaged sidecars and channel-owned plugin records aligned with the
 installed OpenClaw build while leaving full plugin-command completion rebuilds to
 explicit `openclaw completion --write-state` runs.
+
+After an extended-stable core update succeeds, post-core plugin integrity and
+convergence still run, but official plugins temporarily target the stable/latest
+line. OpenClaw does not query plugin `@extended-stable` selectors in this release.
 
 When a local managed Gateway service is installed and restart is enabled,
 package-manager and git-checkout updates stop the running service before
@@ -223,6 +244,7 @@ returns the latest sentinel.
 - `stable`: checkout the latest non-beta tag, then build and doctor.
 - `beta`: prefer the latest `-beta` tag, but fall back to the latest stable tag when beta is missing or older.
 - `dev`: checkout `main`, then fetch and rebase.
+- `extended-stable`: unsupported for Git checkouts; no checkout mutation occurs.
 
 ### Update steps
 
