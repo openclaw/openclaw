@@ -146,7 +146,15 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   keepRecentTokens: 20000,
 };
 
-/** Calculate total context tokens from provider usage. */
+/**
+ * Calculate total context tokens from provider usage.
+ *
+ * Prefer `totalTokens` as the canonical per-call context size. When it is
+ * missing (0), fall back to the component sum — which is correct for a single
+ * API call. Turn-aggregated cache buckets are prevented from reaching this
+ * path by the usage normalization in the embedded runner that populates
+ * `total` before the usage is stored on the assistant message (#99843).
+ */
 export function calculateContextTokens(usage: Usage): number {
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
