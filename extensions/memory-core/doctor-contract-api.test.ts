@@ -611,6 +611,73 @@ describe("memory-core doctor dreaming migration", () => {
     expect(recall.entries["memory:memory/2026-04-05.md:1:1"]?.conceptTags).toContain("glacier");
   });
 
+  it("migrates legacy dreaming state from workspaces outside the dreaming allowlist", async () => {
+    const alphaWorkspace = path.join(rootDir, "alpha-workspace");
+    const recallPath = path.join(alphaWorkspace, "memory", ".dreams", "short-term-recall.json");
+    await fs.mkdir(path.dirname(recallPath), { recursive: true });
+    await fs.writeFile(
+      recallPath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: "2026-04-05T12:00:00.000Z",
+        entries: {
+          "memory:memory/2026-04-05.md:1:1": {
+            key: "memory:memory/2026-04-05.md:1:1",
+            path: "memory/2026-04-05.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Move backups to S3 Glacier.",
+            recallCount: 1,
+            totalScore: 0.9,
+            maxScore: 0.9,
+            firstRecalledAt: "2026-04-05T12:00:00.000Z",
+            lastRecalledAt: "2026-04-05T12:00:00.000Z",
+            queryHashes: ["hash-a"],
+          },
+        },
+      }),
+      "utf8",
+    );
+    const config = {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                agents: ["main"],
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", workspace: workspaceDir },
+          { id: "alpha", workspace: alphaWorkspace },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const preview = await stateMigrations[0].detectLegacyState(migrationParams(config));
+    expect(preview?.preview).toEqual([expect.stringContaining("Memory Core short-term recall")]);
+
+    const result = await stateMigrations[0].migrateLegacyState(migrationParams(config));
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core short-term recall -> SQLite plugin state (1 row(s))",
+      expect.stringContaining("Archived Memory Core short-term recall legacy source"),
+    ]);
+    await expect(fs.access(`${recallPath}.migrated`)).resolves.toBeUndefined();
+    configureMemoryCoreDreamingState(context().openPluginStateKeyedStore);
+    const recall = await shortTermTesting.readRecallStore(
+      alphaWorkspace,
+      "2026-04-05T12:00:00.000Z",
+    );
+    expect(recall.entries["memory:memory/2026-04-05.md:1:1"]?.conceptTags).toContain("glacier");
+  });
+
   it("migrates the legacy memory sidecar index to the per-agent SQLite database", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");

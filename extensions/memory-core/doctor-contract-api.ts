@@ -16,7 +16,7 @@ import {
   MEMORY_INDEX_VECTOR_TABLE,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolveMemoryHostWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
@@ -986,10 +986,11 @@ function groupLegacyMemorySidecarSourcesByPath(
 }
 
 function resolveConfiguredWorkspaces(config: unknown, env: NodeJS.ProcessEnv): string[] {
-  return resolveMemoryDreamingWorkspaces(
-    config as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
-    { env },
-  ).map((entry) => entry.workspaceDir);
+  // Doctor migrations must scan every configured workspace even when runtime
+  // Dreaming is narrowed by `dreaming.agents`, or legacy JSON can be stranded.
+  return resolveMemoryHostWorkspaces(config as Parameters<typeof resolveMemoryHostWorkspaces>[0], {
+    env,
+  }).map((entry) => entry.workspaceDir);
 }
 
 async function readJsonFile(filePath: string): Promise<unknown> {
