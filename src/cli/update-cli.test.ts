@@ -2549,6 +2549,7 @@ describe("update-cli", () => {
     expect(resolveExtendedStablePackage).toHaveBeenCalledWith({
       installKind: "package",
       timeoutMs: undefined,
+      packageName: "openclaw",
     });
     expectPackageInstallSpec("openclaw@2026.6.33");
     expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
@@ -2574,6 +2575,7 @@ describe("update-cli", () => {
     expect(resolveExtendedStablePackage).toHaveBeenCalledWith({
       installKind: "package",
       timeoutMs: undefined,
+      packageName: "openclaw",
     });
     expectPackageInstallSpec("openclaw@2026.6.33");
     expect(syncPluginCall()?.channel).toBe("stable");

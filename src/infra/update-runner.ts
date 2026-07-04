@@ -1694,7 +1694,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const extendedStable =
       channel === "extended-stable"
-        ? await resolveExtendedStablePackage({ installKind: "package", timeoutMs })
+        ? await resolveExtendedStablePackage({
+            installKind: "package",
+            timeoutMs,
+            packageName,
+          })
         : null;
     if (extendedStable?.status === "failed") {
       return {

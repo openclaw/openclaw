@@ -3659,9 +3659,12 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
     if (channel === "extended-stable") {
+      const packageName =
+        (await readPackageName(packageInstallTarget?.packageRoot ?? root)) ?? DEFAULT_PACKAGE_NAME;
       const extendedStable = await resolveExtendedStablePackage({
         installKind: updateInstallKind,
         timeoutMs,
+        packageName,
       });
       if (extendedStable.status === "failed") {
         await reportPreMutationUpdateFailure({

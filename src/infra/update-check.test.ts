@@ -417,11 +417,87 @@ describe("resolveExtendedStablePackage", () => {
     vi.stubGlobal("fetch", fetch);
 
     await expect(
-      resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000 }),
+      resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000, env: {} }),
     ).resolves.toEqual({
       status: "resolved",
       selector: "extended-stable",
       version: "2026.6.33",
+      packageSpec: "openclaw@2026.6.33",
+    });
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      "https://registry.npmjs.org/openclaw/extended-stable",
+      "https://registry.npmjs.org/openclaw/2026.6.33",
+    ]);
+  });
+
+  it("supports an explicit scoped-package override on a loopback test registry", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2000.4.34" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2000.4.34" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({
+        installKind: "package",
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+        env: {
+          OPENCLAW_UPDATE_PACKAGE_SPEC: "@kevins8/openclaw",
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:4873/",
+        },
+      }),
+    ).resolves.toEqual({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2000.4.34",
+      packageSpec: "@kevins8/openclaw@2000.4.34",
+    });
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      "http://127.0.0.1:4873/%40kevins8%2Fopenclaw/extended-stable",
+      "http://127.0.0.1:4873/%40kevins8%2Fopenclaw/2000.4.34",
+    ]);
+  });
+
+  it("ignores package overrides that do not use a loopback registry", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({
+        installKind: "package",
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+        env: {
+          OPENCLAW_UPDATE_PACKAGE_SPEC: "@kevins8/openclaw",
+          NPM_CONFIG_REGISTRY: "https://registry.example.com/",
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "resolved",
       packageSpec: "openclaw@2026.6.33",
     });
     expect(fetch.mock.calls.map((call) => call[0])).toEqual([
