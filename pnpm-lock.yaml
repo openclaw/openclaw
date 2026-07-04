@@ -38,6 +38,7 @@ packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.39.0': 8ce79a079ca223290aeaa8d61063853d8e021ce5d35690f28ac998dbca9bcb4b
+  '@openclaw/fs-safe@0.3.0': a8c4d37299489585bc3095d7a7527029eb25eca7afa0e3d37d2e452019d765fc
 
 importers:
 
@@ -84,7 +85,7 @@ importers:
         version: 0.6.0
       '@openclaw/fs-safe':
         specifier: 0.3.0
-        version: 0.3.0
+        version: 0.3.0(patch_hash=a8c4d37299489585bc3095d7a7527029eb25eca7afa0e3d37d2e452019d765fc)
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.5.0)
@@ -9210,7 +9211,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.3.0':
+  '@openclaw/fs-safe@0.3.0(patch_hash=a8c4d37299489585bc3095d7a7527029eb25eca7afa0e3d37d2e452019d765fc)':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.16

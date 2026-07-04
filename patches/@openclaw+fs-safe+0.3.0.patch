@@ -1,0 +1,28 @@
+diff --git a/dist/sidecar-lock.js b/dist/sidecar-lock.js
+index eecf60d00793ddfeb54415811c18cb2f40ab2568..b1d7fd831edda7e356772dafe10e35cf51595f54 100644
+--- a/dist/sidecar-lock.js
++++ b/dist/sidecar-lock.js
+@@ -144,7 +144,22 @@ async function defaultShouldReclaim(params) {
+ }
+ function releaseAllLocksSync(state) {
+     for (const [normalizedTargetPath, held] of state.held) {
+-        void held.handle.close().catch(() => undefined);
++        // Synchronously release the underlying fd so it is never left
++        // dangling across GC cycles. Then call handle.close() so Node 26
++        // FileHandle finalizers see an explicit close attempt.
++        try {
++            const fd = held.handle?.fd;
++            if (typeof fd === "number" && fd >= 0) {
++                fsSync.closeSync(fd);
++            }
++        } catch {
++            // Ignore close errors during best-effort process-exit cleanup.
++        }
++        try {
++            held.handle?.close()?.catch(() => undefined);
++        } catch {
++            // Ignore errors when the handle is already invalid.
++        }
+         try {
+             if (snapshotMatchesSync(held.lockPath, held.snapshot)) {
+                 fsSync.rmSync(held.lockPath, { force: true });
