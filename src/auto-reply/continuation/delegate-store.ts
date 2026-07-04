@@ -224,6 +224,10 @@ function isTerminalDelegateFlow(flow: TaskFlowRecord): boolean {
   );
 }
 
+function isSucceededDelegateFlow(flow: TaskFlowRecord): boolean {
+  return isContinuationDelegateFlow(flow) && flow.status === "succeeded";
+}
+
 function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
   return isPendingDelegateFlow(flow) && (flow.status === "queued" || flow.status === "running");
 }
@@ -645,7 +649,7 @@ export function markPendingDelegateSpawnAccepted(
     endedAt: now,
   });
   if (!finished.applied) {
-    if (finished.current && isTerminalDelegateFlow(finished.current)) {
+    if (finished.current && isSucceededDelegateFlow(finished.current)) {
       return true;
     }
     const message = `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`;

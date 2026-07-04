@@ -102,7 +102,11 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
     }) => {
       const flow = mockFlows.get(params.flowId);
       if (!flow || flow.revision !== params.expectedRevision) {
-        return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
+        return {
+          applied: false,
+          reason: flow ? "revision_conflict" : "not_found",
+          current: flow ? { ...flow } : undefined,
+        };
       }
       flow.status = "succeeded";
       flow.stateJson = params.stateJson ?? flow.stateJson;
@@ -193,6 +197,22 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(delegate).toBeDefined();
     const flow = mockFlows.get(delegate.flowId!);
     expect(flow).toBeDefined();
+    flow!.revision = flow!.revision + 1;
+
+    expect(markPendingDelegateSpawnAccepted(delegate, "agent:main:subagent:child")).toBe(false);
+    expect(loggerRecords).toContainEqual({
+      level: "warn",
+      message: `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${delegate.expectedRevision} acceptance was not committed`,
+    });
+  });
+
+  it("does not treat a stale failed row as an accepted spawn commit", () => {
+    enqueuePendingDelegate("session-accept-failed", { task: "accept failed" });
+    const [delegate] = consumePendingDelegates("session-accept-failed");
+    expect(delegate).toBeDefined();
+    const flow = mockFlows.get(delegate.flowId!);
+    expect(flow).toBeDefined();
+    flow!.status = "failed";
     flow!.revision = flow!.revision + 1;
 
     expect(markPendingDelegateSpawnAccepted(delegate, "agent:main:subagent:child")).toBe(false);
