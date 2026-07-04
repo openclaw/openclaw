@@ -1,6 +1,6 @@
 // Doctor contribution for low disk space around the OpenClaw state directory.
 import os from "node:os";
-import { formatByteSize } from "@openclaw/normalization-core/format";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";

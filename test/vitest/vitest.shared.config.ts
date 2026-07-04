@@ -408,10 +408,6 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "@openclaw/normalization-core/format",
-        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "format.ts"),
-      },
-      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,

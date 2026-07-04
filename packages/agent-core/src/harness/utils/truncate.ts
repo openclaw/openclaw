@@ -1,6 +1,4 @@
 // Agent Core module implements truncate behavior.
-import { formatByteSize } from "@openclaw/normalization-core/format";
-
 export const DEFAULT_MAX_LINES = 2000;
 export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
 export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
@@ -132,12 +130,12 @@ function replaceUnpairedSurrogates(content: string): string {
  * Format byte counts for compact tool-output diagnostics.
  */
 export function formatSize(bytes: number): string {
-  return formatByteSize(bytes, {
-    style: "legacy-binary",
-    maxUnit: "mega",
-    separator: "",
-    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
-  });
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  } else if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 function resolveTruncationInput(

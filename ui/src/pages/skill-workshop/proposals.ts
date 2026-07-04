@@ -1,6 +1,6 @@
-import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 // Control UI controller manages skill workshop gateway state.
-import { formatByteSize } from "@openclaw/normalization-core/format";
+import { formatByteSize } from "@openclaw/normalization-core";
+import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import {
   normalizeAgentId,

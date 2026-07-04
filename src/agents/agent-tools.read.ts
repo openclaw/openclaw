@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
-import { formatByteSize } from "@openclaw/normalization-core/format";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {

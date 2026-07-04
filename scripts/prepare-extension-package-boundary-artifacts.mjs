@@ -217,7 +217,6 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/index.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/boolean-coercion.d.ts",
-  "packages/plugin-sdk/dist/packages/normalization-core/src/format.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/number-coercion.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts",

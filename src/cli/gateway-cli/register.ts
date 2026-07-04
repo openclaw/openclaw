@@ -1,5 +1,5 @@
 // Commander registration for gateway status, health, diagnostics, discovery, and run commands.
-import { formatByteSize } from "@openclaw/normalization-core/format";
+import { formatByteSize } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";

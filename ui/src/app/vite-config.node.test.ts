@@ -29,14 +29,12 @@ describe("Control UI Vite config", () => {
 
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
-    for (const subpath of ["format", "string-coerce"]) {
-      expect(
-        aliases.find((alias) => alias.find === `@openclaw/normalization-core/${subpath}`),
-      )?.toEqual({
-        find: `@openclaw/normalization-core/${subpath}`,
-        replacement: path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
-      });
-    }
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/string-coerce"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/string-coerce",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
+    });
   });
 
   it("resolves published OpenClaw packages before the broad plugin alias", () => {
