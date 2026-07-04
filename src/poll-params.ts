@@ -23,10 +23,6 @@ export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
   SHARED_POLL_CREATION_PARAM_DEFS,
 ) as SharedPollCreationParamName[];
 
-function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
-  return readSnakeCaseParamRaw(params, key);
-}
-
 // Among the shared poll params, only the content-bearing fields (pollQuestion,
 // pollOption) signal poll intent on their own. The modifier fields
 // (pollDurationHours, pollMulti) and channel-specific metadata
@@ -38,7 +34,7 @@ const CONTENT_BEARING_SHARED_POLL_PARAM_NAMES = ["pollQuestion", "pollOption"] a
 function hasContentBearingPollCreationParam(params: Record<string, unknown>): boolean {
   for (const key of CONTENT_BEARING_SHARED_POLL_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[key];
-    const value = readPollParamRaw(params, key);
+    const value = readSnakeCaseParamRaw(params, key);
     if (def.kind === "string" && typeof value === "string" && value.trim().length > 0) {
       return true;
     }
