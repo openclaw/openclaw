@@ -843,7 +843,9 @@ if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
+  if (process.env.OPENCLAW_SKIP_OUTPUT_CLEAN !== "1") {
+    cleanTsdownOutputRoots();
+  }
   const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
   const result = await runTsdownBuildInvocation(invocation);
 
