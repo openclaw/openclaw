@@ -19,8 +19,10 @@ import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import {
   SLACK_REPLY_BUTTON_ACTION_ID,
+  SLACK_REPLY_LINK_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
+import { truncateSlackText } from "../../truncate.js";
 import {
   authorizeSlackSystemEventSender,
   resolveSlackCommandIngress,
@@ -173,7 +175,7 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
     return undefined;
   }
   const max = 120;
-  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
+  return joined.length <= max ? joined : truncateSlackText(joined, max);
 }
 
 function readInteractionAction(raw: unknown) {
@@ -376,6 +378,17 @@ function isSlackReplyActionId(actionId: string): boolean {
     actionId.startsWith(`${SLACK_REPLY_BUTTON_ACTION_ID}:`) ||
     actionId.startsWith(`${SLACK_REPLY_SELECT_ACTION_ID}:`)
   );
+}
+
+function isSlackReplyLinkAction(parsed: ParsedSlackBlockAction): boolean {
+  if (
+    parsed.actionId === SLACK_REPLY_LINK_ACTION_ID ||
+    parsed.actionId.startsWith(`${SLACK_REPLY_LINK_ACTION_ID}:`)
+  ) {
+    return true;
+  }
+  const legacyUrl = normalizeOptionalString((parsed.typedAction as { url?: unknown }).url);
+  return Boolean(legacyUrl && isSlackReplyActionId(parsed.actionId));
 }
 
 function buildSlackPluginInteractionId(params: {
@@ -901,6 +914,10 @@ async function handleSlackBlockAction(params: {
     log: params.ctx.runtime.log,
   });
   if (!parsed) {
+    return;
+  }
+  // Slack reports URL-button clicks too; navigation must not enqueue an agent interaction.
+  if (isSlackReplyLinkAction(parsed)) {
     return;
   }
   params.trackEvent?.();

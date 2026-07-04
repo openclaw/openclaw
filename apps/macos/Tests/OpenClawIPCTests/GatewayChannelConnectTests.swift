@@ -110,21 +110,15 @@ struct GatewayChannelConnectTests {
             })
     }
 
+    @MainActor
     private func withTemporaryStateDir<T>(_ operation: () async throws -> T) async throws -> T {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        return try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": tempDir.path]) {
+            try await operation()
         }
-        return try await operation()
     }
 
     @Test func `concurrent connect is single flight on success`() async throws {

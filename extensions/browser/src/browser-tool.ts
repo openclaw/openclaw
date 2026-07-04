@@ -262,7 +262,15 @@ async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
   target?: "sandbox" | "host" | "node";
   sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
 }): Promise<BrowserNodeTarget | null> {
+  if (params.allowHostControl === false) {
+    if (params.target === "node" || params.requestedNode) {
+      throw new Error("Node browser control is disabled by sandbox policy.");
+    }
+    return null;
+  }
+
   const cfg = browserToolDeps.getRuntimeConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
@@ -358,6 +366,7 @@ async function callBrowserProxy(params: {
       },
       idempotencyKey: crypto.randomUUID(),
     },
+    { scopes: ["operator.admin"] },
   );
   const parsed = unwrapBrowserProxyPayload(payload);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
@@ -537,6 +546,7 @@ export function createBrowserTool(opts?: {
           requestedNode: requestedNode ?? undefined,
           target,
           sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          allowHostControl: opts?.allowHostControl,
         });
       } catch (error) {
         // Keep the logged-in user browser usable on the host when auto-discovery

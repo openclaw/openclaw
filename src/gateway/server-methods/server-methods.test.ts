@@ -37,7 +37,7 @@ import {
 } from "../chat-display-projection.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { waitForAgentJob } from "./agent-job.js";
+import { __testing as agentJobTesting, waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -591,6 +591,74 @@ describe("waitForAgentJob", () => {
       vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("caps agentRunCache at AGENT_RUN_CACHE_MAX_ENTRIES via FIFO drop", () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const overflow = 25;
+    const prefix = `cap-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    for (let i = 0; i < max + overflow; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
+  });
+
+  it("does not evict cached terminal snapshots with active fresh waiters", async () => {
+    agentJobTesting.resetAgentRunCache();
+    const max = agentJobTesting.agentRunCacheMaxEntries;
+    const prefix = `cap-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitedRunId = `${prefix}-waited`;
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
+    });
+    const waitPromise = waitForAgentJob({
+      runId: waitedRunId,
+      timeoutMs: 5_000,
+      ignoreCachedSnapshot: true,
+    });
+
+    for (let i = 0; i < max + 25; i++) {
+      emitAgentEvent({
+        runId: `${prefix}-${i}`,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: i, endedAt: i + 1 },
+      });
+    }
+    const cached = await waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 });
+    expectRecordFields(cached, {
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 1_100,
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+
+    emitAgentEvent({
+      runId: waitedRunId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 10_000, endedAt: 10_100 },
+    });
+
+    const waited = await waitPromise;
+    expectRecordFields(waited, {
+      status: "ok",
+      startedAt: 10_000,
+      endedAt: 10_100,
+    });
+    emitAgentEvent({
+      runId: `${prefix}-after-waiter`,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 20_000, endedAt: 20_100 },
+    });
+    expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
+    agentJobTesting.resetAgentRunCache();
   });
 });
 
@@ -2777,6 +2845,32 @@ describe("exec approval handlers", () => {
       respond: resolveRespond,
       context,
     });
+    await requestPromise;
+  });
+
+  it("escapes unpaired surrogates before broadcasting an exec approval", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "echo \uD83D \uDE00 😀",
+        commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
+    expect(() => encodeURIComponent(String(request.command))).not.toThrow();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({ handlers, id, respond: resolveRespond, context });
     await requestPromise;
   });
 

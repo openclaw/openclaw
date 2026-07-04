@@ -216,6 +216,40 @@ describe("gateway sessions patch", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  test("archives and restores sessions without retaining a pin", async () => {
+    const archived = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ pinnedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, archived: true },
+      }),
+    );
+    expect(archived.archivedAt).toEqual(expect.any(Number));
+    expect(archived.pinnedAt).toBeUndefined();
+
+    const restored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: archived.archivedAt }),
+        patch: { key: MAIN_SESSION_KEY, archived: false },
+      }),
+    );
+    expect(restored.archivedAt).toBeUndefined();
+  });
+
+  test("pins active sessions and rejects pinned archived sessions", async () => {
+    const pinned = expectPatchOk(
+      await runPatch({ patch: { key: MAIN_SESSION_KEY, pinned: true } }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({ archivedAt: 10 }),
+        patch: { key: MAIN_SESSION_KEY, pinned: true },
+      }),
+      "restore it first",
+    );
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -236,6 +270,30 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.thinkingLevel).toBeUndefined();
+  });
+
+  test("persists responseUsage=off (does not clear)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, responseUsage: "off" },
+      }),
+    );
+    // Explicit off must persist so a configured messages.responseUsage default
+    // cannot re-enable the footer the user turned off.
+    expect(entry.responseUsage).toBe("off");
+  });
+
+  test("clears responseUsage when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, responseUsage: null },
+      }),
+    );
+    expect(entry.responseUsage).toBeUndefined();
   });
 
   test("persists reasoningLevel=off (does not clear)", async () => {

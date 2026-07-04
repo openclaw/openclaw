@@ -182,6 +182,37 @@ export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel
   return normalizeUsageDisplay(raw) ?? "off";
 }
 
+export type ResponseUsageInput = "on" | "off" | "tokens" | "full";
+export type ResponseUsageDefaultConfig =
+  | ResponseUsageInput
+  | { default?: ResponseUsageInput; [channel: string]: ResponseUsageInput | undefined };
+
+export function resolveMessagesResponseUsageDefault(
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): ResponseUsageInput | undefined {
+  if (typeof configured === "string") {
+    return configured;
+  }
+  if (configured && typeof configured === "object") {
+    return (channel ? configured[channel] : undefined) ?? configured.default;
+  }
+  return undefined;
+}
+
+export function resolveEffectiveResponseUsage(
+  sessionRaw: string | undefined | null,
+  configured: ResponseUsageDefaultConfig | undefined,
+  channel?: string,
+): UsageDisplayLevel {
+  const sessionNormalized = normalizeUsageDisplay(sessionRaw);
+  if (sessionNormalized !== undefined) {
+    return sessionNormalized;
+  }
+  const configDefault = resolveMessagesResponseUsageDefault(configured, channel);
+  return resolveResponseUsageMode(configDefault);
+}
+
 /** Normalizes elevated execution policy values. */
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) {

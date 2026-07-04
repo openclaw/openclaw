@@ -220,29 +220,41 @@ describe("Codex plugin activation", () => {
     ]);
   });
 
-  it("installs from a remote curated marketplace when no local marketplace path is present", async () => {
+  it("installs a disabled remote curated plugin by its resolved remote id", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
+    const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
+      name: "google-calendar",
+      remotePluginId: "plugin_connector_google_calendar",
+      installed: false,
+      enabled: false,
+    });
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),
       request: async (method, params) => {
         calls.push({ method, params });
         if (method === "plugin/list") {
           return {
-            ...pluginList([pluginSummary("google-calendar", { installed: false, enabled: false })]),
+            ...pluginList([remoteSummary]),
             marketplaces: [
               {
                 name: CODEX_PLUGINS_MARKETPLACE_NAME,
+                path: "/marketplaces/openai-curated",
+                interface: null,
+                plugins: [pluginSummary("github")],
+              },
+              {
+                name: "openai-curated-remote",
                 path: null,
                 interface: null,
-                plugins: [pluginSummary("google-calendar", { installed: false, enabled: false })],
+                plugins: [remoteSummary],
               },
             ],
           } satisfies v2.PluginListResponse;
         }
         if (method === "plugin/install") {
           expect(params).toEqual({
-            remoteMarketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-            pluginName: "google-calendar",
+            remoteMarketplaceName: "openai-curated-remote",
+            pluginName: "plugin_connector_google_calendar",
           });
           return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
         }

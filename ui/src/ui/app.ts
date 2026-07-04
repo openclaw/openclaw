@@ -78,15 +78,15 @@ import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "./chat/realtime-talk-catalog.ts";
+import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
   type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./chat/realtime-talk-conversation.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
 import {
   RealtimeTalkSession,
   type RealtimeTalkLaunchOptions,
@@ -95,12 +95,13 @@ import {
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
-import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
   WikiImportInsights,
@@ -254,6 +255,7 @@ export class OpenClawApp extends LitElement {
   @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "strict";
+  @state() terminalEnabled = true;
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
@@ -279,7 +281,7 @@ export class OpenClawApp extends LitElement {
   @state() activityExpandedIds = new Set<string>();
   @state() activityAutoFollow = true;
   @state() activityAtBottom = true;
-  @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
+  @state() chatStreamSegments: ChatStreamSegment[] = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
@@ -293,6 +295,7 @@ export class OpenClawApp extends LitElement {
   @state() chatAvatarStatus: "none" | "local" | "remote" | "data" | null = null;
   @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatVerboseLevel: string | null = null;
   @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelSwitchPromises: Record<string, Promise<boolean>> = {};
   @state() chatModelsLoading = false;
@@ -319,6 +322,11 @@ export class OpenClawApp extends LitElement {
   @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatMessagesBySession: ChatMessageCache = new Map();
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() chatReplyTarget: {
+    messageId: string;
+    text: string;
+    senderLabel?: string | null;
+  } | null = null;
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
   @state() realtimeTalkDetail: string | null = null;
@@ -364,6 +372,10 @@ export class OpenClawApp extends LitElement {
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
+  @state() devicePairSetupOpen = false;
+  @state() devicePairSetupLoading = false;
+  @state() devicePairSetupError: string | null = null;
+  @state() devicePairSetup: DevicePairSetup | null = null;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;
@@ -491,6 +503,8 @@ export class OpenClawApp extends LitElement {
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
+  @state() sessionsResultShowArchived = false;
+  @state() selectedChatSessionArchived = false;
   @state() sessionsError: string | null = null;
   @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
   @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
@@ -645,7 +659,12 @@ export class OpenClawApp extends LitElement {
   @state() clawhubDetailLoading = false;
   @state() clawhubDetailError: string | null = null;
   @state() clawhubInstallSlug: string | null = null;
-  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() clawhubInstallMessage: {
+    kind: "success" | "error";
+    text: string;
+    acknowledgeSlug?: string;
+    acknowledgeVersion?: string;
+  } | null = null;
   @state() clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict> = {};
   @state() clawhubVerdictsLoading = false;
   @state() clawhubVerdictsError: string | null = null;
@@ -798,9 +817,9 @@ export class OpenClawApp extends LitElement {
       }
     }
     if (this.chatSessionPickerOpen) {
-      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
-        (node) => path.includes(node),
-      );
+      const insidePicker = Array.from(
+        this.querySelectorAll(".chat-controls__session-picker, .sidebar-session-search"),
+      ).some((node) => path.includes(node));
       if (!insidePicker) {
         this.chatSessionPickerOpen = false;
         this.chatSessionPickerSurface = null;
@@ -977,6 +996,10 @@ export class OpenClawApp extends LitElement {
       Boolean(opts?.smooth),
       { source: "manual" },
     );
+  }
+
+  scheduleChatScroll() {
+    scheduleChatScrollInternal(this as unknown as Parameters<typeof scheduleChatScrollInternal>[0]);
   }
 
   async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {

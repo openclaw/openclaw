@@ -509,9 +509,9 @@ Time format in system prompt. Default: `auto` (OS preference).
 
 | Alias               | Model                           |
 | ------------------- | ------------------------------- |
-| `opus`              | `anthropic/claude-opus-4-6`     |
+| `opus`              | `anthropic/claude-opus-4-8`     |
 | `sonnet`            | `anthropic/claude-sonnet-4-6`   |
-| `gpt`               | `openai/gpt-5.5`                |
+| `gpt`               | `openai/gpt-5.4`                |
 | `gpt-mini`          | `openai/gpt-5.4-mini`           |
 | `gpt-nano`          | `openai/gpt-5.4-nano`           |
 | `gemini`            | `google/gemini-3.1-pro-preview` |
@@ -1316,6 +1316,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `mode`: `enforce` applies cleanup and is the default; `warn` emits warnings only.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
   - `maxEntries`: maximum number of entries in `sessions.json` (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
+  - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives. Defaults to `pruneAfter`; set `false` to disable.
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
@@ -1385,10 +1386,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Telegram, WhatsApp, and iMessage.
-- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Telegram, and WhatsApp.
+- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Signal, Telegram, WhatsApp, and iMessage.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
-  On Telegram and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
+  On Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
 - `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
   `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
   `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.

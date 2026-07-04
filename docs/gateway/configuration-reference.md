@@ -316,6 +316,12 @@ conversation bindings, or any non-Codex harness.
   plugin/app support for the Codex harness. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
   default destructive-action policy for migrated plugin app elicitations.
+  Use `true` to accept safe Codex approval schemas without prompting, `false`
+  to decline them, `"auto"` to route Codex-required approvals through OpenClaw
+  plugin approvals, or `"ask"` to prompt for every plugin write/destructive
+  action without durable approval. The `"ask"` mode clears durable Codex
+  per-tool approval overrides for the affected app and selects the human
+  approvals reviewer for that app before the Codex thread starts.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
   migrated plugin entry when global `codexPlugins.enabled` is also true.
@@ -326,7 +332,12 @@ conversation bindings, or any non-Codex harness.
   Codex plugin identity from migration, for example `"google-calendar"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
-  `allow_destructive_actions` value is used.
+  `allow_destructive_actions` value is used. The per-plugin value accepts the
+  same `true`, `false`, `"auto"`, or `"ask"` policies.
+
+Each admitted plugin app that uses `"ask"` routes that app's approval requests
+to the human reviewer. Other apps and non-app thread approvals keep their
+configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
 entries written by migration are the durable install and repair eligibility set.
@@ -601,8 +612,9 @@ See [Inferred commitments](/concepts/commitments).
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
+- `remote.sshHostKeyPolicy`: macOS SSH tunnel host-key policy. `strict` is the default and requires an already trusted key. `openssh` is an explicit opt-in to the effective OpenSSH configuration for managed aliases; review matching user and system SSH settings before using it. The macOS app and `configure-remote` reset this policy to `strict` when changing targets unless explicitly opted in again.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
-- `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used after relay-backed iOS builds publish registrations to the gateway. Public App Store/TestFlight builds use the hosted OpenClaw relay. Custom relay URLs must match a deliberately separate iOS build/deployment path whose relay URL points at that relay.
+- `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used after relay-backed iOS builds publish registrations to the gateway. Public App Store builds use the hosted OpenClaw relay. Custom relay URLs must match a deliberately separate iOS build/deployment path whose relay URL points at that relay.
 - `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
 - Relay-backed registrations are delegated to a specific gateway identity. The paired iOS app fetches `gateway.identity.get`, includes that identity in the relay registration, and forwards a registration-scoped send grant to the gateway. Another gateway cannot reuse that stored registration.
 - `OPENCLAW_APNS_RELAY_BASE_URL` / `OPENCLAW_APNS_RELAY_TIMEOUT_MS`: temporary env overrides for the relay config above.
@@ -1254,6 +1266,7 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
     lastRunCommit: "abc1234",
     lastRunCommand: "configure",
     lastRunMode: "local",
+    securityAcknowledgedAt: "2026-01-01T00:00:00.000Z",
   },
 }
 ```

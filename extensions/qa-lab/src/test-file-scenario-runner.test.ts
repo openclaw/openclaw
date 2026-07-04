@@ -179,7 +179,7 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
-      ["scripts/ensure-playwright-chromium.mjs"],
+      ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
       [
         "scripts/run-vitest.mjs",
         "run",
@@ -457,6 +457,43 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it("uses script scenario timeout overrides when running producer commands", async () => {
+    const repoRoot = await makeTempRepo("qa-script-scenario-timeout-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script-timeout");
+    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+    if (scenario.execution.kind !== "script") {
+      throw new Error("expected script scenario");
+    }
+    scenario.execution.timeoutMs = 3 * 60 * 60_000;
+
+    const commands: QaScenarioCommandExecution[] = [];
+    await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [scenario],
+      commandTimeoutMs: 30 * 60_000,
+      runCommand: async (command) => {
+        commands.push(command);
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "pass",
+        });
+        return {
+          exitCode: 0,
+          stdout: "script pass\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(commands.map((command) => command.timeoutMs)).toEqual([3 * 60 * 60_000]);
+  });
+
   it("times out script scenarios and kills descendant process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -486,20 +523,23 @@ describe("qa test file scenario runner", () => {
         "utf8",
       );
 
+      const commandTimeoutMs = 3_000;
       const run = runQaTestFileScenarios({
         repoRoot,
         outputDir: path.join(tempRoot, "out"),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
         scenarios: [makeTestFileScenario("script", scriptPath)],
-        commandTimeoutMs: 500,
+        commandTimeoutMs,
       });
-      descendantPid = await readPid(descendantPidPath, 2_000);
+      descendantPid = await readPid(descendantPidPath, commandTimeoutMs - 250);
 
       const result = await run;
 
       expect(result.results[0]?.status).toBe("fail");
-      expect(result.results[0]?.failureMessage).toMatch(/timed out after 500ms/u);
+      expect(result.results[0]?.failureMessage).toMatch(
+        new RegExp(`timed out after ${commandTimeoutMs}ms`, "u"),
+      );
       await waitForDead(descendantPid, 2_000);
     } finally {
       if (descendantPid !== undefined && isProcessRunning(descendantPid)) {

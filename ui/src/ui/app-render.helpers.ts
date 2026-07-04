@@ -9,7 +9,7 @@ import {
   scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
 } from "./app-chat.ts";
-import { syncUrlWithSessionKey } from "./app-settings.ts";
+import { hasOperatorAdminAccess, syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
@@ -28,12 +28,16 @@ import type { ChatState } from "./controllers/chat.ts";
 import {
   createSessionAndRefresh,
   loadSessions,
+  patchSession,
   syncSelectedSessionMessageSubscription,
 } from "./controllers/sessions.ts";
+import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -107,6 +111,27 @@ export function resolveDashboardHeaderContext(
   return { agentLabel };
 }
 
+/**
+ * Whether the operator terminal surface (toolbar toggle + dock) should render.
+ *
+ * The terminal is an admin-only host shell, so availability must track a *live,
+ * admin* connection — not just `terminal.open` appearing in `features.methods`,
+ * which is the server-wide catalog and stays populated from a stale `hello`
+ * while the client auto-reconnects. Requiring `connected` also lets the panel's
+ * own `available` teardown fire on disconnect (the gateway kills that
+ * connection's PTYs), so the UI never keeps tabs pointing at dead sessions.
+ */
+export function isTerminalAvailable(
+  state: Pick<AppViewState, "connected" | "terminalEnabled" | "hello">,
+): boolean {
+  if (!state.connected || !state.terminalEnabled) {
+    return false;
+  }
+  const auth =
+    (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ?? null;
+  return hasOperatorAdminAccess(auth) && isGatewayMethodAdvertised(state, "terminal.open") === true;
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -158,6 +183,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
+  state.selectedChatSessionArchived = false;
   if (previousSessionKey !== sessionKey) {
     resetChatSessionPickerState(state);
   }
@@ -169,6 +195,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   chatSessionState.reconnectResumeSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
+  state.chatReplyTarget = null;
   state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
   state.activityEntries = [];
@@ -176,6 +203,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.activityAtBottom = true;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
+  state.chatVerboseLevel = null;
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
@@ -363,12 +391,16 @@ export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const persistCommentary = state.settings.chatPersistCommentary === true;
   const thinkingLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.thinkingToggle");
   const toolCallsLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.toolCallsToggle");
+  const commentaryLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.commentaryToggle");
   const refreshDisabled =
     !state.connected ||
     state.chatManualRefreshInFlight ||
@@ -502,6 +534,28 @@ export function renderChatControls(state: AppViewState) {
               <span class="chat-settings-action__text">${t("agents.tabs.tools")}</span>
             </button>
             <button
+              class="btn btn--sm btn--icon chat-settings-action ${persistCommentary
+                ? "active"
+                : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (disableThinkingToggle) {
+                  return;
+                }
+                state.applySettings({
+                  ...state.settings,
+                  chatPersistCommentary: !persistCommentary,
+                });
+              }}
+              aria-pressed=${persistCommentary}
+              title=${commentaryLabel}
+              aria-label=${commentaryLabel}
+              data-tooltip=${commentaryLabel}
+            >
+              ${persistCommentary ? icons.pin : icons.pinOff}
+              <span class="chat-settings-action__text">${t("chat.commentaryLabel")}</span>
+            </button>
+            <button
               class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
               @click=${() => {
                 state.sessionsHideCron = !hideCron;
@@ -532,6 +586,7 @@ export function renderChatMobileToggle(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const persistCommentary = state.settings.chatPersistCommentary === true;
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const toolCallsIcon = html`
@@ -626,6 +681,22 @@ export function renderChatMobileToggle(state: AppViewState) {
               ${toolCallsIcon}
             </button>
             <button
+              class="btn btn--sm btn--icon ${persistCommentary ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (!disableThinkingToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatPersistCommentary: !persistCommentary,
+                  });
+                }
+              }}
+              aria-pressed=${persistCommentary}
+              title=${t("chat.commentaryToggle")}
+            >
+              ${persistCommentary ? icons.pin : icons.pinOff}
+            </button>
+            <button
               class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
               @click=${() => {
                 state.sessionsHideCron = !hideCron;
@@ -658,6 +729,7 @@ function switchChatSessionInternal(
     state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
+  state.selectedChatSessionArchived = nextSessionRow?.archived === true;
   if (previousSessionKey !== nextSessionKey) {
     state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
   }
@@ -706,6 +778,69 @@ export function switchChatSessionAndWait(
     switchChatSessionInternal(state, nextSessionKey, { awaitInitialLoad: true }) ??
     Promise.resolve()
   );
+}
+
+export function isCurrentChatSessionArchived(state: AppViewState): boolean {
+  if (state.selectedChatSessionArchived === true) {
+    return true;
+  }
+  return [
+    ...(state.sessionsResult?.sessions ?? []),
+    ...Object.values(state.chatAgentSessionRowsByAgent ?? {}).flat(),
+  ].some(
+    (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+  );
+}
+
+export function openCurrentSessionCheckpoints(state: AppViewState): void {
+  const showArchived = isCurrentChatSessionArchived(state);
+  state.sessionsExpandedCheckpointKey = state.sessionKey;
+  state.sessionsFilterActive = "";
+  state.sessionsFilterLimit = "";
+  state.sessionsIncludeGlobal = true;
+  state.sessionsIncludeUnknown = true;
+  state.sessionsShowArchived = showArchived;
+  state.sessionsSearchQuery = "";
+  state.sessionsSelectedKeys = new Set();
+  state.sessionsPage = 0;
+  state.setTab("sessions");
+  void loadSessions(state, {
+    activeMinutes: 0,
+    limit: 0,
+    includeGlobal: true,
+    includeUnknown: true,
+    showArchived,
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
+  });
+}
+
+export async function patchSessionFromSessionsView(
+  state: AppViewState,
+  key: string,
+  patch: { label?: string | null; archived?: boolean; pinned?: boolean },
+): Promise<boolean> {
+  const patched = await patchSession(state, key, patch);
+  if (patched && patch.archived !== undefined && state.sessionsSelectedKeys?.has(key)) {
+    const selectedKeys = new Set(state.sessionsSelectedKeys);
+    selectedKeys.delete(key);
+    state.sessionsSelectedKeys = selectedKeys;
+  }
+  const patchesSelectedArchiveState =
+    patch.archived !== undefined && areUiSessionKeysEquivalent(key, state.sessionKey);
+  if (!patched || !patchesSelectedArchiveState) {
+    return patched;
+  }
+  state.selectedChatSessionArchived = patch.archived;
+  if (!patch.archived) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(key);
+  const fallbackKey = buildAgentMainSessionKey({
+    agentId: parsed?.agentId ?? state.agentsList?.defaultId ?? "main",
+    mainKey: state.agentsList?.mainKey ?? undefined,
+  });
+  switchChatSession(state, fallbackKey);
+  return true;
 }
 
 export function dismissRealtimeTalkError(state: AppViewState) {
@@ -875,6 +1010,11 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   `;
 }
 
+/**
+ * Sidebar footer status dot. The footer intentionally shows only live
+ * connection state; the gateway version lives in Settings (Quick Settings
+ * footer) instead of persistent chrome.
+ */
 export function renderSidebarConnectionStatus(state: AppViewState) {
   const label = state.connected ? t("common.online") : t("common.offline");
   const toneClass = state.connected
@@ -883,7 +1023,7 @@ export function renderSidebarConnectionStatus(state: AppViewState) {
 
   return html`
     <span
-      class="sidebar-version__status ${toneClass}"
+      class="sidebar-status__dot ${toneClass}"
       role="img"
       aria-live="polite"
       aria-label=${t("chat.gatewayStatus", { status: label })}

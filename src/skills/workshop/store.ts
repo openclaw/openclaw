@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -69,7 +70,7 @@ export function createSkillProposalId(name: string, now = new Date()): string {
 }
 
 export function hashSkillProposalContent(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex");
+  return sha256Hex(content);
 }
 
 function contentSizeBytes(content: string): number {

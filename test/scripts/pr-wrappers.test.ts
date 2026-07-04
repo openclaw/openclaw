@@ -1,5 +1,8 @@
 // PR wrapper tests cover maintainer helper command delegation.
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 function readScript(path: string): string {
@@ -32,13 +35,13 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('exec "$base" merge-run "$pr"');
   });
 
-  it("uses the repository-approved rebase landing method", () => {
+  it("uses the repository-approved squash landing method", () => {
     const script = readScript("scripts/pr-lib/merge.sh");
 
-    expect(script).toContain("--rebase");
-    expect(script).not.toContain("--squash");
-    expect(script).toContain("Merged via rebase.");
-    expect(script).not.toContain("Merged via squash.");
+    expect(script).toContain("--squash");
+    expect(script).not.toContain("--rebase");
+    expect(script).toContain("Merged via squash.");
+    expect(script).not.toContain("Merged via rebase.");
   });
 
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {
@@ -60,5 +63,38 @@ describe("scripts/pr wrappers", () => {
 
     expect(script).toContain('base="$script_dir/pr"');
     expect(script).toContain('exec "$base" review-init "$@"');
+  });
+
+  it("verifies local GitHub auth through GraphQL when REST quota is unavailable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-auth-"));
+    const gh = join(dir, "gh");
+    writeFileSync(
+      gh,
+      `#!/bin/sh
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
+  printf 'monalisa\\n'
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(gh, 0o755);
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        "source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; ensure_gh_api_auth",
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, OPENCLAW_GH_BIN: gh },
+        encoding: "utf8",
+      },
+    );
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
   });
 });

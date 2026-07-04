@@ -1,6 +1,7 @@
 // Qa Lab tests cover suite plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CRABLINE_SERVER_CHANNELS } from "@openclaw/crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -165,6 +166,32 @@ describe("qa suite", () => {
       "scenario id value",
     );
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
+  });
+
+  it("includes effective channel driver in run start progress logs", () => {
+    expect(
+      qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
+        selectedScenarioCount: 80,
+        concurrency: 8,
+        transportId: "qa-channel",
+      }),
+    ).toBe("run start: scenarios=80 concurrency=8 transport=qa-channel");
+
+    expect(
+      qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
+        selectedScenarioCount: 80,
+        concurrency: 1,
+        transportId: "qa-channel",
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        },
+      }),
+    ).toBe(
+      "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
+    );
   });
 
   it("records gateway RSS peak and trace samples", () => {
@@ -358,10 +385,10 @@ describe("qa suite", () => {
       ) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
-      expect(matrix.report?.result).toMatchObject({
-        selectedChannel: "telegram",
-        supportedChannels: ["telegram"],
-      });
+      expect(matrix.report?.result?.selectedChannel).toBe("telegram");
+      expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
+        [...CRABLINE_SERVER_CHANNELS].toSorted(),
+      );
       const smoke = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };

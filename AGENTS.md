@@ -118,11 +118,11 @@ Skills own workflows; root owns hard policy and routing.
 - Tests in a normal source checkout: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
 - If raw Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch mode and will not exit on its own.
 - Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
-- Checks in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
+- Checks/lint in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged/path-scoped: `pnpm check:changed --staged` or `pnpm check:changed -- <files...>`; full `pnpm check`/`pnpm lint` only when required.
 - Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox, not locally.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
-- Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `pnpm lint:*`, `scripts/run-oxlint.mjs`).
+- Formatting: `oxfmt`, not Prettier. Use repo wrappers (`pnpm format:*`, `scripts/run-oxlint.mjs`; full `pnpm lint:*` only when scope requires).
 - Build before push when build output, packaging, lazy/module boundaries, dynamic imports, or published surfaces can change.
 
 ## Validation
@@ -143,6 +143,9 @@ Skills own workflows; root owns hard policy and routing.
 
 ## GitHub / PRs
 
+- Fresh GitHub items: read `CONTRIBUTING.md`, the issue chooser/form, PR template, and `.github/CODEOWNERS`; blank issues are disabled; preserve templates and evidence requirements.
+- Agent-authored/non-trivial work: create or reuse the issue first; tiny fixes may go direct. PRs use the template, link context, and keep durable problem/impact/evidence sections.
+- Route support to Discord and security through `SECURITY.md`. Use listed maintainer areas/`CODEOWNERS`; never guess mentions.
 - Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
@@ -216,6 +219,8 @@ Skills own workflows; root owns hard policy and routing.
 - Prefer behavior tests over workflow/docs string greps. Put operator policy reminders in AGENTS/docs.
 - QA scenario sources are YAML only: `qa/scenarios/index.yaml` and `qa/scenarios/<theme>/*.yaml`. Do not add fenced `qa-scenario`/`qa-flow` Markdown files under `qa/scenarios/`.
 - Clean timers/env/globals/mocks/sockets/temp dirs/module state; `--isolate=false` safe.
+- Tests asserting resolver/root-containment paths: `fs.realpath` mkdtemp/tmp roots first. macOS `os.tmpdir()` is a `/var` -> `/private/var` symlink; prod resolvers return canonical paths, so raw mkdtemp assertions pass on Linux CI but fail on Mac.
+- Explicit `vi.mock` factories must export every binding prod touches, including error classes used in `instanceof` checks; `vi.importActual` the defining module for those instead of stub classes.
 - Prefer injection and narrow `*.runtime.ts` mocks over broad barrels or `openclaw/plugin-sdk/*`.
 - Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.
 - Do not run independent `pnpm test`/Vitest commands concurrently in one worktree; Vitest cache races with `ENOTEMPTY`. Group one command or use distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`.

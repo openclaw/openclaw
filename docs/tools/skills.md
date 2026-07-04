@@ -104,6 +104,9 @@ regardless of where they are loaded from.
       merge with defaults.
     - The effective allowlist applies across prompt building, slash-command
       discovery, sandbox sync, and skill snapshots.
+    - This is not a host shell authorization boundary. If the same agent can
+      use `exec`, constrain that shell separately with sandboxing, OS-user
+      isolation, exec deny/allowlists, and per-resource credentials.
   </Accordion>
 </AccordionGroup>
 
@@ -152,8 +155,8 @@ publish and sync.
 | Update all workspace skills        | `openclaw skills update --all`                         |
 | Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |
-| Verify a skill's trust envelope    | `openclaw skills verify <slug>`                        |
-| Print the generated Skill Card     | `openclaw skills verify <slug> --card`                 |
+| Verify a skill's trust envelope    | `openclaw skills verify @owner/<slug>`                 |
+| Print the generated Skill Card     | `openclaw skills verify @owner/<slug> --card`          |
 | Publish / sync via ClawHub CLI     | `clawhub sync --all`                                   |
 
 <AccordionGroup>
@@ -171,9 +174,11 @@ publish and sync.
 
   </Accordion>
   <Accordion title="Verification and security scanning">
-    `openclaw skills verify <slug>` asks ClawHub for the skill's
+    `openclaw skills verify @owner/<slug>` asks ClawHub for the skill's
     `clawhub.skill.verify.v1` trust envelope. Installed ClawHub skills verify
     against the version and registry recorded in `.clawhub/origin.json`.
+    Bare slugs remain accepted for existing installed or unambiguous skills, but
+    owner-qualified refs avoid publisher ambiguity.
 
     ClawHub skill pages expose the latest security scan state before install,
     with detail pages for VirusTotal, ClawScan, and static analysis. The
@@ -394,8 +399,14 @@ metadata:
       formulas into system package commands. In Linux containers without
       `brew`, brew-only installers are hidden; use a custom image or install
       the dependency manually.
-    - **Go:** if `go` is missing and `brew` is available, the gateway installs
-      Go via Homebrew first and sets `GOBIN` to Homebrew's `bin`.
+    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs and
+      preserves the existing `GOBIN`, `GOPATH`, and `GOTOOLCHAIN` settings. If the
+      configured toolchain cannot satisfy a module's required Go version,
+      onboarding groups the skill with manual Go prerequisites after the install
+      attempt. If `go` is missing and Homebrew is available, OpenClaw installs
+      Go via Homebrew first and sets `GOBIN` to Homebrew's `bin`. On Linux,
+      OpenClaw can instead use `apt-get` as root or through passwordless `sudo`
+      when the refreshed `golang-go` candidate meets the minimum version.
     - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
       `extract` (default: auto when archive detected), `stripComponents`,
       `targetDir` (default: `~/.openclaw/tools/<skillKey>`).

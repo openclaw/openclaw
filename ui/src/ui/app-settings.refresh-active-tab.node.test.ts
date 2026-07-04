@@ -56,6 +56,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./app-chat.ts", () => ({
   refreshChat: mocks.refreshChatMock,
+  createChatSessionsLoadOverrides: () => ({
+    activeMinutes: 0,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+  }),
+  scopedAgentListParamsForSession: () => ({}),
 }));
 vi.mock("./app-polling.ts", () => ({
   startDebugPolling: mocks.startDebugPollingMock,
@@ -160,6 +168,7 @@ function createHost() {
     cronRunsScope: "all",
     cronRunsJobId: null as string | null,
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
+    sessionsResult: null as { sessions: unknown[] } | null,
     sessionKey: "main",
     selectedAgentId: null as string | null,
     hello: null as { auth?: { role?: string; scopes?: string[] } } | null,
@@ -575,6 +584,29 @@ describe("refreshActiveTab", () => {
     expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
     expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
     expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates the sidebar session list on chat startup as a background load", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionsResult = { sessions: [] };
+
+    await refreshActiveTab(host as never, { chatStartup: true });
+
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(
+      host,
+      expect.objectContaining({ backgroundHydrate: true }),
+    );
+  });
+
+  it("skips the sidebar session hydration on plain chat refreshes with data", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionsResult = { sessions: [] };
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadSessionsMock).not.toHaveBeenCalled();
   });
 
   it("does not wait for quota status before scrolling the chat tab", async () => {

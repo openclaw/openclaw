@@ -94,7 +94,11 @@ It does not install or modify anything on the remote host.
   <Step title="Skills">
     - Reads available skills and checks requirements.
     - Lets you choose node manager: npm, pnpm, or bun.
-    - Installs optional dependencies (some use Homebrew on macOS).
+    - Installs optional dependencies for trusted bundled skills when the required
+      installer is available.
+    - Skips unavailable Homebrew, uv, and Go installers, then groups the affected
+      skills with manual setup guidance. Run `openclaw doctor` after installing
+      the missing prerequisites.
 
   </Step>
   <Step title="Finish">
@@ -295,6 +299,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunCommit`
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
+- `wizard.securityAcknowledgedAt`
 
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 

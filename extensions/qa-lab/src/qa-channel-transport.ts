@@ -5,11 +5,16 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
-import { QaStateBackedTransportAdapter } from "./qa-transport.js";
+import {
+  QaStateBackedTransportAdapter,
+  waitForQaTransportOutboundSequence,
+} from "./qa-transport.js";
 import type {
   QaTransportActionName,
   QaTransportGatewayConfig,
   QaTransportGatewayClient,
+  QaTransportNativeCommandInput,
+  QaTransportOutboundSequenceMatch,
   QaTransportReportParams,
 } from "./qa-transport.js";
 import { qaChannelPlugin } from "./runtime-api.js";
@@ -91,6 +96,7 @@ export function createQaChannelGatewayConfig(params: {
       },
     },
     messages: {
+      visibleReplies: "automatic",
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
         visibleReplies: "automatic",
@@ -134,6 +140,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       label: "qa-channel + qa-lab bus",
       accountId: QA_CHANNEL_ACCOUNT_ID,
       requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+      supportedActions: ["delete", "edit", "react", "thread-create"],
       state,
     });
   }
@@ -145,6 +152,20 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
     replyChannel: QA_CHANNEL_ID,
     replyTo: target,
   });
+  async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
+    const { command, ...message } = input;
+    await this.sendInbound({
+      ...message,
+      text: `/${command}`,
+      nativeCommand: { name: command },
+    });
+  }
+  async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
+    return await waitForQaTransportOutboundSequence({
+      input,
+      readEvents: () => this.state.getSnapshot().events,
+    });
+  }
   handleAction = handleQaChannelAction;
   createReportNotes = createQaChannelReportNotes;
 }

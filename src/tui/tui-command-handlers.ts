@@ -11,6 +11,7 @@ import {
 } from "../auto-reply/reply/commands-goal.js";
 import {
   formatThinkingLevels,
+  isSessionDefaultDirectiveValue,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
@@ -25,6 +26,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -604,19 +606,37 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
+        const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
+        const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
+        if (args && !normalized && !isReset) {
+          chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
           break;
         }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
+        if (isReset) {
+          try {
+            const result = await client.patchSession({
+              ...currentSessionPatchTarget(),
+              responseUsage: null,
+            });
+            chatLog.addSystem("usage footer: reset to default");
+            applySessionInfoFromPatch(result);
+            delete state.sessionInfo.responseUsage;
+            delete state.sessionInfo.effectiveResponseUsage;
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`usage failed: ${String(err)}`);
+          }
+          break;
+        }
+        const current =
+          state.sessionInfo.effectiveResponseUsage ??
+          resolveResponseUsageMode(state.sessionInfo.responseUsage);
         const next =
           normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           const result = await client.patchSession({
             ...currentSessionPatchTarget(),
-            responseUsage: next === "off" ? null : next,
+            responseUsage: next,
           });
           chatLog.addSystem(`usage footer: ${next}`);
           applySessionInfoFromPatch(result);
@@ -763,7 +783,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         state.pendingOptimisticUserMessage ||
         (opts.local !== true && state.activeChatRunId))
     ) {
-      chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+      addBlockedChatSubmitNotice(chatLog);
       tui.requestRender();
       return;
     }

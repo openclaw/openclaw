@@ -618,18 +618,22 @@ extension NodeAppModel {
 
 @main
 struct OpenClawApp: App {
+    @State private var appearanceModel: AppAppearanceModel
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
-    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
+        OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel()
         #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
+            // Reruns must exercise onboarding instead of saved pairing state.
+            GatewayOnboardingReset.reset(appModel: appModel, instanceId: GatewaySettingsStore.currentInstanceID())
+        }
         if Self.screenshotModeEnabled {
             UIView.setAnimationsEnabled(false)
             UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
@@ -642,45 +646,45 @@ struct OpenClawApp: App {
         }
         #endif
         OpenClawAppModelRegistry.appModel = appModel
+        _appearanceModel = State(initialValue: AppAppearanceModel())
         _appModel = State(initialValue: appModel)
         _gatewayController = State(
             initialValue: GatewayConnectionController(
                 appModel: appModel,
-                startDiscovery: !Self.screenshotModeEnabled))
+                startDiscovery: !Self.screenshotModeEnabled,
+                deferDiscoveryUntilLocalNetworkRequest: true))
     }
 
     var body: some Scene {
         WindowGroup {
             RootTabs()
                 .tint(OpenClawBrand.accent)
-                .preferredColorScheme(self.appearancePreference.colorScheme)
+                .font(OpenClawType.body)
+                .environment(self.appearanceModel)
+                .preferredColorScheme(self.appearanceModel.preference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
                     self.appDelegate.appModel = self.appModel
-                    self.applyAppearancePreference()
+                    self.applyWindowTint()
                     self.gatewayController.setScenePhase(self.scenePhase)
                 }
+                .onReceive(
+                    NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification),
+                    perform: { _ in
+                        OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
+                    })
                 .onOpenURL { url in
                     Task { await self.handleOpenURL(url) }
-                }
-                .onChange(of: self.appearancePreferenceRaw) { _, _ in
-                    self.applyAppearancePreference()
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
-                    self.applyAppearancePreference()
+                    self.applyWindowTint()
                 }
         }
-    }
-
-    private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference.launchArgumentPreference
-            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
-            ?? .system
     }
 
     private static var screenshotModeEnabled: Bool {
@@ -700,15 +704,17 @@ struct OpenClawApp: App {
     }
 
     @MainActor
-    private func applyAppearancePreference() {
-        let style = self.appearancePreference.userInterfaceStyle
+    private func applyWindowTint() {
+        for window in Self.connectedWindows() {
+            window.tintColor = OpenClawBrand.uiAccent
+        }
+    }
+
+    @MainActor
+    private static func connectedWindows() -> [UIWindow] {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
-            .forEach { window in
-                window.overrideUserInterfaceStyle = style
-                window.tintColor = OpenClawBrand.uiAccent
-            }
     }
 }
 

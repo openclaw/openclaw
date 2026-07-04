@@ -54,6 +54,7 @@ let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQ
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
 let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
+let createChatSessionsLoadOverrides: typeof import("./app-chat.ts").createChatSessionsLoadOverrides;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -70,6 +71,7 @@ async function loadChatHelpers(): Promise<void> {
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
+    createChatSessionsLoadOverrides,
   } = await import("./app-chat.ts"));
 }
 
@@ -247,6 +249,15 @@ async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" 
 describe("refreshChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
+  });
+
+  it("keeps Chat session refreshes active-only when Sessions shows archived rows", () => {
+    expect(createChatSessionsLoadOverrides({ sessionsShowArchived: true })).toMatchObject({
+      activeMinutes: 0,
+      limit: 50,
+      showArchived: false,
+      preserveSessionsViewResult: true,
+    });
   });
 
   it("dispatches chat refresh work without waiting for slow history or metadata RPCs", async () => {
@@ -1489,6 +1500,48 @@ describe("handleSendChat", () => {
     expect(host.refreshSessionsAfterChat.size).toBe(0);
   });
 
+  it("keeps a completed reset successful without replacing the Sessions table", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "chat send payload");
+        return { runId: payload.idempotencyKey, status: "ok" };
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([
+          row("agent:main", { hasActiveRun: false, status: "done" }),
+        ]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const archivedSessions = createSessionsResult([
+      row("agent:main:archived", { archived: true, status: "done" }),
+    ]);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+      tab: "sessions",
+      sessionsShowArchived: true,
+      sessionsResult: archivedSessions,
+    });
+
+    await handleSendChat(host);
+
+    const runState = host as ChatHost & { lastLocalTerminalReconcile?: unknown };
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "done",
+      sessionKey: "agent:main",
+      sessionStatus: "done",
+    });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "sessions.list")).toBe(true),
+    );
+    expect(host.sessionsResult).toBe(archivedSessions);
+  });
+
   it("marks terminal error ACK sends failed instead of accepting the queued message", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "chat.send") {
@@ -2443,6 +2496,59 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toHaveLength(1);
     const userMessage = requireRecord(host.chatMessages[0], "user message");
     expect(userMessage.role).toBe("user");
+  });
+
+  it("escapes reply sender labels and clears reply state after chat.send is acknowledged", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "continue",
+      chatReplyTarget: {
+        messageId: "reply-source-1",
+        text: "quoted body",
+        senderLabel: "A *B* [C]",
+      },
+    });
+
+    const send = handleSendChat(host);
+    await Promise.resolve();
+
+    expect(host.chatReplyTarget?.messageId).toBe("reply-source-1");
+    expect(host.chatQueue[0]?.text).toBe("> **A \\*B\\* \\[C\\]:** quoted body\n\ncontinue");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatReplyTarget).toBeNull();
+  });
+
+  it("keeps reply state when chat.send fails before acceptance", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return Promise.resolve({ runId: "run-failed", status: "error" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "retry this",
+      chatReplyTarget: {
+        messageId: "reply-source-2",
+        text: "quoted body",
+        senderLabel: "User",
+      },
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatReplyTarget?.messageId).toBe("reply-source-2");
+    expect(host.chatMessage).toBe("retry this");
   });
 
   it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {

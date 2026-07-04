@@ -4,14 +4,15 @@ import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
-import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
-import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
@@ -92,6 +93,8 @@ export type AppViewState = {
   userAvatar?: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
+  /** Whether the gateway advertises the operator terminal as enabled. */
+  terminalEnabled: boolean;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
   sessionKey: string;
@@ -101,6 +104,7 @@ export type AppViewState = {
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   activityEntries: ActivityEntry[];
@@ -110,7 +114,7 @@ export type AppViewState = {
   activityExpandedIds: Set<string>;
   activityAutoFollow: boolean;
   activityAtBottom: boolean;
-  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegments: ChatStreamSegment[];
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
@@ -125,6 +129,7 @@ export type AppViewState = {
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
+  chatVerboseLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
@@ -139,6 +144,8 @@ export type AppViewState = {
   chatSessionPickerError: string | null;
   chatSessionPickerResult: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
+  sessionsResultShowArchived?: boolean;
+  selectedChatSessionArchived?: boolean;
   chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
@@ -181,9 +188,14 @@ export type AppViewState = {
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
+  scheduleChatScroll: () => void;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
+  devicePairSetupOpen: boolean;
+  devicePairSetupLoading: boolean;
+  devicePairSetupError: string | null;
+  devicePairSetup: DevicePairSetup | null;
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -427,7 +439,13 @@ export type AppViewState = {
     clawhubDetailLoading: boolean;
     clawhubDetailError: string | null;
     clawhubInstallSlug: string | null;
-    clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+    clawhubInstallMessage: {
+      kind: "success" | "error";
+      text: string;
+      acknowledgeSlug?: string;
+      acknowledgeVersion?: string;
+      acknowledgeLabel?: string;
+    } | null;
     clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
     clawhubVerdictsLoading: boolean;
     clawhubVerdictsError: string | null;

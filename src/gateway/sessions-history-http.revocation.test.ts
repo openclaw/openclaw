@@ -24,10 +24,6 @@ vi.mock("../config/config.js", () => ({
   }),
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({ entries: [] }),
-}));
-
 vi.mock("../sessions/transcript-events.js", () => ({
   onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
     transcriptUpdateHandler = cb;
@@ -83,11 +79,12 @@ vi.mock("./http-utils.js", () => ({
 }));
 
 vi.mock("./session-utils.js", () => ({
-  resolveGatewaySessionStoreTarget: () => ({
+  resolveGatewaySessionStoreTargetWithStore: () => ({
     storePath: "/tmp",
     storeKeys: ["agent:main"],
     canonicalKey: "agent:main",
     agentId: "main",
+    store: {},
   }),
   resolveFreshestSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",

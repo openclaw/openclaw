@@ -112,11 +112,11 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "runtime-logger": 3,
   "runtime-secret-resolution": 5,
   "setup-adapter-runtime": 1,
-  "channel-streaming": 47,
+  "channel-streaming": 48,
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 416,
+  "config-types": 421,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -127,18 +127,18 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "outbound-send-deps": 4,
   "outbound-runtime": 16,
   "file-access-runtime": 2,
-  "infra-runtime": 584,
+  "infra-runtime": 585,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
-  "text-runtime": 189,
+  "text-runtime": 191,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
   "secret-file-runtime": 1,
   "security-runtime": 7,
   "agent-harness": 7,
-  "agent-harness-runtime": 7,
+  "agent-harness-runtime": 11,
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
@@ -158,13 +158,13 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-mention-gating": 7,
   "channel-lifecycle": 23,
   "channel-ingress": 8,
-  "channel-message": 228,
-  "channel-message-runtime": 225,
+  "channel-message": 229,
+  "channel-message-runtime": 226,
   "channel-pairing-paths": 1,
   "channel-policy": 8,
   "channel-route": 5,
   "session-store-runtime": 1,
-  "session-transcript-runtime": 1,
+  "session-transcript-runtime": 2,
   "group-access": 13,
   "media-generation-runtime-shared": 3,
   "music-generation-core": 20,
@@ -174,7 +174,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "memory-core-engine-runtime": 15,
   "memory-core-host-multimodal": 3,
   "memory-core-host-query": 2,
-  "memory-core-host-events": 11,
+  "memory-core-host-events": 12,
   "memory-core-host-status": 1,
   "memory-core-host-runtime-core": 1,
   "memory-host-core": 1,
@@ -201,16 +201,16 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10369),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5201),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 323),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10422),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5233),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3247,
+      3261,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      215,
+      214,
     ),
   };
   publicDeprecatedExportsByEntrypointBudget = readEntrypointBudgetEnv(
@@ -282,27 +282,29 @@ function countWildcardReexports(entrypoints) {
   return { count, matches };
 }
 
+// All three inventories overlap. Reuse one module graph so reporting subsets
+// does not triple TypeScript compiler time and heap usage.
+const exportStatsProgram = ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
+  allowJs: false,
+  declaration: true,
+  emitDeclarationOnly: true,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  noEmit: true,
+  skipLibCheck: true,
+  strict: false,
+  target: ts.ScriptTarget.ES2022,
+  types: [],
+});
+const exportStatsChecker = exportStatsProgram.getTypeChecker();
+
 function collectExportStats(entrypoints) {
-  const files = entrypoints.map(entrypointPath);
-  const program = ts.createProgram(files, {
-    allowJs: false,
-    declaration: true,
-    emitDeclarationOnly: true,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    noEmit: true,
-    skipLibCheck: true,
-    strict: false,
-    target: ts.ScriptTarget.ES2022,
-    types: [],
-  });
-  const checker = program.getTypeChecker();
   const byEntrypoint = new Map();
   const uniqueNames = new Set();
   const uniqueCallableNames = new Set();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = exportStatsProgram.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -312,8 +314,8 @@ function collectExportStats(entrypoints) {
       });
       continue;
     }
-    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = exportStatsChecker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? exportStatsChecker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
@@ -321,11 +323,11 @@ function collectExportStats(entrypoints) {
     for (const symbol of symbols) {
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
-      const callable = isCallableExport(checker, symbol, sourceFile);
+      const callable = isCallableExport(exportStatsChecker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
         hasDeprecatedTag(symbol) ||
-        hasDeprecatedTag(unwrapAlias(checker, symbol));
+        hasDeprecatedTag(unwrapAlias(exportStatsChecker, symbol));
       if (callable) {
         callableExports += 1;
         uniqueCallableNames.add(exportName);

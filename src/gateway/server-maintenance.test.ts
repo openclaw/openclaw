@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
@@ -380,6 +381,40 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(deps.dedupe.has("agent:pending-agent")).toBe(true);
     expect(deps.dedupe.has("agent:expired-pending-agent")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("keeps pending chat sends through ttl and overflow until their run expiry", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    seedStableDedupeEntries(deps, now);
+    deps.dedupe.set(pendingChatSendDedupeKey("pending-chat"), {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "pending-chat",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now + 120_000,
+      },
+    });
+    deps.dedupe.set(pendingChatSendDedupeKey("expired-chat"), {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "expired-chat",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now - 1,
+      },
+    });
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has(pendingChatSendDedupeKey("pending-chat"))).toBe(true);
+    expect(deps.dedupe.has(pendingChatSendDedupeKey("expired-chat"))).toBe(false);
+    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
 
     stopMaintenanceTimers(timers);
   });

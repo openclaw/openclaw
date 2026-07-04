@@ -120,6 +120,7 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Cleanup reports short-lived gateway model-run probe cleanup separately as `modelRunPruned`. This only matches strict explicit keys shaped like `agent:*:explicit:model-run-<uuid>`. The fixed retention is `24h`, but it is pressure-gated: it only removes stale probe rows when session-entry maintenance/cap pressure is reached. When it runs, model-run cleanup happens before global stale cleanup and capping.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
@@ -178,11 +179,11 @@ openclaw sessions compact "agent:main:main" --max-lines 200
 openclaw sessions compact "agent:work:main" --agent work --json
 ```
 
-- Without `--max-lines`, the gateway LLM-summarizes the transcript. This can be slow, so the default `--timeout` is `180000` ms.
+- Without `--max-lines`, the gateway LLM-summarizes the transcript. The CLI does not impose a client deadline by default; the gateway owns the configured compaction lifecycle.
 - With `--max-lines <n>`, it truncates to the last `n` transcript lines and archives the prior transcript as a `.bak` sidecar.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: gateway connection overrides.
-- `--timeout <ms>`: RPC timeout in milliseconds.
+- `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
 - `--json`: print the raw RPC payload.
 
 The command exits non-zero when the gateway reports a failed compaction or is unreachable, so crons and scripts never mistake a silent no-op for success.

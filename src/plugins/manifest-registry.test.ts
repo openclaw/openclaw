@@ -463,7 +463,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "icon-demo",
       name: "Icon Demo",
-      icon: "https://cdn.simpleicons.org/simpleicons/111111",
+      icon: "https://cdn.simpleicons.org/simpleicons",
       configSchema: { type: "object" },
     });
 
@@ -475,7 +475,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons/111111");
+    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
   });
 
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {

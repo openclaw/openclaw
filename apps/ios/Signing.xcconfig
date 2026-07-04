@@ -2,7 +2,7 @@
 // Auto-selected local team overrides live in .local-signing.xcconfig (git-ignored).
 // Manual local overrides can go in LocalSigning.xcconfig (git-ignored).
 
-#include "Config/Version.xcconfig"
+#include "build/Version.xcconfig"
 
 OPENCLAW_CODE_SIGN_STYLE = Manual
 OPENCLAW_CODE_SIGN_IDENTITY = Apple Development

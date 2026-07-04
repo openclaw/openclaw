@@ -74,6 +74,10 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadAttachHandlers = lazyHandlerModule(
+  () => import("./server-methods/attach.js"),
+  (module) => module.attachHandlers,
+);
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
@@ -102,6 +106,10 @@ const loadDeviceHandlers = lazyHandlerModule(
   () => import("./server-methods/devices.js"),
   (module) => module.deviceHandlers,
 );
+const loadDevicePairSetupHandlers = lazyHandlerModule(
+  () => import("./server-methods/device-pair-setup.js"),
+  (module) => module.devicePairSetupHandlers,
+);
 const loadDiagnosticsHandlers = lazyHandlerModule(
   () => import("./server-methods/diagnostics.js"),
   (module) => module.diagnosticsHandlers,
@@ -125,6 +133,10 @@ const loadHealthHandlers = lazyHandlerModule(
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
+);
+const loadTerminalHandlers = lazyHandlerModule(
+  () => import("./server-methods/terminal.js"),
+  (module) => module.terminalHandlers,
 );
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
@@ -272,8 +284,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadConnectHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["attach.grant", "attach.revoke"],
+    loadHandlers: loadAttachHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["terminal.open", "terminal.input", "terminal.resize", "terminal.close"],
+    loadHandlers: loadTerminalHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
@@ -331,6 +351,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.token.revoke",
     ],
     loadHandlers: loadDeviceHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["device.pair.setupCode"],
+    loadHandlers: loadDevicePairSetupHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["diagnostics.stability"],
@@ -639,8 +663,14 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
+  // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
+  // metadata newer than global runtime state still authorizes and dispatches correctly. When the
+  // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
+  // methods registered after the startup snapshot stay reachable (#94127).
   const methodRegistry =
-    opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
+    opts.methodRegistry?.getHandler(req.method) !== undefined
+      ? opts.methodRegistry
+      : createRequestGatewayMethodRegistry(opts.extraHandlers);
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);

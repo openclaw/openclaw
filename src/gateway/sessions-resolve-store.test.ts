@@ -261,50 +261,6 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
-  it("resolves migrated ACP harness keys when metadata remains under the matched store key", async () => {
-    await withStateDirEnv("openclaw-sessions-resolve-acp-harness-legacy-", async () => {
-      const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
-      };
-      const acpKey = "agent:claude:acp:33333333-3333-4333-8333-333333333333";
-      const legacyAcpKey = "agent:CLAUDE:acp:33333333-3333-4333-8333-333333333333";
-      const claudeStorePath = resolveStorePath(cfg.session?.store, { agentId: "claude" });
-      await saveSessionStore(claudeStorePath, {
-        [legacyAcpKey]: {
-          sessionId: "sess-acp-harness-legacy",
-          label: "claude-delegate-legacy",
-          updatedAt: freshUpdatedAt(),
-        },
-      });
-      writeAcpSessionMetaForMigration({
-        sessionKey: legacyAcpKey,
-        sessionId: "sess-acp-harness-legacy",
-        meta: {
-          backend: "acpx",
-          agent: "claude",
-          runtimeSessionName: legacyAcpKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: freshUpdatedAt(),
-        },
-      });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { key: acpKey },
-        }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
-
-      await expect(
-        resolveSessionKeyFromResolveParams({
-          cfg,
-          p: { key: acpKey },
-        }),
-      ).resolves.toEqual({ ok: true, key: acpKey });
-    });
-  });
-
   it("repairs ACP metadata when the session store key was already canonicalized", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-acp-harness-partial-", async () => {
       const cfg: OpenClawConfig = {

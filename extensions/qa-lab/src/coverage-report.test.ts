@@ -182,9 +182,9 @@ describe("qa coverage report", () => {
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeLessThanOrEqual(
       inventory.scorecardTaxonomy.categoryCount,
     );
-    expect(inventory.scorecardTaxonomy.requiredFeatureCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.fulfilledFeatureCount).toBeGreaterThan(0);
-    expect(inventory.scorecardTaxonomy.taxonomyFulfillmentPercent).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.requiredCoverageIdCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.fulfilledCoverageIdCount).toBeGreaterThan(0);
+    expect(inventory.scorecardTaxonomy.coverageIdFulfillmentPercent).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.evidenceRefCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.scenarioCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.unknownCoverageIdCount).toBe(0);
@@ -231,6 +231,27 @@ describe("qa coverage report", () => {
     expect(inventory.bySurface.memory.map((coverage) => coverage.id)).toContain("memory.recall");
   });
 
+  it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {
+    const scenario = scenarioWithCoverage({
+      primary: [TEST_EXECUTABLE_COVERAGE_ID],
+      executionKind: "script",
+      executionPath: "scripts/test-scenario.ts",
+    });
+
+    expect(() =>
+      buildQaCoverageInventory([scenario], {
+        nonYamlScenarios: [
+          {
+            id: scenario.id,
+            sourcePath: "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+          },
+        ],
+      }),
+    ).toThrow(
+      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts)",
+    );
+  });
+
   it("renders a compact markdown inventory", () => {
     const report = renderQaCoverageMarkdownReport(
       buildQaCoverageInventory(readQaScenarioPack().scenarios),
@@ -259,7 +280,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");
     expect(report).toContain("- Fulfilled taxonomy categories:");
-    expect(report).toContain("- Fulfilled taxonomy features:");
+    expect(report).toContain("- Fulfilled taxonomy coverage IDs:");
     expect(report).toContain("- Evidence refs:");
     expect(report).toContain("- Scenario coverage IDs:");
     expect(report).toContain(
@@ -347,7 +368,7 @@ describe("qa coverage report", () => {
       ],
     });
 
-    expect(report.fulfilledFeatureCount).toBe(0);
+    expect(report.fulfilledCoverageIdCount).toBe(0);
     expect(report.categories[0]?.coverageStatus).toBe("missing");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",
@@ -375,7 +396,7 @@ describe("qa coverage report", () => {
 
     expect(report.validationIssues).toStrictEqual([]);
     expect(report.fulfilledCategoryCount).toBe(1);
-    expect(report.fulfilledFeatureCount).toBe(1);
+    expect(report.fulfilledCoverageIdCount).toBe(1);
     expect(report.categories[0]?.coverageStatus).toBe("covered");
     expect(report.categories[0]?.scenarioRefs).toStrictEqual([
       "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
@@ -391,7 +412,7 @@ describe("qa coverage report", () => {
     ]);
   });
 
-  it("requires every coverage ID on a taxonomy feature to have primary evidence", () => {
+  it("counts partial coverage IDs proportionately for taxonomy fulfillment", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy({
         featureCoverageIds: [[TEST_EXECUTABLE_COVERAGE_ID, TEST_WEBCHAT_COVERAGE_ID]],
@@ -407,7 +428,9 @@ describe("qa coverage report", () => {
     });
 
     expect(report.fulfilledCategoryCount).toBe(0);
-    expect(report.fulfilledFeatureCount).toBe(0);
+    expect(report.requiredCoverageIdCount).toBe(2);
+    expect(report.fulfilledCoverageIdCount).toBe(1);
+    expect(report.coverageIdFulfillmentPercent).toBe(50);
     expect(report.categories[0]?.coverageStatus).toBe("partial");
     expect(report.categories[0]?.fulfilledCoverageIds).toStrictEqual([TEST_EXECUTABLE_COVERAGE_ID]);
     expect(report.validationIssues).toContainEqual(
@@ -416,6 +439,75 @@ describe("qa coverage report", () => {
         ref: TEST_WEBCHAT_COVERAGE_ID,
       }),
     );
+  });
+
+  it("counts each required taxonomy coverage ID once across categories", () => {
+    const taxonomy: QaMaturityTaxonomy = {
+      ...testMaturityTaxonomy(),
+      profiles: [
+        {
+          id: "release",
+          description: "Test release profile.",
+          includeAllCategories: false,
+          channelDriver: "qa-channel",
+          categoryIds: [
+            "agent-runtime-and-provider-execution.agent-turn-execution",
+            "agent-runtime-and-provider-execution.tool-execution-controls",
+          ],
+        },
+      ],
+      surfaces: [
+        {
+          id: "agent-runtime-and-provider-execution",
+          name: "Agent Runtime",
+          family: "test",
+          level: "experimental",
+          categories: [
+            {
+              id: "agent-turn-execution",
+              name: "Agent Turn Execution",
+              category_note: "agent-turn-execution.md",
+              docs: [],
+              search_anchors: [],
+              features: [
+                {
+                  name: "shared plus unique",
+                  coverageIds: [TEST_EXECUTABLE_COVERAGE_ID, TEST_WEBCHAT_COVERAGE_ID],
+                },
+              ],
+            },
+            {
+              id: "tool-execution-controls",
+              name: "Tool Execution Controls",
+              category_note: "tool-execution-controls.md",
+              docs: [],
+              search_anchors: [],
+              features: [
+                {
+                  name: "shared",
+                  coverageIds: [TEST_EXECUTABLE_COVERAGE_ID],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const report = buildQaScorecardTaxonomyReport({
+      taxonomy,
+      repoRoot: process.cwd(),
+      scenarios: [
+        scenarioWithCoverage({
+          primary: [TEST_EXECUTABLE_COVERAGE_ID],
+          secondary: [TEST_WEBCHAT_COVERAGE_ID],
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
+        }),
+      ],
+    });
+
+    expect(report.requiredCoverageIdCount).toBe(2);
+    expect(report.fulfilledCoverageIdCount).toBe(1);
+    expect(report.coverageIdFulfillmentPercent).toBe(50);
   });
 
   it("uses script producer evidence as coverage fulfillment", () => {
@@ -437,7 +529,7 @@ describe("qa coverage report", () => {
 
     expect(report.validationIssues).toStrictEqual([]);
     expect(report.fulfilledCategoryCount).toBe(1);
-    expect(report.fulfilledFeatureCount).toBe(1);
+    expect(report.fulfilledCoverageIdCount).toBe(1);
     expect(report.categories[0]?.evidence).toStrictEqual([
       {
         coverageId: TEST_BROWSER_COVERAGE_ID,
@@ -555,7 +647,7 @@ describe("qa coverage report", () => {
       ],
     });
 
-    expect(report.fulfilledFeatureCount).toBe(0);
+    expect(report.fulfilledCoverageIdCount).toBe(0);
     expect(report.categories[0]?.coverageStatus).toBe("partial");
     expect(report.validationIssues.map((issue) => issue.code)).toEqual([
       "coverage-id-not-found",

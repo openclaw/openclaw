@@ -10,10 +10,12 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
+const SINGLE_VALUE_FLAGS = new Set(["--iterations", "--methods", "--output-dir", "--repo-root"]);
 /** Maximum time to wait for a spawned gateway to become reachable. */
 export const READY_TIMEOUT_MS = 120_000;
 /** Per-probe timeout used while polling gateway readiness endpoints. */
@@ -74,11 +76,18 @@ export function parseArgs(argv) {
     iterations: DEFAULT_ITERATIONS,
     methods: DEFAULT_METHODS,
   };
+  const seenSingleValueFlags = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       args.help = true;
       continue;
+    }
+    if (SINGLE_VALUE_FLAGS.has(arg)) {
+      if (seenSingleValueFlags.has(arg)) {
+        throw new Error(`${arg} was provided more than once.`);
+      }
+      seenSingleValueFlags.add(arg);
     }
     if (arg === "--output-dir") {
       args.outputDir = readFlagValue(argv, index, arg);
@@ -128,12 +137,6 @@ async function getFreePort() {
         reject(new Error("failed to allocate loopback port"));
       });
     });
-  });
-}
-
-async function sleep(ms) {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 

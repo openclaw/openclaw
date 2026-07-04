@@ -32,6 +32,9 @@ async function writeSession(records: unknown[]): Promise<string> {
   return sessionFile;
 }
 
+// Fixtures keep legacy string content on purpose: session ingest normalizes
+// assistant strings into [{ type: "text" }] blocks, so expectations below
+// assert the canonical block-array shape for assistant rows.
 function messageEntry(params: {
   id: string;
   parentId: string | null;
@@ -48,6 +51,14 @@ function messageEntry(params: {
       content: params.content,
       timestamp: 1,
     },
+  };
+}
+
+function mirroredTarget(sessionFile: string) {
+  return {
+    sessionFile,
+    sessionId: "codex-session",
+    sessionKey: "codex-session",
   };
 }
 
@@ -75,9 +86,11 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
       { role: "user", content: "root prompt" },
-      { role: "assistant", content: "active answer" },
+      { role: "assistant", content: [{ type: "text", text: "active answer" }] },
     ]);
   });
 
@@ -93,7 +106,9 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toEqual([]);
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toEqual([]);
   });
 
   it("keeps visible history when continuation rows use a disjoint append cursor", async () => {
@@ -125,9 +140,11 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
       { role: "user", content: "visible prompt" },
-      { role: "assistant", content: "continued answer" },
+      { role: "assistant", content: [{ type: "text", text: "continued answer" }] },
     ]);
   });
 
@@ -154,9 +171,11 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       }),
     ]);
 
-    await expect(readCodexMirroredSessionHistoryMessages(sessionFile)).resolves.toMatchObject([
+    await expect(
+      readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile)),
+    ).resolves.toMatchObject([
       { role: "user", content: "visible prompt" },
-      { role: "assistant", content: "continued answer" },
+      { role: "assistant", content: [{ type: "text", text: "continued answer" }] },
     ]);
   });
 });

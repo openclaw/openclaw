@@ -92,8 +92,11 @@ describe("docker build cache layout", () => {
   it("does not leave empty shell continuation lines in sandbox-common", async () => {
     const dockerfile = await readRepoFile("scripts/docker/sandbox/Dockerfile.common");
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
+    expect(dockerfile).toContain("ARG INSTALL_NODE=1");
+    expect(dockerfile).toContain("ARG NODE_MAJOR=24");
+    expect(dockerfile).toContain('curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x"');
     expect(dockerfile).toContain(
-      'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi',
+      'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm && pnpm --version; fi',
     );
   });
 

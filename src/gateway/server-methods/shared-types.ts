@@ -13,6 +13,7 @@ import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
@@ -28,6 +29,7 @@ import type {
 } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { TerminalSessionManager } from "../terminal/session-manager.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -46,6 +48,7 @@ export type GatewayClient = {
   internal?: {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
+    agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
   };
@@ -99,6 +102,9 @@ export type GatewayRequestContext = {
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
+  // Operator terminal session store. Absent in local/in-process contexts where
+  // no PTY surface is served.
+  terminalSessions?: TerminalSessionManager;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;

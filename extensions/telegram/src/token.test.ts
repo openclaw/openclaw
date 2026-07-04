@@ -91,6 +91,37 @@ describe("resolveTelegramToken", () => {
     expect(res).toEqual(expected);
   });
 
+  it("resolves the configured defaultAccount token when accountId is omitted (#61012)", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          defaultAccount: "kitt",
+          accounts: {
+            kitt: { botToken: "kitt-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res).toEqual({ token: "kitt-token", source: "config" });
+  });
+
+  it("keeps the env token for omitted accountId when no defaultAccount is configured", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            kitt: { botToken: "kitt-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res).toEqual({ token: "env-token", source: "env" });
+  });
+
   it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = createTempDir();

@@ -47,6 +47,47 @@ function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }
 
+function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return "";
+  }
+  const parts = raw.split(":");
+  let bodyStart = 0;
+  while (parts.length - bodyStart >= 3 && parts[bodyStart]?.toLowerCase() === "agent") {
+    parts[bodyStart] = "agent";
+    parts[bodyStart + 1] = parts[bodyStart + 1]?.toLowerCase() ?? "";
+    bodyStart += 2;
+  }
+  while (bodyStart < parts.length && !parts[bodyStart]?.trim()) {
+    bodyStart += 1;
+  }
+  const channel = parts[bodyStart]?.toLowerCase();
+  const peerKind = parts[bodyStart + 1]?.toLowerCase();
+  const preservesMatrixTail =
+    channel === "matrix" && (peerKind === "channel" || peerKind === "group");
+  const preservesSignalGroup = channel === "signal" && peerKind === "group";
+  if (!preservesMatrixTail && !preservesSignalGroup) {
+    return raw.toLowerCase();
+  }
+  parts[bodyStart] = channel;
+  parts[bodyStart + 1] = peerKind;
+  if (preservesMatrixTail) {
+    for (let index = parts.length - 2; index >= bodyStart + 2; index -= 1) {
+      if (parts[index]?.toLowerCase() === "thread") {
+        parts[index] = "thread";
+        break;
+      }
+    }
+  } else {
+    parts[bodyStart + 2] = parts[bodyStart + 2]?.trim() ?? "";
+    for (let index = bodyStart + 3; index < parts.length; index += 1) {
+      parts[index] = parts[index]?.toLowerCase() ?? "";
+    }
+  }
+  return parts.join(":");
+}
+
 function readSessionDefaults(
   host: Pick<UiSessionDefaultsHost, "hello">,
 ): { defaultAgentId?: string | null; mainKey?: string | null } | undefined {
@@ -156,7 +197,7 @@ export function buildAgentMainSessionKey(params: {
 }
 
 function normalizeDefaultMainSessionAliasForUi(sessionKey: string | undefined | null): string {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  const normalized = normalizeSessionKeyForUiComparison(sessionKey);
   return normalized === DEFAULT_MAIN_KEY
     ? buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: DEFAULT_MAIN_KEY })
     : normalized;
@@ -174,6 +215,23 @@ export function areUiSessionKeysEquivalent(
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+}
+
+// Archive policy shared by the chat picker, sidebar recents, and Sessions
+// table: agent main sessions must stay reachable, live runs must finish
+// first, and global/unknown scopes are not archivable conversation threads.
+export function canArchiveSessionRow(
+  row: { key: string; kind?: string; hasActiveRun?: boolean },
+  configuredMainKey: string,
+): boolean {
+  if (row.hasActiveRun === true || row.kind === "global" || row.kind === "unknown") {
+    return false;
+  }
+  const isMainSession =
+    row.key === "main" ||
+    normalizeLowercaseStringOrEmpty(parseAgentSessionKey(row.key)?.rest) ===
+      normalizeMainKey(configuredMainKey);
+  return !isMainSession;
 }
 
 export function isSessionKeyTiedToAgent(

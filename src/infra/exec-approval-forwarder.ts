@@ -1,4 +1,3 @@
-// Forwards exec approval requests between runtime sessions and approval handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -20,6 +19,9 @@ import {
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+// Forwards exec approval requests between runtime sessions and approval handlers.
+import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -142,14 +144,10 @@ type ExecApprovalForwarderDeps = {
 
 const DEFAULT_MODE = "session" as const;
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
-let execApprovalForwarderRuntimePromise: Promise<
-  typeof import("./exec-approval-forwarder.runtime.js")
-> | null = null;
 
-function loadExecApprovalForwarderRuntime() {
-  execApprovalForwarderRuntimePromise ??= import("./exec-approval-forwarder.runtime.js");
-  return execApprovalForwarderRuntimePromise;
-}
+const loadExecApprovalForwarderRuntime = createLazyRuntimeModule(
+  () => import("./exec-approval-forwarder.runtime.js"),
+);
 
 function normalizeMode(mode?: ExecApprovalForwardingConfig["mode"]) {
   return mode ?? DEFAULT_MODE;
@@ -230,11 +228,7 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
     return { inline: true, text: `\`${command}\`` };
   }
 
-  let fence = "```";
-  while (command.includes(fence)) {
-    fence += "`";
-  }
-  return { inline: false, text: `${fence}\n${command}\n${fence}` };
+  return { inline: false, text: formatFencedCodeBlock(command) };
 }
 
 export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {

@@ -25,15 +25,30 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 
 ## Quick start (pair + connect)
 
-1. Start the Gateway:
+1. Start an authenticated Gateway with a route your phone can reach. Tailscale
+   Serve is the recommended remote path:
 
 ```bash
-openclaw gateway --port 18789
+openclaw gateway --port 18789 --tailscale serve
 ```
 
-2. In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
+For a trusted same-LAN setup, use an authenticated `gateway.bind: "lan"`
+instead. The default loopback bind is not reachable from a phone. If the
+Gateway has not been configured yet, run `openclaw onboard` first so setup-code
+creation has a token or password auth path.
 
-3. Approve the pairing request on the gateway host:
+2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
+   **Pair mobile device** in the **Devices** card.
+
+3. In the iOS app, open **Settings** → **Gateway**, scan the QR code (or paste
+   the setup code), and connect.
+
+4. The official app connects automatically. If **Devices** shows a pending
+   request, review its role and scopes before approving it.
+
+The Control UI button requires an already paired session with `operator.admin`.
+As a terminal fallback, pick a discovered gateway in the iOS app (or enable
+Manual Host and enter host/port), then approve the request on the Gateway host:
 
 ```bash
 openclaw devices list
@@ -63,7 +78,7 @@ This is disabled by default. It applies only to fresh `role: node` pairing with
 no requested scopes. Operator/browser pairing and any role, scope, metadata, or
 public-key change still require manual approval.
 
-4. Verify connection:
+5. Verify connection:
 
 ```bash
 openclaw nodes status
@@ -75,7 +90,7 @@ openclaw gateway call node.list --params "{}"
 Official distributed iOS builds use the external push relay instead of publishing the raw APNs
 token to the gateway.
 
-Official/TestFlight builds from the public App Store release lane use the hosted relay at `https://ios-push-relay.openclaw.ai`.
+Official App Store builds from the public release lane use the hosted relay at `https://ios-push-relay.openclaw.ai`.
 
 Custom relay deployments require a deliberately separate iOS build/deployment path whose relay URL matches the gateway relay URL. The public App Store release lane does not accept custom relay URL overrides. If you are using a custom relay build, set the matching gateway relay URL:
 
@@ -106,11 +121,11 @@ How the flow works:
 What the gateway does **not** need for this path:
 
 - No deployment-wide relay token.
-- No direct APNs key for official/TestFlight relay-backed sends.
+- No direct APNs key for official App Store relay-backed sends.
 
 Expected operator flow:
 
-1. Install the official/TestFlight iOS build.
+1. Install the official iOS app.
 2. Optional: set `gateway.push.apns.relay.baseUrl` on the gateway only when using a deliberately separate custom relay build.
 3. Pair the app to the gateway and let it finish connecting.
 4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
@@ -180,7 +195,7 @@ Why this design was created:
 
 - To keep production APNs credentials out of user gateways.
 - To avoid storing raw official-build APNs tokens on the gateway.
-- To allow hosted relay usage only for official/TestFlight OpenClaw builds.
+- To allow hosted relay usage only for official OpenClaw iOS builds.
 - To prevent one gateway from sending wake pushes to iOS devices owned by a different gateway.
 
 Local/manual builds remain on direct APNs. If you are testing those builds without the relay, the
@@ -193,7 +208,7 @@ export OPENCLAW_APNS_PRIVATE_KEY_P8="$(cat /path/to/AuthKey_KEYID.p8)"
 ```
 
 These are gateway-host runtime env vars, not Fastlane settings. `apps/ios/fastlane/.env` only stores
-App Store Connect / TestFlight auth such as `APP_STORE_CONNECT_KEY_ID` and
+App Store Connect auth such as `APP_STORE_CONNECT_KEY_ID` and
 `APP_STORE_CONNECT_ISSUER_ID`; it does not configure direct APNs delivery for local iOS builds.
 
 Recommended gateway-host storage:
@@ -267,6 +282,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare
   `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`;
   the Gateway allows those push-to-talk commands by default for trusted

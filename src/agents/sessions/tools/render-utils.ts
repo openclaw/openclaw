@@ -5,10 +5,10 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
+import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
-import { stripAnsi } from "../../utils/ansi.js";
 import type { ToolRenderResultOptions } from "../extensions/types.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
 
@@ -18,7 +18,10 @@ export function shortenPath(path: unknown): string {
     return "";
   }
   const home = os.homedir();
-  if (path.startsWith(home)) {
+  if (path === home) {
+    return "~";
+  }
+  if (path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) {
     return `~${path.slice(home.length)}`;
   }
   return path;
@@ -60,7 +63,7 @@ export function getTextOutput(
   const imageBlocks = result.content.filter((c) => c.type === "image");
 
   let output = textBlocks
-    .map((c) => sanitizeBinaryOutput(stripAnsi(c.text || "")).replace(/\r/g, ""))
+    .map((c) => sanitizeBinaryOutput(stripAnsiSequences(c.text || "")).replace(/\r/g, ""))
     .join("\n");
 
   const caps = getCapabilities();
