@@ -741,6 +741,53 @@ describe("voice-call plugin", () => {
     expectRedactedVoiceCallStatus(result.details.call);
   });
 
+  it("tool get_status falls back to the newest persisted snapshot when the call was evicted from memory", async () => {
+    // History is returned oldest-first (matching the on-disk store order). The
+    // fallback must resolve the NEWEST matching snapshot, not the first one — a
+    // forward find() would return the stale ringing record. See #96586.
+    const ringing = createCallRecord({
+      callId: "call-1",
+      providerCallId: "CA123",
+      state: "ringing",
+    });
+    const completed = createCallRecord({
+      callId: "call-1",
+      providerCallId: "CA123",
+      state: "completed",
+      endReason: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
+    });
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
+    runtimeStub.manager.getCallHistory = vi.fn(async () => [ringing, completed]);
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "get_status",
+      callId: "call-1",
+    })) as { details: { found?: boolean; call?: { state?: string } } };
+    expect(runtimeStub.manager.getCallHistory).toHaveBeenCalled();
+    expect(result.details.found).toBe(true);
+    expect(result.details.call?.state).toBe("completed");
+  });
+
+  it("tool get_status reports found:false when the call is neither active nor persisted", async () => {
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
+    runtimeStub.manager.getCallHistory = vi.fn(async () => []);
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "get_status",
+      callId: "call-1",
+    })) as { details: { found?: boolean } };
+    expect(result.details.found).toBe(false);
+  });
+
   it("tool send_dtmf returns json payload", async () => {
     const { tools } = setup({ provider: "mock" });
     const tool = tools[0] as {
