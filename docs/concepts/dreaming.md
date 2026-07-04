@@ -114,6 +114,13 @@ as rejected for that scoring pass. This signal is still report-only: it can
 change candidate ordering or review metadata, but it does not write to
 `MEMORY.md` or promote the candidate by itself.
 
+Shadow-trial reports can include that scoring metadata when a caller supplies
+the candidate's base score. The report records the base score, shadow-trial
+delta, final review score, rejected-by-shadow-trial flag, and `scoring action:
+report-only` beside the existing `promotion action: report-only` marker. Those
+fields are review evidence only; they do not make a dry-run policy decision and
+do not enable automatic promotion.
+
 ## QA shadow trial report coverage
 
 QA Lab includes a report-only scenario for exploring how a future dreaming
