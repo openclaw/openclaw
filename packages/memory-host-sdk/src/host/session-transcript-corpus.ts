@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "./config-utils.js";
 import {
+  extractAgentIdFromSessionsDir,
   canonicalizeMainSessionAlias,
   getRuntimeConfig,
   isCronRunSessionKey,
@@ -85,19 +86,6 @@ function extractAgentIdFromSessionPath(absPath: string): string | null {
   const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
   const sessionsIndex = parts.lastIndexOf("sessions");
   if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
-function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
-  const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.length - 1;
-  if (
-    parts[sessionsIndex] !== "sessions" ||
-    sessionsIndex < 2 ||
-    parts[sessionsIndex - 2] !== "agents"
-  ) {
     return null;
   }
   return parts[sessionsIndex - 1] || null;

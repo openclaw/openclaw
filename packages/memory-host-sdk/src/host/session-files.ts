@@ -6,6 +6,7 @@ import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
+  extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
@@ -244,19 +245,6 @@ function resolveSessionStoreTranscriptResolvedPath(
     return path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`);
   }
   return null;
-}
-
-function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
-  const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.length - 1;
-  if (
-    parts[sessionsIndex] !== "sessions" ||
-    sessionsIndex < 2 ||
-    parts[sessionsIndex - 2] !== "agents"
-  ) {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
 }
 
 function isCanonicalSessionsDirForAgent(sessionsDir: string, agentId: string): boolean {
