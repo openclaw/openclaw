@@ -973,6 +973,7 @@ describe("test-projects args", () => {
         forwardedArgs: [],
         includePatterns: [
           "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
+          "src/auto-reply/reply/get-reply.auto-fallback.test.ts",
           "src/auto-reply/reply/reply-turn-admission.test.ts",
           "src/auto-reply/reply/session-updates.test.ts",
         ],
