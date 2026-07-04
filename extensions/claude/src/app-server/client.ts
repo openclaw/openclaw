@@ -743,25 +743,33 @@ export async function clearSharedClaudeAppServerClient(key?: string): Promise<vo
 }
 
 /**
- * Return a read-only snapshot of the current shared client's state WITHOUT
- * forcing creation. Used by /claude status so the command stays cheap when
- * no turn has run yet. Reports the most recently accessed pool entry
- * (`lastAccessedKey`) — exact for the common single-extension case; with two
- * concurrently-active harness extensions (openclaw-7ss), this reflects
- * whichever ran a turn most recently, not a specific one. A future caller
- * that needs a specific entry can look it up directly by its own key.
+ * Return a read-only snapshot of a shared client's state WITHOUT forcing
+ * creation. Used by /claude status so the command stays cheap when no turn has
+ * run yet.
+ *
+ * Pass an explicit pool `key` (e.g. `claudeAppServerPoolKey("anthropic")`) to
+ * peek at THAT extension's own bridge — the correct behavior for an
+ * extension-scoped command like /claude status|version, which must report the
+ * Claude extension's process, not whichever bridge ran a turn most recently.
+ *
+ * With `key` omitted the snapshot falls back to the most recently accessed pool
+ * entry (`lastAccessedKey`) — exact for the common single-extension case, but
+ * with two concurrently-active harness extensions (openclaw-7ss) it reflects
+ * whichever ran a turn most recently rather than a specific one (the ambiguity
+ * that motivated the keyed variant, GLM review G7).
  */
-export function peekSharedClaudeAppServerClient(): {
+export function peekSharedClaudeAppServerClient(key?: string): {
   running: boolean;
   command?: string;
   pendingRequests: number;
   lastError?: string;
   runningVersion?: string;
 } | null {
-  if (!lastAccessedKey) {
+  const lookupKey = key ?? lastAccessedKey;
+  if (!lookupKey) {
     return null;
   }
-  const entry = sharedClients.get(lastAccessedKey);
+  const entry = sharedClients.get(lookupKey);
   if (!entry) {
     return null;
   }

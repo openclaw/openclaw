@@ -8,7 +8,7 @@ import {
   resolveBridgeSpawnEnv,
   resolveClaudeBridgeSpawnInvocation,
 } from "./client.js";
-import { resolveClaudeBridgeStartEnv } from "./run-attempt.js";
+import { assertClaudeBridgeCredentials, resolveClaudeBridgeStartEnv } from "./run-attempt.js";
 import { MANAGED_CLAUDE_BRIDGE_PACKAGE, MIN_CLAUDE_BRIDGE_VERSION } from "./version.js";
 
 describe("assertSupportedBridgeVersion", () => {
@@ -114,6 +114,59 @@ describe("resolveClaudeBridgeStartEnv", () => {
       ANTHROPIC_API_KEY: "configured-key",
       CLAUDE_CONFIG_DIR: "/tmp/claude",
     });
+  });
+});
+
+describe("assertClaudeBridgeCredentials (GLM review G5)", () => {
+  it("throws an actionable error when a custom base URL has no credentials", () => {
+    let err: unknown;
+    try {
+      assertClaudeBridgeCredentials({
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
+        modelProvider: "zai",
+      });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("zai");
+    expect(message).toContain("https://api.z.ai/api/anthropic");
+    expect(message).toContain("ANTHROPIC_API_KEY");
+  });
+
+  it("does NOT throw for stock Anthropic (no custom base URL) with no key — OAuth fallback", () => {
+    expect(() => assertClaudeBridgeCredentials({ env: undefined })).not.toThrow();
+    expect(() => assertClaudeBridgeCredentials({ env: {} })).not.toThrow();
+    expect(() =>
+      assertClaudeBridgeCredentials({ env: { CLAUDE_CONFIG_DIR: "/tmp/claude" } }),
+    ).not.toThrow();
+  });
+
+  it("passes when a custom base URL is paired with any accepted credential", () => {
+    const baseUrl = "https://api.z.ai/api/anthropic";
+    expect(() =>
+      assertClaudeBridgeCredentials({
+        env: { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_API_KEY: "k" },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertClaudeBridgeCredentials({
+        env: { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_AUTH_TOKEN: "t" },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertClaudeBridgeCredentials({ env: { ANTHROPIC_BASE_URL: baseUrl }, resolvedApiKey: "r" }),
+    ).not.toThrow();
+  });
+
+  it("treats whitespace-only credentials as missing", () => {
+    expect(() =>
+      assertClaudeBridgeCredentials({
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY: "  " },
+        resolvedApiKey: "  ",
+      }),
+    ).toThrow();
   });
 });
 
