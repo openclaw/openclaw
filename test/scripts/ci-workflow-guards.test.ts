@@ -907,9 +907,8 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(ciWorkflowText).toContain(
-      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
-    );
+    expect(ciWorkflowText).toContain('runner: "blacksmith-16vcpu-ubuntu-2404"');
+    expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(runStep.run).toContain("--qa-profile smoke-ci");
     expect(runStep.run).toContain("--concurrency 8");
     expect(runStep.run).not.toContain("--category");
@@ -918,7 +917,7 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain('exit "$qa_exit_code"');
     expect(runStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
     expect(runStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
-    expect(runStep.run).toContain("--max-old-space-size=12288");
+    expect(runStep.run).toContain("--max-old-space-size=16384");
     expect(runStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
     expect(runStep.run).not.toContain("OPENAI_API_KEY");
     expect(runStep.run).toMatch(
