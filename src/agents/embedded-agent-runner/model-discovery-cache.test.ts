@@ -15,9 +15,6 @@
  *   clearModelDiscoveryCache() alongside the existing resetModelCatalogCache()
  *   and clearCurrentProviderAuthState().
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearModelDiscoveryCache,
@@ -33,12 +30,8 @@ import {
 
 const mockDiscoverAuthStorage = vi.hoisted(() => vi.fn());
 const mockDiscoverModels = vi.hoisted(() => vi.fn());
-const mockResolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(
-  () => vi.fn((): string[] => []),
-);
-const mockResolveRuntimeExternalAuthProviderRefs = vi.hoisted(
-  () => vi.fn((): string[] => []),
-);
+const mockResolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn((): string[] => []));
+const mockResolveRuntimeExternalAuthProviderRefs = vi.hoisted(() => vi.fn((): string[] => []));
 
 vi.mock("../agent-model-discovery.js", () => ({
   discoverAuthStorage: mockDiscoverAuthStorage,
