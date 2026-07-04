@@ -26,7 +26,8 @@ const MAX_CALL_WINDOW_MS = 120_000;
 const MAX_AUDIO_DURATION_MS = MAX_CALL_WINDOW_MS - CALL_ANSWER_GRACE_MS;
 const MAX_MESSAGE_LENGTH = 4_000;
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
-const CALL_PLACED_LOG_MARKER = "call placed; media starts when the peer answers";
+const MEOWCALLER_ANSWER_TIMEOUT = "45s";
+const MEOWCALLER_MAX_DURATION = "65s";
 
 // One whatsmeow session database must not be driven by concurrent companion clients.
 // Reject overlap so model retries cannot duplicate calls or contend on auth state.
@@ -78,8 +79,14 @@ async function isRegularFile(filePath: string): Promise<boolean> {
   }
 }
 
-function resolveSetupCommand(stateDir: string): string {
-  return `mkdir -p ${JSON.stringify(stateDir)} && cd ${JSON.stringify(stateDir)} && meowcaller listen`;
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function resolveSetupCommand(stateDir: string, sessionStorePath: string): string {
+  const quotedStateDir = quotePosixShellArg(stateDir);
+  const quotedStorePath = quotePosixShellArg(sessionStorePath);
+  return `mkdir -p ${quotedStateDir} && chmod 700 ${quotedStateDir} && meowcaller pair --store ${quotedStorePath}`;
 }
 
 function wrapPcm16MonoInWav(pcm: Buffer, sampleRate: number): Buffer {
@@ -188,7 +195,7 @@ function createWhatsAppCallToolWithDependencies(
 
   const accountId = normalizeAccountId(context.agentAccountId);
   const stateDir = dependencies.resolveStateDir(accountId);
-  const sessionDatabasePath = path.join(stateDir, SESSION_DATABASE);
+  const sessionStorePath = path.join(stateDir, SESSION_DATABASE);
 
   return {
     name: "whatsapp_call",
@@ -199,15 +206,16 @@ function createWhatsAppCallToolWithDependencies(
     async execute(_toolCallId, rawParams, signal) {
       const params = rawParams as WhatsAppCallToolParams;
       const binaryFound = await dependencies.detectMeowCaller();
-      const sessionDatabaseFound = await isRegularFile(sessionDatabasePath);
+      const sessionStoreFound = await isRegularFile(sessionStorePath);
       if (params.action === "status") {
         return jsonResult({
           binaryFound,
-          sessionDatabaseFound,
+          sessionStoreFound,
           accountId,
           stateDir,
-          setupCommand: resolveSetupCommand(stateDir),
-          requiredCommand: "meowcaller notify <target> <file>",
+          setupCommand: resolveSetupCommand(stateDir, sessionStorePath),
+          requiredCommand:
+            "meowcaller notify --store <path> --answer-timeout 45s --max-duration 65s <target> <file>",
           note: "MeowCaller uses a separate WhatsApp linked-device session; it cannot reuse OpenClaw's Baileys credentials.",
         });
       }
@@ -222,9 +230,9 @@ function createWhatsAppCallToolWithDependencies(
       if (!binaryFound) {
         throw new Error("MeowCaller is not installed; run whatsapp_call with action=status");
       }
-      if (!sessionDatabaseFound) {
+      if (!sessionStoreFound) {
         throw new Error(
-          "MeowCaller is not paired; run whatsapp_call with action=status, then run its setupCommand, render the qr_code payload locally, and scan it as a linked device",
+          "MeowCaller has no session store; run whatsapp_call with action=status, then run its setupCommand in an interactive terminal and scan the QR as a linked device",
         );
       }
 
@@ -262,10 +270,21 @@ function createWhatsAppCallToolWithDependencies(
             mode: 0o600,
           });
           const result = await api.runtime.system.runCommandWithTimeout(
-            [MEOWCALLER_COMMAND, "notify", target, audioPath],
+            [
+              MEOWCALLER_COMMAND,
+              "notify",
+              "--store",
+              sessionStorePath,
+              "--answer-timeout",
+              MEOWCALLER_ANSWER_TIMEOUT,
+              "--max-duration",
+              MEOWCALLER_MAX_DURATION,
+              target,
+              audioPath,
+            ],
             {
               cwd: stateDir,
-              env: { MEOW_LOG_LEVEL: "info" },
+              env: { MEOW_LOG_LEVEL: "warn" },
               timeoutMs: callWindowMs,
               signal,
               killProcessTree: true,
@@ -275,20 +294,20 @@ function createWhatsAppCallToolWithDependencies(
           if (result.termination === "signal") {
             throw new Error("WhatsApp call cancelled");
           }
-          if (result.termination === "exit" && result.code !== 0) {
+          if (result.termination === "timeout") {
+            throw new Error("MeowCaller exceeded the bounded WhatsApp call window");
+          }
+          if (result.termination !== "exit" || result.code !== 0) {
             throw new Error(
-              `MeowCaller exited before completing the call window (code ${result.code})`,
+              `MeowCaller did not complete the call (code ${result.code ?? "unknown"})`,
             );
           }
-          if (!`${result.stdout}\n${result.stderr}`.includes(CALL_PLACED_LOG_MARKER)) {
-            throw new Error("MeowCaller did not confirm that the call was placed");
-          }
           return jsonResult({
-            attempted: true,
+            completed: true,
             recipient: "current WhatsApp requester",
             callWindowSeconds: Math.ceil(callWindowMs / 1_000),
             ttsProvider: speech.provider,
-            note: "MeowCaller confirmed the call was placed; answer and playback remain device-side events.",
+            note: "MeowCaller completed answer, playback, and hangup for the requester-bound call.",
           });
         } finally {
           await fs.rm(tempDir, { recursive: true, force: true });
@@ -313,5 +332,6 @@ export const testing = {
   resolveCallWindowMs,
   resolveLinkedWhatsAppSelfE164,
   resolveRequesterE164,
+  resolveSetupCommand,
   wrapPcm16MonoInWav,
 };

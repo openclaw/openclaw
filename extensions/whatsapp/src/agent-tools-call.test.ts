@@ -35,11 +35,11 @@ function createApi(params?: {
           params?.runCommand ??
           vi.fn(async () => ({
             stdout: "",
-            stderr: "call placed; media starts when the peer answers",
-            code: 124,
-            signal: "SIGTERM" as const,
-            killed: true,
-            termination: "timeout" as const,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
           })),
       },
     },
@@ -86,11 +86,13 @@ describe("WhatsApp call tool", () => {
     const result = await tool?.execute("call-1", { action: "status" });
     expect(result?.details).toMatchObject({
       binaryFound: false,
-      sessionDatabaseFound: false,
+      sessionStoreFound: false,
       accountId: "default",
       stateDir,
     });
-    expect(result?.details).toHaveProperty("setupCommand");
+    expect(result?.details).toMatchObject({
+      setupCommand: expect.stringContaining("meowcaller pair --store"),
+    });
     expect(JSON.stringify(tool?.parameters)).not.toContain('"to"');
   });
 
@@ -98,7 +100,7 @@ describe("WhatsApp call tool", () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     let audioPath: string | undefined;
     const runCommand = vi.fn(async (argv: string[]) => {
-      audioPath = argv[3];
+      audioPath = argv.at(-1);
       const wav = await fs.readFile(audioPath);
       expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
       expect(wav.toString("ascii", 8, 12)).toBe("WAVE");
@@ -107,11 +109,11 @@ describe("WhatsApp call tool", () => {
       expect(wav.subarray(44)).toEqual(Buffer.alloc(48_000, 1));
       return {
         stdout: "",
-        stderr: "call placed; media starts when the peer answers",
-        code: 124,
-        signal: "SIGTERM" as const,
-        killed: true,
-        termination: "timeout" as const,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
       };
     }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
     const api = createApi({ runCommand });
@@ -126,13 +128,20 @@ describe("WhatsApp call tool", () => {
     });
 
     expect(runCommand).toHaveBeenCalledOnce();
-    expect(vi.mocked(runCommand).mock.calls[0]?.[0]?.slice(0, 3)).toEqual([
+    expect(vi.mocked(runCommand).mock.calls[0]?.[0]).toEqual([
       "meowcaller",
       "notify",
+      "--store",
+      path.join(stateDir, "wa-voip.db"),
+      "--answer-timeout",
+      "45s",
+      "--max-duration",
+      "65s",
       "+15551234567",
+      audioPath,
     ]);
     expect(result?.details).toMatchObject({
-      attempted: true,
+      completed: true,
       recipient: "current WhatsApp requester",
       callWindowSeconds: 61,
       ttsProvider: "openai",
@@ -194,7 +203,7 @@ describe("WhatsApp call tool", () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     let audioPath: string | undefined;
     const runCommand = vi.fn(async (argv: string[]) => {
-      audioPath = argv[3];
+      audioPath = argv.at(-1);
       return {
         stdout: "",
         stderr: "sensitive upstream diagnostics",
@@ -214,17 +223,17 @@ describe("WhatsApp call tool", () => {
     );
 
     await expect(tool?.execute("call-3", { action: "call", message: "Hello" })).rejects.toThrow(
-      "MeowCaller exited before completing the call window (code 1)",
+      "MeowCaller did not complete the call (code 1)",
     );
     expect(audioPath).toBeDefined();
     await expect(fs.stat(path.dirname(audioPath ?? ""))).rejects.toThrow();
   });
 
-  it("does not report success when an unpaired session only waits for a QR scan", async () => {
+  it("does not report success when MeowCaller times out", async () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     const runCommand = vi.fn(async () => ({
       stdout: "",
-      stderr: "scan in WhatsApp > Linked devices qr_code=[redacted]",
+      stderr: "",
       code: 124,
       signal: "SIGTERM" as const,
       killed: true,
@@ -241,7 +250,7 @@ describe("WhatsApp call tool", () => {
 
     await expect(
       tool?.execute("call-unpaired", { action: "call", message: "Hello" }),
-    ).rejects.toThrow("MeowCaller did not confirm that the call was placed");
+    ).rejects.toThrow("MeowCaller exceeded the bounded WhatsApp call window");
   });
 
   it.each(["ulaw_8000", "raw-8khz-8bit-mono-mulaw"])(
@@ -266,6 +275,14 @@ describe("WhatsApp call tool", () => {
     expect(testing.resolveCallWindowMs(24_000 * 2 * 60, 24_000)).toBe(120_000);
     expect(() => testing.resolveCallWindowMs(24_000 * 2 * 61, 24_000)).toThrow(
       "60-second WhatsApp call limit",
+    );
+  });
+
+  it("shell-quotes the pairing command", () => {
+    expect(
+      testing.resolveSetupCommand("/tmp/call dir/$HOME's", "/tmp/call dir/$HOME's/wa-voip.db"),
+    ).toBe(
+      `mkdir -p '/tmp/call dir/$HOME'"'"'s' && chmod 700 '/tmp/call dir/$HOME'"'"'s' && meowcaller pair --store '/tmp/call dir/$HOME'"'"'s/wa-voip.db'`,
     );
   });
 });

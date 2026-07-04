@@ -132,20 +132,24 @@ to call your personal number.
 </Warning>
 
 <Steps>
-  <Step title="Install a MeowCaller CLI with send-only notify support">
+  <Step title="Install the reviewed MeowCaller CLI">
 
     The adapter expects an executable named `meowcaller` on the gateway host's `PATH`.
-    It must provide this send-only command:
+    Until [MeowCaller PR #7](https://github.com/purpshell/meowcaller/pull/7) merges, build
+    the reviewed branch at commit `752050471fc2bf7a8cdfbf7dbd3cd4e865d85d3f`:
 
 ```bash
-meowcaller notify <target> <file.mp3|wav|opus>
+git clone --branch feat/send-only-notify https://github.com/steipete/meowcaller.git
+cd meowcaller
+git checkout 752050471fc2bf7a8cdfbf7dbd3cd4e865d85d3f
+mkdir -p "$HOME/.local/bin"
+go build -o "$HOME/.local/bin/meowcaller" ./cmd/meowcaller
 ```
 
-    `notify` must send the file without opening a speaker, receiving peer audio, or recording
-    peer audio. The current upstream `play` command does not meet that contract because it also
-    opens the local speaker. Do not substitute `play`. Pin the reviewed MeowCaller revision that
-    adds `notify`, build `examples/cli`, and put the resulting binary on the gateway service's
-    `PATH`.
+    Ensure `$HOME/.local/bin` is also on the gateway service's `PATH`. This revision provides
+    explicit `pair` and send-only `notify` commands. `notify` opens no microphone, speaker,
+    video device, inbound audio sink, or diagnostic capture. Do not substitute the example
+    CLI's `play` command.
 
   </Step>
 
@@ -155,14 +159,16 @@ meowcaller notify <target> <file.mp3|wav|opus>
     account-specific state directory and pairing command. For the default account:
 
 ```bash
-mkdir -p "$HOME/.openclaw/credentials/whatsapp-calls/default"
-cd "$HOME/.openclaw/credentials/whatsapp-calls/default"
-meowcaller listen
+state_dir="$HOME/.openclaw/credentials/whatsapp-calls/default"
+mkdir -p "$state_dir"
+chmod 700 "$state_dir"
+meowcaller pair --store "$state_dir/wa-voip.db"
 ```
 
-    On first run, the example CLI prints a `qr_code` payload. Render that payload with a trusted
-    local QR tool, scan it from **WhatsApp > Linked devices**, wait for the `connected` line, then
-    stop the listener. Keep `wa-voip.db` private; it is the MeowCaller linked-device session.
+    Run the command in an interactive terminal. Scan its QR from **WhatsApp > Linked devices**
+    and wait for `MeowCaller linked device ready`. The command then exits. Keep `wa-voip.db`
+    private; it is the MeowCaller linked-device session. The `whatsapp_call` status action
+    returns the account-specific command when you use a non-default account.
 
   </Step>
 
@@ -171,7 +177,9 @@ meowcaller listen
     Configure a telephony-capable [TTS provider](/tools/tts), restart the gateway, then send a
     WhatsApp request such as `Call me and say the build finished.` The tool resolves the sender
     from trusted inbound context, synthesizes a temporary private WAV file, runs MeowCaller for a
-    bounded call window, and deletes the audio file afterward.
+    bounded call window, and deletes the audio file afterward. OpenClaw passes the account's
+    store explicitly, waits for a zero exit status after answer, playback, and hangup, and treats
+    a timeout or nonzero exit as a failed tool call.
 
   </Step>
 </Steps>
@@ -183,7 +191,7 @@ Current limits:
 - no shared auth with the chat connection
 - no self-calls from personal-number/self-chat mode
 - synthesized audio is limited to 60 seconds
-- no answer/delivery receipt; the tool reports only that MeowCaller stayed active for the call window
+- no handset-side audibility receipt beyond MeowCaller's answer/playback/hangup completion
 - OpenClaw stops the companion process after a bounded 60–120 second window
 
 ## Deployment patterns
