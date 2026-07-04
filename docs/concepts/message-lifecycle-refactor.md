@@ -230,7 +230,13 @@ type MessageOrigin =
       source: "openclaw";
       schemaVersion: 1;
       kind: "gateway_failure";
-      code: "agent_failed_before_reply" | "missing_api_key" | "model_login_expired";
+      code:
+        | "agent_failed_before_reply"
+        | "missing_api_key"
+        | "model_login_expired"
+        | "model_rate_limited"
+        | "model_overloaded"
+        | "model_billing_exhausted";
       echoPolicy: "drop_bot_room_echo";
     }
   | {
