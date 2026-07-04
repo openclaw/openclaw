@@ -3801,10 +3801,10 @@ function handleApprovalRequest(params: {
 }
 
 function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
-    return ["message"];
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return [];
   }
-  return [];
+  return ["message"];
 }
 
 export const testing = {

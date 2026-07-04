@@ -88,12 +88,12 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
     "message",
-    "heartbeat_respond",
     "agents_list",
     "sessions_spawn",
     "sessions_yield",
     "nodes",
     "cron",
+    "heartbeat_respond",
     "tts",
     "gateway",
     "sessions_list",
@@ -228,20 +228,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 51148,
-    "roughTokens": 12787
+    "chars": 51374,
+    "roughTokens": 12844
   },
   "openClawDeveloperInstructions": {
-    "chars": 1936,
-    "roughTokens": 484
+    "chars": 1955,
+    "roughTokens": 489
   },
   "totalTextOnly": {
-    "chars": 26976,
-    "roughTokens": 6744
+    "chars": 26995,
+    "roughTokens": 6749
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78126,
-    "roughTokens": 19532
+    "chars": 78371,
+    "roughTokens": 19593
   },
   "userInputText": {
     "chars": 1271,
@@ -428,7 +428,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
@@ -547,12 +547,12 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 ```json
 [
   "message",
-  "heartbeat_respond",
   "agents_list",
   "sessions_spawn",
   "sessions_yield",
   "nodes",
   "cron",
+  "heartbeat_respond",
   "tts",
   "gateway",
   "sessions_list",
@@ -695,6 +695,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
     "type": "function"
   },
   {
+    "deferLoading": true,
     "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
     "inputSchema": {
       "additionalProperties": false,

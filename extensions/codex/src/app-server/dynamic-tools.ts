@@ -435,9 +435,6 @@ export function createCodexDynamicToolBridge(params: {
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
     ...(params.directToolNames ?? []),
   ]);
-  if (availableTools.some((entry) => entry.name === HEARTBEAT_RESPONSE_TOOL_NAME)) {
-    directToolNames.add(HEARTBEAT_RESPONSE_TOOL_NAME);
-  }
   return {
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,

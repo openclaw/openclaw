@@ -125,41 +125,6 @@
     "type": "function"
   },
   {
-    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "nextCheck": {
-          "type": "string"
-        },
-        "notificationText": {
-          "type": "string"
-        },
-        "notify": {
-          "type": "boolean"
-        },
-        "outcome": {
-          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-          "type": "string"
-        },
-        "priority": {
-          "enum": ["low", "normal", "high"],
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": ["outcome", "notify", "summary"],
-      "type": "object"
-    },
-    "name": "heartbeat_respond",
-    "type": "function"
-  },
-  {
     "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
     "inputSchema": {
       "properties": {},
@@ -1038,6 +1003,42 @@
           "type": "object"
         },
         "name": "cron",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
+        "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "nextCheck": {
+              "type": "string"
+            },
+            "notificationText": {
+              "type": "string"
+            },
+            "notify": {
+              "type": "boolean"
+            },
+            "outcome": {
+              "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+              "type": "string"
+            },
+            "priority": {
+              "enum": ["low", "normal", "high"],
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": ["outcome", "notify", "summary"],
+          "type": "object"
+        },
+        "name": "heartbeat_respond",
         "type": "function"
       },
       {
