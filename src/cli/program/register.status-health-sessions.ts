@@ -57,8 +57,58 @@ function mergeSessionsListOptions(
   };
 }
 
+function parseSessionsActive(value: unknown): number | undefined {
+  const parsed = parsePositiveIntOrUndefined(value);
+  if (value !== undefined && parsed === undefined) {
+    defaultRuntime.error("--active must be a positive integer, for example --active 30.");
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  return parsed;
+}
+
+function parseSessionsLimit(value: unknown): number | "all" | undefined {
+  if (value === undefined || value === "all") {
+    return value;
+  }
+  if (typeof value === "number") {
+    const parsed = parsePositiveIntOrUndefined(value);
+    if (parsed === undefined) {
+      defaultRuntime.error('--limit must be a positive integer or "all", for example --limit 25.');
+      defaultRuntime.exit(1);
+      return undefined;
+    }
+    return parsed;
+  }
+  const parsed = parsePositiveIntOrUndefined(value);
+  if (parsed !== undefined) {
+    return parsed;
+  }
+  defaultRuntime.error('--limit must be a positive integer or "all", for example --limit 25.');
+  defaultRuntime.exit(1);
+  return undefined;
+}
+
+function parseSessionsTail(value: unknown): number | undefined {
+  const parsed = parsePositiveIntOrUndefined(value);
+  if (value !== undefined && parsed === undefined) {
+    defaultRuntime.error("--tail must be a positive integer, for example --tail 25.");
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  return parsed;
+}
+
 async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
   setVerbose(Boolean(opts.verbose));
+  const active = parseSessionsActive(opts.active);
+  const limit = parseSessionsLimit(opts.limit);
+  if (
+    (opts.active !== undefined && active === undefined) ||
+    (opts.limit !== undefined && limit === undefined)
+  ) {
+    return;
+  }
   const { sessionsCommand } = await import("../../commands/sessions.js");
   await sessionsCommand(
     {
@@ -66,8 +116,8 @@ async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
       store: opts.store,
       agent: opts.agent,
       allAgents: Boolean(opts.allAgents),
-      active: opts.active,
-      limit: opts.limit,
+      active,
+      limit,
     },
     defaultRuntime,
   );
@@ -305,6 +355,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             allAgents?: boolean;
           }
         | undefined;
+      const tail = parseSessionsTail(opts.tail);
+      if (opts.tail !== undefined && tail === undefined) {
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { sessionsTailCommand } = await import("../../commands/sessions-tail.js");
         await sessionsTailCommand(
@@ -314,7 +368,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
             allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
             follow: Boolean(opts.follow),
-            tail: opts.tail as string | undefined,
+            tail,
           },
           defaultRuntime,
         );

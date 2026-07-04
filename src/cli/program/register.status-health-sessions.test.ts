@@ -234,8 +234,8 @@ describe("registerStatusHealthSessionsCommands", () => {
     expectCommandOptions(sessionsCommand, {
       json: true,
       store: "/tmp/sessions.json",
-      active: "120",
-      limit: "25",
+      active: 120,
+      limit: 25,
     });
   });
 
@@ -291,8 +291,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       store: "/tmp/sessions.json",
       agent: "work",
       allAgents: true,
-      active: "120",
-      limit: "25",
+      active: 120,
+      limit: 25,
     });
   });
 
@@ -371,8 +371,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       store: "/tmp/sessions.json",
       agent: "work",
       allAgents: true,
-      active: "120",
-      limit: "25",
+      active: 120,
+      limit: 25,
     });
   });
 
@@ -433,7 +433,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       agent: "work",
       allAgents: false,
       follow: true,
-      tail: "5",
+      tail: 5,
     });
   });
 
