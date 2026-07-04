@@ -67,10 +67,19 @@ function assertNoAptGetFallbackCalls() {
       return false;
     }
     const argv = call[0] as string[];
-    const isPermissionCheck = argv[0] === "sudo" && argv.includes("-l");
+    const isPermissionCheck =
+      argv[0] === "sudo" && argv.some((arg) => arg === "-l" || arg === "-ll");
     return argv.includes("apt-get") && !isPermissionCheck;
   });
   expect(aptCalls).toHaveLength(0);
+}
+
+function mockPasswordlessSudoRule(): void {
+  runCommandWithTimeoutMock.mockResolvedValueOnce({
+    code: 0,
+    stdout: "    Options: !authenticate\n",
+    stderr: "",
+  });
 }
 
 function commandCallAt(
@@ -206,25 +215,26 @@ describe("skills-install fallback edge cases", () => {
           "sudo",
           "-k",
           "-n",
-          "-l",
+          "-ll",
           "apt-get",
           "update",
           "-qq",
         ]);
         expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
+        expect(sudoCall?.[1]?.env, testCase.label).toEqual({ LC_ALL: "C" });
         assertNoAptGetFallbackCalls();
       }
     });
   });
 
-  it("rejects sudo when apt install is not passwordless", async () => {
+  it("rejects an apt rule that requires authentication even when sudo listing succeeds", async () => {
     await withUid(1000, async () => {
       mockAvailableBinaries(["apt-get", "sudo"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      mockPasswordlessSudoRule();
       runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 1,
-        stdout: "",
-        stderr: "sudo: a password is required",
+        code: 0,
+        stdout: "    Options: authenticate\n",
+        stderr: "",
       });
 
       const result = await installSkill({
@@ -234,12 +244,12 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(commandCallAt(0)[0]).toEqual(["sudo", "-k", "-n", "-l", "apt-get", "update", "-qq"]);
+      expect(commandCallAt(0)[0]).toEqual(["sudo", "-k", "-n", "-ll", "apt-get", "update", "-qq"]);
       expect(commandCallAt(1)[0]).toEqual([
         "sudo",
         "-k",
         "-n",
-        "-l",
+        "-ll",
         "apt-get",
         "install",
         "-y",
@@ -389,16 +399,24 @@ describe("skills-install fallback edge cases", () => {
     it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
       await withUid(1000, async () => {
         mockAvailableBinaries(["apt-get", "sudo"]);
-        runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-        runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+        mockPasswordlessSudoRule();
+        mockPasswordlessSudoRule();
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(commandCallAt(0)[0]).toEqual(["sudo", "-k", "-n", "-l", "apt-get", "update", "-qq"]);
+        expect(commandCallAt(0)[0]).toEqual([
+          "sudo",
+          "-k",
+          "-n",
+          "-ll",
+          "apt-get",
+          "update",
+          "-qq",
+        ]);
         expect(commandCallAt(1)[0]).toEqual([
           "sudo",
           "-k",
           "-n",
-          "-l",
+          "-ll",
           "apt-get",
           "install",
           "-y",
@@ -544,8 +562,8 @@ describe("skills-install fallback edge cases", () => {
   it("keeps sudo apt probes and execution noninteractive", async () => {
     await withUid(1000, async () => {
       mockAvailableBinaries(["apt-get", "sudo"]);
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      mockPasswordlessSudoRule();
+      mockPasswordlessSudoRule();
       runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
       runCommandWithTimeoutMock.mockResolvedValueOnce({
         code: 0,
@@ -563,8 +581,8 @@ describe("skills-install fallback edge cases", () => {
 
       expect(result.ok).toBe(true);
       expect(runCommandWithTimeoutMock.mock.calls.map((call) => call[0])).toEqual([
-        ["sudo", "-k", "-n", "-l", "apt-get", "update", "-qq"],
-        ["sudo", "-k", "-n", "-l", "apt-get", "install", "-y", "golang-go"],
+        ["sudo", "-k", "-n", "-ll", "apt-get", "update", "-qq"],
+        ["sudo", "-k", "-n", "-ll", "apt-get", "install", "-y", "golang-go"],
         ["sudo", "-n", "apt-get", "update", "-qq"],
         ["apt-cache", "policy", "golang-go"],
         ["sudo", "-n", "apt-get", "install", "-y", "golang-go"],

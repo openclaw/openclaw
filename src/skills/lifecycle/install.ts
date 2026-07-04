@@ -367,8 +367,8 @@ const APT_GO_UPDATE_ARGV = ["apt-get", "update", "-qq"];
 const APT_GO_INSTALL_ARGV = ["apt-get", "install", "-y", APT_GO_PACKAGE];
 const SUDO_NONINTERACTIVE_PREFIX = ["sudo", "-n"];
 const SUDO_APT_GO_CHECK_ARGVS = [
-  ["sudo", "-k", "-n", "-l", ...APT_GO_UPDATE_ARGV],
-  ["sudo", "-k", "-n", "-l", ...APT_GO_INSTALL_ARGV],
+  ["sudo", "-k", "-n", "-ll", ...APT_GO_UPDATE_ARGV],
+  ["sudo", "-k", "-n", "-ll", ...APT_GO_INSTALL_ARGV],
 ];
 const GO_VERSION_ENV_ARGV = ["go", "env", "GOVERSION"];
 
@@ -416,6 +416,17 @@ function appendPathDirectory(pathEnv: string | undefined, directory: string): st
   return pathEnv ? `${pathEnv}${path.delimiter}${directory}` : directory;
 }
 
+function sudoListAllowsPasswordlessCommand(output: string): boolean {
+  const optionsLine = output.split(/\r?\n/).find((line) => /^\s*Options:\s*/.test(line));
+  if (!optionsLine) {
+    return false;
+  }
+  return optionsLine
+    .slice(optionsLine.indexOf(":") + 1)
+    .split(",")
+    .some((option) => option.trim() === "!authenticate");
+}
+
 async function resolveAptCommandAccess(): Promise<AptCommandAccess> {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return { available: true, prefix: [] };
@@ -424,9 +435,23 @@ async function resolveAptCommandAccess(): Promise<AptCommandAccess> {
     return { available: false, reason: "sudo-missing" };
   }
   for (const argv of SUDO_APT_GO_CHECK_ARGVS) {
-    const sudoCheck = await runCommandSafely(argv, { timeoutMs: 5_000 });
+    const sudoCheck = await runCommandSafely(argv, {
+      timeoutMs: 5_000,
+      env: { LC_ALL: "C" },
+    });
     if (sudoCheck.code !== 0) {
       return { available: false, reason: "sudo-unusable", failure: sudoCheck };
+    }
+    if (!sudoListAllowsPasswordlessCommand(sudoCheck.stdout)) {
+      return {
+        available: false,
+        reason: "sudo-unusable",
+        failure: {
+          code: 1,
+          stdout: sudoCheck.stdout,
+          stderr: sudoCheck.stderr || "sudo rule requires authentication",
+        },
+      };
     }
   }
   return { available: true, prefix: SUDO_NONINTERACTIVE_PREFIX };
