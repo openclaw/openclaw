@@ -371,6 +371,92 @@ describe("runReplyAgent :: continuation.work span", () => {
     expect(attrs["chain.id"] as string).toMatch(UUID_REGEX);
   });
 
+  it("suppresses continue_work tool callbacks from incomplete non-replay-safe turns", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-incomplete-replay-unsafe",
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "tool requested more work before incomplete turn surfaced",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Agent couldn't generate a response.", isError: true }],
+        meta: {
+          agentMeta: { usage: { input: 2, output: 3 } },
+          replayInvalid: true,
+          livenessState: "blocked",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent couldn't generate a response.",
+            fallbackSafe: false,
+          },
+        },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Agent couldn't generate a response.",
+    );
+
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(0);
+    expect(run.sessionEntry.continuationChainCount).toBeUndefined();
+  });
+
+  it("still honors continue_work from incomplete replay-safe turns", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-work-incomplete-replay-safe",
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async (args: unknown) => {
+      const options = args as {
+        continueWorkOpts?: {
+          requestContinuation?: (request: { reason: string; delaySeconds: number }) => void;
+        };
+      };
+      options.continueWorkOpts?.requestContinuation?.({
+        reason: "safe incomplete turn requested more work",
+        delaySeconds: 1,
+      });
+      return {
+        payloads: [{ text: "Agent could not generate a response yet.", isError: true }],
+        meta: {
+          agentMeta: { usage: { input: 2, output: 3 } },
+          replayInvalid: false,
+          livenessState: "blocked",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent could not generate a response yet.",
+            fallbackSafe: true,
+          },
+        },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Agent could not generate a response yet.",
+    );
+
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(1);
+    expect(run.sessionEntry.continuationChainCount).toBe(1);
+  });
+
   it("treats continue_work tool callbacks as accepted WORK signals", async () => {
     vi.useFakeTimers();
     const { tracer, spans } = createRecordingTracer();

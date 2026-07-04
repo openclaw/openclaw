@@ -2030,7 +2030,17 @@ export async function runReplyAgent(replyParams: {
     // text and are parsed here. The merged signal only needs the first request
     // to decide kind/delay; the full array fans out at the work-schedule site.
     const continueWorkRequests = runOutcome.continueWorkRequests ?? [];
-    const firstWorkRequest = continueWorkRequests[0];
+    const suppressToolContinuationAfterIncompleteTurn =
+      runResult.meta?.error?.kind === "incomplete_turn" && runResult.meta?.replayInvalid === true;
+    if (suppressToolContinuationAfterIncompleteTurn && continueWorkRequests.length > 0) {
+      defaultRuntime.log(
+        `[continuation] Ignoring ${continueWorkRequests.length} continue_work election(s) because the enclosing turn was incomplete and replay-unsafe for session ${sessionKey ?? "unknown"}`,
+      );
+    }
+    const effectiveContinueWorkRequests = suppressToolContinuationAfterIncompleteTurn
+      ? []
+      : continueWorkRequests;
+    const firstWorkRequest = effectiveContinueWorkRequests[0];
     const continuationExtraction = extractContinuationSignal({
       payloads: payloadArray,
       continueWorkRequest: firstWorkRequest
@@ -3144,8 +3154,8 @@ export async function runReplyAgent(replyParams: {
             // work has no per-tool array, so it schedules one election from the
             // merged signal.
             const workRequests: ContinueWorkRequest[] =
-              !continuationExtraction.fromBracket && continueWorkRequests.length > 0
-                ? continueWorkRequests
+              !continuationExtraction.fromBracket && effectiveContinueWorkRequests.length > 0
+                ? effectiveContinueWorkRequests
                 : [
                     {
                       reason: continuationWorkReason ?? "",
