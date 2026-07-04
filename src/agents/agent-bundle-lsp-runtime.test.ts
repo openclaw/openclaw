@@ -122,6 +122,21 @@ describe("bundle LSP runtime", () => {
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
   });
 
+  it("suppresses spawn errors on LSP child process to prevent unhandled error crash", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const { spawnLspServerProcess } = await import("./agent-bundle-lsp-runtime.js");
+    const result = spawnLspServerProcess({
+      command: "typescript-language-server",
+      args: ["--stdio"],
+    });
+
+    // The returned child must have an error handler installed.
+    // Emitting error on a ChildProcess without a handler throws ERR_UNHANDLED_ERROR.
+    expect(() => result.emit("error", new Error("spawn ENOENT"))).not.toThrow();
+  });
+
   it("keeps LSP framing aligned after multibyte messages in the same chunk", async () => {
     configureSingleLspServer();
     const prefix = encodeLspMessage({

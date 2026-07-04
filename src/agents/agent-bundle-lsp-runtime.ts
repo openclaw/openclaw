@@ -80,7 +80,7 @@ export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): Child
     allowShellFallback: true,
   });
   const invocation = materializeWindowsSpawnProgram(program, config.args ?? []);
-  return spawn(invocation.command, invocation.argv, {
+  const child = spawn(invocation.command, invocation.argv, {
     stdio: ["pipe", "pipe", "pipe"],
     env: mergedEnv,
     cwd: config.cwd,
@@ -88,6 +88,8 @@ export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): Child
     windowsHide: invocation.windowsHide ?? process.platform === "win32",
     shell: invocation.shell,
   });
+  child.on("error", () => {});
+  return child;
 }
 
 function createLspSession(serverName: string, child: ChildProcess): LspSession {
