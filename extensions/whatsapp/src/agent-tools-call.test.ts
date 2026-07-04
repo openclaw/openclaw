@@ -100,8 +100,12 @@ describe("WhatsApp call tool", () => {
     await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     let audioPath: string | undefined;
     const runCommand = vi.fn(async (argv: string[]) => {
-      audioPath = argv.at(-1);
-      const wav = await fs.readFile(audioPath);
+      const commandAudioPath = argv.at(-1);
+      if (!commandAudioPath) {
+        throw new Error("missing audio path");
+      }
+      audioPath = commandAudioPath;
+      const wav = await fs.readFile(commandAudioPath);
       expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
       expect(wav.toString("ascii", 8, 12)).toBe("WAVE");
       expect(wav.readUInt32LE(24)).toBe(24_000);
