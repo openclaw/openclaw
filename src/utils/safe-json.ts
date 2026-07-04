@@ -27,3 +27,24 @@ export function safeJsonStringify(value: unknown): string | null {
     return null;
   }
 }
+
+/**
+ * Non-throwing JSON serialization for runtime output.
+ * Tries JSON.stringify first; falls back to String(value) for ordinary
+ * circular references; returns "[unserializable]" as a last resort for
+ * null-prototype objects where even String() throws.
+ *
+ * Kept in this lightweight module so logger/runtime adapters can import it
+ * without pulling in the full runtime module.
+ */
+export function safeJsonOutput(value: unknown, space?: number): string {
+  try {
+    return JSON.stringify(value, null, space && space > 0 ? space : undefined) ?? "null";
+  } catch {
+    try {
+      return JSON.stringify(String(value));
+    } catch {
+      return '"[unserializable]"';
+    }
+  }
+}

@@ -1,6 +1,7 @@
 // Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
+import { safeJsonOutput } from "./utils/safe-json.js";
 
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
@@ -66,23 +67,7 @@ function writeStdout(value: string): void {
   }
 }
 
-/**
- * Non-throwing JSON serialization for runtime output.
- * Tries JSON.stringify first; falls back to String(value) for ordinary
- * circular references; returns "[unserializable]" as a last resort for
- * null-prototype objects where even String() throws.
- */
-export function safeJsonOutput(value: unknown, space?: number): string {
-  try {
-    return JSON.stringify(value, null, space && space > 0 ? space : undefined) ?? "null";
-  } catch {
-    try {
-      return JSON.stringify(String(value));
-    } catch {
-      return '"[unserializable]"';
-    }
-  }
-}
+export { safeJsonOutput } from "./utils/safe-json.js";
 
 function createRuntimeIo(): Pick<OutputRuntimeEnv, "log" | "error" | "writeStdout" | "writeJson"> {
   return {

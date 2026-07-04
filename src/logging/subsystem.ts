@@ -4,12 +4,8 @@ import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { isVerbose } from "../global-state.js";
-import {
-  defaultRuntime,
-  safeJsonOutput,
-  type OutputRuntimeEnv,
-  type RuntimeEnv,
-} from "../runtime.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
+import { safeJsonOutput } from "../utils/safe-json.js";
 import {
   formatConsoleTimestamp,
   getConsoleSettings,
