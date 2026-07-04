@@ -2483,11 +2483,25 @@ async function runAgentTurnWithFallbackInternal(
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
+                    chatType: params.followupRun.run.chatType,
+                    messageTo:
+                      params.followupRun.originatingTo ??
+                      params.sessionCtx.OriginatingTo ??
+                      params.sessionCtx.To,
+                    messageThreadId: cliCurrentThreadId,
+                    groupId: params.followupRun.run.groupId,
+                    groupChannel: params.followupRun.run.groupChannel,
+                    groupSpace: params.followupRun.run.groupSpace,
+                    spawnedBy: params.followupRun.run.spawnedBy,
+                    sandboxSessionKey: params.followupRun.run.runtimePolicySessionKey,
                     currentChannelId:
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
                     senderId: params.followupRun.run.senderId,
+                    senderName: params.followupRun.run.senderName,
+                    senderUsername: params.followupRun.run.senderUsername,
+                    senderE164: params.followupRun.run.senderE164,
                     chatId: params.followupRun.originatingChatId,
                     channelContext: params.followupRun.run.channelContext,
                     currentThreadTs:

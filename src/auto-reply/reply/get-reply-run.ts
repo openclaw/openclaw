@@ -1391,6 +1391,7 @@ export async function runPreparedReply(
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
+      spawnedBy: normalizeOptionalString(sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
       channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),

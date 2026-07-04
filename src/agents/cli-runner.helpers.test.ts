@@ -676,6 +676,19 @@ describe("resolveCliRunQueueKey", () => {
       }),
     ).toBe("claude-cli:owner:abcd1234");
   });
+
+  it("serializes custom Claude stdio runtimes on their owner lane", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "custom-claude",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-custom-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "abcd1234",
+      }),
+    ).toBe("custom-claude:owner:abcd1234");
+  });
 });
 
 describe("buildClaudeOwnerKey", () => {

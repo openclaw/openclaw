@@ -3,6 +3,7 @@
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildMcpToolSchema,
   type McpLoopbackTool,
@@ -40,6 +41,7 @@ type McpLoopbackScopeParams = {
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   requireExplicitMessageTarget?: boolean;
+  directMcpServers?: boolean;
   senderIsOwner: boolean | undefined;
 };
 
@@ -55,7 +57,12 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   });
   return {
     agentId: scoped.agentId,
-    tools: scoped.tools,
+    // Bundle MCP servers are injected into CLI clients as first-class MCP
+    // servers. Re-exporting their projected tools through loopback would create
+    // a second policy route and make collision-safe tool names disagree.
+    tools: params.directMcpServers
+      ? scoped.tools.filter((tool) => getPluginToolMeta(tool)?.pluginId !== "bundle-mcp")
+      : scoped.tools,
   };
 }
 
@@ -77,6 +84,7 @@ export class McpLoopbackToolCache {
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
       params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      params.directMcpServers === true ? "direct-mcp-servers" : "",
       params.senderIsOwner === true
         ? "owner"
         : params.senderIsOwner === false

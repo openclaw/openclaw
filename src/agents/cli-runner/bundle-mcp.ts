@@ -16,11 +16,15 @@ import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
   findClaudeMcpConfigPath,
   findClaudeMcpConfigPaths,
+  hasExternalClaudeMcpServerPolicies,
   injectClaudeMcpConfigArgs,
+  prepareClaudeMcpServers,
   writeClaudeMcpCaptureConfig,
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
+import { isClaudeLiveSessionTransport } from "./claude-live-contract.js";
+import type { ClaudeMcpServerToolPolicies } from "./types.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -28,6 +32,8 @@ type PreparedCliBundleMcpConfig = {
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  mcpServerToolPolicies?: ClaudeMcpServerToolPolicies;
+  mcpNativeServerNames?: string[];
   env?: Record<string, string>;
 };
 
@@ -37,6 +43,19 @@ function resolveBundleMcpMode(mode: CliBundleMcpMode | undefined): CliBundleMcpM
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
+}
+
+function applyManagedMcpConfig(
+  current: BundleMcpConfig,
+  managed: BundleMcpConfig,
+): BundleMcpConfig {
+  const mcpServers = { ...current.mcpServers };
+  for (const serverName of Object.keys(managed.mcpServers)) {
+    // Managed identities replace native entries wholesale. Retaining stale
+    // command/url fields could change which transport owns a trusted name.
+    delete mcpServers[serverName];
+  }
+  return applyMergePatch({ ...current, mcpServers }, managed) as BundleMcpConfig;
 }
 
 function sortJsonValue(value: unknown): unknown {
@@ -62,12 +81,35 @@ function normalizeOpenClawLoopbackUrl(value: string): string {
   return `${match[1]}:<openclaw-loopback>${match[2]}`;
 }
 
-function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+type RuntimeMcpConfig = {
+  mcpServers: Record<string, unknown>;
+};
+
+function markClaudeDirectMcpServers(config: RuntimeMcpConfig): RuntimeMcpConfig {
+  const openclaw = config.mcpServers.openclaw;
+  if (!isRecord(openclaw)) {
+    return config;
+  }
+  return {
+    mcpServers: {
+      ...config.mcpServers,
+      openclaw: {
+        ...openclaw,
+        headers: {
+          ...(isRecord(openclaw.headers) ? openclaw.headers : {}),
+          "x-openclaw-direct-mcp-servers": "true",
+        },
+      },
+    },
+  };
+}
+
+function canonicalizeBundleMcpConfigForResume(config: RuntimeMcpConfig): RuntimeMcpConfig {
   // The OpenClaw loopback MCP port changes across runs. Replace it before
   // hashing so resume compatibility tracks config shape, not ephemeral ports.
   const canonicalServers = Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => {
-      if (name !== "openclaw" || typeof server.url !== "string") {
+      if (name !== "openclaw" || !isRecord(server) || typeof server.url !== "string") {
         return [name, sortJsonValue(server)];
       }
       return [
@@ -78,9 +120,9 @@ function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMc
         }),
       ];
     }),
-  ) as BundleMcpConfig["mcpServers"];
+  );
   return {
-    mcpServers: sortJsonValue(canonicalServers) as BundleMcpConfig["mcpServers"],
+    mcpServers: sortJsonValue(canonicalServers) as Record<string, unknown>,
   };
 }
 
@@ -110,16 +152,50 @@ async function prepareModeSpecificBundleMcpConfig(params: {
   mode: CliBundleMcpMode;
   backend: CliBackendConfig;
   mergedConfig: BundleMcpConfig;
+  nativeClaudeMcpServerNames?: ReadonlySet<string>;
+  managedClaudeMcpServerOrder?: readonly string[];
   env?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
-  const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
-  const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
+  const isClaudeConfig = params.mode === "claude-config-file";
+  const preparedClaudeServers = isClaudeConfig
+    ? prepareClaudeMcpServers(params.mergedConfig.mcpServers, {
+        nativeServerNames: params.nativeClaudeMcpServerNames,
+        managedServerOrder: params.managedClaudeMcpServerOrder,
+      })
+    : undefined;
+  const mcpServerToolPolicies = preparedClaudeServers?.toolPolicies;
+  const mcpNativeServerNames = preparedClaudeServers?.nativeServerNames;
+  const hasExternalClaudeMcpServers = hasExternalClaudeMcpServerPolicies(mcpServerToolPolicies);
+  if (hasExternalClaudeMcpServers && !isClaudeLiveSessionTransport(params.backend)) {
+    throw new Error(
+      'Claude CLI external MCP servers require liveSession: "claude-stdio", output: "jsonl", resumeOutput unset or "jsonl", and input: "stdin" for OpenClaw tool policy enforcement',
+    );
+  }
+  const claudeRuntimeConfig = {
+    mcpServers: preparedClaudeServers?.mcpServers ?? {},
+  };
+  const runtimeConfig = isClaudeConfig
+    ? isClaudeLiveSessionTransport(params.backend)
+      ? markClaudeDirectMcpServers(claudeRuntimeConfig)
+      : claudeRuntimeConfig
+    : params.mergedConfig;
+  const policyHashInput = mcpServerToolPolicies ? `${JSON.stringify(mcpServerToolPolicies)}\n` : "";
+  const serializedConfig = `${JSON.stringify(runtimeConfig, null, 2)}\n`;
+  const mcpConfigHash = crypto
+    .createHash("sha256")
+    .update(serializedConfig)
+    .update(policyHashInput)
+    .digest("hex");
   const serializedResumeConfig = `${JSON.stringify(
-    canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+    canonicalizeBundleMcpConfigForResume(runtimeConfig),
     null,
     2,
   )}\n`;
-  const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
+  const mcpResumeHash = crypto
+    .createHash("sha256")
+    .update(serializedResumeConfig)
+    .update(policyHashInput)
+    .digest("hex");
 
   if (params.mode === "codex-config-overrides") {
     return {
@@ -133,6 +209,8 @@ async function prepareModeSpecificBundleMcpConfig(params: {
       },
       mcpConfigHash,
       mcpResumeHash,
+      mcpServerToolPolicies,
+      mcpNativeServerNames,
       env: params.env,
     };
   }
@@ -143,6 +221,8 @@ async function prepareModeSpecificBundleMcpConfig(params: {
       backend: params.backend,
       mcpConfigHash,
       mcpResumeHash,
+      mcpServerToolPolicies,
+      mcpNativeServerNames,
       env: settings.env,
       cleanup: settings.cleanup,
     };
@@ -150,11 +230,11 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
-  const runtimeConfig = resolveOpenClawMcpEnvTemplates(
-    params.mergedConfig,
+  const resolvedRuntimeConfig = resolveOpenClawMcpEnvTemplates(
+    runtimeConfig,
     params.env,
   ) as BundleMcpConfig;
-  await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
+  await fs.writeFile(mcpConfigPath, `${JSON.stringify(resolvedRuntimeConfig, null, 2)}\n`, "utf-8");
   return {
     backend: {
       ...params.backend,
@@ -166,6 +246,8 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     },
     mcpConfigHash,
     mcpResumeHash,
+    mcpServerToolPolicies,
+    mcpNativeServerNames,
     env: params.env,
     cleanup: async () => {
       // Claude config files are generated per run and should not survive cleanup.
@@ -199,6 +281,17 @@ export async function prepareCliBundleMcpConfig(params: {
         ? findClaudeMcpConfigPaths(params.backend.args)
         : [];
   let mergedConfig: BundleMcpConfig = { mcpServers: {} };
+  const nativeClaudeMcpServerNames = new Set<string>();
+  const managedClaudeMcpServerOrder: string[] = [];
+  const markManagedClaudeMcpServers = (serverNames: readonly string[]) => {
+    for (const serverName of serverNames) {
+      const previousIndex = managedClaudeMcpServerOrder.indexOf(serverName);
+      if (previousIndex >= 0) {
+        managedClaudeMcpServerOrder.splice(previousIndex, 1);
+      }
+      managedClaudeMcpServerOrder.push(serverName);
+    }
+  };
 
   for (const existingMcpConfigPath of existingMcpConfigPaths) {
     // Merge any user-provided Claude MCP config first so bundle/plugin config can
@@ -206,10 +299,11 @@ export async function prepareCliBundleMcpConfig(params: {
     const resolvedExistingPath = path.isAbsolute(existingMcpConfigPath)
       ? existingMcpConfigPath
       : path.resolve(params.workspaceDir, existingMcpConfigPath);
-    mergedConfig = applyMergePatch(
-      mergedConfig,
-      await readExternalMcpConfig(resolvedExistingPath),
-    ) as BundleMcpConfig;
+    const externalConfig = await readExternalMcpConfig(resolvedExistingPath);
+    mergedConfig = applyMergePatch(mergedConfig, externalConfig) as BundleMcpConfig;
+    for (const serverName of Object.keys(externalConfig.mcpServers)) {
+      nativeClaudeMcpServerNames.add(serverName);
+    }
   }
 
   const bundleConfig = loadMergedBundleMcpConfig({
@@ -220,15 +314,27 @@ export async function prepareCliBundleMcpConfig(params: {
   for (const diagnostic of bundleConfig.diagnostics) {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  const bundleServerNames = Object.keys(bundleConfig.config.mcpServers);
+  for (const serverName of bundleServerNames) {
+    nativeClaudeMcpServerNames.delete(serverName);
+  }
+  markManagedClaudeMcpServers(bundleServerNames);
+  mergedConfig = applyManagedMcpConfig(mergedConfig, bundleConfig.config);
   if (params.additionalConfig) {
-    mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
+    const additionalServerNames = Object.keys(params.additionalConfig.mcpServers);
+    for (const serverName of additionalServerNames) {
+      nativeClaudeMcpServerNames.delete(serverName);
+    }
+    markManagedClaudeMcpServers(additionalServerNames);
+    mergedConfig = applyManagedMcpConfig(mergedConfig, params.additionalConfig);
   }
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
     mergedConfig,
+    nativeClaudeMcpServerNames,
+    managedClaudeMcpServerOrder,
     env: params.env,
   });
 }

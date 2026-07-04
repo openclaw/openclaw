@@ -61,6 +61,7 @@ type McpRequestContext = {
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   requireExplicitMessageTarget: boolean | undefined;
+  directMcpServers: boolean | undefined;
   senderIsOwner: boolean | undefined;
 };
 
@@ -380,6 +381,7 @@ export function resolveMcpRequestContext(
       inboundEventKind: undefined,
       sourceReplyDeliveryMode: undefined,
       requireExplicitMessageTarget: undefined,
+      directMcpServers: undefined,
       senderIsOwner: auth.senderIsOwner,
     };
   }
@@ -402,6 +404,7 @@ export function resolveMcpRequestContext(
     requireExplicitMessageTarget: normalizeMcpBooleanHeader(
       getHeader(req, "x-openclaw-require-explicit-message-target"),
     ),
+    directMcpServers: normalizeMcpBooleanHeader(getHeader(req, "x-openclaw-direct-mcp-servers")),
     senderIsOwner: auth.senderIsOwner,
   };
 }

@@ -35,6 +35,7 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -67,7 +68,6 @@ const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
-const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
 
 type McpToolSelection = {
@@ -351,26 +351,6 @@ function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boo
     return false;
   }
   return !exclude.some((pattern) => globMatches(pattern, toolName));
-}
-
-function sanitizeMcpMetadataText(value: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  const scrubbed = normalized
-    .replace(
-      /ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
-      "[redacted MCP metadata instruction]",
-    )
-    .replace(
-      /disregard\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
-      "[redacted MCP metadata instruction]",
-    )
-    .replace(/system\s+prompt/gi, "system prompt");
-  return scrubbed.length > BUNDLE_MCP_METADATA_TEXT_LIMIT
-    ? `${scrubbed.slice(0, BUNDLE_MCP_METADATA_TEXT_LIMIT)}...`
-    : scrubbed;
 }
 
 function summarizeServerCapabilities(capabilities: ServerCapabilities | undefined) {

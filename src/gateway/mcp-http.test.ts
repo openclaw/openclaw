@@ -2,6 +2,7 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 
@@ -120,7 +121,7 @@ import {
   recordMcpLoopbackToolCallResult,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "./mcp-http.loopback-runtime.js";
-import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
+import { McpLoopbackToolCache, resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 
 let server: Awaited<ReturnType<typeof startMcpLoopbackServer>> | undefined;
 
@@ -1026,6 +1027,74 @@ describe("mcp loopback server", () => {
     expectMcpToolNames(payload, ["message", "cron", "owner_probe"]);
   });
 
+  it("does not mirror directly injected bundle MCP tools through loopback", () => {
+    const bundleTool = makeMockTool({
+      name: "computer-use__click",
+      description: "click",
+    });
+    setPluginToolMeta(bundleTool as never, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "computer-use",
+        safeServerName: "computer-use",
+        toolName: "click",
+        operation: "tool",
+      },
+    });
+    const pluginTool = makeMockTool({
+      name: "weather_lookup",
+      description: "weather",
+    });
+    setPluginToolMeta(pluginTool as never, {
+      pluginId: "weather",
+      optional: false,
+    });
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [makeMessageTool(), bundleTool, pluginTool],
+    });
+
+    const scoped = resolveMcpLoopbackScopedTools({
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: undefined,
+      currentInboundAudio: undefined,
+      currentMessageId: undefined,
+      currentThreadTs: undefined,
+      inboundEventKind: undefined,
+      messageProvider: undefined,
+      requireExplicitMessageTarget: undefined,
+      directMcpServers: true,
+      senderIsOwner: true,
+      sessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: undefined,
+    });
+
+    expect(scoped.tools.map((tool) => tool.name)).toEqual(["message", "weather_lookup"]);
+
+    const attachScoped = resolveMcpLoopbackScopedTools({
+      accountId: undefined,
+      cfg: { session: { mainKey: "main" } } as never,
+      currentChannelId: undefined,
+      currentInboundAudio: undefined,
+      currentMessageId: undefined,
+      currentThreadTs: undefined,
+      inboundEventKind: undefined,
+      messageProvider: undefined,
+      requireExplicitMessageTarget: undefined,
+      directMcpServers: undefined,
+      senderIsOwner: false,
+      sessionKey: "agent:main:main",
+      sourceReplyDeliveryMode: undefined,
+    });
+    expect(attachScoped.tools.map((tool) => tool.name)).toEqual([
+      "message",
+      "computer-use__click",
+      "weather_lookup",
+    ]);
+  });
+
   it("keeps tools available to loopback callers", async () => {
     mockScopedTools([makeMessageTool(), makeCronTool()]);
     const { runtime } = await startLoopbackServerForTest();
@@ -1763,6 +1832,9 @@ describe("createMcpLoopbackServerConfig", () => {
     ).toBe("${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}");
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe(
       "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+    );
+    expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty(
+      "x-openclaw-direct-mcp-servers",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });

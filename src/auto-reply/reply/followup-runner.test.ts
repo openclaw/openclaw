@@ -1114,6 +1114,7 @@ describe("createFollowupRunner runtime config", () => {
       createQueuedRun({
         originatingChannel: "telegram",
         originatingTo: "telegram:-100123:topic:42",
+        originatingChatId: "-100123",
         originatingThreadId: "42",
         originatingReplyToId: "reply-42",
         messageId: "queued-message-1",
@@ -1123,7 +1124,16 @@ describe("createFollowupRunner runtime config", () => {
           provider: "anthropic",
           model: "claude-opus-4-7",
           messageProvider: "telegram",
+          chatType: "group",
+          runtimePolicySessionKey: "agent:agent:telegram:group:-100123",
+          groupId: "-100123",
+          groupChannel: "ops",
+          groupSpace: "workspace-1",
+          spawnedBy: "agent:main:parent",
           senderId: "sender-42",
+          senderName: "Alice",
+          senderUsername: "alice",
+          senderE164: "+15555550100",
           senderIsOwner: true,
           cwd: "/tmp/task-repo",
           inputProvenance: {
@@ -1146,7 +1156,6 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-42");
-    expect(call.senderId).toBe("sender-42");
     expect(call.senderIsOwner).toBe(true);
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
@@ -1156,6 +1165,19 @@ describe("createFollowupRunner runtime config", () => {
       cwd: "/tmp/task-repo",
       config: runtimeConfig,
       suppressNextUserMessagePersistence: false,
+      chatType: "group",
+      messageTo: "telegram:-100123:topic:42",
+      messageThreadId: "42",
+      groupId: "-100123",
+      groupChannel: "ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      sandboxSessionKey: "agent:agent:telegram:group:-100123",
+      senderId: "sender-42",
+      senderName: "Alice",
+      senderUsername: "alice",
+      senderE164: "+15555550100",
+      chatId: "-100123",
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
   });

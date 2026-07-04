@@ -69,6 +69,17 @@ available as a normal OpenClaw MCP server. Use the Codex Computer Use setup on
 this page when Codex app-server should own plugin installation, MCP reloads,
 and native tool calls inside Codex-mode turns.
 
+The same direct MCP path works with the `claude-cli` runtime. Register the
+desktop-control server under `mcp.servers`, add a narrow `toolFilter`, and use
+an Anthropic model with `agentRuntime.id: "claude-cli"`. OpenClaw passes the
+server through Claude's strict MCP config and evaluates each native MCP
+call against the effective per-agent tool policy. An OpenClaw-owned MCP proxy
+filters the advertised tools and rejects denied calls before they reach the
+desktop-control server, independently of Claude's native permission settings.
+Claude reserves the server name `computer-use`; OpenClaw rewrites that name only
+inside Claude's generated launch config, so the OpenClaw MCP registry and tool
+policy continue to use `computer-use`.
+
 CUA's driver is macOS-specific and still requires the local macOS permissions
 that its app prompts for, such as Accessibility and Screen Recording. OpenClaw
 does not install `cua-driver`, grant those permissions, or bypass the upstream

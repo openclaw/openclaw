@@ -1,8 +1,8 @@
 /**
  * Shared normalization helpers for CLI-specific bundle MCP adapters.
  */
-import { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 import type { BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
+import { toMcpStringRecord } from "../mcp-config-shared.js";
 /** Re-exported record guard for adapter modules that share loose JSON inputs. */
 export { isRecord } from "../../../packages/normalization-core/src/record-coerce.js";
 
@@ -12,15 +12,9 @@ function normalizeStringArray(value: unknown): string[] | undefined {
     : undefined;
 }
 
-/** Normalize a string-valued record, dropping non-string entries. */
+/** Normalize MCP env/header scalar values into the strings expected by CLI runtimes. */
 export function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const entries = Object.entries(value).filter((entry): entry is [string, string] => {
-    return typeof entry[1] === "string";
-  });
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  return toMcpStringRecord(value);
 }
 
 /** Decode supported `${ENV}` and `Bearer ${ENV}` header placeholders. */

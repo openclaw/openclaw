@@ -243,6 +243,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
+          directMcpServers: requestContext.directMcpServers,
           senderIsOwner: requestContext.senderIsOwner,
         });
 

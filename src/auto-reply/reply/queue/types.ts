@@ -107,6 +107,7 @@ export type FollowupRun = {
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    spawnedBy?: string;
     senderId?: string;
     channelContext?: PluginHookChannelContext;
     senderName?: string;

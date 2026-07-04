@@ -79,6 +79,9 @@ export async function prepareBundleProbeCliConfig(params?: {
       backend: {
         command: "node",
         args: ["./fake-claude.mjs"],
+        liveSession: "claude-stdio",
+        output: "jsonl",
+        input: "stdin",
       },
       workspaceDir: bundleProbeWorkspaceDir,
       config: createEnabledBundleProbeConfig(),

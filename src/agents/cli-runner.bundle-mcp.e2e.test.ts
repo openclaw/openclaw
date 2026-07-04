@@ -209,11 +209,17 @@ describe("CLI bundle MCP e2e", () => {
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const { executePreparedCliRun } = await import("./cli-runner/execute.js");
+      const { closeClaudeLiveSessionForContext } =
+        await import("./cli-runner/claude-live-session.js");
       const fixture = await createBundleMcpFixture({
+        liveSession: true,
         tempPrefix: "openclaw-cli-bundle-mcp-",
       });
       const context = await prepareBundleMcpExecutionContext({
-        backend: buildTestBackend({ commandPath: fixture.fakeClaudePath }),
+        backend: buildTestBackend({
+          commandPath: fixture.fakeClaudePath,
+          liveSession: "claude-stdio",
+        }),
         config: fixture.config,
         model: "test-bundle",
         prompt: "Use your configured MCP tools and report the bundle probe text.",
@@ -226,8 +232,9 @@ describe("CLI bundle MCP e2e", () => {
       try {
         const result = await executePreparedCliRun(context);
 
-        expect(result.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
+        expect(result.text).toContain("LIVE BUNDLE MCP OK FROM-BUNDLE");
       } finally {
+        await closeClaudeLiveSessionForContext(context);
         await context.preparedBackend.cleanup?.();
         await cleanupFixture(fixture);
       }

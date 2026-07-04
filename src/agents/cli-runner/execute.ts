@@ -251,6 +251,39 @@ function createCliAbortError(): Error {
   return createAbortError("CLI run aborted");
 }
 
+function retainPreparedBackendCleanup(
+  preparedBackend: PreparedCliRunContext["preparedBackend"],
+): (() => Promise<void>) | undefined {
+  const originalCleanup = preparedBackend.cleanup;
+  if (!originalCleanup) {
+    return undefined;
+  }
+  if (!preparedBackend.retainCleanup) {
+    let references = 1;
+    let cleanupPromise: Promise<void> | undefined;
+    const createRelease = () => {
+      let released = false;
+      return async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        references -= 1;
+        if (references === 0) {
+          cleanupPromise ??= originalCleanup();
+          await cleanupPromise;
+        }
+      };
+    };
+    preparedBackend.cleanup = createRelease();
+    preparedBackend.retainCleanup = () => {
+      references += 1;
+      return createRelease();
+    };
+  }
+  return preparedBackend.retainCleanup();
+}
+
 function buildCliLogArgs(params: {
   args: string[];
   systemPromptArg?: string;
@@ -1033,33 +1066,55 @@ export async function executePreparedCliRun(
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
           }
+          // The prepared run and reusable process share generated MCP/plugin
+          // artifacts. The run lease keeps retries valid; the session lease
+          // keeps lazy reads valid after the run finishes.
+          const releasePreparedBackendCleanup = retainPreparedBackendCleanup(
+            context.preparedBackend,
+          );
+          let preparedCleanupLeaseTransferred = false;
           params.onExecutionPhase?.({
             phase: "process_spawned",
             provider: params.provider,
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
-          const liveResult = await runClaudeLiveSessionTurn({
-            context,
-            args,
-            env,
-            prompt,
-            useResume,
-            noOutputTimeoutMs,
-            getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: emitCliAssistantDelta,
-            onToolUseStart: emitCliToolUseStart,
-            onToolResult: emitCliToolResult,
-            onCommentaryText:
-              emitLiveEvents && context.params.emitCommentaryText
-                ? emitCliCommentaryText
-                : undefined,
-            onMcpCaptureReady: beginGatewayCapture,
-            cleanup: async () => {
-              await fallbackClaudeSkillsPlugin?.cleanup();
-            },
-          });
+          let liveResult: Awaited<ReturnType<typeof runClaudeLiveSessionTurn>>;
+          try {
+            liveResult = await runClaudeLiveSessionTurn({
+              context,
+              args,
+              env,
+              prompt,
+              useResume,
+              noOutputTimeoutMs,
+              getProcessSupervisor: executeDeps.getProcessSupervisor,
+              onAssistantDelta: emitCliAssistantDelta,
+              onToolUseStart: emitCliToolUseStart,
+              onToolResult: emitCliToolResult,
+              onCommentaryText:
+                emitLiveEvents && context.params.emitCommentaryText
+                  ? emitCliCommentaryText
+                  : undefined,
+              onMcpCaptureReady: beginGatewayCapture,
+              onCleanupOwnershipTransferred: () => {
+                preparedCleanupLeaseTransferred = true;
+                fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
+              },
+              cleanup: async () => {
+                try {
+                  await fallbackClaudeSkillsPlugin?.cleanup();
+                } finally {
+                  await releasePreparedBackendCleanup?.();
+                }
+              },
+            });
+          } catch (error) {
+            if (!preparedCleanupLeaseTransferred) {
+              await releasePreparedBackendCleanup?.();
+            }
+            throw error;
+          }
           const rawText = liveResult.output.text;
           runOutput = {
             ...liveResult.output,

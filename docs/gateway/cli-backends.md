@@ -184,6 +184,39 @@ launches Claude with `--permission-mode default`. Per-agent
 agent. Raw Claude backend args may still include `--permission-mode`, but live
 Claude launches normalize that flag to match the effective OpenClaw exec policy.
 
+When the generated strict MCP config contains OpenClaw-managed servers beyond
+the loopback, the live Claude runtime rewrites each managed external entry
+through an OpenClaw-owned MCP policy proxy. The proxy filters `tools/list`,
+authorizes every `tools/call` before forwarding it upstream, and bridges
+Claude's form elicitation capability for an active, allowed `computer-use`
+tool call. Claude settings, hooks, or native preapproval therefore cannot
+bypass OpenClaw policy.
+Global, provider, agent, group, sender, sandbox, subagent, and inherited
+restrictions are evaluated with deny-wins behavior, and
+`mcp.servers.<name>.toolFilter` is enforced without widening an exact tool
+allowlist to the whole server. The loopback `mcp__openclaw__*` server already
+materializes the effective OpenClaw tool surface. Generic per-run `toolsAllow`
+restrictions still fail closed for CLI backends.
+
+External Claude MCP servers require the default `liveSession: "claude-stdio"`,
+`output: "jsonl"`, unset or JSONL `resumeOutput`, and `input: "stdin"` runtime contract. Backend overrides
+that disable the live session or change its transport are rejected because the
+generic one-shot CLI path cannot enforce OpenClaw's per-tool policy. MCP
+allowlists must use concrete tool names or namespace globs such as
+`computer-use__list_apps` or `computer-use__*`; a bare server name does not
+grant every tool on that server.
+
+Entries supplied directly through a backend's existing Claude
+`--mcp-config` remain Claude-owned. OpenClaw preserves their native OAuth,
+timeout, and per-tool settings and does not proxy them. Register a server under
+OpenClaw `mcp.servers` when its calls must be governed by OpenClaw tool policy.
+An OpenClaw-managed entry with the same name replaces the backend-native entry
+and takes ownership of its runtime policy.
+
+Claude reserves the MCP server name `computer-use`. OpenClaw assigns that entry
+a collision-free launch name in Claude's generated config while continuing to
+match OpenClaw tool policy against the configured `computer-use` name.
+
 The bundled Anthropic `claude-cli` backend also maps OpenClaw `/think` levels
 to Claude Code's native `--effort` flag for non-off levels. `minimal` and
 `low` map to `low`, `adaptive` and `medium` map to `medium`, and `high`,
@@ -435,6 +468,10 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace
 - merges them with any existing backend MCP config/settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning extension
+- preserves OpenClaw MCP tool filters beside Claude's native config and
+  enforces managed external calls through the Claude runtime's MCP policy proxy
+- injects bundle MCP servers directly and omits their projected copies from the
+  `openclaw` loopback server, so each tool has one policy and naming path
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a
 backend opts into bundle MCP so background runs stay isolated.

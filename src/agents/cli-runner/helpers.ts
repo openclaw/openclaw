@@ -101,16 +101,20 @@ export function resolveCliRunQueueKey(params: {
   cliSessionId?: string;
   ownerKey?: string;
 }): string {
-  const requiresLiveSessionSerialization =
-    isClaudeCliProvider(params.backendId) && params.liveSession === "claude-stdio";
+  const requiresLiveSessionSerialization = params.liveSession === "claude-stdio";
   if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
-  if (isClaudeCliProvider(params.backendId)) {
+  if (requiresLiveSessionSerialization) {
     const ownerKey = params.ownerKey?.trim();
-    if (requiresLiveSessionSerialization && ownerKey) {
+    if (ownerKey) {
       return `${params.backendId}:owner:${ownerKey}`;
     }
+    const workspaceDir = params.workspaceDir.trim();
+    return workspaceDir ? `${params.backendId}:workspace:${workspaceDir}` : params.backendId;
+  }
+  if (isClaudeCliProvider(params.backendId)) {
+    const ownerKey = params.ownerKey?.trim();
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;

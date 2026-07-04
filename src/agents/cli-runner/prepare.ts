@@ -82,6 +82,7 @@ import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { isClaudeLiveSessionTransport } from "./claude-live-contract.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -488,6 +489,10 @@ export async function prepareCliRunContext(
   });
   const bundleMcpEnabled =
     !isSideQuestion && backendResolved.bundleMcp && params.disableTools !== true;
+  const directMcpServers =
+    bundleMcpEnabled &&
+    (backendResolved.bundleMcpMode ?? "claude-config-file") === "claude-config-file" &&
+    isClaudeLiveSessionTransport(backendResolved.config);
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
@@ -661,12 +666,14 @@ export async function prepareCliRunContext(
             inboundEventKind: undefined,
             sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
             requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+            directMcpServers: directMcpServers || undefined,
             senderIsOwner: undefined,
           }).tools
         : [];
+    const mcpReservedToolNames = promptTools.map((tool) => tool.name).toSorted();
     const promptToolNamesHash =
       bundleMcpEnabled && mcpLoopbackRuntime
-        ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+        ? hashCliSessionText(JSON.stringify(mcpReservedToolNames))
         : undefined;
     const reusableCliSessionCandidate: CliReusableSession = isSideQuestion
       ? { mode: "none" }
@@ -983,6 +990,7 @@ export async function prepareCliRunContext(
         extraSystemPromptHash,
         messageToolPolicyHash,
         promptToolNamesHash,
+        mcpReservedToolNames,
         cwdHash,
         ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
       };
@@ -1052,6 +1060,7 @@ export async function prepareCliRunContext(
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
+      mcpReservedToolNames,
       cwdHash,
       ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };

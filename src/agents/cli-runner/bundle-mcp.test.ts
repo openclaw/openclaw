@@ -125,7 +125,12 @@ describe("prepareCliBundleMcpConfig", () => {
       configPath,
       `${JSON.stringify({
         mcpServers: {
-          equals: { command: "node", args: ["equals.mjs"] },
+          equals: {
+            type: "http",
+            url: "https://example.test/mcp",
+            timeout: 5_000,
+            tools: [{ name: "delete", policy: "always_deny" }],
+          },
         },
       })}\n`,
       "utf-8",
@@ -145,9 +150,24 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.backend.args).not.toContain("--mcp-config=equals-mcp.json");
     const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
     const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { args?: string[] }>;
+      mcpServers?: Record<
+        string,
+        {
+          type?: string;
+          url?: string;
+          timeout?: number;
+          tools?: Array<{ name?: string; policy?: string }>;
+        }
+      >;
     };
-    expect(raw.mcpServers?.equals?.args).toEqual(["equals.mjs"]);
+    expect(raw.mcpServers?.equals).toEqual({
+      type: "http",
+      url: "https://example.test/mcp",
+      timeout: 5_000,
+      tools: [{ name: "delete", policy: "always_deny" }],
+    });
+    expect(prepared.mcpServerToolPolicies).toEqual({});
+    expect(prepared.mcpNativeServerNames).toEqual(["equals"]);
 
     await prepared.cleanup?.();
   });
@@ -216,6 +236,9 @@ describe("prepareCliBundleMcpConfig", () => {
       backend: {
         command: "node",
         args: ["./fake-claude.mjs"],
+        liveSession: "claude-stdio",
+        output: "jsonl",
+        input: "stdin",
       },
       workspaceDir,
       config: {
