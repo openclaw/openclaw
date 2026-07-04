@@ -636,7 +636,11 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
     expect(applied.appliedSummaries[0]?.wouldMutate).toBe(true);
     const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted["agent:main:cron:job:run:fresh"]?.sessionFile).toBe(canonicalTranscript);
+    // Repair persists the resolver's canonical form; on macOS the tmpdir path
+    // realpaths through /var -> /private/var, so compare resolved paths.
+    expect(persisted["agent:main:cron:job:run:fresh"]?.sessionFile).toBe(
+      await fs.realpath(canonicalTranscript),
+    );
     await expectPathExists(canonicalTranscript);
   });
 
@@ -686,7 +690,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(applied.appliedSummaries[0]?.repaired).toBe(1);
     expect(applied.appliedSummaries[0]?.missing).toBe(0);
     const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted[sessionKey]?.sessionFile).toBe(canonicalTranscript);
+    expect(persisted[sessionKey]?.sessionFile).toBe(await fs.realpath(canonicalTranscript));
     await expectPathExists(canonicalTranscript);
   });
 

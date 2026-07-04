@@ -314,6 +314,34 @@ function pruneMissingTranscriptEntries(params: {
     storePath: params.storePath,
   });
   const sessionsDir = path.dirname(params.storePath);
+  // Symlink-aware in-dir resolution for stored absolute sessionFile values:
+  // resolveSessionFilePath realpaths the sessions dir, so a missing file
+  // stored through a symlinked dir (macOS /var -> /private/var tmp stores)
+  // fails its containment and silently falls back to the canonical
+  // transcript, which defeats missing-file pruning and stale-metadata repair.
+  const realSessionsDir = (() => {
+    try {
+      return fs.realpathSync(path.resolve(sessionsDir));
+    } catch {
+      return path.resolve(sessionsDir);
+    }
+  })();
+  const resolveStoredFileWithinDir = (candidate: string | undefined): string | undefined => {
+    const trimmed = candidate?.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) {
+      return undefined;
+    }
+    let parentReal: string;
+    try {
+      parentReal = fs.realpathSync(path.dirname(trimmed));
+    } catch {
+      return undefined;
+    }
+    if (parentReal !== realSessionsDir) {
+      return undefined;
+    }
+    return path.join(parentReal, path.basename(trimmed));
+  };
   let removed = 0;
   let repaired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
@@ -338,6 +366,13 @@ function pruneMissingTranscriptEntries(params: {
       transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
     } catch {
       // Malformed sessionFile metadata can still be repaired via the canonical path below.
+    }
+    // Prefer the stored file when it lives in this sessions dir: on symlinked
+    // dirs resolveSessionFilePath returns the canonical fallback instead,
+    // which would mask both the missing-file prune and the stale repair.
+    const storedInDirPath = resolveStoredFileWithinDir(entry.sessionFile);
+    if (storedInDirPath) {
+      transcriptPath = storedInDirPath;
     }
     if (
       isStaleGeneratedBaseTranscript({
