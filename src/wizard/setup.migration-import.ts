@@ -524,6 +524,9 @@ export async function runSetupMigrationImport(params: {
   commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   continueOnboarding?: boolean;
 }): Promise<void> {
+  if (params.opts.nonInteractive && !params.opts.importFrom?.trim()) {
+    throw new Error("--import-from is required for non-interactive migration import.");
+  }
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },

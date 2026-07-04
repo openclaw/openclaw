@@ -26,7 +26,11 @@ import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
-import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
+import {
+  defaultGatewayBindMode,
+  isLoopbackAddress,
+  resolveGatewayBindHost,
+} from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -85,6 +89,15 @@ async function canUseAgentAssistedGatewayPolicy(
     return false;
   }
   try {
+    if (authMode === "none") {
+      const bindHost = await resolveGatewayBindHost(
+        config.gateway?.bind ?? "loopback",
+        config.gateway?.customBindHost,
+      );
+      if (!isLoopbackAddress(bindHost)) {
+        return false;
+      }
+    }
     if (!isLoopbackAddress(new URL(resolveGatewayProbeUrl()).hostname)) {
       return false;
     }

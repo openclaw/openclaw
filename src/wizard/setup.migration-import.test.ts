@@ -582,6 +582,35 @@ describe("setup migration import", () => {
     expect(migrationPlan).not.toHaveBeenCalled();
   });
 
+  it("requires a provider before selecting one during non-interactive migration", async () => {
+    const root = await makeTempRoot();
+    const workspaceDir = path.join(root, "workspace");
+    const select = vi.fn();
+
+    await expect(
+      runSetupMigrationImport({
+        opts: {
+          importSource: "/tmp/codex-home",
+          nonInteractive: true,
+          workspace: workspaceDir,
+        },
+        baseConfig: {},
+        detections: [],
+        prompter: createWizardPrompter({ select }),
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        },
+        commitConfigFile: vi.fn(async (config) => config),
+      }),
+    ).rejects.toThrow("--import-from is required for non-interactive migration import.");
+
+    expect(select).not.toHaveBeenCalled();
+    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    expect(migrationPlan).not.toHaveBeenCalled();
+  });
+
   it("keeps an installed migration provider managed when migration apply is cancelled", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");

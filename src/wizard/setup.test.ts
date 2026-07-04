@@ -107,6 +107,7 @@ const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 const hasRunnableLocalAgent = vi.hoisted(() => vi.fn(async () => false));
 const finishAgentAssistedSetup = vi.hoisted(() => vi.fn(async () => {}));
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn<DefaultGatewayBindMode>(() => "loopback"));
+const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 const resolveControlUiLinks = vi.hoisted(() =>
   vi.fn(() => ({
     httpUrl: "http://127.0.0.1:18789",
@@ -319,6 +320,7 @@ vi.mock("../gateway/net.js", () => ({
   defaultGatewayBindMode,
   isLoopbackAddress: (value: string | undefined) =>
     value === "::1" || value === "localhost" || value?.startsWith("127.") === true,
+  resolveGatewayBindHost,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -921,6 +923,56 @@ describe("runSetupWizard", () => {
       expect.objectContaining({
         quickstartGateway: expect.objectContaining({
           bind: "lan",
+          authMode: "none",
+        }),
+      }),
+    );
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("keeps no-auth auto binds that resolve broadly out of assisted setup", async () => {
+    resolveGatewayBindHost.mockResolvedValueOnce("0.0.0.0");
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          bind: "auto",
+          auth: {
+            mode: "none",
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(resolveGatewayBindHost).toHaveBeenCalledWith("auto", undefined);
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          bind: "auto",
           authMode: "none",
         }),
       }),
