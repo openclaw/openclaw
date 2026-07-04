@@ -106,6 +106,10 @@ const loadDeviceHandlers = lazyHandlerModule(
   () => import("./server-methods/devices.js"),
   (module) => module.deviceHandlers,
 );
+const loadDevicePairSetupHandlers = lazyHandlerModule(
+  () => import("./server-methods/device-pair-setup.js"),
+  (module) => module.devicePairSetupHandlers,
+);
 const loadDiagnosticsHandlers = lazyHandlerModule(
   () => import("./server-methods/diagnostics.js"),
   (module) => module.diagnosticsHandlers,
@@ -339,6 +343,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "device.token.revoke",
     ],
     loadHandlers: loadDeviceHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["device.pair.setupCode"],
+    loadHandlers: loadDevicePairSetupHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["diagnostics.stability"],

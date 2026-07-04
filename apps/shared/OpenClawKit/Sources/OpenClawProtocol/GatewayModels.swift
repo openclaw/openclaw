@@ -7047,6 +7047,58 @@ public struct DevicePairRemoveParams: Codable, Sendable {
     }
 }
 
+public struct DevicePairSetupCodeParams: Codable, Sendable {
+    public let publicurl: String?
+    public let preferremoteurl: Bool?
+    public let includeqr: Bool?
+
+    public init(
+        publicurl: String?,
+        preferremoteurl: Bool?,
+        includeqr: Bool?)
+    {
+        self.publicurl = publicurl
+        self.preferremoteurl = preferremoteurl
+        self.includeqr = includeqr
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case publicurl = "publicUrl"
+        case preferremoteurl = "preferRemoteUrl"
+        case includeqr = "includeQr"
+    }
+}
+
+public struct DevicePairSetupCodeResult: Codable, Sendable {
+    public let setupcode: String
+    public let qrdataurl: String?
+    public let gatewayurl: String
+    public let auth: AnyCodable
+    public let urlsource: String
+
+    public init(
+        setupcode: String,
+        qrdataurl: String?,
+        gatewayurl: String,
+        auth: AnyCodable,
+        urlsource: String)
+    {
+        self.setupcode = setupcode
+        self.qrdataurl = qrdataurl
+        self.gatewayurl = gatewayurl
+        self.auth = auth
+        self.urlsource = urlsource
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case setupcode = "setupCode"
+        case qrdataurl = "qrDataUrl"
+        case gatewayurl = "gatewayUrl"
+        case auth
+        case urlsource = "urlSource"
+    }
+}
+
 public struct DeviceTokenRotateParams: Codable, Sendable {
     public let deviceid: String
     public let role: String

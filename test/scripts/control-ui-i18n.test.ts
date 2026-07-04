@@ -5,7 +5,11 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { appendBoundedProcessOutput, runProcess } from "../../scripts/control-ui-i18n.ts";
+import {
+  appendBoundedProcessOutput,
+  runProcess,
+  shouldReuseExistingTranslation,
+} from "../../scripts/control-ui-i18n.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function processIsAlive(pid: number): boolean {
@@ -46,6 +50,23 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("refreshes recorded fallback copy when sync is forced without a provider", () => {
+    expect(
+      shouldReuseExistingTranslation({
+        allowTranslate: false,
+        force: true,
+        isFallback: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldReuseExistingTranslation({
+        allowTranslate: false,
+        force: false,
+        isFallback: true,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a bounded process output tail", () => {
     const first = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
     const second = appendBoundedProcessOutput(first, "ghij", 5);

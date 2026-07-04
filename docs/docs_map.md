@@ -755,7 +755,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Reusable sender groups
   - H3: Where the state lives
   - H2: 2) Node device pairing (iOS/Android/macOS/headless nodes)
-  - H3: Pair via Telegram (recommended for iOS)
+  - H3: Pair from the Control UI (recommended)
+  - H3: Pair via Telegram
   - H3: Approve a node device
   - H3: Optional trusted-CIDR node auto-approve
   - H3: Node pairing state storage
@@ -9808,6 +9809,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick open (local)
   - H2: Device pairing (first connection)
+  - H2: Pair a mobile device
   - H2: Personal identity (browser-local)
   - H2: Runtime config endpoint
   - H2: Language support

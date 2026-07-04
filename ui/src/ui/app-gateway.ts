@@ -54,7 +54,7 @@ import {
   type ChatState,
 } from "./controllers/chat.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
-import { loadDevices, type DevicesState } from "./controllers/devices.ts";
+import { closeDevicePairSetup, loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   clearResolvedExecApprovalPrompt,
@@ -107,12 +107,10 @@ function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
 }
 
-type GatewayHost = {
+type GatewayHost = DevicesState & {
   settings: UiSettings;
   password: string;
   clientInstanceId: string;
-  client: GatewayBrowserClient | null;
-  connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
@@ -787,6 +785,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.chatError = null;
   host.hello = null;
   host.connected = false;
+  closeDevicePairSetup(host);
   if (reconnectReason === "seq-gap") {
     host.execApprovalQueue = pruneExecApprovalQueue(host.execApprovalQueue);
     clearPendingQueueItemsForRun(
@@ -921,6 +920,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      closeDevicePairSetup(host);
       const currentSessionId =
         typeof host.currentSessionId === "string" ? host.currentSessionId.trim() : "";
       if (currentSessionId) {

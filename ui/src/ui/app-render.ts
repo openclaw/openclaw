@@ -97,7 +97,10 @@ import {
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
   approveDevicePairing,
+  closeDevicePairSetup,
   loadDevices,
+  openDevicePairSetup,
+  refreshDevicePairSetup,
   rejectDevicePairing,
   revokeDeviceToken,
   rotateDeviceToken,
@@ -3770,6 +3773,16 @@ export function renderApp(state: AppViewState) {
                 devicesLoading: state.devicesLoading,
                 devicesError: state.devicesError,
                 devicesList: state.devicesList,
+                devicePairSetupOpen: state.devicePairSetupOpen,
+                devicePairSetupLoading: state.devicePairSetupLoading,
+                devicePairSetupError: state.devicePairSetupError,
+                devicePairSetup: state.devicePairSetup,
+                canPairDevice:
+                  state.connected &&
+                  hasOperatorAdminAccess(
+                    (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                      null,
+                  ),
                 configForm:
                   state.configForm ??
                   (state.configSnapshot?.config as Record<string, unknown> | null),
@@ -3787,6 +3800,10 @@ export function renderApp(state: AppViewState) {
                 execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
                 onRefresh: () => void loadNodes(state),
                 onDevicesRefresh: () => void loadDevices(state),
+                onDevicePairSetupOpen: () => void openDevicePairSetup(state),
+                onDevicePairSetupRefresh: () => void refreshDevicePairSetup(state),
+                onDevicePairSetupClose: () => closeDevicePairSetup(state),
+                onDevicePairSetupCopy: (setupCode) => void copyToClipboard(setupCode),
                 onDeviceApprove: (requestId) => void approveDevicePairing(state, requestId),
                 onDeviceReject: (requestId) => void rejectDevicePairing(state, requestId),
                 onDeviceRotate: (deviceId, role, scopes) =>
