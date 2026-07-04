@@ -1,5 +1,4 @@
 type ByteSizeUnit = "byte" | "kilo" | "mega" | "giga" | "tera";
-
 type ByteSizeStyle = "si" | "iec" | "legacy-binary";
 
 type ByteSizeFormatOptions = {
