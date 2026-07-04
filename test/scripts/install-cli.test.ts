@@ -722,7 +722,7 @@ describe("install-cli.sh", () => {
           "require_bin() { :; }",
           "download_file() {",
           '  case "$1" in',
-          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.18.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.19.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
           "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
           "  esac",
           "}",
@@ -737,7 +737,7 @@ describe("install-cli.sh", () => {
           '  cp "$NEW_NPM" "$dest/bin/npm"',
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
-          "NODE_VERSION=22.18.0",
+          "NODE_VERSION=22.19.0",
           "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
@@ -749,7 +749,7 @@ describe("install-cli.sh", () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).toContain(
-        "Installed Node 22.18.0 must provide Node >= 22.19.0 with node:sqlite",
+        "Installed Node 22.19.0 must provide Node >= 22.19.0 with node:sqlite",
       );
       expect(result.stdout).toContain("found v22.18.0");
     } finally {
