@@ -17,7 +17,11 @@ import {
   buildPinnedWritePlan,
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
-import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import {
+  buildReaddirPlan,
+  buildStatPlan,
+  type SandboxFsCommandPlan,
+} from "./fs-bridge-shell-command-plans.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
@@ -201,26 +205,41 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
+    const rootMount = this.mounts.find((mount) => mount.containerRoot === target.containerPath);
+    if (rootMount) {
+      const result = await this.runCheckedCommand({
+        checks: [{ target, options: { action: "stat files", allowedType: "directory" } }],
+        script: 'set -eu\nstat -c "%F|%s|%y" -- "$1"',
+        args: [rootMount.containerRoot],
+        allowFailure: true,
+        signal: params.signal,
+      });
+      return parseStatResult(result, target.containerPath);
+    }
     const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files");
     const result = await this.runPlannedCommand(
       buildStatPlan(target, anchoredTarget),
       params.signal,
     );
+    return parseStatResult(result, target.containerPath);
+  }
+
+  async readdir(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<string[]> {
+    const target = this.resolveResolvedPath(params);
+    const pinnedTarget = this.pathGuard.resolvePinnedDirectoryEntry(target, "list directories");
+    const result = await this.runPlannedCommand(
+      buildReaddirPlan(target, pinnedTarget),
+      params.signal,
+    );
     if (result.code !== 0) {
-      const stderr = result.stderr.toString("utf8");
-      if (stderr.includes("No such file or directory")) {
-        return null;
-      }
-      const message = stderr.trim() || `stat failed with code ${result.code}`;
-      throw new Error(`stat failed for ${target.containerPath}: ${message}`);
+      const stderr = result.stderr.toString("utf8").trim();
+      throw new Error(stderr || `readdir failed with code ${result.code}`);
     }
-    const text = result.stdout.toString("utf8").trim();
-    const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
-    return {
-      type: coerceStatType(typeRaw),
-      size: parseSandboxStatSize(sizeRaw),
-      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
-    };
+    return parseJsonStringArray(result.stdout.toString("utf8"), target.containerPath);
   }
 
   private async runCommand(
@@ -301,6 +320,27 @@ function allowsWrites(access: SandboxWorkspaceAccess): boolean {
   return access === "rw";
 }
 
+function parseStatResult(
+  result: SandboxBackendCommandResult,
+  displayPath: string,
+): SandboxFsStat | null {
+  if (result.code !== 0) {
+    const stderr = result.stderr.toString("utf8");
+    if (stderr.includes("No such file or directory")) {
+      return null;
+    }
+    const message = stderr.trim() || `stat failed with code ${result.code}`;
+    throw new Error(`stat failed for ${displayPath}: ${message}`);
+  }
+  const text = result.stdout.toString("utf8").trim();
+  const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
+  return {
+    type: coerceStatType(typeRaw),
+    size: parseSandboxStatSize(sizeRaw),
+    mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
+  };
+}
+
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
   if (!typeRaw) {
     return "other";
@@ -313,4 +353,12 @@ function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
     return "file";
   }
   return "other";
+}
+
+function parseJsonStringArray(raw: string, displayPath: string): string[] {
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+    throw new Error(`Invalid directory listing for ${displayPath}`);
+  }
+  return parsed;
 }

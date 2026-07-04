@@ -112,6 +112,18 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Raft plugin",
+    "target": "Raft plugin"
+  },
+  {
+    "source": "raft",
+    "target": "raft"
+  },
+  {
     "source": "Web tools",
     "target": "Web 工具"
   },
@@ -1226,6 +1238,14 @@
   {
     "source": "Zalo ClawBot",
     "target": "Zalo ClawBot"
+  },
+  {
+    "source": "Attach CLI",
+    "target": "Attach CLI"
+  },
+  {
+    "source": "v2026.6.11",
+    "target": "v2026.6.11"
   },
   {
     "source": "Docs map",

@@ -89,7 +89,7 @@ Available groups:
 
 - `group:runtime`: `exec`, `process`, `code_execution` (`bash` is accepted as
   an alias for `exec`)
-- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:fs`: `read`, `write`, `edit`, `apply_patch`, `grep`, `find`, `ls`
   For read-only agents, deny `group:runtime` as well as mutating filesystem tools unless sandbox filesystem policy or a separate host boundary enforces the read-only constraint.
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`

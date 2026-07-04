@@ -12,7 +12,7 @@ import {
   normalizeToolName,
 } from "../../tool-policy.js";
 
-const BASE_CODING_TOOL_FACTORY_NAMES = new Set(["edit", "read", "write"]);
+const BASE_CODING_TOOL_FACTORY_NAMES = new Set(["edit", "find", "grep", "ls", "read", "write"]);
 
 const SHELL_CODING_TOOL_FACTORY_NAMES = new Set(["apply_patch", "exec", "process"]);
 
