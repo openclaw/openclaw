@@ -84,7 +84,7 @@ class ChatEventTextTest {
   }
 
   @Test
-  fun ignoresNonCanonicalAssistantRoles() {
+  fun acceptsCaseInsensitiveAssistantRoles() {
     for (role in listOf("ASSISTANT", " assistant ")) {
       val payload =
         payload(
@@ -92,13 +92,13 @@ class ChatEventTextTest {
           {
             "message": {
               "role": "$role",
-              "content": "do not speak"
+              "content": "speak this"
             }
           }
           """,
         )
 
-      assertNull(ChatEventText.assistantTextFromPayload(payload))
+      assertEquals("speak this", ChatEventText.assistantTextFromPayload(payload))
     }
   }
 
