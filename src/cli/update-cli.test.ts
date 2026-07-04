@@ -229,6 +229,7 @@ vi.mock("../utils.js", async (importOriginal) => {
       typeof value === "object" && value !== null && !Array.isArray(value),
     pathExists: (...args: unknown[]) => pathExists(...args),
     resolveConfigDir: () => "/tmp/openclaw-config",
+    sleep: vi.fn(async () => undefined),
   };
 });
 

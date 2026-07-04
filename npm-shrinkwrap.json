@@ -14,7 +14,7 @@
         "@anthropic-ai/sdk": "0.100.1",
         "@clack/core": "1.3.1",
         "@clack/prompts": "1.4.0",
-        "@earendil-works/pi-tui": "0.78.0",
+        "@earendil-works/pi-tui": "0.80.3",
         "@google/genai": "2.7.0",
         "@grammyjs/runner": "2.0.3",
         "@grammyjs/transformer-throttler": "1.2.1",
@@ -25,6 +25,7 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
+        "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.3.0",
@@ -153,13 +154,13 @@
       }
     },
     "node_modules/@earendil-works/pi-tui": {
-      "version": "0.78.0",
-      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.78.0.tgz",
-      "integrity": "sha512-3a705FnsVVUhAyceShNB3kS2rpxcxLcx+hqB0u6MMMpHwQGbW+m++MqA6r7eOzq/8FLx5e3vDh38h/SVTk2qzw==",
+      "version": "0.80.3",
+      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.3.tgz",
+      "integrity": "sha512-2BJI6qwRQfnM0Q7seL1+SbacU/jRRjBnN7Hu3n9BjAn7/s5FaBNnvdD1qBQYRsFTHfjqMaDsjYqanPyqwXj99w==",
       "license": "MIT",
       "dependencies": {
         "get-east-asian-width": "1.6.0",
-        "marked": "15.0.12"
+        "marked": "18.0.5"
       },
       "engines": {
         "node": ">=22.19.0"
@@ -2110,15 +2111,15 @@
       }
     },
     "node_modules/marked": {
-      "version": "15.0.12",
-      "resolved": "https://registry.npmjs.org/marked/-/marked-15.0.12.tgz",
-      "integrity": "sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==",
+      "version": "18.0.5",
+      "resolved": "https://registry.npmjs.org/marked/-/marked-18.0.5.tgz",
+      "integrity": "sha512-S6GcvALHg6K4ohtu4E7x0a1AqhAjp6cV8KhLSyN9qVapnzJkusVBxZRcIU9AeYsbe6P1hKDusSbEOzGyyuce6w==",
       "license": "MIT",
       "bin": {
         "marked": "bin/marked.js"
       },
       "engines": {
-        "node": ">= 18"
+        "node": ">= 20"
       }
     },
     "node_modules/math-intrinsics": {

@@ -56,8 +56,8 @@ importers:
         specifier: 1.4.0
         version: 1.4.0
       '@earendil-works/pi-tui':
-        specifier: 0.78.0
-        version: 0.78.0
+        specifier: 0.80.3
+        version: 0.80.3
       '@google/genai':
         specifier: 2.7.0
         version: 2.7.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
@@ -88,6 +88,9 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.5.0)
+      '@silvia-odwyer/photon-node':
+        specifier: 0.3.4
+        version: 0.3.4
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -2489,8 +2492,8 @@ packages:
     resolution: {integrity: sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==}
     engines: {node: '>=22.12.0'}
 
-  '@earendil-works/pi-tui@0.78.0':
-    resolution: {integrity: sha512-3a705FnsVVUhAyceShNB3kS2rpxcxLcx+hqB0u6MMMpHwQGbW+m++MqA6r7eOzq/8FLx5e3vDh38h/SVTk2qzw==}
+  '@earendil-works/pi-tui@0.80.3':
+    resolution: {integrity: sha512-2BJI6qwRQfnM0Q7seL1+SbacU/jRRjBnN7Hu3n9BjAn7/s5FaBNnvdD1qBQYRsFTHfjqMaDsjYqanPyqwXj99w==}
     engines: {node: '>=22.19.0'}
 
   '@emnapi/core@1.10.0':
@@ -6129,13 +6132,13 @@ packages:
   markdown-table@2.0.0:
     resolution: {integrity: sha512-Ezda85ToJUBhM6WGaG6veasyym+Tbs3cMAw/ZhOPqXiYsr0jgocBV3j3nx+4lk47plLlIqjwuTm/ywVI+zjJ/A==}
 
-  marked@15.0.12:
-    resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
-    engines: {node: '>= 18'}
-    hasBin: true
-
   marked@18.0.4:
     resolution: {integrity: sha512-c/BTaKzg0G6ezQx97DAkYU7k0HM6ys0FqYeKBL6hlBByZwy+ycA1+f0vDdjMHKKeEjdgkx0GOv9Il6D+85cOqA==}
+    engines: {node: '>= 20'}
+    hasBin: true
+
+  marked@18.0.5:
+    resolution: {integrity: sha512-S6GcvALHg6K4ohtu4E7x0a1AqhAjp6cV8KhLSyN9qVapnzJkusVBxZRcIU9AeYsbe6P1hKDusSbEOzGyyuce6w==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -8597,10 +8600,10 @@ snapshots:
       - opusscript
       - utf-8-validate
 
-  '@earendil-works/pi-tui@0.78.0':
+  '@earendil-works/pi-tui@0.80.3':
     dependencies:
       get-east-asian-width: 1.6.0
-      marked: 15.0.12
+      marked: 18.0.5
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -12271,9 +12274,9 @@ snapshots:
     dependencies:
       repeat-string: 1.6.1
 
-  marked@15.0.12: {}
-
   marked@18.0.4: {}
+
+  marked@18.0.5: {}
 
   math-intrinsics@1.1.0: {}
 
