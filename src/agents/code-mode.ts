@@ -1172,6 +1172,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const waitTool = markCodeModeControlTool({
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
+    hideFromChannelProgress: true,
     description: "Resume a suspended OpenClaw code mode run returned by exec.",
     parameters: Type.Object({
       runId: Type.String({ description: "Code mode run id returned by exec." }),

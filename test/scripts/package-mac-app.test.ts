@@ -49,9 +49,9 @@ function getPackageManagerHelperBlock(): string {
 }
 
 function getSwiftToolchainBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
+  const script = readFileSync("scripts/lib/swift-toolchain.sh", "utf8");
   const start = script.indexOf("REQUIRED_SWIFT_TOOLS_MAJOR=");
-  const end = script.indexOf("merge_framework_machos()");
+  const end = script.length;
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -301,6 +301,7 @@ describe("package-mac-app plist stamping", () => {
     const installIndex = script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]');
     const preInstallBlock = script.slice(0, installIndex);
 
+    expect(script).toContain('source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"');
     expect(preInstallBlock).toContain("\nrequire_swift_toolchain\n");
   });
 

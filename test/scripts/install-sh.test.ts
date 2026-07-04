@@ -161,7 +161,7 @@ NODE
     expect(script).toContain(
       'run_required_step "Installing nodejs-current" apk add --no-cache nodejs-current npm',
     );
-    expect(script).toContain("if ! node_is_at_least_required; then");
+    expect(script).toContain("if ! node_is_supported; then");
 
     const apkIndex = script.indexOf("if command -v apk &> /dev/null && is_alpine_linux; then");
     const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
@@ -182,7 +182,7 @@ NODE
       ui_success() { printf 'success:%s\\n' "$*"; }
       run_quiet_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
       apk() { :; }
-      node_is_at_least_required() { return 0; }
+      node_is_supported() { return 0; }
       finish_linux_node_install() { printf 'finish-linux-node\\n'; }
       install_node
     `);
@@ -275,7 +275,7 @@ NODE
       "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
     );
     expect(result.stdout).toContain(
-      "error:Alpine apk repositories did not provide Node.js v22.19+",
+      "error:Alpine apk repositories did not provide Node.js 22.19+, 23.11+, or 24+",
     );
     expect(result.stdout).toContain("Use Alpine 3.21+ or install Node.js 24 manually");
   });
@@ -1078,15 +1078,11 @@ NODE
     expect(output).toContain("version=v22.22.0");
   });
 
-  it("uses the package engine floor when accepting existing Node runtimes", () => {
+  it("uses the package engine range when accepting existing Node runtimes", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       engines?: { node?: string };
     };
-    const engineMatch = /^>=22\.(\d+)\.0$/.exec(pkg.engines?.node ?? "");
-    expect(engineMatch).not.toBeNull();
-
-    const minMinor = Number(engineMatch?.[1]);
-    expect(script).toContain(`NODE_MIN_MINOR=${minMinor}`);
+    expect(pkg.engines?.node).toBe(">=22.19.0 <23 || >=23.11.0");
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
     const bin = join(tmp, "bin");
@@ -1111,15 +1107,12 @@ NODE
           "unset -f node 2>/dev/null || true",
           "unalias node 2>/dev/null || true",
           'node() { printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"; }',
-          `FAKE_NODE_VERSION="v22.${minMinor - 1}.0"`,
-          "export FAKE_NODE_VERSION",
-          "node_is_at_least_required",
-          "node_below_floor=$?",
-          `FAKE_NODE_VERSION="v22.${minMinor}.0"`,
-          "export FAKE_NODE_VERSION",
-          "node_is_at_least_required",
-          "node_at_floor=$?",
-          'printf "node_below_floor=%s\\nnode_at_floor=%s\\n" "$node_below_floor" "$node_at_floor"',
+          "for version in 22.18.9 22.19.0 23.7.0 23.10.9 23.11.0 24.0.0; do",
+          '  FAKE_NODE_VERSION="v${version}"',
+          "  export FAKE_NODE_VERSION",
+          "  node_is_supported",
+          '  printf "%s=%s\\n" "$version" "$?"',
+          "done",
           "exit 0",
         ].join("\n"),
         {
@@ -1132,8 +1125,12 @@ NODE
     }
 
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain("node_below_floor=1");
-    expect(result?.stdout).toContain("node_at_floor=0");
+    expect(result?.stdout).toContain("22.18.9=1");
+    expect(result?.stdout).toContain("22.19.0=0");
+    expect(result?.stdout).toContain("23.7.0=1");
+    expect(result?.stdout).toContain("23.10.9=1");
+    expect(result?.stdout).toContain("23.11.0=0");
+    expect(result?.stdout).toContain("24.0.0=0");
   });
 
   it("persists a supported Linux Node path before noninteractive shell guards", () => {
@@ -1414,10 +1411,7 @@ NODE
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(
-      join(outer, "package.json"),
-      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
-    );
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
@@ -1545,7 +1539,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
         fi
         return 0
       }
-      node_major_version() { echo 16; }
+      node_is_supported() { return 1; }
       if ensure_macos_default_node_active; then
         echo "ensure returned success"
       else

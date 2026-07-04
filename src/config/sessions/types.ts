@@ -43,6 +43,13 @@ export type {
   SessionAcpMeta,
 };
 
+export type CliSessionReseedReceipt = {
+  version: 1;
+  promptHash: string;
+  localSessionId: string;
+  userTurnDisposition: "persisted" | "omitted";
+};
+
 export type CliSessionBinding = {
   sessionId: string;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -56,6 +63,8 @@ export type CliSessionBinding = {
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
+  reseedReceipt?: CliSessionReseedReceipt;
 };
 
 export type SessionCompactionCheckpointReason =

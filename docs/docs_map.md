@@ -1005,6 +1005,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Install (on demand)
   - H2: Quick setup
+  - H2: Call the current requester with MeowCaller (experimental)
   - H2: Deployment patterns
   - H2: Runtime model
   - H2: Approval prompts
@@ -5417,6 +5418,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements
   - H2: Quickstart
+  - H2: Share threads with Codex Desktop and CLI
   - H2: Configuration
   - H2: Verify Codex runtime
   - H2: Routing and model selection

@@ -1,8 +1,10 @@
 // Signal plugin module implements approval reactions behavior.
 import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
 import {
+  addApprovalReactionHintToText,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
+  hasApprovalReactionHintText,
   listApprovalReactionBindings,
   resolveApprovalReactionTarget,
   type ApprovalReactionDecisionBinding,
@@ -362,38 +364,11 @@ export function buildSignalApprovalReactionHint(
   return buildApprovalReactionHint({ allowedDecisions });
 }
 
-function insertSignalApprovalReactionHintNearHeader(params: {
-  text: string;
-  hint: string;
-}): string {
-  const lines = params.text.split(/\r?\n/);
-  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
-  if (idLineIndex >= 0) {
-    const before = lines.slice(0, idLineIndex + 1).join("\n");
-    const after = lines
-      .slice(idLineIndex + 1)
-      .join("\n")
-      .replace(/^\n+/, "");
-    return after ? `${before}\n\n${params.hint}\n\n${after}` : `${before}\n\n${params.hint}`;
-  }
-  return `${params.hint}\n\n${params.text}`;
-}
-
 export function addSignalApprovalReactionHintToText(params: {
   text: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string {
-  if (hasSignalApprovalReactionHintText(params.text)) {
-    return params.text;
-  }
-  const hint = buildSignalApprovalReactionHint(params.allowedDecisions);
-  return hint
-    ? insertSignalApprovalReactionHintNearHeader({ text: params.text, hint })
-    : params.text;
-}
-
-function hasSignalApprovalReactionHintText(text?: string | null): boolean {
-  return /(^|\n)React with:\s*(\n|$)/i.test(text ?? "");
+  return addApprovalReactionHintToText(params);
 }
 
 function buildTargetRoute(params: {
@@ -571,8 +546,8 @@ function listDeliveredSignalMessageIdsWithVisibleHint(params: {
   const ids = candidates
     .filter((result) =>
       resultsWithVisibleText.length > 0
-        ? hasSignalApprovalReactionHintText(readSignalDeliveryVisibleText(result))
-        : hasSignalApprovalReactionHintText(params.payload.text),
+        ? hasApprovalReactionHintText(readSignalDeliveryVisibleText(result))
+        : hasApprovalReactionHintText(params.payload.text),
     )
     .map((result) => normalizeOptionalString(result.messageId))
     .filter((messageId): messageId is string => Boolean(messageId && messageId !== "unknown"));
@@ -595,7 +570,7 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
   if (!metadata?.allowedDecisions || metadata.allowedDecisions.length === 0) {
     return false;
   }
-  if (!hasSignalApprovalReactionHintText(params.payload.text)) {
+  if (!hasApprovalReactionHintText(params.payload.text)) {
     return false;
   }
   if (

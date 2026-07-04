@@ -1049,10 +1049,14 @@ async function finalizeCronRun(params: {
     });
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+      const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
         const { clearCliSession } = await loadCliRunnerRuntime();
         clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
+      } else if (cliSessionBinding?.sessionId?.trim()) {
+        const { setCliSessionBinding } = await loadCliRunnerRuntime();
+        setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
       } else if (cliSessionId) {
         const { setCliSessionId } = await loadCliRunnerRuntime();
         setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
