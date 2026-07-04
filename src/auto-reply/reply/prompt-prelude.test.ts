@@ -1,7 +1,12 @@
 // Tests prompt prelude construction for sender, routing, and context metadata.
 import { describe, expect, it } from "vitest";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
+
+function countOccurrences(text: string | undefined, needle: string): number {
+  return (text?.split(needle).length ?? 1) - 1;
+}
 
 describe("buildReplyPromptEnvelope", () => {
   it("keeps bare reset runtime context in the model prompt and out of transcript/current-turn context", () => {
@@ -58,6 +63,64 @@ describe("buildReplyPromptEnvelope", () => {
     });
   });
 
+  it("adds one message-tool delivery hint to user-request runtime context only", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "@bot what changed?",
+      BodyStripped: "what changed?",
+      Provider: "telegram",
+      ChatType: "group",
+      InboundEventKind: "user_request",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "what changed?",
+      prefixedBody: "what changed?",
+      hasUserBody: true,
+      inboundUserContext: "Current message:\nchat_id=-100123",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "user_request",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(
+      countOccurrences(envelope.currentInboundContext?.text, MESSAGE_TOOL_ONLY_DELIVERY_HINT),
+    ).toBe(1);
+    expect(envelope.prefixedCommandBody).toBe("what changed?");
+    expect(envelope.transcriptCommandBody).toBe("what changed?");
+    expect(envelope.transcriptCommandBody).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+  });
+
+  it.each([undefined, "automatic"] as const)(
+    "omits user-request delivery hints for %s delivery",
+    (sourceReplyDeliveryMode) => {
+      const sessionCtx = finalizeInboundContext({
+        Body: "@bot what changed?",
+        BodyStripped: "what changed?",
+        Provider: "telegram",
+        ChatType: "group",
+        InboundEventKind: "user_request",
+      });
+
+      const envelope = buildReplyPromptEnvelope({
+        ctx: sessionCtx,
+        sessionCtx,
+        baseBody: "what changed?",
+        prefixedBody: "what changed?",
+        hasUserBody: true,
+        inboundUserContext: "Current message:\nchat_id=-100123",
+        isBareSessionReset: false,
+        startupAction: "new",
+        inboundEventKind: "user_request",
+        sourceReplyDeliveryMode,
+      });
+
+      expect(envelope.currentInboundContext?.text).not.toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
+    },
+  );
+
   it("projects room events as context instead of user requests", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "No wtf",
@@ -92,7 +155,7 @@ describe("buildReplyPromptEnvelope", () => {
 
     expect(envelope.prefixedCommandBody).toBe("[OpenClaw room event]");
     expect(envelope.queuedBody).toBe("[OpenClaw room event]");
-    expect(envelope.transcriptCommandBody).toBe("");
+    expect(envelope.transcriptCommandBody).toBe("#35676 Keśava: No wtf");
     expect(envelope.currentInboundContext?.text).toBe(
       [
         "[OpenClaw room event]",
@@ -129,6 +192,36 @@ describe("buildReplyPromptEnvelope", () => {
     );
     expect(envelope.currentInboundContext?.resumableText).not.toContain(
       "Conversation context (untrusted, chronological, selected for current message):",
+    );
+  });
+
+  it("uses attributed coalesced room-event lines for current event and transcript", () => {
+    const ambientTranscriptBody = ["#35676 Keśava: No wtf", "#35677 Ayaan: fr"].join("\n");
+    const sessionCtx = finalizeInboundContext({
+      Body: "No wtf\nfr",
+      BodyStripped: "No wtf\nfr",
+      Provider: "telegram",
+      ChatType: "group",
+      InboundEventKind: "room_event",
+      MessageSid: "35677",
+      SenderName: "Ayaan",
+      AmbientTranscriptBody: ambientTranscriptBody,
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "No wtf\nfr",
+      hasUserBody: true,
+      inboundUserContext: "Conversation context:",
+      isBareSessionReset: false,
+      startupAction: "new",
+      inboundEventKind: "room_event",
+    });
+
+    expect(envelope.transcriptCommandBody).toBe(ambientTranscriptBody);
+    expect(envelope.currentInboundContext?.text).toContain(
+      `Current event:\n${ambientTranscriptBody}`,
     );
   });
 

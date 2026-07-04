@@ -9,6 +9,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -60,14 +61,9 @@ export type {
   TelegramMediaRef,
 } from "./bot-message-context.types.js";
 
-type TelegramMessageContextRuntime = typeof import("./bot-message-context.runtime.js");
-
-let telegramMessageContextRuntimePromise: Promise<TelegramMessageContextRuntime> | undefined;
-
-async function loadTelegramMessageContextRuntime() {
-  telegramMessageContextRuntimePromise ??= import("./bot-message-context.runtime.js");
-  return await telegramMessageContextRuntimePromise;
-}
+const loadTelegramMessageContextRuntime = createLazyRuntimeModule(
+  () => import("./bot-message-context.runtime.js"),
+);
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
 type TelegramReactionApi = (
@@ -432,15 +428,14 @@ export const buildTelegramMessageContext = async ({
     agentId: route.agentId,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId);
+  const groupRequireMention = firstDefined(
+    topicConfig?.requireMention,
+    activationOverride,
+    telegramGroupConfig?.requireMention,
+    baseRequireMention,
+  );
   const requireMention =
-    isGroup && bindingMode.kind === "plugin-owned-runtime"
-      ? false
-      : firstDefined(
-          topicConfig?.requireMention,
-          activationOverride,
-          telegramGroupConfig?.requireMention,
-          baseRequireMention,
-        );
+    isGroup && bindingMode.kind === "plugin-owned-runtime" ? false : groupRequireMention;
 
   const recordChannelActivity =
     runtime?.recordChannelActivity ??
@@ -520,6 +515,7 @@ export const buildTelegramMessageContext = async ({
     groupConfig,
     topicConfig,
     effectiveWasMentioned: bodyResult.effectiveWasMentioned,
+    groupRequireMention: Boolean(groupRequireMention),
     mentionFacts: bodyResult.mentionFacts,
     hasControlCommand: bodyResult.hasControlCommand,
     stickerCacheHit: bodyResult.stickerCacheHit,

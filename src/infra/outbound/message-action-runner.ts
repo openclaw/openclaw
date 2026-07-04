@@ -42,6 +42,7 @@ import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
@@ -104,16 +105,11 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
-let messageActionGatewayRuntimePromise: Promise<
-  typeof import("./message.gateway.runtime.js")
-> | null = null;
-
-function loadMessageActionGatewayRuntime() {
-  // Gateway runtime is only needed for remote message action dispatch or
-  // idempotency keys; keep normal in-process actions import-light.
-  messageActionGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
-  return messageActionGatewayRuntimePromise;
-}
+// Gateway runtime is only needed for remote message action dispatch or
+// idempotency keys; keep normal in-process actions import-light.
+const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
+  () => import("./message.gateway.runtime.js"),
+);
 
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;

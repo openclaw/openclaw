@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   collectTempCreationFindingsFromDiff,
   formatGithubWarning,
@@ -9,7 +9,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_DIR",
@@ -277,7 +277,7 @@ describe("report-test-temp-creations", () => {
       "  useAutoCleanupTempDirTracker,",
       "  makeTempDir,",
       '} from "../helpers/temp-dir.js";',
-      "const tempDirs = useAutoCleanupTempDirTracker();",
+      "const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
     ].join("\n");
     const diff = [
       "diff --git a/test/scripts/manual-temp.test.ts b/test/scripts/manual-temp.test.ts",
@@ -307,7 +307,7 @@ describe("report-test-temp-creations", () => {
     const file = "test/scripts/auto-temp.test.ts";
     const source = [
       'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
-      "const tempDirs = useAutoCleanupTempDirTracker();",
+      "const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
       'const workspace = tempDirs.make("case-");',
     ].join("\n");
     const diff = [
@@ -316,7 +316,7 @@ describe("report-test-temp-creations", () => {
       "+++ b/test/scripts/auto-temp.test.ts",
       "@@ -1,0 +1,3 @@",
       '+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
-      "+const tempDirs = useAutoCleanupTempDirTracker();",
+      "+const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
       '+const workspace = tempDirs.make("case-");',
     ].join("\n");
 
@@ -390,7 +390,7 @@ describe("report-test-temp-creations", () => {
         source: "const tempRoot = fs.mkdtempSync();",
       }),
     ).toBe(
-      "::warning file=test/helpers/temp%2Cfixture.ts,line=12::new mkdtemp temp directory creation: prefer useAutoCleanupTempDirTracker() from test/helpers/temp-dir.ts for new test-owned temp directories.",
+      "::warning file=test/helpers/temp%2Cfixture.ts,line=12::new mkdtemp temp directory creation: prefer useAutoCleanupTempDirTracker(afterEach) from test/helpers/temp-dir.ts for new test-owned temp directories.",
     );
   });
 
@@ -424,7 +424,7 @@ describe("report-test-temp-creations", () => {
     ].join("\n");
     const autoSource = [
       'import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";',
-      "const tempDirs = useAutoCleanupTempDirTracker();",
+      "const tempDirs = useAutoCleanupTempDirTracker(afterEach);",
       'const workspace = tempDirs.make("case-");',
     ].join("\n");
     fs.writeFileSync(stagedManualFile, `${manualSource}\n`, "utf8");

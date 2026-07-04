@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
+  isAgentRunDirectAbortReason,
   isAbortedAgentStopReason,
   resolveAgentRunAbortLifecycleFields,
 } from "./run-termination.js";
@@ -42,5 +44,16 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
     expect(isAbortedAgentStopReason("aborted")).toBe(true);
     expect(isAbortedAgentStopReason("restart")).toBe(true);
     expect(isAbortedAgentStopReason("timeout")).toBe(false);
+  });
+
+  it("marks direct active-run cancellation independently of an AbortSignal", () => {
+    const error = createAgentRunDirectAbortError();
+
+    expect(error).toMatchObject({
+      name: "AbortError",
+      message: "agent run aborted",
+    });
+    expect(isAgentRunDirectAbortReason(error)).toBe(true);
+    expect(isAgentRunDirectAbortReason(createAgentRunRestartAbortError())).toBe(false);
   });
 });

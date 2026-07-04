@@ -42,6 +42,10 @@ function getSilentTrailingRegex(token: string): RegExp {
   return regex;
 }
 
+function stripEdgePunctuation(text: string): string {
+  return text.replace(/^\p{P}+|\p{P}+$/gu, "");
+}
+
 /** Returns true only for token-only silent replies. */
 export function isSilentReplyText(
   text: string | undefined,
@@ -52,7 +56,12 @@ export function isSilentReplyText(
   }
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  // Models sometimes wrap the token in punctuation. Preserve exact custom-token matching,
+  // but keep symbols such as emoji substantive so they are still delivered.
+  return (
+    getSilentExactRegex(token).test(text) ||
+    getSilentExactRegex(token).test(stripEdgePunctuation(text.trim()))
+  );
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };

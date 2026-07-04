@@ -1,3 +1,4 @@
+import CoreLocation
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -16,9 +17,9 @@ extension SettingsProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -99,9 +100,9 @@ extension SettingsProTab {
             ProIconBadge(systemName: icon, color: color)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text(detail)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -122,11 +123,11 @@ extension SettingsProTab {
     func detailRow(_ label: String, value: String) -> some View {
         HStack {
             Text(label)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Text(value)
-                .font(.caption)
+                .font(OpenClawType.caption)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -170,10 +171,41 @@ extension SettingsProTab {
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
+        self.refreshLocationPermissionSummary()
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
         self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+    }
+
+    func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
+        let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+        let manager = CLLocationManager()
+        self.locationPermissionRefreshID &+= 1
+        let refreshID = self.locationPermissionRefreshID
+        let currentSummary = self.locationPermissionSummary
+        self.locationPermissionSummary = LocationPermissionSummary(
+            desiredMode: mode,
+            locationServicesEnabled: currentSummary.locationServicesEnabled,
+            authorizationStatus: manager.authorizationStatus,
+            accuracyAuthorization: manager.accuracyAuthorization)
+        Task {
+            let locationServicesEnabled = await Self.locationServicesEnabled()
+            guard refreshID == self.locationPermissionRefreshID else { return }
+            let latestManager = CLLocationManager()
+            let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
+            self.locationPermissionSummary = LocationPermissionSummary(
+                desiredMode: latestMode,
+                locationServicesEnabled: locationServicesEnabled,
+                authorizationStatus: latestManager.authorizationStatus,
+                accuracyAuthorization: latestManager.accuracyAuthorization)
+        }
+    }
+
+    private static func locationServicesEnabled() async -> Bool {
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
     }
 
     func syncAfterOnboardingReset() {
@@ -376,15 +408,19 @@ extension SettingsProTab {
     {
         self.isChangingLocationMode = true
         self.locationStatusText = nil
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         defer { self.isChangingLocationMode = false }
 
         if mode == .off {
+            _ = await self.appModel.requestLocationPermissions(mode: mode)
             self.previousLocationModeRaw = rawValue
+            self.refreshLocationPermissionSummary(desiredMode: mode)
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
             return
         }
 
         let granted = await self.appModel.requestLocationPermissions(mode: mode)
+        self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
             self.previousLocationModeRaw = rawValue
             self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
@@ -392,6 +428,8 @@ extension SettingsProTab {
             self.locationModeRaw = previous
             self.previousLocationModeRaw = previous
             self.locationStatusText = "Location permission was not granted."
+            self.refreshLocationPermissionSummary(
+                desiredMode: OpenClawLocationMode(rawValue: previous) ?? .off)
         }
     }
 
@@ -484,6 +522,7 @@ extension SettingsProTab {
         case .diagnostics: "Diagnostics"
         case .privacy: "Privacy"
         case .notifications: "Notifications"
+        case .licenses: "Licenses"
         case .about: "About"
         }
     }
@@ -772,15 +811,35 @@ extension SettingsProTab {
 
     var privacyDetail: String {
         let location = OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        return location == .off ? "Location off" : "Location \(self.locationLabel)"
+        return switch (location, self.locationPermissionSummary.effectiveMode) {
+        case (.off, _):
+            "Location off"
+        case (.whileUsing, .whileUsing):
+            "Location While Using"
+        case (.whileUsing, .off):
+            "Location While Using, effective Off"
+        case (.whileUsing, .always):
+            "Location While Using, effective Always"
+        case (.always, .always):
+            "Location Always"
+        case (.always, .whileUsing):
+            "Location Always, effective While Using"
+        case (.always, .off):
+            "Location Always, effective Off"
+        }
     }
 
-    var locationLabel: String {
-        switch OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off {
-        case .off: "Off"
-        case .whileUsing: "While Using"
-        case .always: "Always"
+    var locationPermissionDetailText: String {
+        if self.isChangingLocationMode {
+            return "Requesting iOS location permission…"
         }
+        return self.locationPermissionSummary.detailText
+    }
+
+    var locationPermissionWarningText: String? {
+        guard let locationStatusText else { return nil }
+        guard locationStatusText != self.locationPermissionSummary.detailText else { return nil }
+        return locationStatusText
     }
 
     var notificationStatusText: String {

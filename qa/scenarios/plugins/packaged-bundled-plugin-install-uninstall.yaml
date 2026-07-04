@@ -5,9 +5,8 @@ scenario:
   surface: plugin-sdk-and-bundled-plugin-architecture
   category: plugin-sdk-and-bundled-plugin-architecture.bundled-plugins
   coverage:
-    primary:
-      - plugins.packaged-bundled-plugins
     secondary:
+      - plugins.packaged-bundled-plugins
       - plugins.bundled-plugin-listing
       - clawhub.managed-install-records-that-preserve-source
   objective: Verify packaged distributions discover bundled plugins from packaged roots and can install, smoke, and uninstall them.

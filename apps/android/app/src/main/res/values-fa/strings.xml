@@ -22,16 +22,6 @@
     <string name="password">رمز عبور</string>
     <string name="run_onboarding_again">اجرای دوباره فرایند شروع به کار</string>
     <string name="resolved_endpoint">نقطه پایانی حل‌شده</string>
-    <string name="gateway_setup">راه‌اندازی دروازه</string>
-    <string name="connect_to_gateway">به دروازه خود متصل شوید</string>
-    <string name="scan_setup_code">اسکن کد راه‌اندازی</string>
-    <string name="use_gateway_qr">از QR دروازه یا کد راه‌اندازی خود استفاده کنید</string>
-    <string name="nearby_gateway">دروازه نزدیک</string>
-    <string name="enter_gateway_url">URL دروازه را وارد کنید</string>
-    <string name="connect_manual_url">اتصال با استفاده از URL دستی</string>
-    <string name="permissions">مجوزها</string>
-    <string name="done">انجام شد</string>
     <string name="gateway_trust_first_seen">پیش از اعتماد به این دروازه، اثر انگشت گواهی را تأیید کنید.\n\n%1$s</string>
     <string name="gateway_trust_changed">گواهی دروازه تغییر کرده است. فقط در صورتی ادامه دهید که انتظار این تغییر را داشتید.\n\nSHA-256 قدیمی:\n%1$s\n\nSHA-256 جدید:\n%2$s</string>
-    <string name="gateway_recovery">بازیابی دروازه</string>
 </resources>

@@ -93,6 +93,7 @@ export type RunCliAgentParams = {
   allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
+  cliSessionBindingFacts?: CliSessionBindingFacts;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
@@ -177,6 +178,12 @@ export type CliReusableSession = {
     | "mcp"
     | "missing-transcript"
     | "orphaned-tool-use";
+};
+
+export type CliSessionBindingFacts = {
+  extraSystemPromptStatic?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
 };
 
 /** Fully prepared execution context consumed by the CLI runner executor. */

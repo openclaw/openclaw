@@ -4,7 +4,7 @@ scenario:
   id: mcp-gateway-connect-startup-retry
   surface: runtime
   coverage:
-    primary:
+    secondary:
       - gateway.connect-request
       - gateway.protocol-version-negotiation
       - gateway.startup-retry

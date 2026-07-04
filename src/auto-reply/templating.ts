@@ -135,6 +135,12 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  AmbientTranscriptWatermarkKey?: string;
+  AmbientTranscriptBody?: string;
+  AmbientTranscriptMessageId?: string;
+  AmbientTranscriptTimestampMs?: number;
+  AmbientTranscriptPreviousMessageId?: string;
+  AmbientTranscriptPreviousTimestampMs?: number;
   /** Per-turn reply-threading overrides. */
   ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;
@@ -268,6 +274,8 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** Effective channel-owned mention policy before any plugin-binding bypass. */
+  GroupRequireMention?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */

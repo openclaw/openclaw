@@ -4,6 +4,76 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.805d35da3b3c9d18",
+      "source": "Ready",
+      "translated": "Gereed"
+    },
+    {
+      "id": "native.android.44c06b96c01cb062",
+      "source": "Needs setup",
+      "translated": "Installatie vereist"
+    },
+    {
+      "id": "native.android.1bd3499b4cf8c3f2",
+      "source": "Unverified",
+      "translated": "Niet geverifieerd"
+    },
+    {
+      "id": "native.android.66f091d1fc047eff",
+      "source": "${state.provider.label} via Gateway relay",
+      "translated": "${state.provider.label} via Gateway-relay"
+    },
+    {
+      "id": "native.android.859f7fec2019b314",
+      "source": "Gateway talk catalog not loaded",
+      "translated": "Gateway-talkcatalogus niet geladen"
+    },
+    {
+      "id": "native.android.ecb051798c98537f",
+      "source": "Could not load Gateway talk catalog",
+      "translated": "Kan Gateway-talkcatalogus niet laden"
+    },
+    {
+      "id": "native.android.95b5551fcb519c1f",
+      "source": "Gateway did not return ${issue.target.title} setup",
+      "translated": "Gateway heeft de installatie van ${issue.target.title} niet geretourneerd"
+    },
+    {
+      "id": "native.android.328d435e93e9a2b2",
+      "source": "No ${issue.target.title} provider is configured on the Gateway",
+      "translated": "Er is geen ${issue.target.title}-provider geconfigureerd op de Gateway"
+    },
+    {
+      "id": "native.android.b3ee0bd7fd90a9e7",
+      "source": "Gateway selected unknown provider ${issue.providerId}",
+      "translated": "Gateway heeft onbekende provider ${issue.providerId} geselecteerd"
+    },
+    {
+      "id": "native.android.04086b6aed3c2ce5",
+      "source": "Gateway did not return ${issue.target.title} readiness",
+      "translated": "Gateway heeft de gereedheid van ${issue.target.title} niet geretourneerd"
+    },
+    {
+      "id": "native.android.27f61e5f9b33b6f9",
+      "source": "Configure a ${issue.target.title} provider on the Gateway",
+      "translated": "Configureer een ${issue.target.title}-provider op de Gateway"
+    },
+    {
+      "id": "native.android.e4fe3a325a6d6299",
+      "source": "Gateway did not identify the active ${issue.target.title} provider",
+      "translated": "Gateway heeft de actieve ${issue.target.title}-provider niet geïdentificeerd"
+    },
+    {
+      "id": "native.android.7e6b01f6e7c9bc92",
+      "source": "Choose a supported ${issue.target.title} provider on the Gateway",
+      "translated": "Kies een ondersteunde ${issue.target.title}-provider op de Gateway"
+    },
+    {
+      "id": "native.android.39bdbc9a546c7f1d",
+      "source": "Configure ${issue.providerLabel} on the Gateway",
+      "translated": "Configureer ${issue.providerLabel} op de Gateway"
+    },
+    {
       "id": "native.android.ff4c22906eac1e9e",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -694,6 +764,21 @@
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
+      "id": "native.android.d5230e4551045851",
+      "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "Installatiecode gebruikt een IPv6-zone-ID. Gebruik een IPv6-adres zonder scope of een LAN-hostnaam."
+    },
+    {
+      "id": "native.android.ca9fc2ce10f4028a",
+      "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "QR-code gebruikt een IPv6-zone-ID. Gebruik een IPv6-adres zonder scope of een LAN-hostnaam."
+    },
+    {
+      "id": "native.android.141236601fece71e",
+      "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "IPv6-zone-ID's worden niet ondersteund. Gebruik een IPv6-adres zonder scope of een LAN-hostnaam."
+    },
+    {
       "id": "native.android.47e3c19d55f0150b",
       "source": "Setup code has invalid gateway URL.",
       "translated": "De setupcode heeft een ongeldige Gateway-URL."
@@ -707,6 +792,51 @@
       "id": "native.android.732f5b59ba7e1513",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "Voer een geldig handmatig endpoint in om verbinding te maken."
+    },
+    {
+      "id": "native.android.b331b5b54e147e41",
+      "source": "Setup code expired",
+      "translated": "Installatiecode verlopen"
+    },
+    {
+      "id": "native.android.fd29725b5271ffcc",
+      "source": "Gateway token needed",
+      "translated": "Gateway-token vereist"
+    },
+    {
+      "id": "native.android.a20706c18b04439c",
+      "source": "Gateway token not configured",
+      "translated": "Gateway-token niet geconfigureerd"
+    },
+    {
+      "id": "native.android.ef63577677f434bd",
+      "source": "Gateway password needed",
+      "translated": "Gateway-wachtwoord vereist"
+    },
+    {
+      "id": "native.android.841612944fc3c917",
+      "source": "Gateway password invalid",
+      "translated": "Gateway-wachtwoord ongeldig"
+    },
+    {
+      "id": "native.android.746689fea659f156",
+      "source": "Gateway password not configured",
+      "translated": "Gateway-wachtwoord niet geconfigureerd"
+    },
+    {
+      "id": "native.android.3b34fd01c808e358",
+      "source": "Gateway access needs review",
+      "translated": "Gateway-toegang moet worden gecontroleerd"
+    },
+    {
+      "id": "native.android.baaf14ba36d7cc94",
+      "source": "Saved auth invalid",
+      "translated": "Opgeslagen authenticatie ongeldig"
+    },
+    {
+      "id": "native.android.ec80b07c46a3bb1f",
+      "source": "Device identity required",
+      "translated": "Apparaatidentiteit vereist"
     },
     {
       "id": "native.android.b44fc3039e0fb9fa",
@@ -859,6 +989,16 @@
       "translated": "Gekoppelde telefoons en nodehosts verschijnen hier na het koppelen."
     },
     {
+      "id": "native.android.e177c7f189c1a472",
+      "source": "Node approval required",
+      "translated": "Node-goedkeuring vereist"
+    },
+    {
+      "id": "native.android.a850defd5857e7d1",
+      "source": "Run on the Gateway host:",
+      "translated": "Voer uit op de Gateway-host:"
+    },
+    {
       "id": "native.android.70b6f8fccd67f4ce",
       "source": "Pending Requests",
       "translated": "Aanvragen in behandeling"
@@ -919,14 +1059,44 @@
       "translated": "Online"
     },
     {
-      "id": "native.android.d42fe72f8e76b450",
-      "source": "OPENCLAW",
-      "translated": "OPENCLAW"
+      "id": "native.android.9ac2d4498b17d478",
+      "source": "Trust",
+      "translated": "Vertrouwen"
     },
     {
-      "id": "native.android.a5c2d7f27576f0c4",
-      "source": "Your personal AI assistant.\nExfoliate! Exfoliate!",
-      "translated": "Je persoonlijke AI-assistent.\nExfoliëren! Exfoliëren!"
+      "id": "native.android.e26ee07a1d1911be",
+      "source": "Cancel",
+      "translated": "Annuleren"
+    },
+    {
+      "id": "native.android.64c8db13ef91513c",
+      "source": "Welcome to OpenClaw",
+      "translated": "Welkom bij OpenClaw"
+    },
+    {
+      "id": "native.android.cc878f72a6b70b23",
+      "source": "Connect to your Gateway",
+      "translated": "Verbinding maken met je Gateway"
+    },
+    {
+      "id": "native.android.bf3750bf264f0063",
+      "source": "Choose device permissions",
+      "translated": "Apparaatrechten kiezen"
+    },
+    {
+      "id": "native.android.3bfe29d4d13d3c3e",
+      "source": "Use OpenClaw from your phone",
+      "translated": "Gebruik OpenClaw vanaf je telefoon"
+    },
+    {
+      "id": "native.android.c0b539eeb4612f5d",
+      "source": "Security notice",
+      "translated": "Beveiligingsmelding"
+    },
+    {
+      "id": "native.android.5aed4b5c8d6b246d",
+      "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
+      "translated": "De verbonden OpenClaw-agent kan apparaatmogelijkheden gebruiken die je inschakelt. Ga alleen door als je de Gateway en agent waarmee je verbinding maakt vertrouwt."
     },
     {
       "id": "native.android.63c31ee564d63347",
@@ -934,19 +1104,134 @@
       "translated": "Gateway verbinden"
     },
     {
-      "id": "native.android.afdd3e2c10f56b75",
-      "source": "Setup code issue",
-      "translated": "Probleem met installatiecode"
+      "id": "native.android.58d80589d9d4b7ff",
+      "source": "Could not open setup guide.",
+      "translated": "Kan de installatiehandleiding niet openen."
     },
     {
-      "id": "native.android.084eda7046e91737",
-      "source": "Advanced",
-      "translated": "Geavanceerd"
+      "id": "native.android.18d6dd32cfcc1c9a",
+      "source": "Scan QR or setup code",
+      "translated": "QR-code of installatiecode scannen"
+    },
+    {
+      "id": "native.android.8b8acc5b98b8c99f",
+      "source": "Set up manually",
+      "translated": "Handmatig instellen"
+    },
+    {
+      "id": "native.android.debd7b3e59db6ab2",
+      "source": "Before you start",
+      "translated": "Voordat je begint"
+    },
+    {
+      "id": "native.android.9cfcf68aae2c05c6",
+      "source": "Access to the Gateway device",
+      "translated": "Toegang tot het Gateway-apparaat"
+    },
+    {
+      "id": "native.android.71ce00f359981a0b",
+      "source": "Phone can reach the Gateway",
+      "translated": "Telefoon kan de Gateway bereiken"
+    },
+    {
+      "id": "native.android.68a31cee94a9db86",
+      "source": "Android setup guide",
+      "translated": "Android-installatiehandleiding"
+    },
+    {
+      "id": "native.android.d514a981f80779e9",
+      "source": "Setup Gateway",
+      "translated": "Gateway instellen"
+    },
+    {
+      "id": "native.android.6a45e2dae35ab5a7",
+      "source": "Start your Gateway.",
+      "translated": "Start je Gateway."
+    },
+    {
+      "id": "native.android.c6f9da7008df05a6",
+      "source": "Generate a QR code.",
+      "translated": "Genereer een QR-code."
+    },
+    {
+      "id": "native.android.96d40475de2885d6",
+      "source": "Choose from gallery",
+      "translated": "Kiezen uit galerij"
+    },
+    {
+      "id": "native.android.fd83bd36419ef526",
+      "source": "QR code not accepted",
+      "translated": "QR-code niet geaccepteerd"
+    },
+    {
+      "id": "native.android.4dde43318559c65d",
+      "source": "Choose another image",
+      "translated": "Kies een andere afbeelding"
+    },
+    {
+      "id": "native.android.54bab6e4054484d0",
+      "source": "Scan QR code",
+      "translated": "QR-code scannen"
+    },
+    {
+      "id": "native.android.05987e822ac102ec",
+      "source": "Open the camera and frame the code from openclaw qr.",
+      "translated": "Open de camera en richt op de code van openclaw qr."
+    },
+    {
+      "id": "native.android.90fa932d2e0adbd9",
+      "source": "Align the QR code inside the square.",
+      "translated": "Plaats de QR-code binnen het vierkant."
+    },
+    {
+      "id": "native.android.7a817ddf54373dbf",
+      "source": "Camera access is needed to scan the setup QR.",
+      "translated": "Cameratoegang is nodig om de setup-QR te scannen."
+    },
+    {
+      "id": "native.android.c8d5f12cb28f3853",
+      "source": "Allow camera",
+      "translated": "Camera toestaan"
+    },
+    {
+      "id": "native.android.7efba153567b1232",
+      "source": "Close scanner",
+      "translated": "Scanner sluiten"
+    },
+    {
+      "id": "native.android.b8d5431e1e441f74",
+      "source": "Enter setup code",
+      "translated": "Setupcode invoeren"
     },
     {
       "id": "native.android.41e3fbccb2ad5a4c",
       "source": "Setup code",
       "translated": "Installatiecode"
+    },
+    {
+      "id": "native.android.06a2214da1eee841",
+      "source": "Paste setup code",
+      "translated": "Setupcode plakken"
+    },
+    {
+      "id": "native.android.35aec8a97ac12e1c",
+      "source": "Setup code was not accepted",
+      "translated": "Setupcode is niet geaccepteerd"
+    },
+    {
+      "id": "native.android.9aaee5a05de93dbe",
+      "source": "Use setup code",
+      "translated": "Setupcode gebruiken"
+    },
+    {
+      "id": "native.android.073c93545602b198",
+      "source": "Manual setup",
+      "translated": "Handmatige configuratie"
+    },
+    {
+      "id": "native.android.46d58ca58c32ad52",
+      "source": "Gateway URL",
+      "translated": "Gateway-URL"
     },
     {
       "id": "native.android.d54b9e3433ffd809",
@@ -959,24 +1244,29 @@
       "translated": "Poort"
     },
     {
-      "id": "native.android.20d94e1cedd3f319",
-      "source": "TLS off",
-      "translated": "TLS uit"
+      "id": "native.android.1b0d9893ae4c0682",
+      "source": "Use the Gateway computer's LAN address or secure remote hostname.",
+      "translated": "Gebruik het LAN-adres of de beveiligde externe hostnaam van de Gateway-computer."
     },
     {
-      "id": "native.android.a3a158b4a10d34ba",
-      "source": "TLS on",
-      "translated": "TLS aan"
+      "id": "native.android.bfc48711d6deed92",
+      "source": "Token",
+      "translated": "Token"
     },
     {
-      "id": "native.android.a02f48c59c8b7b9d",
-      "source": "Local",
-      "translated": "Lokaal"
+      "id": "native.android.7ac2b9aec9d78cda",
+      "source": "Paste token",
+      "translated": "Token plakken"
     },
     {
-      "id": "native.android.aae4212f2ff4df98",
-      "source": "Token optional",
-      "translated": "Token optioneel"
+      "id": "native.android.96ba0e3919c3955a",
+      "source": "Paste a shared Gateway token or operator-issued token.",
+      "translated": "Plak een gedeeld Gateway-token of een door de operator uitgegeven token."
+    },
+    {
+      "id": "native.android.4a5a1702f0130328",
+      "source": "Password",
+      "translated": "Wachtwoord"
     },
     {
       "id": "native.android.e7045d344dd32ddc",
@@ -984,29 +1274,99 @@
       "translated": "Wachtwoord optioneel"
     },
     {
-      "id": "native.android.369ee061f6d7881f",
-      "source": "Pair with Gateway",
-      "translated": "Koppelen met Gateway"
+      "id": "native.android.1259d0d0d1671ed7",
+      "source": "Connection type",
+      "translated": "Verbindingstype"
     },
     {
-      "id": "native.android.82b296ed39647687",
-      "source": "Last gateway",
-      "translated": "Laatste gateway"
+      "id": "native.android.278d9abb3abc12e6",
+      "source": "Local network",
+      "translated": "Lokaal netwerk"
     },
     {
-      "id": "native.android.3b169db8b57795b5",
-      "source": "Retry connection",
-      "translated": "Verbinding opnieuw proberen"
+      "id": "native.android.4aa2b8be11a971eb",
+      "source": "Secure remote",
+      "translated": "Beveiligde externe verbinding"
     },
     {
-      "id": "native.android.e0e5d2bb055863fb",
-      "source": "Edit connection",
-      "translated": "Verbinding bewerken"
+      "id": "native.android.8c31e2762b496d61",
+      "source": "Local works for LAN or emulator hosts. Secure remote is for wss:// or Tailscale Serve/Funnel.",
+      "translated": "Lokaal werkt voor LAN- of emulatorhosts. Beveiligde externe verbinding is voor wss:// of Tailscale Serve/Funnel."
     },
     {
-      "id": "native.android.ea2f18dad7749613",
-      "source": "Copy diagnostic",
-      "translated": "Diagnose kopiëren"
+      "id": "native.android.24a0a4819f223b87",
+      "source": "Could not test connection",
+      "translated": "Kan verbinding niet testen"
+    },
+    {
+      "id": "native.android.9a8f8ba539d4dd68",
+      "source": "Test connection",
+      "translated": "Verbinding testen"
+    },
+    {
+      "id": "native.android.a1c6ad798cdb4e32",
+      "source": "View details",
+      "translated": "Details bekijken"
+    },
+    {
+      "id": "native.android.ebdc41fd34eab0a5",
+      "source": "Connection details",
+      "translated": "Verbindingsdetails"
+    },
+    {
+      "id": "native.android.f982d1f6ad7b3e5d",
+      "source": "Copy",
+      "translated": "Kopiëren"
+    },
+    {
+      "id": "native.android.fa2a2369f23aa195",
+      "source": "Close",
+      "translated": "Sluiten"
+    },
+    {
+      "id": "native.android.50cca1e186823cd6",
+      "source": "Details copied",
+      "translated": "Details gekopieerd"
+    },
+    {
+      "id": "native.android.31a4bf3ed4071f7c",
+      "source": "Approve node access",
+      "translated": "Nodetoegang goedkeuren"
+    },
+    {
+      "id": "native.android.f43cb6ed03dc6766",
+      "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
+      "translated": "Gateway-koppeling is voltooid. Keur deze telefoon goed als node zodat OpenClaw de apparaatmogelijkheden kan gebruiken die je inschakelt."
+    },
+    {
+      "id": "native.android.8e49feba12c350ac",
+      "source": "On the Gateway computer, run:",
+      "translated": "Voer op de Gateway-computer uit:"
+    },
+    {
+      "id": "native.android.6189b5e2af7cc793",
+      "source": "Use the requestId from the pending command in the approve command.",
+      "translated": "Gebruik de requestId uit de opdracht in behandeling in de approve-opdracht."
+    },
+    {
+      "id": "native.android.53bcd45eeb574d74",
+      "source": "I have approved",
+      "translated": "Ik heb goedgekeurd"
+    },
+    {
+      "id": "native.android.cdc44aaeb8bd6e4a",
+      "source": "Still waiting for approval",
+      "translated": "Nog steeds wachten op goedkeuring"
+    },
+    {
+      "id": "native.android.df5cc00eb95c21ad",
+      "source": "Run the approve command on the Gateway computer, then check again.",
+      "translated": "Voer de approve-opdracht uit op de Gateway-computer en controleer daarna opnieuw."
+    },
+    {
+      "id": "native.android.f579f91c216dd6c4",
+      "source": "OK",
+      "translated": "OK"
     },
     {
       "id": "native.android.b80462122abbe312",
@@ -1014,44 +1374,9 @@
       "translated": "Goedkeuringsopdracht kopiëren"
     },
     {
-      "id": "native.android.a31f2beb68298aa8",
-      "source": "Allow permissions",
-      "translated": "Machtigingen toestaan"
-    },
-    {
-      "id": "native.android.b82104d8df1d4b4a",
-      "source": "These permissions keep OpenClaw secure\nand useful.",
-      "translated": "Deze machtigingen houden OpenClaw veilig\nen nuttig."
-    },
-    {
-      "id": "native.android.03b95088ba72bd8e",
-      "source": "Open $title",
-      "translated": "$title openen"
-    },
-    {
-      "id": "native.android.f38ca3445453a6bb",
-      "source": "Choose what this phone can share with OpenClaw. You can change these later in Settings.",
-      "translated": "Kies wat deze telefoon kan delen met OpenClaw. Je kunt dit later wijzigen in Instellingen."
-    },
-    {
-      "id": "native.android.44549cfd7e6a1ab8",
-      "source": "Back",
-      "translated": "Terug"
-    },
-    {
-      "id": "native.android.4b54af42d17dec84",
-      "source": "Permission Setup",
-      "translated": "Machtigingen instellen"
-    },
-    {
-      "id": "native.android.437599c024df158e",
-      "source": "Granted",
-      "translated": "Verleend"
-    },
-    {
-      "id": "native.android.cf8344d3562e28e3",
-      "source": "Not granted",
-      "translated": "Niet verleend"
+      "id": "native.android.d4c3bcf880727fb3",
+      "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
+      "translated": "Schakel alleen toegang in waarvan je het prettig vindt dat OpenClaw die gebruikt terwijl deze telefoon verbonden is. Je kunt dit later wijzigen in Android-instellingen."
     },
     {
       "id": "native.android.d7ea800cc2475013",
@@ -1059,9 +1384,19 @@
       "translated": "Doorgaan"
     },
     {
-      "id": "native.android.e44224ed4df1700f",
-      "source": "Setup code expired. Scan a fresh setup QR.",
-      "translated": "Installatiecode verlopen. Scan een nieuwe installatie-QR."
+      "id": "native.android.44549cfd7e6a1ab8",
+      "source": "Back",
+      "translated": "Terug"
+    },
+    {
+      "id": "native.android.f3f0527db434d756",
+      "source": "Permissions",
+      "translated": "Machtigingen"
+    },
+    {
+      "id": "native.android.29732759e050c874",
+      "source": "The code may have expired or been generated for another Gateway.",
+      "translated": "De code is mogelijk verlopen of gegenereerd voor een andere Gateway."
     },
     {
       "id": "native.android.511925b4321aae31",
@@ -1109,9 +1444,14 @@
       "translated": "Goedkeuringsopdracht gekopieerd"
     },
     {
-      "id": "native.android.bc9715de99c769c7",
-      "source": "Diagnostic copied",
-      "translated": "Diagnose gekopieerd"
+      "id": "native.android.437599c024df158e",
+      "source": "Granted",
+      "translated": "Verleend"
+    },
+    {
+      "id": "native.android.cf8344d3562e28e3",
+      "source": "Not granted",
+      "translated": "Niet verleend"
     },
     {
       "id": "native.android.561d07951dc36959",
@@ -1479,24 +1819,14 @@
       "translated": "Gereed"
     },
     {
-      "id": "native.android.4114adf0c5aea967",
-      "source": "Realtime Provider",
-      "translated": "Realtime Provider"
+      "id": "native.android.60cf67eb5ec46ea0",
+      "source": "Realtime Talk",
+      "translated": "Realtime Talk"
     },
     {
-      "id": "native.android.7b0e4e56b23430f5",
-      "source": "Live",
-      "translated": "Live"
-    },
-    {
-      "id": "native.android.c7b857aceff24ce6",
-      "source": "Voice",
-      "translated": "Stem"
-    },
-    {
-      "id": "native.android.ce4425d1689309dc",
-      "source": "Transport",
-      "translated": "Transport"
+      "id": "native.android.c80e9a8e3d393676",
+      "source": "Dictation",
+      "translated": "Dicteren"
     },
     {
       "id": "native.android.94527c3346897c00",
@@ -1762,6 +2092,26 @@
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Bijwerken"
+    },
+    {
+      "id": "native.android.13f70e22b5648308",
+      "source": "Licenses",
+      "translated": "Licenties"
+    },
+    {
+      "id": "native.android.996367534eb94cc2",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw waardeert zijn partners in de open-sourcecommunity."
+    },
+    {
+      "id": "native.android.24da1d2eb750ba07",
+      "source": "No license notices are packaged in this build.",
+      "translated": "Er zijn geen licentiekennisgevingen in deze build opgenomen."
+    },
+    {
+      "id": "native.android.933e72cac84c571e",
+      "source": "Open ${license.title}",
+      "translated": "${license.title} openen"
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2314,6 +2664,11 @@
       "translated": "Vereist aandacht"
     },
     {
+      "id": "native.android.8452bcda8a619361",
+      "source": "Open ${row.title}",
+      "translated": "${row.title} openen"
+    },
+    {
       "id": "native.android.a65477861c7203aa",
       "source": "Open session",
       "translated": "Sessie openen"
@@ -2422,11 +2777,6 @@
       "id": "native.android.45005deba537cc59",
       "source": "Open profile",
       "translated": "Profiel openen"
-    },
-    {
-      "id": "native.android.8452bcda8a619361",
-      "source": "Open ${row.title}",
-      "translated": "${row.title} openen"
     },
     {
       "id": "native.android.22d755834386db07",
@@ -2629,9 +2979,9 @@
       "translated": "Dicteren stoppen"
     },
     {
-      "id": "native.android.86b0b12702b1fd3d",
-      "source": "Provider",
-      "translated": "Provider"
+      "id": "native.android.71fa9c845cdb89bd",
+      "source": "Voice setup",
+      "translated": "Spraakinstellingen"
     },
     {
       "id": "native.android.fa79aec52f4ca61c",
@@ -2804,9 +3154,19 @@
       "translated": "Verzenden"
     },
     {
+      "id": "native.android.ff4e568bce360d5f",
+      "source": "No commands found",
+      "translated": "Geen opdrachten gevonden"
+    },
+    {
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "Afbeelding niet beschikbaar"
+    },
+    {
+      "id": "native.android.97a0b44d89402809",
+      "source": "Jump to latest",
+      "translated": "Naar nieuwste springen"
     },
     {
       "id": "native.android.69239493702da212",
@@ -2874,6 +3234,11 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "Nieuwe chat"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Chat vernieuwen"
@@ -2887,6 +3252,11 @@
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "Sessie laden"
+    },
+    {
+      "id": "native.android.2c1106e1687ab258",
+      "source": "Jump to latest",
+      "translated": "Naar nieuwste springen"
     },
     {
       "id": "native.android.9df2c9d68bad169f",
@@ -2929,6 +3299,11 @@
       "translated": "Stoppen"
     },
     {
+      "id": "native.android.5953c956ff208e6e",
+      "source": "No commands found",
+      "translated": "Geen opdrachten gevonden"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway offline"
@@ -2952,11 +3327,6 @@
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "Bijlage verwijderen"
-    },
-    {
-      "id": "native.android.326caa6b92aa9bdf",
-      "source": "New chat",
-      "translated": "Nieuwe chat"
     },
     {
       "id": "native.android.5fa853a957713a56",
@@ -3089,11 +3459,6 @@
       "translated": "Spraak in wachtrij verzenden"
     },
     {
-      "id": "native.android.ae8e946c1bb1f3bc",
-      "source": "Off",
-      "translated": "Uit"
-    },
-    {
       "id": "native.android.b4f67e96603515bd",
       "source": "Listening",
       "translated": "Luistert"
@@ -3102,6 +3467,21 @@
       "id": "native.android.b88e4278ead724ba",
       "source": "Ready",
       "translated": "Gereed"
+    },
+    {
+      "id": "native.android.8d8230088f3baa2a",
+      "source": "Off",
+      "translated": "Uit"
+    },
+    {
+      "id": "native.android.d6b7f86564ac3147",
+      "source": "Talk failed: Realtime provider closed unexpectedly.",
+      "translated": "Talk mislukt: Realtime-provider is onverwacht gesloten."
+    },
+    {
+      "id": "native.android.eb6ac739ad55e63a",
+      "source": "Talk failed: Realtime provider closed: $reason",
+      "translated": "Talk mislukt: Realtime-provider gesloten: $reason"
     },
     {
       "id": "native.android.13531fe081a45711",
@@ -3249,51 +3629,6 @@
       "translated": "Opgelost eindpunt"
     },
     {
-      "id": "native.android.3d9d01cc0af8727d",
-      "source": "Gateway Setup",
-      "translated": "Gateway instellen"
-    },
-    {
-      "id": "native.android.fff6a6f130e88354",
-      "source": "Connect to your Gateway",
-      "translated": "Maak verbinding met je Gateway"
-    },
-    {
-      "id": "native.android.77a54beda22bfeb7",
-      "source": "Scan setup code",
-      "translated": "Installatiecode scannen"
-    },
-    {
-      "id": "native.android.8f525f9218215b42",
-      "source": "Use your Gateway QR or setup code",
-      "translated": "Gebruik je Gateway-QR-code of installatiecode"
-    },
-    {
-      "id": "native.android.40da32c36971b959",
-      "source": "Nearby gateway",
-      "translated": "Gateway in de buurt"
-    },
-    {
-      "id": "native.android.7423bd0086e6897e",
-      "source": "Enter gateway URL",
-      "translated": "Gateway-URL invoeren"
-    },
-    {
-      "id": "native.android.c9420b6801f5a76f",
-      "source": "Connect using a manual URL",
-      "translated": "Verbinding maken met een handmatige URL"
-    },
-    {
-      "id": "native.android.4b55356d9bf6e444",
-      "source": "Permissions",
-      "translated": "Machtigingen"
-    },
-    {
-      "id": "native.android.c49a911b95af5d5d",
-      "source": "Done",
-      "translated": "Gereed"
-    },
-    {
       "id": "native.android.288b83f93172c633",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "translated": "Controleer de certificaatvingerafdruk voordat je deze gateway vertrouwt.\n\n%1$s"
@@ -3302,11 +3637,6 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "Het gatewaycertificaat is gewijzigd. Ga alleen door als je dit verwachtte.\n\nOude SHA-256:\n%1$s\n\nNieuwe SHA-256:\n%2$s"
-    },
-    {
-      "id": "native.android.6ffa3d752514836d",
-      "source": "Gateway Recovery",
-      "translated": "Gateway-herstel"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -5194,29 +5524,39 @@
       "translated": "\\(diagnosticsIssueCount)"
     },
     {
-      "id": "native.apple.f93745d2550799de",
-      "source": "Location \\(self.locationLabel)",
-      "translated": "Locatie \\(self.locationLabel)"
-    },
-    {
       "id": "native.apple.acbedcae9f022c29",
       "source": "Location off",
       "translated": "Locatie uit"
     },
     {
-      "id": "native.apple.539d9f2b9cde9cb3",
-      "source": "Off",
-      "translated": "Uit"
+      "id": "native.apple.7d31e35d20b78c2d",
+      "source": "Location While Using",
+      "translated": "Locatie bij gebruik"
     },
     {
-      "id": "native.apple.86a934ca21b05d9c",
-      "source": "While Using",
-      "translated": "Bij gebruik"
+      "id": "native.apple.b94b8d4e935c81fb",
+      "source": "Location While Using, effective Off",
+      "translated": "Locatie bij gebruik, effectief Uit"
     },
     {
-      "id": "native.apple.7774b67d295ea77d",
-      "source": "Always",
-      "translated": "Altijd"
+      "id": "native.apple.6533895b2a1f2b2d",
+      "source": "Location While Using, effective Always",
+      "translated": "Locatie bij gebruik, effectief Altijd"
+    },
+    {
+      "id": "native.apple.c3c9d2baa0607380",
+      "source": "Location Always",
+      "translated": "Locatie altijd"
+    },
+    {
+      "id": "native.apple.10fe695bb1cd3c62",
+      "source": "Location Always, effective While Using",
+      "translated": "Locatie altijd, effectief Bij gebruik"
+    },
+    {
+      "id": "native.apple.306454b6d067e1ee",
+      "source": "Location Always, effective Off",
+      "translated": "Locatie altijd, effectief Uit"
     },
     {
       "id": "native.apple.2829150c12160b55",
@@ -5292,6 +5632,11 @@
       "id": "native.apple.f52553cad6c1f307",
       "source": "About",
       "translated": "Over"
+    },
+    {
+      "id": "native.apple.529c06f7f7f6e428",
+      "source": "Licenses",
+      "translated": "Licenties"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",
@@ -5472,6 +5817,21 @@
       "id": "native.apple.bbb2c589c2049217",
       "source": "iOS",
       "translated": "iOS"
+    },
+    {
+      "id": "native.apple.5abfcc15e933c483",
+      "source": "No licenses bundled",
+      "translated": "Geen licenties meegeleverd"
+    },
+    {
+      "id": "native.apple.af22fba4150f2c1d",
+      "source": "License files are not available in this build.",
+      "translated": "Licentiebestanden zijn niet beschikbaar in deze build."
+    },
+    {
+      "id": "native.apple.a82dc4a746268028",
+      "source": "OpenClaw appreciates its partners in the open-source community.",
+      "translated": "OpenClaw waardeert zijn partners in de opensourcecommunity."
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -6309,9 +6669,9 @@
       "translated": "OpenClaw kan bewegingsgegevens gebruiken ter ondersteuning van apparaatafhankelijke interacties en automatiseringen."
     },
     {
-      "id": "native.apple.b6c35a14bb309193",
-      "source": "OpenClaw needs photo library access when you choose existing photos to share with your assistant.",
-      "translated": "OpenClaw heeft toegang tot je fotobibliotheek nodig wanneer je bestaande foto's kiest om met je assistent te delen."
+      "id": "native.apple.40ed4259ec869f1b",
+      "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
+      "translated": "OpenClaw laat je assistent foto’s lezen die je toestaat en laat je foto’s kiezen om te delen."
     },
     {
       "id": "native.apple.81b673f0c6fc4371",
@@ -6322,6 +6682,111 @@
       "id": "native.apple.2275552c26460945",
       "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
       "translated": "OpenClaw gebruikt spraakherkenning op het apparaat voor de praatmodus en spraakactivering."
+    },
+    {
+      "id": "native.apple.cf0450b542893fb5",
+      "source": "Off",
+      "translated": "Uit"
+    },
+    {
+      "id": "native.apple.c470d02f26ac51f6",
+      "source": "While Using",
+      "translated": "Bij gebruik"
+    },
+    {
+      "id": "native.apple.663b3e453bb47c07",
+      "source": "Always",
+      "translated": "Altijd"
+    },
+    {
+      "id": "native.apple.2dc593065171c201",
+      "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
+      "translated": "Locatiedeling is uitgeschakeld in OpenClaw. Locatievoorzieningen zijn uitgeschakeld in iOS-instellingen."
+    },
+    {
+      "id": "native.apple.1dc990a9cc0500c5",
+      "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
+      "translated": "Locatiedeling is uitgeschakeld in OpenClaw. iOS staat momenteel Altijd toe."
+    },
+    {
+      "id": "native.apple.9a4e858d2b218d41",
+      "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
+      "translated": "Locatiedeling is uitgeschakeld in OpenClaw. iOS staat momenteel Bij gebruik toe."
+    },
+    {
+      "id": "native.apple.ab481eb11214797f",
+      "source": "Location sharing is disabled.",
+      "translated": "Locatiedeling is uitgeschakeld."
+    },
+    {
+      "id": "native.apple.34699b6a26b51110",
+      "source": "Location Services are off in iOS Settings.",
+      "translated": "Locatievoorzieningen zijn uitgeschakeld in iOS-instellingen."
+    },
+    {
+      "id": "native.apple.3b96b639e7442ee3",
+      "source": "Foreground location requests are allowed. Precise Location is on.",
+      "translated": "Locatieverzoeken op de voorgrond zijn toegestaan. Exacte locatie is ingeschakeld."
+    },
+    {
+      "id": "native.apple.9e537e22f834f4d5",
+      "source": "Foreground location requests are allowed. Precise Location is off.",
+      "translated": "Locatieverzoeken op de voorgrond zijn toegestaan. Exacte locatie is uitgeschakeld."
+    },
+    {
+      "id": "native.apple.3241d6de1ab6b340",
+      "source": "Foreground location requests are allowed.",
+      "translated": "Locatieverzoeken op de voorgrond zijn toegestaan."
+    },
+    {
+      "id": "native.apple.7b16935cf96c6ee3",
+      "source": "Background location requests and significant-change updates are allowed. Precise Location is on.",
+      "translated": "Locatieverzoeken op de achtergrond en updates bij significante wijzigingen zijn toegestaan. Exacte locatie is ingeschakeld."
+    },
+    {
+      "id": "native.apple.b1503179f7e1058d",
+      "source": "Background location requests and significant-change updates are allowed. Precise Location is off.",
+      "translated": "Locatieverzoeken op de achtergrond en updates bij significante wijzigingen zijn toegestaan. Exacte locatie is uitgeschakeld."
+    },
+    {
+      "id": "native.apple.6f63c4f93b7a9ab5",
+      "source": "Background location requests and significant-change updates are allowed.",
+      "translated": "Locatieverzoeken op de achtergrond en updates bij significante wijzigingen zijn toegestaan."
+    },
+    {
+      "id": "native.apple.95a6772115ad8b63",
+      "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is on.",
+      "translated": "Altijd is geselecteerd, maar iOS staat locatie momenteel alleen toe tijdens het gebruik van de app. Exacte locatie is ingeschakeld."
+    },
+    {
+      "id": "native.apple.8ab7fd180dc593f6",
+      "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is off.",
+      "translated": "Altijd is geselecteerd, maar iOS staat locatie momenteel alleen toe tijdens het gebruik van de app. Exacte locatie is uitgeschakeld."
+    },
+    {
+      "id": "native.apple.15bc589594491413",
+      "source": "Always is selected, but iOS currently allows location only while using the app.",
+      "translated": "Altijd is geselecteerd, maar iOS staat locatie momenteel alleen toe tijdens het gebruik van de app."
+    },
+    {
+      "id": "native.apple.30ce7ced43a0a752",
+      "source": "Location permission is denied in iOS Settings.",
+      "translated": "Locatietoestemming is geweigerd in iOS-instellingen."
+    },
+    {
+      "id": "native.apple.0de03d90e4280432",
+      "source": "Location permission is restricted on this device.",
+      "translated": "Locatietoestemming is beperkt op dit apparaat."
+    },
+    {
+      "id": "native.apple.0d0506a7417e7d92",
+      "source": "Choose a location mode to request iOS permission.",
+      "translated": "Kies een locatiemodus om iOS-toestemming aan te vragen."
+    },
+    {
+      "id": "native.apple.633f011b81108a8c",
+      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "translated": "OpenClaw kan de huidige iOS-locatietoestemming niet bepalen."
     },
     {
       "id": "native.apple.0d030e96f7738497",
@@ -6944,6 +7409,11 @@
       "translated": "Zoek en voeg contacten toe vanuit de assistent."
     },
     {
+      "id": "native.apple.eda8d96e40bcc36a",
+      "source": "Photos",
+      "translated": "Foto’s"
+    },
+    {
       "id": "native.apple.df0159ff34744870",
       "source": "Calendar (Add Events)",
       "translated": "Agenda (gebeurtenissen toevoegen)"
@@ -6972,6 +7442,21 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Geef herinneringen weer, voeg ze toe en voltooi ze."
+    },
+    {
+      "id": "native.apple.651cc89381dd69c0",
+      "source": "Limited",
+      "translated": "Beperkt"
+    },
+    {
+      "id": "native.apple.ab998419291361da",
+      "source": "Read photos you select for the assistant.",
+      "translated": "Lees foto’s die je voor de assistent selecteert."
+    },
+    {
+      "id": "native.apple.e8c07f7c48d086f9",
+      "source": "Read recent photos for the assistant.",
+      "translated": "Lees recente foto’s voor de assistent."
     },
     {
       "id": "native.apple.22b335bddf72e453",
@@ -11767,6 +12252,16 @@
       "id": "native.apple.43be8a2336e42faf",
       "source": "Sessions",
       "translated": "Sessies"
+    },
+    {
+      "id": "native.apple.f84b674ad395b694",
+      "source": "Jump to latest",
+      "translated": "Naar nieuwste springen"
+    },
+    {
+      "id": "native.apple.429d825201b2cb85",
+      "source": "Jump to latest reply",
+      "translated": "Naar nieuwste antwoord springen"
     },
     {
       "id": "native.apple.9ab586b85834705c",

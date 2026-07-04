@@ -139,18 +139,29 @@ function canReadPendingNodePairing(client: GatewayClient | null): boolean {
   return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
 }
 
-function safeNodeReadProjection(node: NodeListNode): NodeListNode | null {
+function safeNodeReadProjection(
+  node: NodeListNode,
+  ownDeviceId: string | undefined,
+): NodeListNode | null {
   if (!node.paired && !node.connected) {
     return null;
   }
   const {
-    pendingRequestId: _pendingRequestId,
+    pendingRequestId,
     pendingDeclaredCaps: _pendingDeclaredCaps,
     pendingDeclaredCommands: _pendingDeclaredCommands,
     pendingDeclaredPermissions: _pendingDeclaredPermissions,
     ...safeNode
   } = node;
-  return safeNode;
+  // A read-scoped mobile client may guide its user to approve this phone, but must not expose
+  // another node's approval target or any pending capability declaration.
+  return node.nodeId === ownDeviceId && pendingRequestId
+    ? { ...safeNode, pendingRequestId }
+    : safeNode;
+}
+
+function nodeReadCallerDeviceId(client: GatewayClient | null): string | undefined {
+  return normalizeOptionalString(client?.connect?.device?.id);
 }
 
 function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
@@ -174,7 +185,8 @@ function listNodesForClient(params: {
   if (canReadPendingNodePairing(params.client)) {
     return nodes;
   }
-  return nodes.map(safeNodeReadProjection).filter(isVisibleNode);
+  const ownDeviceId = nodeReadCallerDeviceId(params.client);
+  return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
 }
 
 function normalizeBrowserProxyPath(value: string): string {
@@ -1195,7 +1207,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         catalogNode && canReadPendingNodePairing(client)
           ? catalogNode
           : catalogNode
-            ? safeNodeReadProjection(catalogNode)
+            ? safeNodeReadProjection(catalogNode, nodeReadCallerDeviceId(client))
             : null;
       if (!node) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
