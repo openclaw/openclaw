@@ -112,10 +112,11 @@ describe("writeMeta WAL checkpoint", () => {
   }
 
   it("writeMeta calls PRAGMA wal_checkpoint(TRUNCATE) during sync", async () => {
-    // Proves the fix: writeMeta itself forces a WAL checkpoint after writing
-    // the meta row, independent of closeMemoryDatabase. On unpatched main,
-    // the only checkpoint happens during close — meta can be lost if the
-    // process is killed before close.
+    // Proves the fix: after publishMemoryDatabaseTables copies the shadow
+    // DB contents (including the meta row) to the live per-agent DB, a
+    // WAL checkpoint is forced on the live DB — not on the shadow DB.
+    // On unpatched main, the checkpoint was inside writeMeta on the shadow
+    // DB and did nothing useful for crash durability of the live index.
     //
     // This test exercises the real per-agent DB path resolved through
     // resolveOpenClawAgentSqlitePath (not a legacy store.path override).
@@ -132,8 +133,9 @@ describe("writeMeta WAL checkpoint", () => {
       ([sql]) => typeof sql === "string" && sql === "PRAGMA wal_checkpoint(TRUNCATE)",
     );
 
-    // At least one checkpoint fired during sync (from writeMeta).
-    // Close-time checkpoint may add more, but the sync-time call is the fix.
+    // At least one checkpoint fired during sync (from the post-publish
+    // checkpoint on the live per-agent DB). Close-time checkpoint may add
+    // more, but the sync-time call is the fix.
     expect(checkpointCalls.length).toBeGreaterThan(0);
 
     execSpy.mockRestore();

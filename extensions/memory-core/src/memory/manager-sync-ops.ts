@@ -2793,6 +2793,18 @@ export abstract class MemoryManagerSyncOps {
         vectorExtensionPath: this.vector.extensionPath,
       });
 
+      // Force WAL checkpoint on the live per-agent DB so the newly
+      // published meta row survives process crashes. Without this, the
+      // meta may live only in the WAL file; if the process is killed
+      // before closeMemoryDatabase() checkpoints, the next startup reads
+      // no meta and declares the index missing.
+      try {
+        originalDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      } catch {
+        // Non-fatal: checkpoint may fail in read-only or edge cases.
+        // The normal close path will still attempt a checkpoint.
+      }
+
       this.db = originalDb;
       this.resetVectorState();
       this.fts.available = nextFtsState.available;
@@ -2859,16 +2871,6 @@ export abstract class MemoryManagerSyncOps {
         `INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
-    // Force WAL checkpoint so meta survives process crashes.
-    // Without this, the meta row may live only in the WAL file; if the
-    // process is killed before closeMemoryDatabase() checkpoints, the
-    // next startup reads no meta and declares the index missing.
-    try {
-      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    } catch {
-      // Non-fatal: checkpoint may fail in read-only or edge cases.
-      // The normal close path will still attempt a checkpoint.
-    }
     this.lastMetaSerialized = value;
   }
 }
