@@ -15,8 +15,27 @@ export async function buildOnboardingWelcome(params: {
   workspace?: string;
 }): Promise<string> {
   const overview = await params.engine.loadOverview();
-  const isConfigured = overview.config.exists && overview.config.valid && overview.defaultModel;
-  if (isConfigured) {
+  // "Configured" must match the app onboarding gate (wizard metadata or
+  // gateway auth), not just a model: a model-only config would otherwise get
+  // the ready-guide welcome while the gate stays locked, stranding the page.
+  const hasAuthoredSetup = await (async () => {
+    if (!overview.config.exists || !overview.config.valid) {
+      return false;
+    }
+    try {
+      const { readConfigFileSnapshot } = await import("../config/config.js");
+      const snapshot = await readConfigFileSnapshot();
+      const cfg = snapshot.sourceConfig ?? snapshot.config ?? {};
+      const auth = cfg.gateway?.auth;
+      return (
+        Boolean(cfg.wizard && Object.keys(cfg.wizard).length > 0) ||
+        Boolean(auth?.mode ?? auth?.token ?? auth?.password)
+      );
+    } catch {
+      return false;
+    }
+  })();
+  if (hasAuthoredSetup && overview.defaultModel) {
     const welcome = formatCrestodianOnboardingWelcome(overview);
     params.engine.noteAssistantMessage(welcome);
     return welcome;
