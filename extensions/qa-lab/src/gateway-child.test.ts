@@ -11,6 +11,7 @@ import {
   resolveQaControlUiRoot,
   startQaGatewayChild,
 } from "./gateway-child.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => process.execPath));
@@ -22,7 +23,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/temp-path", () => ({
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
   resolvePreferredOpenClawTmpDir: () => qaTempPathState.preferredTmpDir,
 }));
 
@@ -31,6 +33,7 @@ vi.mock("./node-exec.js", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
@@ -39,6 +42,7 @@ afterEach(async () => {
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
+  await tempDirs.cleanup();
 });
 
 function createParams(baseEnv?: NodeJS.ProcessEnv) {
@@ -1619,6 +1623,24 @@ describe("qa bundled plugin dir", () => {
         allowedPluginIds: ["../escape"],
       }),
     ).rejects.toThrow("invalid QA bundled plugin id: ../escape");
+  });
+
+  it("leaves external allowed plugins to configured load paths", async () => {
+    const repoRoot = await tempDirs.makeTempDir("qa-bundled-external-id-");
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf8",
+    );
+    const tempRoot = await tempDirs.makeTempDir("qa-bundled-external-target-");
+
+    const { bundledPluginsDir } = await testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["external-fixture"],
+    });
+
+    await expect(readdir(bundledPluginsDir)).resolves.not.toContain("external-fixture");
   });
 
   it("stages source-only bundled plugins into a repo-like runtime root with node_modules", async () => {
