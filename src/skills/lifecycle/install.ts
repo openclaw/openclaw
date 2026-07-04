@@ -218,14 +218,11 @@ function buildInstallCommand(
   }
 }
 
-async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
-  const deps = getSkillsInstallDeps();
-  const exe = brewExe ?? (deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable());
-  if (!exe) {
-    return undefined;
-  }
-
-  const prefixResult = await runCommandWithTimeout([exe, "--prefix"], {
+async function resolveBrewPrefixBinDir(
+  timeoutMs: number,
+  brewExe: string,
+): Promise<string | undefined> {
+  const prefixResult = await runCommandSafely([brewExe, "--prefix"], {
     timeoutMs: Math.min(timeoutMs, 30_000),
   });
   if (prefixResult.code === 0) {
@@ -233,6 +230,20 @@ async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<s
     if (prefix) {
       return path.join(prefix, "bin");
     }
+  }
+  return undefined;
+}
+
+async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
+  const deps = getSkillsInstallDeps();
+  const exe = brewExe ?? (deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable());
+  if (!exe) {
+    return undefined;
+  }
+
+  const prefixBin = await resolveBrewPrefixBinDir(timeoutMs, exe);
+  if (prefixBin) {
+    return prefixBin;
   }
 
   for (const candidate of ["/opt/homebrew/bin", "/usr/local/bin"]) {
@@ -398,6 +409,13 @@ function parseAptGoCandidate(output: string): GoVersion | undefined {
   return { major: Number(match[1]), minor: Number(match[2]) };
 }
 
+function appendPathDirectory(pathEnv: string | undefined, directory: string): string {
+  if ((pathEnv ?? "").split(path.delimiter).includes(directory)) {
+    return pathEnv ?? directory;
+  }
+  return pathEnv ? `${pathEnv}${path.delimiter}${directory}` : directory;
+}
+
 async function resolveAptCommandAccess(): Promise<AptCommandAccess> {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return { available: true, prefix: [] };
@@ -530,13 +548,6 @@ export type SkillInstallReadiness =
   | { ready: true }
   | { ready: false; reason: SkillInstallSkipReason };
 
-async function canUseBrewForAutoInstall(brewExe: string): Promise<boolean> {
-  const accessCheck = await runCommandSafely([brewExe, "doctor", "check_access_directories"], {
-    timeoutMs: 10_000,
-  });
-  return accessCheck.code === 0;
-}
-
 function parseGoVersion(output: string): GoVersion | undefined {
   const match = /\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(output);
   if (!match) {
@@ -579,9 +590,9 @@ async function canBootstrapGoViaApt(): Promise<boolean> {
  * ensureGoInstalled/installGoViaApt). Says whether a recipe kind can run without manual
  * setup so callers can skip doomed installs; keep in lockstep with those fallbacks.
  *
- * uv/go bootstraps count only on-PATH brew: the recipe still spawns bare `uv`/`go`,
- * so a tool bootstrapped through off-PATH Linuxbrew would not be executable. Any brew
- * path used for installs must also pass Homebrew's focused directory access check.
+ * uv bootstraps count only on-PATH brew because the recipe still spawns bare `uv`.
+ * Go installs can use a resolved brew prefix because installSkill carries that bin
+ * into the child and current PATH. Brew recipes swap argv[0] to the resolved path.
  */
 export async function resolveInstallerKindReadiness(kind: string): Promise<SkillInstallReadiness> {
   const deps = getSkillsInstallDeps();
@@ -589,16 +600,12 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
   const brewExe = brewOnPath ? "brew" : deps.resolveBrewExecutable();
   switch (kind) {
     case "brew":
-      return brewExe && (await canUseBrewForAutoInstall(brewExe))
-        ? { ready: true }
-        : { ready: false, reason: "brew" };
+      return brewExe ? { ready: true } : { ready: false, reason: "brew" };
     case "uv": {
       if (deps.hasBinary("uv")) {
         return { ready: true };
       }
-      return brewOnPath && brewExe && (await canUseBrewForAutoInstall(brewExe))
-        ? { ready: true }
-        : { ready: false, reason: "uv" };
+      return brewOnPath ? { ready: true } : { ready: false, reason: "uv" };
     }
     case "go": {
       if (deps.hasBinary("go")) {
@@ -606,15 +613,13 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
           ? { ready: true }
           : { ready: false, reason: "go" };
       }
-      if (brewOnPath && brewExe) {
-        return (await canUseBrewForAutoInstall(brewExe))
-          ? { ready: true }
-          : { ready: false, reason: "go" };
+      if (brewOnPath) {
+        return { ready: true };
       }
       if (brewExe) {
-        // ensureGoInstalled prefers any resolvable brew over apt, so the install
-        // would bootstrap an off-PATH Go and then fail spawning bare `go`.
-        return { ready: false, reason: "go" };
+        return (await resolveBrewPrefixBinDir(10_000, brewExe))
+          ? { ready: true }
+          : { ready: false, reason: "go" };
       }
       return (await canBootstrapGoViaApt()) ? { ready: true } : { ready: false, reason: "go" };
     }
@@ -762,19 +767,24 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const envOverrides: NodeJS.ProcessEnv = {};
+  let installedGoBin: string | undefined;
   if (spec.kind === "node") {
     Object.assign(envOverrides, await buildNodeInstallEnv(prefs));
   }
   if (spec.kind === "go") {
     const brewBin =
       brewExe && !goWasAlreadyInstalled ? await resolveBrewBinDir(timeoutMs, brewExe) : undefined;
-    // OpenClaw adds ~/.local/bin to PATH on startup. Existing and apt-provided
-    // Go toolchains should not depend on an unrelated Homebrew installation.
-    envOverrides.GOBIN = brewBin ?? path.join(os.homedir(), ".local", "bin");
+    installedGoBin = brewBin ?? path.join(os.homedir(), ".local", "bin");
+    envOverrides.GOBIN = installedGoBin;
+    envOverrides.PATH = appendPathDirectory(process.env.PATH, installedGoBin);
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
   const installResult = await executeInstallCommand({ argv, timeoutMs, env });
+  if (installResult.ok && installedGoBin && envOverrides.PATH) {
+    // Keep the just-installed command discoverable without requiring a gateway restart.
+    process.env.PATH = envOverrides.PATH;
+  }
   const normalizedResult =
     spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
       ? { ...installResult, skipReason: "go" as const }
