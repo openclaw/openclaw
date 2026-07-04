@@ -25,6 +25,7 @@ import type {
   SessionInfoEntry,
   SessionMessageEntry,
 } from "../../sessions/session-manager.js";
+import { log } from "../logger.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
@@ -381,6 +382,7 @@ function classifyPromptReleasedSessionLines(
     : undefined;
   let hasGlobalMetadata = false;
   let hasOpaqueEntries = false;
+  let sideLeafControlCount = 0;
   let expectedParentId = options?.initialParentId ?? null;
   for (const line of lines) {
     const matchExpectedEntry = (
@@ -454,6 +456,14 @@ function classifyPromptReleasedSessionLines(
     const opaqueEntry =
       parsePromptReleasedLeafControlLine(line) ??
       (options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined);
+    if (
+      opaqueEntry &&
+      isJsonRecord(opaqueEntry.record) &&
+      opaqueEntry.record.type === "leaf" &&
+      opaqueEntry.record.appendMode === "side"
+    ) {
+      sideLeafControlCount += 1;
+    }
     const opaqueId =
       opaqueEntry && isJsonRecord(opaqueEntry.record)
         ? normalizeTranscriptEntryId(opaqueEntry.record.id)
@@ -468,6 +478,13 @@ function classifyPromptReleasedSessionLines(
   }
   if (remainingExpectedEntries?.length) {
     return undefined;
+  }
+  if (sideLeafControlCount > 0) {
+    log.debug("prompt-released session side leaf accepted", {
+      entryCount: entries.length,
+      sideLeafControlCount,
+      kind: hasOpaqueEntries ? "opaque" : hasGlobalMetadata ? "global-metadata" : "transcript-only",
+    });
   }
   if (hasOpaqueEntries) {
     return { kind: "opaque", entries, publishedEntries };
@@ -1284,6 +1301,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       takeoverDetected = true;
       throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
     }
+    log.debug("prompt-released session change merged", {
+      kind: change.kind,
+      entryCount: change.entries.length,
+      publishedEntryCount: change.publishedEntries.length,
+      postMergePublishedEntryCount: mergeResult?.publishedEntries?.length ?? 0,
+      requiresReload: mergeResult?.requiresReload === true,
+    });
     return {
       snapshot: refreshedSnapshot,
       publishedEntries: mergeResult?.requiresReload
