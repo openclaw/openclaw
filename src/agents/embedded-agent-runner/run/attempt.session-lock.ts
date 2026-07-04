@@ -325,6 +325,27 @@ function parsePromptReleasedOpaqueLine(line: string): PromptReleasedOpaqueEntry 
   }
 }
 
+function parsePromptReleasedLeafControlLine(line: string): PromptReleasedOpaqueEntry | undefined {
+  try {
+    const record = JSON.parse(line) as unknown;
+    if (
+      !isJsonRecord(record) ||
+      record.type !== "leaf" ||
+      !hasSessionEntryBase(record) ||
+      (record.targetId !== null && typeof record.targetId !== "string") ||
+      (record.appendParentId !== undefined &&
+        record.appendParentId !== null &&
+        typeof record.appendParentId !== "string") ||
+      record.appendMode !== "side"
+    ) {
+      return undefined;
+    }
+    return { type: "prompt_released_opaque", record };
+  } catch {
+    return undefined;
+  }
+}
+
 type PromptReleasedSessionChange =
   | {
       kind: "transcript-only";
@@ -430,7 +451,9 @@ function classifyPromptReleasedSessionLines(
       hasGlobalMetadata = true;
       continue;
     }
-    const opaqueEntry = options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined;
+    const opaqueEntry =
+      parsePromptReleasedLeafControlLine(line) ??
+      (options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined);
     const opaqueId =
       opaqueEntry && isJsonRecord(opaqueEntry.record)
         ? normalizeTranscriptEntryId(opaqueEntry.record.id)
