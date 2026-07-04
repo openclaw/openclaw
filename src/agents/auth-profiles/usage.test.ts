@@ -413,6 +413,83 @@ describe("resolveProfilesUnavailableReason", () => {
       }),
     ).toBe("auth");
   });
+
+  it("ignores a blockedUntil scoped to a different model when forModel is given", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+        blockedModel: "gpt-5.5",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBeNull();
+  });
+
+  it("reports rate_limit for a blockedUntil that matches forModel", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+        blockedModel: "gpt-5.3-codex-spark",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("reports rate_limit for an unscoped blockedUntil regardless of forModel", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 60_000,
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("ignores a rate_limit cooldown scoped to a different cooldownModel when forModel is given", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "gpt-5.5",
+        failureCounts: { rate_limit: 3 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["openai:default"],
+        now,
+        forModel: "gpt-5.3-codex-spark",
+      }),
+    ).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -375,6 +375,7 @@ export function resolveProfilesUnavailableReason(params: {
   store: AuthProfileStore;
   profileIds: string[];
   now?: number;
+  forModel?: string;
 }): AuthProfileFailureReason | null {
   const now = params.now ?? Date.now();
   const scores = new Map<AuthProfileFailureReason, number>();
@@ -398,13 +399,31 @@ export function resolveProfilesUnavailableReason(params: {
       continue;
     }
 
-    if (isActiveUnusableWindow(stats.blockedUntil, now)) {
+    // Model-aware bypass: a subscription_limit block recorded against a specific
+    // model (blockedModel) must not be reported as the unavailable reason for a
+    // *different* model on the same profile, mirroring the scoping already
+    // applied by resolveProfileUnusableUntil/isProfileInCooldown in
+    // usage-state.ts.
+    const blockedAppliesToModel =
+      !params.forModel || !stats.blockedModel || stats.blockedModel === params.forModel;
+    if (blockedAppliesToModel && isActiveUnusableWindow(stats.blockedUntil, now)) {
       addScore("rate_limit", 1_000);
       continue;
     }
 
     const cooldownActive = isActiveUnusableWindow(stats.cooldownUntil, now);
     if (!cooldownActive) {
+      continue;
+    }
+
+    // Same model-aware bypass for rate_limit/timeout cooldowns scoped to a
+    // different model via cooldownModel.
+    if (
+      params.forModel &&
+      isModelScopedCooldownReason(stats.cooldownReason) &&
+      stats.cooldownModel &&
+      stats.cooldownModel !== params.forModel
+    ) {
       continue;
     }
 
