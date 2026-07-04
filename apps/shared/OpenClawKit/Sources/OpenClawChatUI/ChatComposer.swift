@@ -743,13 +743,13 @@ struct OpenClawChatComposer: View {
 
     private var slashCommandScrollAffordance: some View {
         VStack(spacing: 0) {
-            LinearGradient(
-                colors: [
-                    .clear,
-                    OpenClawChatTheme.composerBackground.opacity(0.94),
-                ],
-                startPoint: .top,
-                endPoint: .bottom)
+            Rectangle()
+                .fill(.regularMaterial)
+                .mask(
+                    LinearGradient(
+                        colors: [.clear, .black],
+                        startPoint: .top,
+                        endPoint: .bottom))
                 .frame(height: 34)
 
             Image(systemName: "chevron.compact.down")
@@ -757,7 +757,7 @@ struct OpenClawChatComposer: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 6)
-                .background(OpenClawChatTheme.composerBackground.opacity(0.94))
+                .background(.regularMaterial)
         }
         .allowsHitTesting(false)
     }
