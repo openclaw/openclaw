@@ -2203,6 +2203,58 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
   });
 
+  it("does not reapply a folded cost-cap rejection after the first persist fails", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:folded-rejection-persist-fail";
+    enqueuePendingDelegate(sessionKey, {
+      task: "folded rejection retry",
+      chainTokensFold: 250_000,
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    const first = await recoverPendingContinuationDelegates({});
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "running" });
+    const retryState = mockFlows.get("flow-1")?.stateJson as Record<string, unknown> | undefined;
+    expect(retryState?.chainTokensFold).toBe(undefined);
+    expect(retryState?.persistedChainState).toMatchObject({
+      currentChainCount: 1,
+      accumulatedChainTokens: 550_000,
+    });
+
+    updateSessionStoreForRecoveryShouldThrow = false;
+    const retried = await recoverPendingContinuationDelegates({});
+
+    expect(retried).toMatchObject({ sessions: 1, dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 550_000,
+    });
+  });
+
   it("clears persisted chain-token folds so later delayed hedges do not reapply them (#1158)", async () => {
     setRuntimeConfigSnapshot({
       agents: {
