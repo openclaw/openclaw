@@ -253,6 +253,14 @@ describe("OpenAI tool projection", () => {
     ).toThrow("custom tool_choice is unsupported");
   });
 
+  it("rejects unsupported top-level Responses custom choices", () => {
+    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
+
+    expect(() =>
+      reconcileOpenAIResponsesToolChoice({ type: "custom", name: "shell" } as never, projection),
+    ).toThrow("custom tool_choice is unsupported");
+  });
+
   it("disables an auto Chat Completions allowed_tools choice when none survive", () => {
     const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
 

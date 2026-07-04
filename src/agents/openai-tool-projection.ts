@@ -28,11 +28,12 @@ export type OpenAIToolProjection = {
   readonly diagnostics: readonly OpenAIToolProjectionDiagnostic[];
 };
 
-type OpenAIResponsesToolChoice = ResponseCreateParamsStreaming["tool_choice"];
+type OpenAIResponsesSdkToolChoice = ResponseCreateParamsStreaming["tool_choice"];
 type OpenAIResponsesAllowedToolChoice = Extract<
-  OpenAIResponsesToolChoice,
+  OpenAIResponsesSdkToolChoice,
   { type: "allowed_tools" }
 >;
+export type OpenAIResponsesToolChoice = Exclude<OpenAIResponsesSdkToolChoice, { type: "custom" }>;
 type OpenAICompletionsSdkToolChoice =
   OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming["tool_choice"];
 type OpenAICompletionsAllowedToolChoice = Extract<
@@ -151,9 +152,9 @@ function requireProjectedFunction(
 
 /** Keeps Responses tool choices aligned with surviving function schemas. */
 export function reconcileOpenAIResponsesToolChoice(
-  choice: OpenAIResponsesToolChoice,
+  choice: OpenAIResponsesSdkToolChoice,
   projection: OpenAIToolProjection,
-): OpenAIResponsesToolChoice | undefined {
+): OpenAIResponsesSdkToolChoice | undefined {
   if (choice === "auto") {
     return projection.tools.length > 0 ? choice : undefined;
   }
@@ -169,6 +170,11 @@ export function reconcileOpenAIResponsesToolChoice(
     return choice;
   }
   const choiceType = choice.type;
+  if (choiceType === "custom") {
+    throw new Error(
+      "OpenAI Responses custom tool_choice is unsupported because this adapter emits function tools only",
+    );
+  }
   if (choiceType === "function") {
     const functionName = choice.name;
     if (typeof functionName !== "string") {
