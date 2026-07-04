@@ -29,7 +29,9 @@ import {
   getCliSessionBinding,
   isCliProvider,
   LiveSessionModelSwitchError,
+  classifyEmbeddedAgentRunResultForModelFallback,
   logWarn,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
@@ -339,6 +341,13 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result,
+        }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());

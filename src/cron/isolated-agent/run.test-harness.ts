@@ -84,6 +84,8 @@ export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
 export const listWebSearchProvidersMock = createMock();
 export const resolveWebSearchProviderIdMock = createMock();
+export const classifyEmbeddedAgentRunResultForModelFallbackMock = createMock();
+export const mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -256,6 +258,10 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+  classifyEmbeddedAgentRunResultForModelFallback:
+    classifyEmbeddedAgentRunResultForModelFallbackMock,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion:
+    mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
 }));
 
 vi.mock("../../agents/model-runtime-aliases.js", () => ({
@@ -517,6 +523,12 @@ function resetRunExecutionMocks(): void {
   registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
+  classifyEmbeddedAgentRunResultForModelFallbackMock.mockReset();
+  classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue(null);
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockReset();
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock.mockImplementation(
+    (params: { latestResult: unknown }) => params.latestResult,
+  );
   runEmbeddedAgentMock.mockReset();
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();

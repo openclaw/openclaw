@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  classifyEmbeddedAgentRunResultForModelFallbackMock,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
   mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
   resolveCliRuntimeExecutionProviderMock,
@@ -17,13 +19,20 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function requireModelFallbackRequest(): {
+  classifyResult?: (params: { provider: string; model: string; result: unknown }) => unknown;
   fallbacksOverride?: string[];
+  mergeExhaustedResult?: (params: { latestResult: unknown; preferredResult: unknown }) => unknown;
   provider?: string;
   model?: string;
 } {
   const request = runWithModelFallbackMock.mock.calls[0]?.[0] as
     | {
+        classifyResult?: (params: { provider: string; model: string; result: unknown }) => unknown;
         fallbacksOverride?: string[];
+        mergeExhaustedResult?: (params: {
+          latestResult: unknown;
+          preferredResult: unknown;
+        }) => unknown;
         provider?: string;
         model?: string;
       }
@@ -97,6 +106,61 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
     expect(requireModelFallbackRequest().fallbacksOverride).toEqual(expectedFallbacks);
+  });
+
+  it("passes embedded result fallback classification into cron model failover", async () => {
+    const classified = {
+      code: "empty_result",
+      message: "embedded agent returned no payloads",
+      retryable: true,
+    };
+    classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue(classified);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          payload: { kind: "agentTurn", message: "test" },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    const fallbackRequest = requireModelFallbackRequest();
+    const embeddedResult = {
+      payloads: [],
+      meta: {
+        agentMeta: {},
+        agentHarnessResultClassification: "empty_result",
+      },
+    };
+    expect(
+      fallbackRequest.classifyResult?.({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        result: embeddedResult,
+      }),
+    ).toBe(classified);
+    expect(classifyEmbeddedAgentRunResultForModelFallbackMock).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      result: embeddedResult,
+    });
+    expect(fallbackRequest.mergeExhaustedResult).toBe(
+      mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
+    );
+    const latestResult = { payloads: [{ text: "latest visible summary" }] };
+    const preferredResult = { payloads: [{ text: "preferred fallback summary" }] };
+    expect(
+      fallbackRequest.mergeExhaustedResult?.({
+        latestResult,
+        preferredResult,
+      }),
+    ).toBe(latestResult);
+    expect(mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock).toHaveBeenCalledWith({
+      latestResult,
+      preferredResult,
+    });
   });
 
   it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {
