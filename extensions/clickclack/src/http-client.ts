@@ -127,6 +127,9 @@ export function createClickClackClient(options: ClientOptions) {
       kind: "agent_commentary" | "agent_tool";
       turnId?: string;
     }): Promise<ClickClackMessage> => {
+      if (!params.channelId && !params.conversationId) {
+        throw new Error("createActivityMessage requires a channelId or conversationId");
+      }
       const path = params.channelId
         ? `/api/channels/${encodeURIComponent(params.channelId)}/messages`
         : `/api/dms/${encodeURIComponent(params.conversationId ?? "")}/messages`;

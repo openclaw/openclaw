@@ -71,6 +71,26 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).toHaveBeenCalledWith("msg_1", "First and second");
   });
 
+  it("skips redundant PATCHes for identical or stale-shorter commentary snapshots", async () => {
+    const { client, createActivityMessage, updateMessageBody } = createClientMock();
+    const publisher = createClickClackActivityPublisher({
+      client,
+      target: { channelId: "chn_1" },
+      turnId: "msg_turn",
+      flushMs: 10,
+    });
+
+    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
+    await vi.advanceTimersByTimeAsync(20);
+    // Identical snapshot and a stale shorter frame must not queue new flushes.
+    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First and second" });
+    publisher.onItemEvent({ itemId: "c1", kind: "preamble", progressText: "First" });
+    await publisher.finalize();
+
+    expect(createActivityMessage).toHaveBeenCalledTimes(1);
+    expect(updateMessageBody).not.toHaveBeenCalled();
+  });
+
   it("opens a new durable row for each commentary segment (item id)", async () => {
     const { client, createActivityMessage } = createClientMock();
     const publisher = createClickClackActivityPublisher({
@@ -98,10 +118,18 @@ describe("createClickClackActivityPublisher", () => {
       turnId: "msg_turn",
     });
 
-    publisher.onItemEvent({ toolCallId: "tool:toolu_1", kind: "tool", name: "exec" });
+    // The runtime emits one opaque toolCallId across all frames of a call;
+    // the lane prefix (tool:/command:) lives on itemId only.
+    publisher.onItemEvent({
+      itemId: "tool:toolu_1",
+      toolCallId: "toolu_1",
+      kind: "tool",
+      name: "exec",
+    });
     await publisher.finalize();
     publisher.onItemEvent({
-      toolCallId: "command:toolu_1",
+      itemId: "command:toolu_1",
+      toolCallId: "toolu_1",
       kind: "command",
       name: "exec",
       progressText: "ls -la",

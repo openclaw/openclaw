@@ -132,7 +132,7 @@ export function createClickClackActivityPublisher(params: {
   let chain: Promise<void> = Promise.resolve();
 
   const enqueue = (work: () => Promise<void>): Promise<void> => {
-    chain = chain.then(work).catch((error) => {
+    chain = chain.then(work).catch((error: unknown) => {
       params.onError?.(error);
     });
     return chain;
@@ -188,10 +188,13 @@ export function createClickClackActivityPublisher(params: {
       commentaryByItem.set(key, segment);
     }
     // Snapshots are cumulative per item; never shrink the row body on a
-    // shorter (stale or whitespace-normalized) frame.
-    if (text.length >= segment.body.length) {
-      segment.body = text;
+    // shorter (stale or whitespace-normalized) frame, and skip identical
+    // snapshots entirely so out-of-order frames cannot queue redundant
+    // PATCHes.
+    if (text.length < segment.body.length || text === segment.body) {
+      return;
     }
+    segment.body = text;
     segment.dirty = true;
     if (!segment.timer) {
       segment.timer = setTimeout(() => {
@@ -202,11 +205,16 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const toolRowKey = (payload: ClickClackItemEventPayload): string => {
-    // The same call can surface with lane-prefixed ids (`tool:X`,
-    // `command:X`) on some frames and the bare id on others; strip the prefix
-    // from whichever identifier we use so all frames share one key.
-    const base = payload.toolCallId?.trim() || payload.itemId?.trim() || "";
-    return base.replace(/^(tool|command):/, "");
+    // toolCallId is an opaque identifier: use it untouched when present.
+    // itemId carries a lane/lifecycle prefix (`tool:X`, `command:X`) on some
+    // frames and appears bare on others, so normalize only itemId to give
+    // all frames of one call a shared key.
+    const toolCallId = payload.toolCallId?.trim();
+    if (toolCallId) {
+      return toolCallId;
+    }
+    const itemId = payload.itemId?.trim() ?? "";
+    return itemId.replace(/^(tool|command):/, "");
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {

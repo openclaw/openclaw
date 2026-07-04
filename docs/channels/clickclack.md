@@ -130,6 +130,30 @@ bit:
 Keep the trust bit off if you only use the default `agent` reply mode; it is
 not needed there.
 
+## Agent activity rows
+
+By default a ClickClack channel shows nothing while an agent turn runs; only the final reply lands. Set `agentActivity: true` on an account to publish durable `agent_commentary` and `agent_tool` message rows while the turn is in progress:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+      agentActivity: true,
+    },
+  },
+}
+```
+
+Requirements and behavior:
+
+- **Off by default.** Stock setups and older ClickClack servers are untouched.
+- **Requires the `agent_activity:write` token scope.** This scope is separate from `bot:write` and is not inherited by it; create the bot token with `--scopes bot:write,agent_activity:write` (or grant the scope to an existing token) before enabling the option.
+- **Best-effort degradation.** If the token lacks `agent_activity:write` or the server rejects activity writes, failures are logged and the final reply still delivers normally; no activity rows appear.
+- Rows are grouped per turn (`turn_id`), coalesced so one logical step is one row, and tool rows use the same progress formatting as Discord/Slack/Telegram (tool name plus command detail).
+
 ## Targets
 
 - `channel:<name-or-id>` sends to a workspace channel. Bare targets default to `channel:`.
@@ -153,8 +177,9 @@ ClickClack token scopes are enforced by the ClickClack API.
 - `bot:read`: read workspace/channel/message/thread/DM/realtime/profile data.
 - `bot:write`: `bot:read` plus channel messages, thread replies, DMs, and uploads.
 - `bot:admin`: `bot:write` plus channel creation.
+- `agent_activity:write`: durable agent activity rows (`agent_commentary` / `agent_tool`). Not inherited by `bot:write` or `bot:admin`; required only when `agentActivity: true` is set.
 
-OpenClaw only needs `bot:write` for normal agent chat.
+OpenClaw only needs `bot:write` for normal agent chat. Add `agent_activity:write` when enabling [agent activity rows](#agent-activity-rows).
 
 ## Troubleshooting
 

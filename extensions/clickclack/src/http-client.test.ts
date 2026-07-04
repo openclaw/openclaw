@@ -4,6 +4,14 @@ import { createClickClackClient } from "./http-client.js";
 
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 
+function requestBodyJson(init: RequestInit | undefined): unknown {
+  const body = init?.body;
+  if (typeof body !== "string") {
+    throw new Error("expected string request body");
+  }
+  return JSON.parse(body);
+}
+
 async function listenLoopbackServer(server: Server): Promise<number> {
   return await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -176,11 +184,25 @@ describe("ClickClack HTTP client", () => {
       expect.objectContaining({ method: "POST" }),
     );
     const init = fetchMock.mock.calls[0]?.[1];
-    expect(JSON.parse(String(init?.body))).toEqual({
+    expect(requestBodyJson(init)).toEqual({
       body: "ran bash",
       kind: "agent_tool",
       turn_id: "t1",
     });
+  });
+
+  it("rejects activity rows without a channel or conversation target", async () => {
+    const fetchMock = vi.fn();
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.createActivityMessage({ body: "orphan row", kind: "agent_commentary" }),
+    ).rejects.toThrow("createActivityMessage requires a channelId or conversationId");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("routes DM activity rows through the conversation create path", async () => {
@@ -231,6 +253,6 @@ describe("ClickClack HTTP client", () => {
       expect.objectContaining({ method: "PATCH" }),
     );
     const init = fetchMock.mock.calls[0]?.[1];
-    expect(JSON.parse(String(init?.body))).toEqual({ body: "longer" });
+    expect(requestBodyJson(init)).toEqual({ body: "longer" });
   });
 });
