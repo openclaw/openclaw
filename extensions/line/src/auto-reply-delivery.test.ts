@@ -1,4 +1,5 @@
 // Line tests cover auto reply delivery plugin behavior.
+import type { messagingApi } from "@line/bot-sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { LineAutoReplyDeps } from "./auto-reply-delivery.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
@@ -250,7 +251,10 @@ describe("deliverLineAutoReply", () => {
 
   it("falls back to altText when markdown flex message exceeds size limit", async () => {
     // Build contents large enough to exceed FLEX_MAX_CONTENTS_BYTES (32568)
-    const largeContents = { type: "bubble", body: { type: "box", layout: "vertical", contents: Array.from({ length: 5000 }, (_, i) => ({ type: "text", text: `line ${i}` })) } };
+    const largeContents = {
+      type: "bubble",
+      body: { type: "box", layout: "vertical", contents: Array.from({ length: 5000 }, (_, i) => ({ type: "text", text: `line ${i}` })) },
+    } as messagingApi.FlexContainer;
     const chunkMarkdownTextSpy = vi.fn((text: string) => [text]);
     const sendLineReplyChunksSpy = vi.fn(async () => ({ replyTokenUsed: false }));
     const { deps, replyMessageLine } = createDeps({
