@@ -4,8 +4,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveMemoryHostWorkspaces } from "../memory-host-sdk/workspaces.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
-import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 import { resolveMemoryHostEventLogPath } from "./memory-host-events.js";
 
 export * from "./memory-core-host-runtime-core.js";
@@ -95,7 +95,7 @@ export async function listMemoryWorkspacePublicArtifacts(params: {
 export async function listMemoryHostPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const workspaces = resolveMemoryDreamingWorkspaces(params.cfg);
+  const workspaces = resolveMemoryHostWorkspaces(params.cfg);
   const artifacts: MemoryPluginPublicArtifact[] = [];
   for (const workspace of workspaces) {
     artifacts.push(

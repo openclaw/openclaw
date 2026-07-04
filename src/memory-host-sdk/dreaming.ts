@@ -1,17 +1,15 @@
 // Memory host dreaming helpers record and load memory dreaming artifacts.
-import path from "node:path";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveMemoryHostWorkspaces } from "./workspaces.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
@@ -330,11 +328,6 @@ function resolveExecutionConfig(
   };
 }
 
-function normalizePathForComparison(input: string): string {
-  const normalized = path.resolve(input);
-  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
-}
-
 function formatLocalIsoDay(epochMs: number): string {
   const date = new Date(epochMs);
   const year = date.getFullYear();
@@ -635,57 +628,5 @@ export function resolveMemoryDreamingWorkspaces(
   const allowedAgentIds = Array.isArray(dreamingConfig.agents)
     ? new Set(dreamingConfig.agents)
     : undefined;
-  const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const agentIds: string[] = [];
-  const seenAgents = new Set<string>();
-  for (const entry of configured) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const id = normalizeAgentId(entry.id);
-    if (seenAgents.has(id)) {
-      continue;
-    }
-    if (allowedAgentIds && !allowedAgentIds.has(id)) {
-      continue;
-    }
-    seenAgents.add(id);
-    agentIds.push(id);
-  }
-  if (agentIds.length === 0) {
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    if (!allowedAgentIds || allowedAgentIds.has(defaultAgentId)) {
-      agentIds.push(defaultAgentId);
-    }
-  }
-
-  const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
-  const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
-    const workspaceDir = workspaceDirRaw?.trim();
-    if (!workspaceDir) {
-      return;
-    }
-    const agentId = normalizeAgentId(agentIdRaw);
-    if (allowedAgentIds && !allowedAgentIds.has(agentId)) {
-      return;
-    }
-    const key = normalizePathForComparison(workspaceDir);
-    const existing = byWorkspace.get(key);
-    if (existing) {
-      if (!existing.agentIds.includes(agentId)) {
-        existing.agentIds.push(agentId);
-      }
-      return;
-    }
-    byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
-  };
-
-  for (const agentId of agentIds) {
-    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
-  }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
-  return [...byWorkspace.values()];
+  return resolveMemoryHostWorkspaces(cfg, options, { allowedAgentIds });
 }

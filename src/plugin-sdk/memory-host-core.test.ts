@@ -139,6 +139,61 @@ describe("memory-host-core helpers", () => {
     }
   });
 
+  it("keeps public artifact discovery independent from dreaming agent scope", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-public-scope-"));
+    try {
+      const mainWorkspaceDir = path.join(fixtureRoot, "main");
+      const alphaWorkspaceDir = path.join(fixtureRoot, "alpha");
+      await fs.mkdir(mainWorkspaceDir, { recursive: true });
+      await fs.mkdir(alphaWorkspaceDir, { recursive: true });
+      await fs.writeFile(path.join(mainWorkspaceDir, "MEMORY.md"), "# Main Memory\n", "utf8");
+      await fs.writeFile(path.join(alphaWorkspaceDir, "MEMORY.md"), "# Alpha Memory\n", "utf8");
+
+      await expect(
+        listMemoryHostPublicArtifacts({
+          cfg: {
+            plugins: {
+              entries: {
+                "memory-core": {
+                  config: {
+                    dreaming: {
+                      agents: ["main"],
+                    },
+                  },
+                },
+              },
+            },
+            agents: {
+              list: [
+                { id: "main", default: true, workspace: mainWorkspaceDir },
+                { id: "alpha", workspace: alphaWorkspaceDir },
+              ],
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          kind: "memory-root",
+          workspaceDir: mainWorkspaceDir,
+          relativePath: "MEMORY.md",
+          absolutePath: path.join(mainWorkspaceDir, "MEMORY.md"),
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "memory-root",
+          workspaceDir: alphaWorkspaceDir,
+          relativePath: "MEMORY.md",
+          absolutePath: path.join(alphaWorkspaceDir, "MEMORY.md"),
+          agentIds: ["alpha"],
+          contentType: "markdown",
+        },
+      ]);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
     expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
     expect(memoryCoreAlias.listActiveMemoryPublicArtifacts).toBe(listActiveMemoryPublicArtifacts);
