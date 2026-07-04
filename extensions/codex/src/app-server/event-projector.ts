@@ -127,6 +127,7 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "react",
   "typing",
 ]);
+const warnedUnknownCodexItemStatuses = new Set<string>();
 
 export function shouldEmitTranscriptToolProgress(toolName: unknown, _args?: unknown): boolean {
   const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
@@ -200,6 +201,8 @@ export class CodexAppServerEventProjector {
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
+  private readonly warnedUnknownNotificationMethods = new Set<string>();
+  private readonly warnedCorrelationMismatches = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -310,6 +313,7 @@ export class CodexAppServerEventProjector {
         return;
       }
     } else if (!this.isNotificationForTurn(params)) {
+      this.warnNotificationCorrelationMismatch(notification.method, params);
       return;
     }
 
@@ -364,6 +368,7 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = "prompt";
         break;
       default:
+        this.warnUnknownNotificationMethod(notification.method, params);
         break;
     }
   }
@@ -2119,6 +2124,35 @@ export class CodexAppServerEventProjector {
     return threadId === this.threadId && turnId === this.turnId;
   }
 
+  private warnNotificationCorrelationMismatch(method: string, params: JsonObject): void {
+    const notificationThreadId = readCodexNotificationThreadId(params) ?? null;
+    const notificationTurnId = readNotificationTurnId(params) ?? null;
+    const key = `${method}\0${notificationThreadId}\0${notificationTurnId}`;
+    if (this.warnedCorrelationMismatches.has(key)) {
+      return;
+    }
+    this.warnedCorrelationMismatches.add(key);
+    embeddedAgentLog.warn("codex app-server notification did not match active turn", {
+      method,
+      activeThreadId: this.threadId,
+      activeTurnId: this.turnId,
+      notificationThreadId,
+      notificationTurnId,
+    });
+  }
+
+  private warnUnknownNotificationMethod(method: string, params: JsonObject): void {
+    if (this.warnedUnknownNotificationMethods.has(method)) {
+      return;
+    }
+    this.warnedUnknownNotificationMethods.add(method);
+    embeddedAgentLog.warn("codex app-server projector received unknown notification method", {
+      method,
+      threadId: readCodexNotificationThreadId(params) ?? null,
+      turnId: readNotificationTurnId(params) ?? null,
+    });
+  }
+
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
     const turnId = params.turnId;
@@ -2413,13 +2447,30 @@ function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" |
   if (status === "failed") {
     return "failed";
   }
+  if (status === "completed") {
+    return "completed";
+  }
   if (status === "declined") {
     return "blocked";
   }
   if (status === "inProgress" || status === "running") {
     return "running";
   }
-  return "completed";
+  warnUnknownItemStatus(status, item);
+  return "failed";
+}
+
+function warnUnknownItemStatus(status: string | undefined, item: CodexThreadItem): void {
+  const key = `${item.type}\0${status ?? "<missing>"}`;
+  if (warnedUnknownCodexItemStatuses.has(key)) {
+    return;
+  }
+  warnedUnknownCodexItemStatuses.add(key);
+  embeddedAgentLog.warn("codex app-server projector received unknown item status", {
+    itemId: typeof item.id === "string" ? item.id : null,
+    itemType: item.type,
+    status: status ?? null,
+  });
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {

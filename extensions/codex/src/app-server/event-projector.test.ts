@@ -990,6 +990,90 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant?.errorMessage).toBeUndefined();
   });
 
+  it("fails closed and warns on unknown item statuses", async () => {
+    const onAgentEvent = vi.fn();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-unknown-status",
+          command: "echo test",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "timedOut",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: null,
+        },
+      }),
+    );
+
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-unknown-status",
+      name: "bash",
+    }).data;
+    expect(toolResult.status).toBe("failed");
+    expect(toolResult.isError).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server projector received unknown item status",
+      expect.objectContaining({
+        itemId: "cmd-unknown-status",
+        itemType: "commandExecution",
+        status: "timedOut",
+      }),
+    );
+  });
+
+  it("warns on unknown current-turn notification methods", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "item/renamedByFutureCodex",
+      params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: "item-1" },
+    } as ProjectorNotification);
+
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server projector received unknown notification method",
+      expect.objectContaining({
+        method: "item/renamedByFutureCodex",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+      }),
+    );
+  });
+
+  it("warns when turn-scoped notifications do not match the active run", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "turn-2",
+        item: { type: "agentMessage", id: "msg-2", text: "ignored" },
+      },
+    } as ProjectorNotification);
+
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server notification did not match active turn",
+      expect.objectContaining({
+        method: "item/completed",
+        activeThreadId: THREAD_ID,
+        activeTurnId: TURN_ID,
+        notificationThreadId: THREAD_ID,
+        notificationTurnId: "turn-2",
+      }),
+    );
+  });
+
   it("uses nested app-server error messages for terminal errors", async () => {
     const projector = await createProjector();
 
