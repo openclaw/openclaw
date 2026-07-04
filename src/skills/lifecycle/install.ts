@@ -371,6 +371,7 @@ const SUDO_APT_GO_CHECK_ARGVS = [
   ["sudo", "-k", "-n", "-l", ...APT_GO_INSTALL_ARGV],
 ];
 const GO_VERSION_ENV_ARGV = ["go", "env", "GOVERSION"];
+const GO_INSTALL_ENV_ARGV = ["go", "env", "GOBIN", "GOPATH"];
 
 type GoVersion = { major: number; minor: number };
 
@@ -566,6 +567,28 @@ async function isGoUsableForAutoInstall(): Promise<boolean> {
   }
   const version = parseGoVersion(versionResult.stdout);
   return version !== undefined && isSupportedGoVersion(version);
+}
+
+async function resolveExistingGoBinDir(timeoutMs: number): Promise<string | undefined> {
+  const envResult = await runCommandSafely(GO_INSTALL_ENV_ARGV, {
+    timeoutMs: Math.min(timeoutMs, 5_000),
+    env: { GOTOOLCHAIN: "local" },
+  });
+  if (envResult.code !== 0) {
+    return undefined;
+  }
+  const [configuredGoBin = "", configuredGoPath = ""] = envResult.stdout
+    .replaceAll("\r", "")
+    .split("\n");
+  const goBin = configuredGoBin.trim();
+  if (goBin) {
+    return goBin;
+  }
+  const firstGoPath = configuredGoPath
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .find(Boolean);
+  return firstGoPath ? path.join(firstGoPath, "bin") : undefined;
 }
 
 function isGoToolchainPrerequisiteFailure(result: SkillInstallResult): boolean {
@@ -772,11 +795,16 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     Object.assign(envOverrides, await buildNodeInstallEnv(prefs));
   }
   if (spec.kind === "go") {
-    const brewBin =
-      brewExe && !goWasAlreadyInstalled ? await resolveBrewBinDir(timeoutMs, brewExe) : undefined;
-    installedGoBin = brewBin ?? path.join(os.homedir(), ".local", "bin");
-    envOverrides.GOBIN = installedGoBin;
-    envOverrides.PATH = appendPathDirectory(process.env.PATH, installedGoBin);
+    if (goWasAlreadyInstalled) {
+      installedGoBin = await resolveExistingGoBinDir(timeoutMs);
+    } else {
+      const brewBin = brewExe ? await resolveBrewBinDir(timeoutMs, brewExe) : undefined;
+      installedGoBin = brewBin ?? path.join(os.homedir(), ".local", "bin");
+    }
+    if (installedGoBin) {
+      envOverrides.GOBIN = installedGoBin;
+      envOverrides.PATH = appendPathDirectory(process.env.PATH, installedGoBin);
+    }
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
