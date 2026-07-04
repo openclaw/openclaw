@@ -3,6 +3,7 @@ import type { SessionMaintenanceWarning } from "../config/sessions/store-mainten
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
@@ -19,21 +20,21 @@ type WarningParams = {
 
 const warnedContexts = new Map<string, string>();
 const log = createSubsystemLogger("session-maintenance-warning");
-let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
+const messageRuntimeLoader = createLazyPromiseLoader(
+  () => import("../channels/message/runtime.js"),
+  { cacheRejections: true },
+);
 
 function resetSessionMaintenanceWarningForTests() {
   warnedContexts.clear();
-  messageRuntimePromise = null;
+  messageRuntimeLoader.clear();
 }
 
 export const testing = {
   resetSessionMaintenanceWarningForTests,
 } as const;
 
-function loadDeliverRuntime() {
-  messageRuntimePromise ??= import("../channels/message/runtime.js");
-  return messageRuntimePromise;
-}
+const loadDeliverRuntime = messageRuntimeLoader.load;
 
 function shouldSendWarning(): boolean {
   return process.env.NODE_ENV !== "test";

@@ -71,7 +71,8 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.sendNativeCommand({
+        expect(transport.sendNativeCommand).toBeTypeOf("function");
+        await transport.sendNativeCommand?.({
           command: "stop",
           conversation: { id: "alice", kind: "direct" },
           senderId: "alice",
@@ -103,6 +104,67 @@ describe("crabline transport", () => {
     });
   });
 
+  it("observes Telegram preview edits through the shared transport adapter", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+
+      try {
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const postTelegram = async (method: string, body: Record<string, unknown>) => {
+          const response = await fetch(
+            `${manifest.endpoints.apiRoot}/bot${manifest.botToken}/${method}`,
+            {
+              body: JSON.stringify(body),
+              headers: { "content-type": "application/json" },
+              method: "POST",
+            },
+          );
+          expect(response.ok).toBe(true);
+          return (await response.json()) as { result: { message_id: number } };
+        };
+        const sent = await postTelegram("sendMessage", {
+          chat_id: "-1001234567890",
+          message_thread_id: 42,
+          text: "preview text",
+        });
+        expect(transport.state.searchMessages({ query: "preview text" })).toEqual([
+          expect.objectContaining({ text: "preview text" }),
+        ]);
+        await postTelegram("editMessageText", {
+          chat_id: "-1001234567890",
+          message_id: sent.result.message_id,
+          text: "final marker",
+        });
+
+        expect(transport.waitForOutboundSequence).toBeTypeOf("function");
+        await expect(
+          transport.waitForOutboundSequence!({
+            conversationId: "-1001234567890",
+            finalSettleMs: 0,
+            finalTextIncludes: "final marker",
+            minimumPreviewEvents: 1,
+            threadId: "42",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          events: [{ kind: "sent" }, { kind: "edited" }],
+          final: { text: "final marker", threadId: "42" },
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
@@ -114,6 +176,8 @@ describe("crabline transport", () => {
       try {
         expect(transport.id).toBe("crabline");
         expect(transport.requiredPluginIds).toEqual(["slack"]);
+        expect(transport.sendNativeCommand).toBeUndefined();
+        expect(transport.waitForOutboundSequence).toBeUndefined();
         expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
           channels: {
             slack: {
@@ -450,6 +514,63 @@ describe("crabline transport", () => {
     });
   });
 
+  it("normalizes native Mattermost post creation into outbound state", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("mattermost"),
+        state: createQaBusState(),
+      });
+
+      try {
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-channel", kind: "group" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "Mattermost baseline marker check.",
+        });
+        const delivery = transport.buildAgentDelivery({ target: "group:qa-channel" });
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${manifest.endpoints.apiRoot}/posts`,
+          init: {
+            body: JSON.stringify({
+              channel_id: delivery.to.replace(/^channel:/u, ""),
+              message: "assistant via fake mattermost",
+            }),
+            headers: {
+              authorization: `Bearer ${manifest.botToken}`,
+              "content-type": "application/json",
+            },
+            method: "POST",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-mattermost-transport-test",
+        });
+        await release();
+        expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: "qa-channel", kind: "group" },
+            textIncludes: "assistant via fake mattermost",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: "qa-channel", kind: "group" },
+          text: "assistant via fake mattermost",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("binds Matrix config and normalizes transport targets", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
@@ -497,6 +618,141 @@ describe("crabline transport", () => {
           direction: "inbound",
           senderId: "@alice:matrix.test",
           text: "Matrix baseline marker check.",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
+  it("normalizes native Matrix room message sends into outbound state", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("matrix"),
+        state: createQaBusState(),
+      });
+
+      try {
+        const roomId = "!qa:matrix.test";
+        await transport.state.addInboundMessage({
+          conversation: { id: roomId, kind: "group" },
+          senderId: "@alice:matrix.test",
+          senderName: "Alice",
+          text: "Matrix baseline marker check.",
+        });
+        const delivery = transport.buildAgentDelivery({ target: `group:${roomId}` });
+        const providerRoomId = delivery.to.replace(/^room:/u, "");
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          accessToken: string;
+          endpoints: { clientApiRoot: string };
+        };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${manifest.endpoints.clientApiRoot}/rooms/${encodeURIComponent(providerRoomId)}/send/m.room.message/qa-matrix-send`,
+          init: {
+            body: JSON.stringify({ body: "assistant via fake matrix", msgtype: "m.text" }),
+            headers: {
+              authorization: `Bearer ${manifest.accessToken}`,
+              "content-type": "application/json",
+            },
+            method: "PUT",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-matrix-transport-test",
+        });
+        await release();
+        expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: roomId, kind: "group" },
+            textIncludes: "assistant via fake matrix",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: roomId, kind: "group" },
+          text: "assistant via fake matrix",
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
+  it("configures Zalo and normalizes native message sends", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection("zalo"),
+        state: createQaBusState(),
+      });
+
+      try {
+        expect(transport.requiredPluginIds).toEqual(["zalo"]);
+        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+          channels: {
+            zalo: {
+              allowFrom: ["*"],
+              botToken: "crabline-zalo-bot-token",
+              dmPolicy: "open",
+              enabled: true,
+              groupAllowFrom: ["*"],
+              groupPolicy: "open",
+            },
+          },
+        });
+        expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
+          ZALO_API_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
+          ZALO_BOT_TOKEN: "crabline-zalo-bot-token",
+        });
+
+        await transport.state.addInboundMessage({
+          conversation: { id: "qa-group", kind: "group" },
+          senderId: "alice",
+          senderName: "Alice",
+          text: "Zalo baseline marker check.",
+        });
+        const delivery = transport.buildAgentDelivery({ target: "group:qa-group" });
+        expect(delivery).toEqual({
+          channel: "zalo",
+          replyChannel: "zalo",
+          replyTo: "qa-group",
+          to: "qa-group",
+        });
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const { response, release } = await fetchWithSsrFGuard({
+          url: `${manifest.endpoints.apiRoot}/bot${manifest.botToken}/sendMessage`,
+          init: {
+            body: JSON.stringify({
+              chat_id: delivery.to,
+              text: "assistant via fake zalo",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+          },
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-crabline-zalo-transport-test",
+        });
+        await release();
+        expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: "qa-group", kind: "group" },
+            textIncludes: "assistant via fake zalo",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: "qa-group", kind: "group" },
+          text: "assistant via fake zalo",
         });
       } finally {
         await transport.cleanup?.();

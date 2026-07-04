@@ -115,6 +115,7 @@ import {
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { BlockReplyContext, GetReplyOptions } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
@@ -897,13 +898,12 @@ function captureDeliveredTranscriptMirror(params: {
   return () => (observedFinal ? deliveredMetadata : metadata);
 }
 
-async function mirrorTranscriptAfterDispatcherDelivery(params: {
+async function mirrorTranscriptAfterDispatcherSettled(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
 }): Promise<void> {
-  await params.dispatcher.waitForIdle();
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
   if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
     return;
@@ -1542,7 +1542,9 @@ export async function dispatchReplyFromConfig(
   };
   const getDispatchAbortSignal = () => {
     const operationSignal = dispatchReplyOperation?.abortSignal;
-    const upstreamSignal = params.replyOptions?.abortSignal;
+    // The operation mirrors upstream aborts until the backend commits its
+    // terminal outcome, then keeps delivery alive after freezeAbort().
+    const upstreamSignal = operationSignal ? undefined : params.replyOptions?.abortSignal;
     if (
       cachedDispatchAbortSignal &&
       cachedDispatchAbortSignal.operationSignal === operationSignal &&
@@ -1550,7 +1552,7 @@ export async function dispatchReplyFromConfig(
     ) {
       return cachedDispatchAbortSignal.signal;
     }
-    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    const signal = operationSignal ?? upstreamSignal;
     cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
     return signal;
   };
@@ -1588,6 +1590,7 @@ export async function dispatchReplyFromConfig(
     if (!dispatchReplyOperation) {
       return;
     }
+    dispatchReplyOperation.freezeAbort();
     if (!dispatchReplyOperation.result) {
       dispatchReplyOperation.fail("run_failed", error);
     }
@@ -2044,6 +2047,7 @@ export async function dispatchReplyFromConfig(
   });
   const {
     sourceReplyDeliveryMode,
+    sessionStableSourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     sendPolicyDenied,
@@ -2203,11 +2207,13 @@ export async function dispatchReplyFromConfig(
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
-          if (
+          const isUnmentionedGroupFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !isExplicitSourceReplyCommand(ctx, cfg)
-          ) {
+            !explicitCommandTurnCtx;
+          const shouldSuppressUnmentionedFallback =
+            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
+          if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });
             commitInboundDedupeIfClaimed();
@@ -2304,7 +2310,7 @@ export async function dispatchReplyFromConfig(
       let routedFinalCount = 0;
       if (!suppressDelivery) {
         const payload = {
-          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
+          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
         const result = await routeReplyToOriginating(payload);
         if (result) {
@@ -2576,19 +2582,25 @@ export async function dispatchReplyFromConfig(
             )
           : undefined);
       markInboundDedupeReplayUnsafe();
-      const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
-      const deliveredTranscriptMirror = captureDeliveredTranscriptMirror({
-        dispatcher,
-        metadata: transcriptMirror,
-      });
+      const finalOutcomeBefore = transcriptMirror
+        ? getDispatcherFinalOutcomeCounts(dispatcher)
+        : undefined;
+      const deliveredTranscriptMirror = transcriptMirror
+        ? captureDeliveredTranscriptMirror({ dispatcher, metadata: transcriptMirror })
+        : undefined;
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-      if (queuedFinal) {
-        await mirrorTranscriptAfterDispatcherDelivery({
-          dispatcher,
-          before: finalOutcomeBefore,
-          metadata: deliveredTranscriptMirror,
-          cfg,
-        });
+      if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
+        // The common settle owner runs this after successful delivery or
+        // cancellation. Keeping reconciliation out of the reply operation lets a
+        // newer foreground turn settle without creating an operation/idle cycle.
+        registerReplyDispatcherSettledTask(dispatcher, () =>
+          mirrorTranscriptAfterDispatcherSettled({
+            dispatcher,
+            before: finalOutcomeBefore,
+            metadata: deliveredTranscriptMirror,
+            cfg,
+          }),
+        );
       }
       return {
         queuedFinal,
@@ -3068,6 +3080,7 @@ export async function dispatchReplyFromConfig(
           {
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
+            sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
             ...({
               onSessionMetadataChanges: notifySessionMetadataChanges,
               onSessionPrepared: notePreparedSession,
@@ -3114,11 +3127,15 @@ export async function dispatchReplyFromConfig(
               },
             }),
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
+              allowWhenToolSummariesHidden:
+                params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
               waitForDirectBlockReplyDelivery: true,

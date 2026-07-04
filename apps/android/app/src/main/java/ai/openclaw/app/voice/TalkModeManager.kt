@@ -695,6 +695,13 @@ class TalkModeManager internal constructor(
     disableRealtimeModeAndNotifyOwner()
   }
 
+  private fun realtimeCloseStatusText(reason: String?): String =
+    when (reason) {
+      null, "completed" -> "Off"
+      "error" -> "Talk failed: Realtime provider closed unexpectedly."
+      else -> "Talk failed: Realtime provider closed: $reason"
+    }
+
   @SuppressLint("MissingPermission")
   private fun startRealtimeCapture(sessionId: String) {
     realtimeCaptureJob?.cancel()
@@ -837,11 +844,15 @@ class TalkModeManager internal constructor(
         Log.w(tag, "realtime error: $message")
       }
       "close" -> {
-        Log.d(tag, "realtime close reason=${obj["reason"].asStringOrNull()}")
-        stopRealtimeRelay(closeSession = false)
+        val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        val currentStatus = _statusText.value
+        val closeStatus =
+          if (currentStatus.startsWith("Talk failed:")) currentStatus else realtimeCloseStatusText(closeReason)
+        Log.d(tag, "realtime close reason=$closeReason")
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
         if (_isEnabled.value) {
           _isEnabled.value = false
-          _statusText.value = "Off"
+          _statusText.value = closeStatus
           onStoppedByRelay()
         }
       }

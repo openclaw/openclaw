@@ -67,6 +67,7 @@ const GatewayRemoteSchemaShape = {
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
   sshIdentity: z.string().optional(),
+  sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
 } satisfies ConfigSchemaShape<GatewayRemoteConfig>;
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();

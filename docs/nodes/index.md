@@ -184,6 +184,14 @@ Related:
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
 
+### Local model inference
+
+A desktop or server node can expose chat-capable models from an Ollama server
+running on that node. Agents use the Ollama plugin's `node_inference` tool to
+discover installed models and run a bounded prompt remotely; the Gateway does
+not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference)
+for setup, model filtering, and direct verification commands.
+
 ## Invoking commands
 
 Low-level (raw RPC):

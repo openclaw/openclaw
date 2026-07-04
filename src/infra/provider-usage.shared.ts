@@ -8,6 +8,7 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 
 export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   anthropic: "Claude",
+  clawrouter: "ClawRouter",
   deepseek: "DeepSeek",
   "github-copilot": "Copilot",
   "google-gemini-cli": "Gemini",
@@ -20,6 +21,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
 
 export const usageProviders: UsageProviderId[] = [
   "anthropic",
+  "clawrouter",
   "deepseek",
   "github-copilot",
   "google-gemini-cli",

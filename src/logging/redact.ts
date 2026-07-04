@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
 import { replacePatternBounded } from "./redact-bounded.js";
+import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 
 export type RedactSensitiveMode = "off" | "tools";
 export type RedactPattern = string | RegExp;
@@ -850,7 +851,7 @@ function redactMatch(
 function redactText(
   text: string,
   patterns: RegExp[],
-  options?: { redactFormBodies?: boolean },
+  options?: { fullContext?: boolean; redactFormBodies?: boolean },
 ): string {
   let next = text;
   if (options?.redactFormBodies) {
@@ -873,9 +874,10 @@ function redactText(
       const input = typeof args[inputIndex] === "string" ? args[inputIndex] : "";
       return redactMatch(match, groups, pattern, { input, offset });
     };
-    next = chunkUnsafePatterns.has(pattern)
-      ? next.replace(pattern, replacer)
-      : replacePatternBounded(next, pattern, replacer);
+    next =
+      options?.fullContext || chunkUnsafePatterns.has(pattern)
+        ? next.replace(pattern, replacer)
+        : replacePatternBounded(next, pattern, replacer);
   }
   return next;
 }
@@ -1027,6 +1029,13 @@ export function redactToolPayloadTextWithConfig(
 ): string {
   if (!text) {
     return text;
+  }
+  if (isFullContextToolPayloadRedaction(loggingConfig)) {
+    const resolved = resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
+    return redactText(text, resolved.patterns, {
+      fullContext: true,
+      redactFormBodies: resolved.redactFormBodies,
+    });
   }
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
 }

@@ -8,6 +8,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -25,12 +26,7 @@ import {
 } from "../policy-state.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 
-let fsPromisesModulePromise: Promise<typeof import("node:fs/promises")> | null = null;
-
-const loadFsPromisesModule = async () => {
-  fsPromisesModulePromise ??= import("node:fs/promises");
-  return await fsPromisesModulePromise;
-};
+const loadFsPromisesModule = createLazyRuntimeModule(() => import("node:fs/promises"));
 
 import { createPolicyDoctorChecks } from "./checks.js";
 import {

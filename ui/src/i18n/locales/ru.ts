@@ -1359,6 +1359,9 @@ export const ru: TranslationMap = {
     updateNow: "Обновить сейчас",
     dismissUpdateBanner: "Скрыть баннер обновления",
     switchedSession: "Переключено на {session}",
+    sidebar: {
+      allSessions: "All sessions",
+    },
     welcome: {
       ready: "Готово к чату",
       hintBeforeShortcut: "Введите сообщение ниже ·",

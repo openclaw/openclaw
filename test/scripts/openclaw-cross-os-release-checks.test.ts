@@ -974,6 +974,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         socket.once("connect", resolve);
         socket.once("error", reject);
       });
+      // Subscribe before shutdown because the one-shot client close event may
+      // arrive before the server close callback resolves.
+      const socketClosePromise = new Promise<void>((resolve) => {
+        socket.once("close", resolve);
+      });
       socket.write(`GET ${url.pathname} HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
       await Promise.race([
         server.close(),
@@ -982,9 +987,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
       ]);
       await Promise.race([
-        new Promise<void>((resolve) => {
-          socket.once("close", resolve);
-        }),
+        socketClosePromise,
         delay(1_000).then(() => {
           throw new Error("socket close timed out");
         }),

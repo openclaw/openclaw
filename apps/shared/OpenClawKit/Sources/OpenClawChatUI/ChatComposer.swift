@@ -180,7 +180,9 @@ struct OpenClawChatComposer: View {
                 set: { next in self.viewModel.selectThinkingLevel(next) }))
         {
             ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(option.label).tag(option.id)
+                Text(option.label)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tag(option.id)
             }
         }
         .labelsHidden()
@@ -196,9 +198,13 @@ struct OpenClawChatComposer: View {
                 get: { self.viewModel.modelSelectionID },
                 set: { next in self.viewModel.selectModel(next) }))
         {
-            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
+            Text(self.viewModel.defaultModelLabel)
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(OpenClawChatViewModel.defaultModelSelectionID)
             ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.selectionID)
+                Text(model.displayLabel)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tag(model.selectionID)
             }
         }
         .labelsHidden()
@@ -217,7 +223,7 @@ struct OpenClawChatComposer: View {
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
                 Text(session.displayName ?? session.key)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                     .tag(session.key)
             }
         }
@@ -287,7 +293,7 @@ struct OpenClawChatComposer: View {
 
     private var compactAttachmentLabel: some View {
         Image(systemName: "paperclip")
-            .font(.system(size: 15, weight: .semibold))
+            .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
             .foregroundStyle(.secondary)
             .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
             .contentShape(Rectangle())
@@ -312,6 +318,7 @@ struct OpenClawChatComposer: View {
                         }
 
                         Text(att.fileName)
+                            .font(OpenClawChatTypography.caption)
                             .lineLimit(1)
 
                         Button {
@@ -372,25 +379,23 @@ struct OpenClawChatComposer: View {
 
     private var cleanEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 2) {
+            // Bottom-aligned so the paperclip and send/mic stay on the last
+            // text line when the field grows to multiple lines, like iMessage.
+            HStack(alignment: .bottom, spacing: 8) {
                 self.attachmentPicker
+                    .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
 
                 self.editorOverlay
                     .padding(.vertical, self.cleanEditorTextPadding)
+                    .padding(.horizontal, 14)
                     .frame(minHeight: self.cleanEditorMinHeight)
+                    .modifier(CleanChatComposerSurface(cornerRadius: self.cleanEditorCornerRadius))
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-composer-surface")
 
-                if let talkControl {
-                    self.compactTalkButton(talkControl)
-                }
-
-                self.sendButton
-                    .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+                self.cleanTrailingControl
+                    .frame(height: self.cleanEditorMinHeight, alignment: .bottom)
             }
-            .padding(.horizontal, 4)
-            .frame(minHeight: self.cleanEditorMinHeight)
-            .modifier(CleanChatComposerSurface(cornerRadius: self.cleanEditorCornerRadius))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("chat-composer-surface")
 
             if self.showsConnectionPill {
                 self.connectionPill
@@ -401,15 +406,27 @@ struct OpenClawChatComposer: View {
         .padding(.vertical, 4)
     }
 
+    /// iMessage-style trailing control: the talk (mic) affordance while the
+    /// draft is empty, swapping to the send button once the user types.
+    @ViewBuilder
+    private var cleanTrailingControl: some View {
+        if !self.viewModel.hasDraftToSend, self.viewModel.pendingRunCount == 0, let talkControl {
+            self.compactTalkButton(talkControl)
+        } else {
+            self.sendButton
+                .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+        }
+    }
+
     private func talkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
         Button {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                 Text(talkControl.isEnabled ? "Stop" : "Talk")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                     .lineLimit(1)
             }
             .foregroundStyle(talkControl.isEnabled ? .white : .primary)
@@ -437,20 +454,17 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(talkControl.isEnabled ? .white : .secondary)
+                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                .foregroundStyle(.white)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
+                // Prominent filled circle so the mic reads as the primary action,
+                // mirroring the send button it swaps with once a draft exists.
                 .background {
-                    if talkControl.isEnabled {
-                        Circle()
-                            .fill(self.talkButtonFill(talkControl))
-                    }
-                }
-                .overlay {
-                    if talkControl.isEnabled {
-                        Circle()
-                            .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
-                    }
+                    Circle()
+                        .fill(talkControl.isEnabled
+                            ? self.talkButtonFill(talkControl)
+                            : AnyShapeStyle(OpenClawChatTheme.accent))
+                        .opacity(talkControl.isGatewayConnected || talkControl.isEnabled ? 1 : 0.4)
                 }
                 .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
                 .contentShape(Rectangle())
@@ -500,7 +514,7 @@ struct OpenClawChatComposer: View {
                 .fill(self.connectionOK ? .green : .orange)
                 .frame(width: 7, height: 7)
             Text(self.connectionStatusText)
-                .font(.caption2)
+                .font(OpenClawChatTypography.caption2)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, self.composerChrome == .clean ? 0 : 8)
@@ -523,7 +537,7 @@ struct OpenClawChatComposer: View {
         ZStack(alignment: self.editorOverlayAlignment) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(self.placeholderText)
-                    .font(.body)
+                    .font(OpenClawChatTypography.body)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
@@ -549,14 +563,13 @@ struct OpenClawChatComposer: View {
                 "",
                 text: self.$viewModel.input,
                 axis: .vertical)
-                .font(.body)
+                .font(OpenClawChatTypography.body)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .fixedSize(horizontal: false, vertical: true)
-                .submitLabel(.send)
-                .onSubmit {
-                    self.sendDraftIfEnabled()
-                }
+                // iMessage-style: return inserts a newline; sending is the
+                // circle button's job, so keep the standard return key.
+                .submitLabel(.return)
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)
@@ -576,7 +589,7 @@ struct OpenClawChatComposer: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                     }
                 }
                 .buttonStyle(.plain)
@@ -597,7 +610,7 @@ struct OpenClawChatComposer: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                     }
                 }
                 .buttonStyle(.plain)

@@ -2,6 +2,7 @@
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -101,10 +102,6 @@ type TelegramTextMessage = Pick<Message, "text" | "caption" | "entities" | "capt
 };
 
 function hasTelegramRichMessage(value: unknown): boolean {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
