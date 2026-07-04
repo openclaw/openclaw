@@ -7,6 +7,7 @@ import { createWebFetchTool } from "../src/agents/tools/web-fetch.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { LookupFn } from "../src/infra/net/ssrf.js";
 import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 
 type BenchmarkCaseId =
   | "tool-create"
@@ -204,13 +205,14 @@ function parseFlagValue(flag: string, args: string[]): string | undefined {
 }
 
 function parseOptions(args = process.argv.slice(2)): Options {
-  validateArgs(args);
+  const normalizedArgs = stripLeadingPackageManagerSeparator(args);
+  validateArgs(normalizedArgs);
   return {
-    cases: parseCases(args),
-    json: args.includes("--json"),
-    output: parseFlagValue("--output", args),
-    runs: parsePositiveInteger("--runs", 20, args),
-    warmup: parseNonNegativeInteger("--warmup", 3, args),
+    cases: parseCases(normalizedArgs),
+    json: normalizedArgs.includes("--json"),
+    output: parseFlagValue("--output", normalizedArgs),
+    runs: parsePositiveInteger("--runs", 20, normalizedArgs),
+    warmup: parseNonNegativeInteger("--warmup", 3, normalizedArgs),
   };
 }
 
