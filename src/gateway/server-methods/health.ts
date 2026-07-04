@@ -2,6 +2,7 @@
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
 import { listContextEngineQuarantines } from "../../context-engine/registry.js";
@@ -92,7 +93,15 @@ function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
 }): HealthSummary {
-  const { contextEngines: _cachedContextEngines, ...cached } = params.cached;
+  const {
+    contextEngines: _cachedContextEngines,
+    deliveryQueues: _cachedDeliveryQueues,
+    ...cached
+  } = params.cached;
+  // Dead-letter counts are cheap SQLite reads; recompute them like context
+  // engines so a delivery that failed after the cache was filled is not hidden
+  // for a refresh interval.
+  const deliveryQueues = buildDeliveryQueueHealthSummary();
   const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
   for (const entry of listContextEngineQuarantines()) {
     const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
@@ -112,6 +121,7 @@ function mergeCachedHealthRuntimeState(params: {
     ...(quarantinedContextEngines.length > 0
       ? { contextEngines: { quarantined: quarantinedContextEngines } }
       : {}),
+    ...(deliveryQueues ? { deliveryQueues } : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),

@@ -245,7 +245,8 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
 }
 
-function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
+/** Builds dead-lettered delivery queue health; shared with cached gateway responses. */
+export function buildDeliveryQueueHealthSummary(): DeliveryQueueHealthSummary | undefined {
   // Dead-lettered deliveries are retained in SQLite for diagnostics but had no
   // health surface; a storage read failure must not take health down with it.
   try {
