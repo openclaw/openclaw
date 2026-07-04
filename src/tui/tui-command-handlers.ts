@@ -26,6 +26,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
@@ -782,7 +783,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         state.pendingOptimisticUserMessage ||
         (opts.local !== true && state.activeChatRunId))
     ) {
-      chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+      addBlockedChatSubmitNotice(chatLog);
       tui.requestRender();
       return;
     }

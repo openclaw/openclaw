@@ -212,7 +212,7 @@ img.chat-avatar {
 .chat-bubble {
   position: relative;
   display: block;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   background: var(--card);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
@@ -225,13 +225,11 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+/* Width-only shell: bubble chrome (border/background/padding) comes from
+   .chat-bubble above. */
 .chat-bubble--tool-shell {
   align-self: stretch;
   width: min(100%, 760px);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
 }
 
 .chat-bubble--tool-shell:hover {
@@ -311,9 +309,10 @@ img.chat-avatar {
   }
 }
 
+/* Skins .btn/.btn--xs buttons: background and svg sizing stay with the .btn
+   base so these match every other icon button; only the muted color is bespoke. */
 .chat-copy-btn,
 .chat-expand-btn {
-  background: var(--bg);
   color: var(--muted);
 }
 
@@ -322,12 +321,6 @@ img.chat-avatar {
   width: 14px;
   height: 14px;
   position: relative;
-}
-
-.chat-copy-btn__icon svg,
-.chat-expand-btn__icon svg {
-  width: 14px;
-  height: 14px;
 }
 
 .chat-copy-btn__icon-copy,
@@ -379,17 +372,6 @@ img.chat-avatar {
   height: 14px;
 }
 
-/* Light mode: restore borders */
-:root[data-theme-mode="light"] .chat-bubble {
-  border-color: var(--border);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-}
-
-:root[data-theme-mode="light"] .chat-bubble--tool-shell {
-  border-color: transparent;
-  box-shadow: none;
-}
-
 .chat-bubble:hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
@@ -413,20 +395,17 @@ img.chat-avatar {
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
-/* Streaming animation */
-.chat-bubble.streaming {
-  animation: pulsing-border 1.5s ease-out infinite;
+/* Light mode: restore borders. Order contract: stays below the role variants
+   above; it ties with .chat-group.user .chat-bubble on specificity and the
+   light skin must win (user bubbles render on var(--bg) in light mode). */
+:root[data-theme-mode="light"] .chat-bubble {
+  border-color: var(--border);
+  background: var(--bg);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-@keyframes pulsing-border {
-  0%,
-  100% {
-    border-color: var(--border);
-  }
-
-  50% {
-    border-color: var(--accent);
-  }
+:root[data-theme-mode="light"] .chat-bubble--tool-shell {
+  box-shadow: none;
 }
 
 /* Fade-in animation for new messages */

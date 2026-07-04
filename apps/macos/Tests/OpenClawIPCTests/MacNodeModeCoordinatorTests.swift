@@ -4,6 +4,28 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeModeCoordinatorTests {
+    @Test @MainActor func `fresh node uses durable dedicated identity for local auto approval`() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"))
+
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: false) == .node)
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: true) == .node)
+    }
+
+    @Test @MainActor func `upgraded node durably preserves its shipped primary identity`() throws {
+        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"))
+
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: true) == .primary)
+        #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
+            defaults: defaults,
+            isExistingInstallation: false) == .primary)
+    }
+
     @Test func `remote mode does not advertise browser proxy`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,

@@ -65,8 +65,8 @@ targets:
         buildPhase: resources
       - path: Sources/Fonts
         buildPhase: resources
-    resources:
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -201,8 +201,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
-    resources:
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - package: OpenClawKit
       - sdk: AppIntents.framework
@@ -247,8 +247,8 @@ targets:
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
       - path: Sources/Fonts
         buildPhase: resources
-    resources:
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
@@ -290,8 +290,8 @@ targets:
           - Info.plist
       - path: Sources/Fonts
         buildPhase: resources
-    resources:
       - path: Resources/Localizable.xcstrings
+        buildPhase: resources
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework

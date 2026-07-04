@@ -29,6 +29,7 @@ import {
 } from "./app-render.helpers.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { copyToClipboard } from "./chat/clipboard.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatQuotaPill,
@@ -96,7 +97,10 @@ import {
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
   approveDevicePairing,
+  closeDevicePairSetup,
   loadDevices,
+  openDevicePairSetup,
+  refreshDevicePairSetup,
   rejectDevicePairing,
   revokeDeviceToken,
   rotateDeviceToken,
@@ -2341,7 +2345,7 @@ export function renderApp(state: AppViewState) {
     }, 160);
   };
   const copyChatWorkspacePath = (filePath: string) => {
-    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+    void copyToClipboard(filePath);
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {
@@ -2731,22 +2735,14 @@ export function renderApp(state: AppViewState) {
                     : nothing}
                 </a>
                 <div class="sidebar-mode-switch">${renderTopbarThemeModeToggle(state)}</div>
-                ${(() => {
-                  const version = state.hello?.server?.version ?? "";
-                  return version
-                    ? html`
-                        <div class="sidebar-version" title=${`v${version}`}>
-                          ${!navCollapsed
-                            ? html`
-                                <span class="sidebar-version__label">${t("common.version")}</span>
-                                <span class="sidebar-version__text">v${version}</span>
-                                ${renderSidebarConnectionStatus(state)}
-                              `
-                            : html` ${renderSidebarConnectionStatus(state)} `}
-                        </div>
-                      `
-                    : nothing;
-                })()}
+                <div class="sidebar-status">
+                  ${renderSidebarConnectionStatus(state)}
+                  ${navCollapsed
+                    ? nothing
+                    : html`<span class="sidebar-status__text"
+                        >${state.connected ? t("common.online") : t("common.offline")}</span
+                      >`}
+                </div>
               </div>
             </div>
           </div>
@@ -3777,6 +3773,16 @@ export function renderApp(state: AppViewState) {
                 devicesLoading: state.devicesLoading,
                 devicesError: state.devicesError,
                 devicesList: state.devicesList,
+                devicePairSetupOpen: state.devicePairSetupOpen,
+                devicePairSetupLoading: state.devicePairSetupLoading,
+                devicePairSetupError: state.devicePairSetupError,
+                devicePairSetup: state.devicePairSetup,
+                canPairDevice:
+                  state.connected &&
+                  hasOperatorAdminAccess(
+                    (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                      null,
+                  ),
                 configForm:
                   state.configForm ??
                   (state.configSnapshot?.config as Record<string, unknown> | null),
@@ -3794,6 +3800,10 @@ export function renderApp(state: AppViewState) {
                 execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
                 onRefresh: () => void loadNodes(state),
                 onDevicesRefresh: () => void loadDevices(state),
+                onDevicePairSetupOpen: () => void openDevicePairSetup(state),
+                onDevicePairSetupRefresh: () => void refreshDevicePairSetup(state),
+                onDevicePairSetupClose: () => closeDevicePairSetup(state),
+                onDevicePairSetupCopy: (setupCode) => void copyToClipboard(setupCode),
                 onDeviceApprove: (requestId) => void approveDevicePairing(state, requestId),
                 onDeviceReject: (requestId) => void rejectDevicePairing(state, requestId),
                 onDeviceRotate: (deviceId, role, scopes) =>

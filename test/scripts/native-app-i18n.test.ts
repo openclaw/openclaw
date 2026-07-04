@@ -74,6 +74,29 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
+    expect(entries.some((entry) => entry.source === "What would you like to work on?")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Check OpenClaw status")).toBe(true);
+    expect(entries.some((entry) => entry.source === "What can I control here?")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Help me start voice chat")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Summarize the current OpenClaw status and tell me what needs attention.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Show me which phone controls and device capabilities are available right now.",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) => entry.source === "Help me start a realtime voice session from this phone.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "DIARY")).toBe(true);
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
     expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);

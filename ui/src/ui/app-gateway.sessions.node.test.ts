@@ -66,6 +66,7 @@ vi.mock("./controllers/chat.ts", () => ({
   handleChatEvent: handleChatEventMock,
 }));
 vi.mock("./controllers/devices.ts", () => ({
+  closeDevicePairSetup: vi.fn(),
   loadDevices: vi.fn(),
 }));
 vi.mock("./controllers/exec-approval.ts", () => ({

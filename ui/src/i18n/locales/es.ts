@@ -134,6 +134,25 @@ export const es: TranslationMap = {
     unknownError: "Error desconocido al cargar el módulo.",
   },
   nodes: {
+    pairing: {
+      button: "Vincular dispositivo móvil",
+      adminRequired: "Se requiere acceso de administrador para crear códigos de configuración.",
+      title: "OpenClaw móvil",
+      subtitle: "Escanea este código QR en la app móvil para conectar un teléfono nuevo.",
+      generating: "Creando un código de configuración seguro…",
+      failed: "No se pudo crear un código de configuración.",
+      qrAlt: "Código QR de vinculación de OpenClaw móvil",
+      qrUnavailable: "QR no disponible. Copia el código de configuración en su lugar.",
+      copySetupCode: "Copiar código de configuración",
+      newCode: "Código nuevo",
+      showSetupCode: "Mostrar código de configuración",
+      pending: "Solicitudes de dispositivos pendientes de revisión: {count}",
+      review: "Revisión",
+      waiting:
+        "Las apps móviles oficiales de OpenClaw se conectan automáticamente después de escanear.",
+      help: "Ayuda de vinculación",
+      manageDevices: "Gestionar dispositivos",
+    },
     binding: {
       loadConfigHint: "Carga la configuración para editar las vinculaciones.",
       formModeHint: "Cambia la pestaña Config al modo Form para editar las vinculaciones aquí.",

@@ -5,7 +5,6 @@ import {
   clearMatrixApprovalReactionTargetsForTest,
   listMatrixApprovalReactionBindings,
   registerMatrixApprovalReactionTarget,
-  resolveMatrixApprovalReactionTarget,
   resolveMatrixApprovalReactionTargetWithPersistence,
   unregisterMatrixApprovalReactionTarget,
 } from "./approval-reactions.js";
@@ -31,7 +30,7 @@ describe("matrix approval reactions", () => {
     );
   });
 
-  it("resolves a registered approval anchor event back to an approval decision", () => {
+  it("resolves a registered approval anchor event back to an approval decision", async () => {
     registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
@@ -40,7 +39,7 @@ describe("matrix approval reactions", () => {
     });
 
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "✅",
@@ -50,7 +49,7 @@ describe("matrix approval reactions", () => {
       decision: "allow-once",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "♾️",
@@ -60,7 +59,7 @@ describe("matrix approval reactions", () => {
       decision: "allow-always",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "❌",
@@ -71,7 +70,7 @@ describe("matrix approval reactions", () => {
     });
   });
 
-  it("ignores reactions that are not allowed on the registered approval anchor event", () => {
+  it("ignores reactions that are not allowed on the registered approval anchor event", async () => {
     registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
@@ -80,7 +79,7 @@ describe("matrix approval reactions", () => {
     });
 
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "♾️",
@@ -88,7 +87,7 @@ describe("matrix approval reactions", () => {
     ).toBeNull();
   });
 
-  it("stops resolving reactions after the approval anchor event is unregistered", () => {
+  it("stops resolving reactions after the approval anchor event is unregistered", async () => {
     registerMatrixApprovalReactionTarget({
       roomId: "!ops:example.org",
       eventId: "$approval-msg",
@@ -101,7 +100,7 @@ describe("matrix approval reactions", () => {
     });
 
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg",
         reactionKey: "✅",
@@ -158,7 +157,7 @@ describe("matrix approval reactions", () => {
     expect(lookup).toHaveBeenCalledWith("!ops:example.org:$approval-msg-2");
   });
 
-  it("falls back to in-memory approval reaction targets when persistent state cannot open", () => {
+  it("falls back to in-memory approval reaction targets when persistent state cannot open", async () => {
     const warn = vi.fn();
     setMatrixRuntime({
       state: {
@@ -177,7 +176,7 @@ describe("matrix approval reactions", () => {
     });
 
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!ops:example.org",
         eventId: "$approval-msg-3",
         reactionKey: "❌",

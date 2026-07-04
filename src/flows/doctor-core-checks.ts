@@ -1050,12 +1050,15 @@ const uiProtocolFreshnessCheck: HealthCheck = {
   },
 };
 
-function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
+function createWorkspaceSuggestionsCheck(
+  deps: CoreHealthCheckDeps,
+): HealthCheck & { readonly defaultEnabled: false } {
   return {
     id: "core/doctor/workspace-suggestions",
     kind: "core",
     description:
       "Workspace backup and memory-system suggestions are captured as structured findings.",
+    defaultEnabled: false,
     source: "doctor",
     async detect(ctx) {
       const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));

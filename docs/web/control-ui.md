@@ -70,6 +70,33 @@ Paperclip agents that connect through the `openclaw_gateway` adapter use the sam
 
 </Note>
 
+## Pair a mobile device
+
+An already paired administrator can create the iOS/Android connection QR without
+opening a terminal:
+
+<Steps>
+  <Step title="Open mobile pairing">
+    Select **Nodes**, then click **Pair mobile device** in the **Devices** card.
+  </Step>
+  <Step title="Connect the phone">
+    In the OpenClaw mobile app, open **Settings** → **Gateway** and scan the QR
+    code. You can copy and paste the setup code instead.
+  </Step>
+  <Step title="Confirm the connection">
+    The official iOS/Android app connects automatically. If **Devices** shows a
+    pending request, review its role and scopes before approving it.
+  </Step>
+</Steps>
+
+Creating a setup code requires `operator.admin`; the button is disabled for
+sessions without it. A setup code contains a short-lived bootstrap credential,
+so treat the QR and copied code like a password while they are valid. For remote
+pairing, the Gateway must resolve to `wss://` (for example, through Tailscale
+Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses.
+See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the
+full security and fallback details.
+
 ## Personal identity (browser-local)
 
 The Control UI supports a per-browser personal identity (display name and avatar) attached to outgoing messages for attribution in shared sessions. It lives in browser storage, is scoped to the current browser profile, and is not synced to other devices or persisted server-side beyond the normal transcript authorship metadata on messages you actually send. Clearing site data or switching browsers resets it to empty.
@@ -121,7 +148,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   <Accordion title="Cron, skills, nodes, exec approvals">
     - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
-    - Nodes: list + caps (`node.list`).
+    - Nodes: list + caps (`node.list`), create mobile setup codes, and approve device pairing (`device.pair.*`).
     - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>

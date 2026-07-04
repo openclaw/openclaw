@@ -605,6 +605,19 @@ type ResolvedToolCallOutcome =
   | { kind: "resolved"; tool?: AgentTool }
   | { kind: "error"; error: unknown };
 
+function hidesToolCallFromChannelProgress(
+  context: AgentContext,
+  toolCall: AgentToolCall,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
+): boolean {
+  const resolution = resolvedToolCalls.get(toolCall);
+  const tool =
+    resolution?.kind === "resolved"
+      ? resolution.tool
+      : context.tools?.find((candidate) => candidate.name === toolCall.name);
+  return tool?.hideFromChannelProgress === true;
+}
+
 async function executeToolCallsSequential(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -626,11 +639,17 @@ async function executeToolCallsSequential(
       signal,
       resolvedToolCalls,
     );
+    const hideFromChannelProgress = hidesToolCallFromChannelProgress(
+      currentContext,
+      toolCall,
+      resolvedToolCalls,
+    );
     await emit({
       type: "tool_execution_start",
       toolCallId: toolCall.id,
       toolName: canonicalToolCall.name,
       args: toolCall.arguments,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     });
 
     const preparation = await prepareToolCall(
@@ -648,6 +667,7 @@ async function executeToolCallsSequential(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       };
     } else {
       const executed = await executePreparedToolCall(preparation, signal, emit);
@@ -698,11 +718,17 @@ async function executeToolCallsParallel(
       signal,
       resolvedToolCalls,
     );
+    const hideFromChannelProgress = hidesToolCallFromChannelProgress(
+      currentContext,
+      toolCall,
+      resolvedToolCalls,
+    );
     await emit({
       type: "tool_execution_start",
       toolCallId: toolCall.id,
       toolName: canonicalToolCall.name,
       args: toolCall.arguments,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     });
 
     const preparation = await prepareToolCall(
@@ -719,6 +745,7 @@ async function executeToolCallsParallel(
         result: preparation.result,
         isError: preparation.isError,
         executionStarted: false,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
       finalizedCalls.push(finalized);
@@ -785,6 +812,7 @@ type FinalizedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
   executionStarted: boolean;
+  hideFromChannelProgress?: boolean;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -1055,6 +1083,7 @@ async function executePreparedToolCall(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
   const updateEvents: Promise<void>[] = [];
+  let acceptingUpdates = true;
 
   try {
     const result = await prepared.tool.execute(
@@ -1062,6 +1091,9 @@ async function executePreparedToolCall(
       prepared.args as never,
       signal,
       (partialResult) => {
+        if (!acceptingUpdates) {
+          return;
+        }
         updateEvents.push(
           Promise.resolve(
             emit({
@@ -1070,19 +1102,26 @@ async function executePreparedToolCall(
               toolName: prepared.toolCall.name,
               args: prepared.toolCall.arguments,
               partialResult,
+              ...(prepared.tool.hideFromChannelProgress === true
+                ? { hideFromChannelProgress: true }
+                : {}),
             }),
           ),
         );
       },
     );
+    acceptingUpdates = false;
     await Promise.all(updateEvents);
     return { result, isError: false };
   } catch (error) {
+    acceptingUpdates = false;
     await Promise.all(updateEvents);
     return {
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
     };
+  } finally {
+    acceptingUpdates = false;
   }
 }
 
@@ -1129,6 +1168,7 @@ async function finalizeExecutedToolCall(
     result,
     isError,
     executionStarted: true,
+    ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   };
 }
 
@@ -1150,6 +1190,7 @@ async function emitToolExecutionEnd(
     result: finalized.result,
     isError: finalized.isError,
     executionStarted: finalized.executionStarted,
+    ...(finalized.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
   });
 }
 

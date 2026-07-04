@@ -353,9 +353,14 @@ export type CodexDynamicToolBridge = {
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
-// Keep OpenClaw session spawning searchable in Codex mode so Codex's native
-// spawn_agent remains the primary Codex subagent surface.
-const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+// Keep OpenClaw control-path tools directly callable even when Codex tool_search
+// is unavailable or resolves a connector-only universe. Developer instructions
+// still steer normal Codex subagents to native spawn_agent.
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
+  "agents_list",
+  "sessions_spawn",
+  "sessions_yield",
+]);
 const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];

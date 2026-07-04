@@ -135,6 +135,25 @@ export const ja_JP: TranslationMap = {
     unknownError: "不明なモジュール読み込みエラーです。",
   },
   nodes: {
+    pairing: {
+      button: "モバイルデバイスをペアリング",
+      adminRequired: "セットアップコードを作成するには管理者アクセスが必要です。",
+      title: "OpenClaw mobile",
+      subtitle:
+        "新しいスマートフォンを接続するには、モバイルアプリでこのQRコードをスキャンしてください。",
+      generating: "安全なセットアップコードを作成しています…",
+      failed: "セットアップコードを作成できませんでした。",
+      qrAlt: "OpenClaw mobile ペアリングQRコード",
+      qrUnavailable: "QRを利用できません。代わりにセットアップコードをコピーしてください。",
+      copySetupCode: "セットアップコードをコピー",
+      newCode: "新しいコード",
+      showSetupCode: "セットアップコードを表示",
+      pending: "レビュー待ちのデバイスリクエスト: {count}",
+      review: "レビュー",
+      waiting: "公式の OpenClaw mobile アプリはスキャン後に自動的に接続します。",
+      help: "ペアリングのヘルプ",
+      manageDevices: "デバイスを管理",
+    },
     binding: {
       loadConfigHint: "バインディングを編集するには設定を読み込んでください。",
       formModeHint:

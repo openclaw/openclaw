@@ -134,6 +134,26 @@ export const it: TranslationMap = {
     unknownError: "Errore sconosciuto di caricamento modulo.",
   },
   nodes: {
+    pairing: {
+      button: "Associa dispositivo mobile",
+      adminRequired:
+        "È necessario l'accesso da amministratore per creare codici di configurazione.",
+      title: "OpenClaw mobile",
+      subtitle: "Scansiona questo codice QR nell'app mobile per connettere un nuovo telefono.",
+      generating: "Creazione di un codice di configurazione sicuro…",
+      failed: "Impossibile creare un codice di configurazione.",
+      qrAlt: "Codice QR di associazione di OpenClaw mobile",
+      qrUnavailable: "QR non disponibile. Copia invece il codice di configurazione.",
+      copySetupCode: "Copia codice di configurazione",
+      newCode: "Nuovo codice",
+      showSetupCode: "Mostra codice di configurazione",
+      pending: "Richieste di dispositivi in attesa di revisione: {count}",
+      review: "Revisione",
+      waiting:
+        "Le app mobile ufficiali di OpenClaw si connettono automaticamente dopo la scansione.",
+      help: "Aiuto per l'associazione",
+      manageDevices: "Gestisci dispositivi",
+    },
     binding: {
       loadConfigHint: "Carica la configurazione per modificare i binding.",
       formModeHint: "Passa la scheda Config in modalità Modulo per modificare qui i binding.",

@@ -135,6 +135,24 @@ export const de: TranslationMap = {
     unknownError: "Unbekannter Fehler beim Laden des Moduls.",
   },
   nodes: {
+    pairing: {
+      button: "Mobilgerät koppeln",
+      adminRequired: "Administratorzugriff ist erforderlich, um Einrichtungscodes zu erstellen.",
+      title: "OpenClaw mobile",
+      subtitle: "Scannen Sie diesen QR-Code in der mobilen App, um ein neues Telefon zu verbinden.",
+      generating: "Sicherer Einrichtungscode wird erstellt…",
+      failed: "Einrichtungscode konnte nicht erstellt werden.",
+      qrAlt: "QR-Code für die Kopplung mit OpenClaw mobile",
+      qrUnavailable: "QR-Code nicht verfügbar. Kopieren Sie stattdessen den Einrichtungscode.",
+      copySetupCode: "Einrichtungscode kopieren",
+      newCode: "Neuer Code",
+      showSetupCode: "Einrichtungscode anzeigen",
+      pending: "Geräteanfragen warten auf Überprüfung: {count}",
+      review: "Überprüfung",
+      waiting: "Offizielle mobile OpenClaw-Apps verbinden sich nach dem Scannen automatisch.",
+      help: "Hilfe zur Kopplung",
+      manageDevices: "Geräte verwalten",
+    },
     binding: {
       loadConfigHint: "Laden Sie die Konfiguration, um Bindungen zu bearbeiten.",
       formModeHint:

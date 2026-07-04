@@ -134,6 +134,24 @@ export const nl: TranslationMap = {
     unknownError: "Onbekende fout bij laden van module.",
   },
   nodes: {
+    pairing: {
+      button: "Mobiel apparaat koppelen",
+      adminRequired: "Beheerderstoegang is vereist om installatiecodes te maken.",
+      title: "OpenClaw mobiel",
+      subtitle: "Scan deze QR-code in de mobiele app om een nieuwe telefoon te verbinden.",
+      generating: "Een veilige installatiecode maken…",
+      failed: "Kan geen installatiecode maken.",
+      qrAlt: "QR-code voor koppeling met OpenClaw mobiel",
+      qrUnavailable: "QR niet beschikbaar. Kopieer in plaats daarvan de installatiecode.",
+      copySetupCode: "Installatiecode kopiëren",
+      newCode: "Nieuwe code",
+      showSetupCode: "Installatiecode weergeven",
+      pending: "Apparaatverzoeken die wachten op beoordeling: {count}",
+      review: "Beoordeling",
+      waiting: "Officiële mobiele OpenClaw-apps verbinden automatisch na het scannen.",
+      help: "Hulp bij koppelen",
+      manageDevices: "Apparaten beheren",
+    },
     binding: {
       loadConfigHint: "Laad de config om bindingen te bewerken.",
       formModeHint:

@@ -1,44 +1,40 @@
 import OpenClawKit
 import SwiftUI
 
-extension SettingsProTab {
-    var currentAppearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
+/// iOS Settings-style icon: white glyph on a solid rounded-square, sized for a List row.
+struct SettingsIcon: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 28, height: 28)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(self.color))
+    }
+}
+
+private struct AppearanceSettingsRow: View {
+    @Environment(AppAppearanceModel.self) private var appearanceModel
+
+    private var preference: AppAppearancePreference {
+        self.appearanceModel.preference
     }
 
-    var appearanceRow: some View {
-        // Menu hides its source label while open on iPad; a dialog keeps the visible row stable.
-        Button {
-            self.isShowingAppearanceDialog = true
+    var body: some View {
+        NavigationLink {
+            AppearanceSettingsScreen()
         } label: {
-            self.appearanceRowLabel
+            self.rowLabel
         }
-        .buttonStyle(.plain)
         .accessibilityIdentifier("settings-appearance-row")
         .accessibilityLabel("Appearance")
-        .accessibilityValue(self.currentAppearancePreference.label)
+        .accessibilityValue(self.preference.label)
         .accessibilityHint("Choose system, light, or dark appearance")
-        .confirmationDialog(
-            "Appearance",
-            isPresented: $isShowingAppearanceDialog,
-            titleVisibility: .visible)
-        {
-            ForEach(AppAppearancePreference.allCases) { preference in
-                Button {
-                    self.appearancePreferenceRaw = preference.rawValue
-                } label: {
-                    Label(preference.label, systemImage: preference.systemImage)
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                .font(OpenClawType.subheadSemiBold)
-            }
-        } message: {
-            Text("Choose system, light, or dark appearance")
-                .font(OpenClawType.subhead)
-        }
     }
 
-    var appearanceRowLabel: some View {
+    private var rowLabel: some View {
         HStack(spacing: 12) {
             ProIconBadge(
                 systemName: "circle.lefthalf.filled",
@@ -46,105 +42,117 @@ extension SettingsProTab {
 
             Text("Appearance")
                 .font(OpenClawType.subheadSemiBold)
-                .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
 
-            HStack(spacing: 5) {
-                Text(self.currentAppearancePreference.label)
-                    .font(OpenClawType.subheadSemiBold)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(OpenClawType.caption2Bold)
-            }
-            .foregroundStyle(OpenClawBrand.accent)
+            Text(self.preference.label)
+                .font(OpenClawType.subhead)
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+    }
+}
+
+private struct AppearanceSettingsScreen: View {
+    @Environment(AppAppearanceModel.self) private var appearanceModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(AppAppearancePreference.allCases) { preference in
+                    Button {
+                        self.select(preference)
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(preference.label)
+                                    .font(OpenClawType.body)
+                                Spacer()
+                                if preference == self.appearanceModel.preference {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(OpenClawBrand.accent)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: preference.systemImage)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("settings-appearance-\(preference.rawValue)")
+                    .accessibilityValue(
+                        preference == self.appearanceModel.preference ? "Selected" : "")
+                }
+            } footer: {
+                Text("System follows this device’s appearance setting.")
+                    .font(OpenClawType.footnote)
+            }
+        }
+        .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func select(_ preference: AppAppearancePreference) {
+        guard preference != self.appearanceModel.preference else { return }
+        self.dismiss()
+        Task { @MainActor in
+            // Changing the root scheme while an iPad split-view destination is active can
+            // leave that destination blank. Apply only after the native pop transition.
+            try? await Task.sleep(for: .milliseconds(500))
+            self.appearanceModel.select(preference)
+        }
+    }
+}
+
+extension SettingsProTab {
+    var appearanceRow: some View {
+        AppearanceSettingsRow()
     }
 
     var gatewaySection: some View {
-        Section {
+        Section("Gateway") {
             NavigationLink(value: SettingsRoute.gateway) {
                 self.gatewayConnectionRow
             }
+            LabeledContent("Address", value: self.gatewayAddress)
+            LabeledContent("Server", value: self.gatewayServer)
+            LabeledContent("Agents", value: "\(self.appModel.gatewayAgents.count)")
+            self.gatewayActions
         }
     }
 
     var gatewayConnectionRow: some View {
-        HStack(spacing: 12) {
-            ProIconBadge(
-                systemName: "antenna.radiowaves.left.and.right",
-                color: self.gatewayStatusColor)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Gateway")
-                    .font(OpenClawType.subheadSemiBold)
-                    .lineLimit(1)
-                Text(self.gatewaySummaryDetail)
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 8)
-        }
-        .padding(.vertical, 4)
-    }
-
-    var gatewaySummaryDetail: String {
-        let agentCount = appModel.gatewayAgents.count
-        let agents = agentCount == 1 ? "1 agent" : "\(agentCount) agents"
-        return "\(gatewayStatusDetail) • \(agents)"
-    }
-
-    var gatewayActions: some View {
-        HStack(spacing: 10) {
-            self.gatewayActionButton(
-                title: "Reconnect",
-                icon: "arrow.triangle.2.circlepath",
-                color: OpenClawBrand.warn,
-                isBusy: self.isReconnectingGateway,
-                isDisabled: self.appModel.isAppleReviewDemoModeEnabled)
-            {
-                Task { await self.reconnectGateway() }
-            }
-
-            self.gatewayActionButton(
-                title: "Diagnose",
-                icon: "cross.case",
-                color: OpenClawBrand.info,
-                isBusy: self.isRefreshingGateway)
-            {
-                Task { await self.runDiagnostics() }
-            }
+        LabeledContent {
+            Text(self.gatewayStatusDetail)
+                .font(OpenClawType.subhead)
+                .foregroundStyle(self.gatewayStatusColor)
+        } label: {
+            Text("Connection")
+                .font(OpenClawType.subheadSemiBold)
         }
     }
 
-    @ViewBuilder
-    var settingsListSection: some View {
+    @ViewBuilder var settingsListSection: some View {
         Section {
             self.settingsListRow(
                 icon: "checkmark.shield.fill",
+                iconColor: self.pendingApproval == nil ? .green : .orange,
                 title: "Approvals",
-                detail: self.pendingApproval == nil ? nil : "1 pending",
                 route: .approvals,
-                color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
                 badgeValue: self.pendingApproval == nil ? nil : "1")
             self.settingsListRow(
-                icon: "person.2",
+                icon: "person.2.fill",
+                iconColor: .blue,
                 title: "Permissions",
-                detail: self.permissionsDetail,
                 route: .permissions)
             self.settingsListRow(
                 icon: "point.3.connected.trianglepath.dotted",
+                iconColor: .purple,
                 title: "Channels",
                 route: .channels)
             self.settingsListRow(
                 icon: "waveform",
+                iconColor: .pink,
                 title: "Voice & Talk",
-                detail: self.voiceDetail,
                 route: .voice)
         }
 
@@ -152,21 +160,22 @@ extension SettingsProTab {
             self.appearanceRow
             self.settingsListRow(
                 icon: "stethoscope",
+                iconColor: .teal,
                 title: "Diagnostics",
-                detail: self.diagnosticsDetail,
                 route: .diagnostics)
             self.settingsListRow(
-                icon: "hand.raised",
+                icon: "hand.raised.fill",
+                iconColor: .indigo,
                 title: "Privacy",
-                detail: self.privacyDetail,
                 route: .privacy)
             self.settingsListRow(
-                icon: "bell",
+                icon: "bell.fill",
+                iconColor: .red,
                 title: "Notifications",
-                detail: self.notificationStatusText,
                 route: .notifications)
             self.settingsListRow(
-                icon: "info.circle",
+                icon: "info.circle.fill",
+                iconColor: .gray,
                 title: "About",
                 route: .about)
         } header: {
@@ -178,6 +187,7 @@ extension SettingsProTab {
         Section {
             self.settingsListRow(
                 icon: "doc.text",
+                iconColor: .gray,
                 title: "Licenses",
                 route: .licenses)
                 .accessibilityIdentifier("settings-licenses-row")
@@ -186,88 +196,105 @@ extension SettingsProTab {
 
     func settingsListRow(
         icon: String,
+        iconColor: Color,
         title: String,
-        detail: String? = nil,
         route: SettingsRoute,
-        color: Color = .secondary,
         badgeValue: String? = nil) -> some View
     {
         NavigationLink(value: route) {
-            HStack(spacing: 12) {
-                ProIconBadge(systemName: icon, color: color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(OpenClawType.subheadSemiBold)
-                    if let detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(OpenClawType.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 8)
-                if let badgeValue {
-                    ProValuePill(value: badgeValue, color: color)
-                }
+            Label {
+                Text(title)
+                    .font(OpenClawType.subheadSemiBold)
+            } icon: {
+                SettingsIcon(systemName: icon, color: iconColor)
             }
-            .padding(.vertical, 4)
         }
+        .badge(badgeValue.map { Text($0).font(OpenClawType.captionSemiBold) })
     }
 
+    @ViewBuilder
     func destination(for route: SettingsRoute) -> some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    switch route {
-                    case .gateway:
-                        self.gatewayDestination
-                    case .approvals:
-                        self.approvalsDestination
-                    case .permissions:
-                        self.permissionsDestination
-                    case .channels:
-                        SettingsChannelsDestination()
-                    case .voice:
-                        self.voiceDestination
-                    case .diagnostics:
-                        self.diagnosticsDestination
-                    case .privacy:
-                        self.privacyDestination
-                    case .notifications:
-                        self.notificationsDestination
-                    case .licenses:
-                        self.licensesDestination
-                    case .about:
-                        self.aboutDestination
+        switch route {
+        case .channels:
+            SettingsChannelsDestination()
+                .navigationTitle(title(for: route))
+                .navigationBarTitleDisplayMode(.inline)
+        default:
+            List {
+                switch route {
+                case .gateway:
+                    self.gatewayDestination
+                case .approvals:
+                    self.approvalsDestination
+                case .permissions:
+                    self.permissionsDestination
+                case .voice:
+                    self.voiceDestination
+                case .diagnostics:
+                    self.diagnosticsDestination
+                case .privacy:
+                    self.privacyDestination
+                case .notifications:
+                    self.notificationsDestination
+                case .about:
+                    self.aboutDestination
+                case .licenses:
+                    self.licensesDestination
+                case .channels:
+                    EmptyView()
+                }
+            }
+            .font(OpenClawType.body)
+            .navigationTitle(title(for: route))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if let headerLeadingAction {
+                    ToolbarItem(placement: .topBarLeading) {
+                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                     }
                 }
-                .padding(.top, 18)
-                .padding(.bottom, OpenClawProMetric.bottomScrollInset)
-                .font(OpenClawType.body)
-            }
-        }
-        .navigationTitle(title(for: route))
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if let headerLeadingAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                ToolbarItem(placement: .principal) {
+                    Text(title(for: route))
+                        .font(OpenClawType.headline)
+                        .foregroundStyle(.primary)
                 }
-            }
-            ToolbarItem(placement: .principal) {
-                Text(title(for: route))
-                    .font(OpenClawType.headline)
-                    .foregroundStyle(.primary)
             }
         }
     }
 
     var gatewayDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            self.gatewayStatusCard
-            self.gatewayDetailsCard
-            self.gatewayActionsCard
+        Group {
+            self.detailStatusCard(
+                icon: "antenna.radiowaves.left.and.right",
+                title: "Gateway",
+                detail: self.gatewayStatusDetail,
+                value: self.gatewayStatusValue,
+                color: self.gatewayStatusColor)
+
+            self.detailListCard {
+                self.detailRow("Address", value: self.gatewayAddress)
+                self.detailRow("Server", value: self.gatewayServer)
+                self.detailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
+                self.detailRow("Default Agent", value: self.appModel.activeAgentName)
+                self.detailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
+            }
+
+            Section {
+                Button {
+                    Task { await self.reconnectGateway() }
+                } label: {
+                    Label("Reconnect", systemImage: "arrow.triangle.2.circlepath")
+                        .font(OpenClawType.body)
+                }
+                .disabled(self.isReconnectingGateway || self.appModel.isAppleReviewDemoModeEnabled)
+                Button {
+                    Task { await self.runDiagnostics() }
+                } label: {
+                    Label("Diagnose", systemImage: "cross.case")
+                        .font(OpenClawType.body)
+                }
+                .disabled(self.isRefreshingGateway)
+            }
 
             self.manualGatewayCard
             self.deviceIdentityCard
@@ -280,7 +307,7 @@ extension SettingsProTab {
     }
 
     var approvalsDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             self.detailStatusCard(
                 icon: "checkmark.shield.fill",
                 title: "Approvals",
@@ -303,125 +330,90 @@ extension SettingsProTab {
     }
 
     var approvalNotificationsWarningCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    ProIconBadge(systemName: "bell.slash.fill", color: OpenClawBrand.warn)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Notifications are off")
-                            .font(OpenClawType.subheadSemiBold)
-                        Text(
-                            """
-                            Enable Notifications to receive approval notifications while OpenClaw is not open.
-                            """)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                if self.directRoute == nil {
-                    Button {
-                        self.openNotificationsRouteFromApprovals()
-                    } label: {
-                        Label("Open Notifications", systemImage: "bell.badge")
-                            .font(OpenClawType.captionSemiBold)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Notifications are off")
+                    .font(OpenClawType.subheadSemiBold)
+                Text("Enable Notifications to receive approval alerts while OpenClaw is not open.")
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if self.directRoute == nil {
+                Button {
+                    self.openNotificationsRouteFromApprovals()
+                } label: {
+                    Label("Open Notifications", systemImage: "bell.badge")
+                        .font(OpenClawType.body)
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
+    @ViewBuilder
     var approvalsReviewCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                if let pendingApproval {
-                    VStack(spacing: 0) {
-                        ForEach(Array(self.approvalItems.enumerated()), id: \.element.id) { index, item in
-                            SettingsApprovalRow(item: item)
-                            if index < self.approvalItems.count - 1 {
-                                Divider().padding(.leading, 46)
-                            }
-                        }
+        if let pendingApproval {
+            Section {
+                ForEach(self.approvalItems, id: \.id) { item in
+                    SettingsApprovalRow(item: item)
+                }
+                if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
+                    Text(errorText)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(OpenClawBrand.danger)
+                }
+                Button {
+                    Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
+                } label: {
+                    Label("Allow", systemImage: "checkmark")
+                        .font(OpenClawType.body)
+                }
+                .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                if pendingApproval.allowsAllowAlways {
+                    Button {
+                        Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always") }
+                    } label: {
+                        Label("Always Allow", systemImage: "checkmark.shield")
+                            .font(OpenClawType.body)
                     }
-
-                    if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
-                        Text(errorText)
-                            .font(OpenClawType.caption2Medium)
-                            .foregroundStyle(OpenClawBrand.danger)
+                    .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                }
+                Button(role: .destructive) {
+                    Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
+                } label: {
+                    Label("Deny", systemImage: "xmark")
+                        .font(OpenClawType.body)
+                }
+                .disabled(self.appModel.pendingExecApprovalPromptResolving)
+            }
+        } else {
+            Section {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("No approvals waiting")
+                            .font(OpenClawType.subheadSemiBold)
+                        Text(self.approvalEmptyDetail)
+                            .font(OpenClawType.caption)
+                            .foregroundStyle(.secondary)
                     }
-
-                    HStack(spacing: 8) {
-                        Button {
-                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
-                        } label: {
-                            Label("Allow", systemImage: "checkmark")
-                                .font(OpenClawType.captionSemiBold)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
-
-                        if pendingApproval.allowsAllowAlways {
-                            Button {
-                                Task {
-                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
-                                }
-                            } label: {
-                                Label("Always", systemImage: "checkmark.shield")
-                                    .font(OpenClawType.captionSemiBold)
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(self.appModel.pendingExecApprovalPromptResolving)
-                        }
-
-                        Button(role: .destructive) {
-                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
-                        } label: {
-                            Label("Deny", systemImage: "xmark")
-                                .font(OpenClawType.captionSemiBold)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
-
-                        Spacer(minLength: 0)
-                    }
-                    .controlSize(.small)
-                } else {
-                    HStack(spacing: 12) {
-                        ProIconBadge(systemName: "checkmark.shield.fill", color: OpenClawBrand.ok)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("No approvals waiting")
-                                .font(OpenClawType.subheadSemiBold)
-                            Text(self.approvalEmptyDetail)
-                                .font(OpenClawType.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                    }
+                } icon: {
+                    Image(systemName: "checkmark.shield.fill")
+                        .foregroundStyle(OpenClawBrand.ok)
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var permissionsDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             self.toggleCard(
-                icon: "camera",
                 title: "Camera",
-                detail: "Allow the gateway to request photos or video while OpenClaw is foregrounded.",
                 isOn: self.$cameraEnabled)
 
             self.locationModeCard
 
             self.toggleCard(
-                icon: "lock.display",
                 title: "Keep Awake",
-                detail: "Keep the screen awake while OpenClaw is open.",
                 isOn: self.$preventSleep)
 
             self.privacyAccessCard
@@ -429,7 +421,7 @@ extension SettingsProTab {
     }
 
     var voiceDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             self.detailStatusCard(
                 icon: "waveform",
                 title: "Voice & Talk",
@@ -444,7 +436,7 @@ extension SettingsProTab {
     }
 
     var diagnosticsDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             self.detailStatusCard(
                 icon: "checklist.checked",
                 title: "Health Check",
@@ -452,27 +444,22 @@ extension SettingsProTab {
                 value: self.diagnosticsHealthValue,
                 color: self.gatewayDiagnosticConnected ? OpenClawBrand.ok : OpenClawBrand.warn)
 
-            ProCard(radius: SettingsLayout.cardRadius) {
-                self.gatewayActionButton(
-                    title: "Run Diagnostics",
-                    icon: "cross.case",
-                    color: OpenClawBrand.info,
-                    isBusy: self.isRefreshingGateway)
-                {
+            Section {
+                Button {
                     Task { await self.runDiagnostics() }
+                } label: {
+                    Label("Run Diagnostics", systemImage: "cross.case")
+                        .font(OpenClawType.body)
                 }
+                .disabled(self.isRefreshingGateway)
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
 
             self.diagnosticChecksCard
 
             self.detailListCard {
                 self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                Divider()
                 self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                Divider()
                 self.detailRow("App", value: DeviceInfoHelper.openClawVersionString())
-                Divider()
                 self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
             }
 
@@ -481,7 +468,7 @@ extension SettingsProTab {
     }
 
     var privacyDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             self.detailStatusCard(
                 icon: "hand.raised",
                 title: "Privacy",
@@ -490,17 +477,13 @@ extension SettingsProTab {
                 color: .secondary)
 
             self.toggleCard(
-                icon: "camera",
                 title: "Camera Access",
-                detail: "Disable to block camera capture requests from the gateway.",
                 isOn: self.$cameraEnabled)
 
             self.locationModeCard
 
             self.toggleCard(
-                icon: "lock.open.display",
                 title: "Background Listening",
-                detail: "Allow active Talk sessions to continue while the app is backgrounded.",
                 isOn: self.$talkBackgroundEnabled)
 
             self.privacyAccessCard
@@ -508,7 +491,7 @@ extension SettingsProTab {
     }
 
     var notificationsDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             self.detailStatusCard(
                 icon: "bell",
                 title: "Notifications",
@@ -516,7 +499,7 @@ extension SettingsProTab {
                 value: self.notificationStatusText,
                 color: self.notificationStatus.color)
 
-            ProCard(radius: SettingsLayout.cardRadius) {
+            Section {
                 VStack(alignment: .leading, spacing: 12) {
                     Button {
                         self.handleNotificationAction()
@@ -550,85 +533,63 @@ extension SettingsProTab {
                     }
                 }
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
         }
     }
 
-    var aboutDestination: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            self.detailListCard {
-                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
-                Divider()
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                Divider()
-                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
+    var gatewayActions: some View {
+        Group {
+            self.gatewayActionButton(
+                title: "Reconnect",
+                icon: "arrow.triangle.2.circlepath",
+                color: OpenClawBrand.accent,
+                isBusy: self.isReconnectingGateway,
+                isDisabled: self.appModel.isAppleReviewDemoModeEnabled)
+            {
+                Task { await self.reconnectGateway() }
+            }
+
+            self.gatewayActionButton(
+                title: "Diagnose",
+                icon: "cross.case",
+                color: OpenClawBrand.accent,
+                isBusy: self.isRefreshingGateway)
+            {
+                Task { await self.runDiagnostics() }
             }
         }
     }
 
-    var licensesDestination: some View {
+    @ViewBuilder var licensesDestination: some View {
         let documents = LicenseDocumentLoader.bundledDocuments()
-        return VStack(alignment: .leading, spacing: 14) {
-            if documents.isEmpty {
-                ProCard(radius: SettingsLayout.cardRadius) {
-                    HStack(spacing: 12) {
-                        ProIconBadge(systemName: "doc.text", color: .secondary)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("No licenses bundled")
-                                .font(OpenClawType.subheadSemiBold)
-                            Text("License files are not available in this build.")
-                                .font(OpenClawType.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
+        if documents.isEmpty {
+            ContentUnavailableView(
+                "No Licenses Bundled",
+                systemImage: "doc.text",
+                description: Text("License files are not available in this build."))
+                .font(OpenClawType.body)
+        } else {
+            Section {
+                ForEach(documents) { document in
+                    NavigationLink {
+                        LicenseDocumentDetailView(document: document)
+                    } label: {
+                        Label {
+                            Text(document.title)
+                                .font(OpenClawType.subhead)
+                        } icon: {
+                            SettingsIcon(systemName: "doc.text", color: .gray)
                         }
                     }
                 }
-                .padding(.horizontal, OpenClawProMetric.pagePadding)
-            } else {
-                let lastDocumentID = documents.last?.id
-
+            } footer: {
                 Text("OpenClaw appreciates its partners in the open-source community.")
                     .font(OpenClawType.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, OpenClawProMetric.pagePadding)
-
-                self.detailListCard {
-                    ForEach(documents) { document in
-                        NavigationLink {
-                            LicenseDocumentDetailView(document: document)
-                        } label: {
-                            self.licenseDocumentRow(document)
-                        }
-                        .buttonStyle(.plain)
-
-                        if document.id != lastDocumentID {
-                            Divider().padding(.leading, 60)
-                        }
-                    }
-                }
-                .accessibilityIdentifier("settings-licenses-list")
             }
+            .accessibilityIdentifier("settings-licenses-list")
         }
     }
 
-    func licenseDocumentRow(_ document: LicenseDocument) -> some View {
-        HStack(spacing: 12) {
-            ProIconBadge(systemName: "doc.text", color: .secondary)
-            Text(document.title)
-                .font(OpenClawType.subheadSemiBold)
-                .foregroundStyle(.primary)
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(OpenClawType.captionSemiBold)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: SettingsLayout.rowHeight)
-    }
-
+    /// Native inset-grouped action row (plain tinted text, no pill chrome).
     func gatewayActionButton(
         title: String,
         icon: String,
@@ -638,117 +599,45 @@ extension SettingsProTab {
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
-            HStack(spacing: 7) {
-                Image(systemName: isBusy ? "hourglass" : icon)
-                    .font(OpenClawType.captionSemiBold)
-                Text(title)
-                    .font(OpenClawType.captionSemiBold)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.76)
+            HStack {
+                Label(title, systemImage: icon)
+                    .font(OpenClawType.body)
+                Spacer()
+                if isBusy {
+                    ProgressView().controlSize(.small)
+                }
             }
-            .font(OpenClawType.captionSemiBold)
-            .frame(maxWidth: .infinity)
-            .frame(height: 32)
+            .contentShape(Rectangle())
         }
-        .font(OpenClawType.captionSemiBold)
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.roundedRectangle(radius: 8))
-        .tint(color)
-        .controlSize(.small)
+        .buttonStyle(.plain)
+        .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
+        .accessibilityLabel(title)
     }
 
-    var gatewayStatusCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            HStack(spacing: 12) {
-                ProIconBadge(systemName: "antenna.radiowaves.left.and.right", color: self.gatewayStatusColor)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Gateway")
-                        .font(OpenClawType.headline)
-                    Text(self.gatewayStatusDetail)
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 8)
-                ProValuePill(value: self.gatewayStatusValue, color: self.gatewayStatusColor)
-            }
-            .font(OpenClawType.body)
+    var aboutDestination: some View {
+        // Concise public details only; deep hardware identifiers live in Diagnostics.
+        detailListCard {
+            self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
+            self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
+            self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    var gatewayDetailsCard: some View {
-        ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-            VStack(spacing: 0) {
-                self.gatewayDetailRow("Address", value: self.gatewayAddress)
-                Divider()
-                self.gatewayDetailRow("Server", value: self.gatewayServer)
-                Divider()
-                self.gatewayDetailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
-                Divider()
-                self.gatewayDetailRow("Default Agent", value: self.appModel.activeAgentName)
-                Divider()
-                self.gatewayDetailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    var gatewayActionsCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            self.gatewayActions
-                .font(OpenClawType.captionSemiBold)
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func gatewayDetailRow(_ label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(OpenClawType.captionMedium)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(OpenClawType.caption)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .font(OpenClawType.caption)
-        .padding(.horizontal, 14)
-        .frame(height: 42)
-    }
-
-    func toggleCard(
-        icon: String,
-        title: String,
-        detail: String,
-        isOn: Binding<Bool>) -> some View
-    {
-        ProCard(radius: SettingsLayout.cardRadius) {
+    func toggleCard(title: String, isOn: Binding<Bool>) -> some View {
+        Section {
             Toggle(isOn: isOn) {
-                HStack(spacing: 12) {
-                    ProIconBadge(systemName: icon, color: isOn.wrappedValue ? OpenClawBrand.accent : .secondary)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(OpenClawType.subheadSemiBold)
-                        Text(detail)
-                            .font(OpenClawType.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
+                Text(title)
+                    .font(OpenClawType.body)
             }
-            .toggleStyle(.switch)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var locationModeCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
+        Section {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    ProIconBadge(
+                    SettingsIcon(
                         systemName: "location",
                         color: self.locationModeRaw == OpenClawLocationMode.off.rawValue ? .secondary : OpenClawBrand
                             .accent)
@@ -793,104 +682,76 @@ extension SettingsProTab {
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var agentSelectionCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Default Agent")
-                    .font(OpenClawType.subheadSemiBold)
-                Picker(selection: self.$selectedAgentPickerId) {
-                    Text("Default")
-                        .font(OpenClawType.subhead)
-                        .tag("")
-                    let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
-                        let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                        Text(name.isEmpty ? agent.id : name)
-                            .font(OpenClawType.subhead)
-                            .tag(agent.id)
-                    }
-                } label: {
-                    Text("Agent")
-                        .font(OpenClawType.subheadSemiBold)
+        Section {
+            Picker("Default Agent", selection: self.$selectedAgentPickerId) {
+                Text("Default").font(OpenClawType.body).tag("")
+                let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
+                    let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    Text(name.isEmpty ? agent.id : name).font(OpenClawType.body).tag(agent.id)
                 }
-                .font(OpenClawType.subhead)
-                Text("Used for new Chat and Talk sessions.")
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
             }
+            .font(OpenClawType.body)
+        } footer: {
+            Text("Used for new Chat and Talk sessions.")
+                .font(OpenClawType.footnote)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var gatewaySetupCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Setup Code")
-                    .font(OpenClawType.subheadSemiBold)
-                TextField("Paste setup code", text: self.$setupCode)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
-                HStack(spacing: 10) {
-                    self.gatewayActionButton(
-                        title: "Scan QR",
-                        icon: "qrcode.viewfinder",
-                        color: OpenClawBrand.accent,
-                        isBusy: self.connectingGatewayID != nil)
-                    {
-                        self.openGatewayQRScanner()
-                    }
-                    self.gatewayActionButton(
-                        title: "Connect",
-                        icon: "bolt.horizontal.circle",
-                        color: OpenClawBrand.ok,
-                        isBusy: self.connectingGatewayID == "manual")
-                    {
-                        Task { await self.applySetupCodeAndConnect() }
-                    }
-                    .disabled(!self.canApplyGatewaySetup)
-                }
-                if let status = self.setupStatusLine {
-                    Text(status)
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if let warning = self.tailnetWarningText {
-                    Text(warning)
-                        .font(OpenClawType.captionSemiBold)
-                        .foregroundStyle(OpenClawBrand.warn)
-                }
+        Section {
+            TextField("Paste setup code", text: self.$setupCode)
+                .font(OpenClawType.body)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            self.gatewayActionButton(
+                title: "Scan QR",
+                icon: "qrcode.viewfinder",
+                color: OpenClawBrand.accent,
+                isBusy: false,
+                isDisabled: self.connectingGatewayID != nil)
+            {
+                self.openGatewayQRScanner()
+            }
+
+            self.gatewayActionButton(
+                title: "Connect",
+                icon: "bolt.horizontal.circle",
+                color: OpenClawBrand.accent,
+                isBusy: self.connectingGatewayID == "manual",
+                isDisabled: !self.canApplyGatewaySetup || self.connectingGatewayID != nil)
+            {
+                Task { await self.applySetupCodeAndConnect() }
+            }
+        } header: {
+            Text("Setup Code")
+                .font(OpenClawType.subheadSemiBold)
+        } footer: {
+            if let warning = self.tailnetWarningText {
+                Text(warning).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.warn)
+            } else if let status = self.setupStatusLine {
+                Text(status)
+                    .font(OpenClawType.footnote)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var discoveredGatewaysCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Discovered Gateways")
-                    .font(OpenClawType.subheadSemiBold)
-                if self.gatewayController.gateways.isEmpty {
-                    Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(self.gatewayController.gateways) { gateway in
-                        self.discoveredGatewayRow(gateway)
-                        if gateway.id != self.gatewayController.gateways.last?.id {
-                            Divider()
-                        }
-                    }
+        Section("Discovered Gateways") {
+            if self.gatewayController.gateways.isEmpty {
+                Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
+                    .font(OpenClawType.subhead)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(self.gatewayController.gateways) { gateway in
+                    self.discoveredGatewayRow(gateway)
                 }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
@@ -921,80 +782,49 @@ extension SettingsProTab {
     }
 
     var manualGatewayCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                self.gatewayButtonToggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
-                TextField("Host", text: self.$manualGatewayHost)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
-                TextField("Port", text: self.manualPortBinding)
-                    .keyboardType(.numberPad)
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
-                self.gatewayButtonToggle("Use TLS", isOn: self.$manualGatewayTLS)
-                self.gatewayActionButton(
-                    title: "Connect Manual",
-                    icon: "network",
-                    color: OpenClawBrand.accent,
-                    isBusy: self.connectingGatewayID == "manual")
-                {
-                    Task { await self.connectManual() }
-                }
-                .disabled(self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        Section("Manual Gateway") {
+            Toggle(isOn: self.$manualGatewayEnabled) {
+                Text("Use Manual Gateway")
+                    .font(OpenClawType.body)
+            }
+            TextField("Host", text: self.$manualGatewayHost)
+                .font(OpenClawType.body)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("Port", text: self.manualPortBinding)
+                .font(OpenClawType.body)
+                .keyboardType(.numberPad)
+            Toggle(isOn: self.$manualGatewayTLS) {
+                Text("Use TLS")
+                    .font(OpenClawType.body)
+            }
+            self.gatewayActionButton(
+                title: "Connect Manual",
+                icon: "network",
+                color: OpenClawBrand.accent,
+                isBusy: self.connectingGatewayID == "manual",
+                isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !self.manualPortIsValid)
+            {
+                Task { await self.connectManual() }
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var gatewayAdvancedCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                self.gatewayButtonToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-                self.gatewaySecureField("Gateway Auth Token", text: self.$gatewayToken)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                self.gatewaySecureField("Gateway Password", text: self.$gatewayPassword)
-                Button(role: .destructive) {
-                    self.showResetOnboardingAlert = true
-                } label: {
-                    Label("Reset Onboarding", systemImage: "arrow.counterclockwise")
-                        .font(OpenClawType.captionSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .font(OpenClawType.captionSemiBold)
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+        Section {
+            Toggle(isOn: self.$gatewayAutoConnect) {
+                Text("Auto-connect on launch")
+                    .font(OpenClawType.body)
             }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    func gatewayButtonToggle(
-        _ title: String,
-        isOn: Binding<Bool>,
-        onChange: ((Bool) -> Void)? = nil) -> some View
-    {
-        Button {
-            isOn.wrappedValue.toggle()
-        } label: {
-            HStack {
-                Text(title)
-                    .font(OpenClawType.subheadSemiBold)
-                Spacer(minLength: 8)
-                self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
+            self.gatewaySecureField("Gateway Auth Token", text: self.$gatewayToken)
+            self.gatewaySecureField("Gateway Password", text: self.$gatewayPassword)
+            Button(role: .destructive) {
+                self.showResetOnboardingAlert = true
+            } label: {
+                Label("Reset Onboarding", systemImage: "arrow.counterclockwise")
+                    .font(OpenClawType.body)
             }
-            .font(OpenClawType.subheadSemiBold)
-            .contentShape(Rectangle())
-        }
-        .font(OpenClawType.subheadSemiBold)
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
-        .onChange(of: isOn.wrappedValue) { _, enabled in
-            onChange?(enabled)
         }
     }
 
@@ -1002,7 +832,8 @@ extension SettingsProTab {
         ZStack(alignment: .leading) {
             SecureField("", text: text)
                 .font(OpenClawType.subhead)
-                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
                 .accessibilityLabel(placeholder)
             if text.wrappedValue.isEmpty {
                 Text(placeholder)
@@ -1017,151 +848,125 @@ extension SettingsProTab {
     }
 
     var voiceFeatureCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                self.settingsToggle("Voice Wake", isOn: self.$voiceWakeEnabled) { enabled in
-                    self.appModel.setVoiceWakeEnabled(enabled)
+        Section {
+            self.settingsToggle("Voice Wake", isOn: self.$voiceWakeEnabled) { enabled in
+                self.appModel.setVoiceWakeEnabled(enabled)
+            }
+            self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
+                guard !self.appModel.isAppleReviewDemoModeEnabled else {
+                    self.talkEnabled = false
+                    return
                 }
-                self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
-                    guard !self.appModel.isAppleReviewDemoModeEnabled else {
-                        self.talkEnabled = false
-                        return
-                    }
-                    self.appModel.setTalkEnabled(enabled)
-                }
-                .disabled(self.appModel.isAppleReviewDemoModeEnabled)
-                Picker("Speech Language", selection: self.$talkSpeechLocale) {
-                    ForEach(TalkSpeechLocale.supportedOptions()) { option in
-                        Text(option.label)
-                            .font(OpenClawType.subhead)
-                            .tag(option.id)
-                    }
-                }
-                self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
-                self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
-                NavigationLink {
-                    VoiceWakeWordsSettingsView()
-                } label: {
-                    self.simpleSettingsRow(
-                        title: "Wake Words",
-                        value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+                self.appModel.setTalkEnabled(enabled)
+            }
+            .disabled(self.appModel.isAppleReviewDemoModeEnabled)
+            Picker("Speech Language", selection: self.$talkSpeechLocale) {
+                ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                    Text(option.label).font(OpenClawType.body).tag(option.id)
                 }
             }
+            .font(OpenClawType.body)
+            self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
+            self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
+            NavigationLink {
+                VoiceWakeWordsSettingsView()
+            } label: {
+                self.simpleSettingsRow(
+                    title: "Wake Words",
+                    value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+            }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var talkVoiceSettingsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        Group {
             if self.gatewayConnected,
                let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue
             {
-                TalkRuntimeIssueBanner(
-                    issue: issue,
-                    onOpenSettings: nil,
-                    onShowDetails: {
-                        self.showTalkIssueDetails = true
-                    })
-            }
-            ProCard(radius: SettingsLayout.cardRadius) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Provider", selection: self.talkProviderSelectionBinding) {
-                        ForEach(TalkModeProviderSelection.allCases) { option in
-                            Text(option.label)
-                                .font(OpenClawType.subhead)
-                                .tag(option.rawValue)
-                        }
-                    }
-                    if self.shouldShowRealtimeVoicePicker {
-                        Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
-                            Text("Gateway Default")
-                                .font(OpenClawType.subhead)
-                                .tag("")
-                            ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
-                                Text(TalkModeRealtimeVoiceSelection.label(for: voice))
-                                    .font(OpenClawType.subhead)
-                                    .tag(voice)
-                            }
-                        }
-                    }
-                    self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-                    Divider()
-                    self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
-                    if let issue = self.gatewayTalkLastIssueDetail {
-                        Divider()
-                        self.detailRow("Last Voice Issue", value: issue)
-                    }
-                    Divider()
-                    self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
-                    Divider()
-                    self.detailRow("API Key", value: self.talkApiKeyStatus)
+                Section {
+                    TalkRuntimeIssueBanner(
+                        issue: issue,
+                        onOpenSettings: nil,
+                        onShowDetails: {
+                            self.showTalkIssueDetails = true
+                        })
                 }
             }
+            Section("Voice") {
+                Picker("Provider", selection: self.talkProviderSelectionBinding) {
+                    ForEach(TalkModeProviderSelection.allCases) { option in
+                        Text(option.label).font(OpenClawType.body).tag(option.rawValue)
+                    }
+                }
+                .font(OpenClawType.body)
+                if self.shouldShowRealtimeVoicePicker {
+                    Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
+                        Text("Gateway Default").font(OpenClawType.body).tag("")
+                        ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
+                            Text(TalkModeRealtimeVoiceSelection.label(for: voice)).font(OpenClawType.body).tag(voice)
+                        }
+                    }
+                    .font(OpenClawType.body)
+                }
+                self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
+                if let issue = self.gatewayTalkLastIssueDetail {
+                    self.detailRow("Last Voice Issue", value: issue)
+                }
+                self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
+                self.detailRow("API Key", value: self.talkApiKeyStatus)
+            }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var shareSettingsCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                Toggle(isOn: self.$talkButtonEnabled) {
-                    Text("Show Talk Control")
-                        .font(OpenClawType.subhead)
-                }
-                TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
-                    .lineLimit(2...5)
-                    .textInputAutocapitalization(.sentences)
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    Task { await self.appModel.runSharePipelineSelfTest() }
-                } label: {
-                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
-                        .font(OpenClawType.captionSemiBold)
-                }
-                .buttonStyle(.bordered)
-                Text(self.appModel.lastShareEventText)
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
+        Section {
+            Toggle(isOn: self.$talkButtonEnabled) {
+                Text("Show Talk Control")
+                    .font(OpenClawType.body)
             }
+            TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                .font(OpenClawType.body)
+                .lineLimit(2...5)
+                .textInputAutocapitalization(.sentences)
+            Button {
+                Task { await self.appModel.runSharePipelineSelfTest() }
+            } label: {
+                Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                    .font(OpenClawType.body)
+            }
+        } footer: {
+            Text(self.appModel.lastShareEventText)
+                .font(OpenClawType.footnote)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var privacyAccessCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
+        Section {
             PrivacyAccessSectionView()
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var diagnosticsAdvancedCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                self.settingsButtonToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
-                    self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
-                }
-                self.settingsButtonToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
-                NavigationLink {
-                    GatewayDiscoveryDebugLogView()
-                } label: {
-                    self.simpleSettingsRow(title: "Discovery Logs", value: self.gatewayController.discoveryStatusText)
-                }
+        Section {
+            self.settingsToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
+                self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
+            }
+            self.settingsToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
+            NavigationLink {
+                GatewayDiscoveryDebugLogView()
+            } label: {
+                self.simpleSettingsRow(title: "Discovery Logs", value: self.gatewayController.discoveryStatusText)
             }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var deviceIdentityCard: some View {
-        ProCard(radius: SettingsLayout.cardRadius) {
-            VStack(alignment: .leading, spacing: 12) {
-                TextField("Device Name", text: self.$displayName)
-                    .font(OpenClawType.subhead)
-                    .textFieldStyle(.roundedBorder)
-                self.gatewayDetailRow("Instance ID", value: self.instanceId)
-            }
+        Section("Device") {
+            TextField("Device Name", text: self.$displayName)
+                .font(OpenClawType.body)
+            self.detailRow("Instance ID", value: self.instanceId)
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func settingsToggle(
@@ -1178,59 +983,12 @@ extension SettingsProTab {
         }
     }
 
-    func settingsButtonToggle(
-        _ title: String,
-        isOn: Binding<Bool>,
-        onChange: ((Bool) -> Void)? = nil) -> some View
-    {
-        // Settings switch rows need full-width taps; wrapping Toggle crashes this NavigationStack on iOS 26.
-        Button {
-            isOn.wrappedValue.toggle()
-        } label: {
-            HStack {
-                Text(title)
-                    .font(OpenClawType.subhead)
-                Spacer(minLength: 8)
-                self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
-            }
-            .font(OpenClawType.subhead)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
-        .onChange(of: isOn.wrappedValue) { _, enabled in
-            onChange?(enabled)
-        }
-    }
-
-    func settingsSwitchIndicator(isOn: Bool) -> some View {
-        Capsule()
-            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
-            .frame(width: 52, height: 32)
-            .overlay(alignment: isOn ? .trailing : .leading) {
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: 28, height: 28)
-                    .padding(2)
-                    .shadow(color: Color.black.opacity(0.14), radius: 1, x: 0, y: 1)
-            }
-    }
-
     func simpleSettingsRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(OpenClawType.subhead)
-            Spacer(minLength: 8)
+        LabeledContent(title) {
             Text(value)
                 .font(OpenClawType.subhead)
-                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Image(systemName: "chevron.right")
-                .font(OpenClawType.captionSemiBold)
-                .foregroundStyle(.secondary)
         }
-        .font(OpenClawType.subhead)
     }
 }

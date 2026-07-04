@@ -145,6 +145,22 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   }));
 }
 
+/** Record a failed attempt without losing evidence that platform delivery may have completed. */
+export async function failDeliveryAfterPlatformSend(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    retryCount: entry.retryCount + 1,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+    platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
+    recoveryState: "unknown_after_send",
+  }));
+}
+
 function updateQueuedDelivery(
   id: string,
   stateDir: string | undefined,
