@@ -1200,7 +1200,7 @@ public actor GatewayChannelActor {
         else {
             return false
         }
-        if host == "localhost" || host == "::1" || host == "127.0.0.1" || host.hasPrefix("127.") {
+        if LoopbackHost.isLoopbackHost(host) {
             return true
         }
         if self.url.scheme?.lowercased() == "wss",
