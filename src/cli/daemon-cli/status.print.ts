@@ -533,13 +533,22 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       for (const entry of drift.runtimeDependencyDrifts) {
         const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
         const installed = entry.installedDependencyVersion ?? "<missing>";
+        const installedLabel =
+          entry.declaredDependencyVersion && entry.declaredDependencyVersion !== installed
+            ? `${installed} (declared ${entry.declaredDependencyVersion}, ${sourceLabel})`
+            : `${installed} (${sourceLabel})`;
         const pluginVersion = entry.installedVersion ? ` in ${entry.installedVersion}` : "";
         defaultRuntime.log(
-          `- ${warnText(entry.pluginId)}${pluginVersion}: ${entry.dependencyName} ${installed} (${sourceLabel}) → expected ${entry.expectedVersion}`,
+          `- ${warnText(entry.pluginId)}${pluginVersion}: ${entry.dependencyName} ${installedLabel} → expected ${entry.expectedVersion}`,
         );
         if (entry.installPath) {
           defaultRuntime.log(
             `  ${label("Plugin root:")} ${infoText(shortenHomePath(entry.installPath))}`,
+          );
+        }
+        if (entry.dependencyPackageJsonPath) {
+          defaultRuntime.log(
+            `  ${label("Runtime package:")} ${infoText(shortenHomePath(entry.dependencyPackageJsonPath))}`,
           );
         }
       }

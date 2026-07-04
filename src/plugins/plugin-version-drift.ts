@@ -32,10 +32,12 @@ export type PluginRuntimeDependencyDriftEntry = {
   expectedVersion: string;
   source: PluginInstallRecord["source"];
   installedVersion?: string;
+  declaredDependencyVersion?: string;
   installedDependencyVersion?: string;
   packageName?: string;
   spec?: string;
   installPath?: string;
+  dependencyPackageJsonPath?: string;
 };
 
 export type PluginVersionDriftReport = {
@@ -169,6 +171,28 @@ function readPackageJsonDependencies(packageDir: string): {
   }
 }
 
+function dependencyPackageJsonPath(packageDir: string, dependencyName: string): string {
+  return join(packageDir, "node_modules", ...dependencyName.split("/"), "package.json");
+}
+
+function readInstalledDependencyPackageVersion(
+  packageDir: string,
+  dependencyName: string,
+): { version: string; packageJsonPath: string } | null {
+  const packageJsonPath = dependencyPackageJsonPath(packageDir, dependencyName);
+  if (!existsSync(packageJsonPath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      version?: unknown;
+    };
+    return typeof parsed.version === "string" ? { version: parsed.version, packageJsonPath } : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildRuntimeDependencyExpectationMap(
   expectations: readonly PluginRuntimeDependencyExpectation[],
 ): Map<string, PluginRuntimeDependencyExpectation[]> {
@@ -209,10 +233,14 @@ function collectRuntimeDependencyDrifts(params: {
     }
     const installedVersion = record.resolvedVersion ?? record.version;
     for (const expectation of expectations) {
-      const installedDependencyVersion =
+      const declaredDependencyVersion =
         packageDependencies.dependencies[expectation.dependencyName] ??
         packageDependencies.optionalDependencies[expectation.dependencyName];
-      if (installedDependencyVersion === expectation.expectedVersion) {
+      const installedDependency = readInstalledDependencyPackageVersion(
+        record.installPath,
+        expectation.dependencyName,
+      );
+      if (installedDependency?.version === expectation.expectedVersion) {
         continue;
       }
       drifts.push({
@@ -221,10 +249,16 @@ function collectRuntimeDependencyDrifts(params: {
         expectedVersion: expectation.expectedVersion,
         source: record.source,
         ...(installedVersion ? { installedVersion } : {}),
-        ...(installedDependencyVersion ? { installedDependencyVersion } : {}),
+        ...(declaredDependencyVersion ? { declaredDependencyVersion } : {}),
+        ...(installedDependency?.version
+          ? { installedDependencyVersion: installedDependency.version }
+          : {}),
         ...(record.resolvedName ? { packageName: record.resolvedName } : {}),
         ...(record.spec ? { spec: record.spec } : {}),
         installPath: record.installPath,
+        ...(installedDependency?.packageJsonPath
+          ? { dependencyPackageJsonPath: installedDependency.packageJsonPath }
+          : {}),
       });
     }
   }

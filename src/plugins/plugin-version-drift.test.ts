@@ -1,5 +1,5 @@
 /** Tests plugin version drift detection between package, manifest, and install records. */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -41,6 +41,7 @@ function clawhubRecord(
 function withPackageJson(
   dependencies: Record<string, string>,
   callback: (installPath: string) => void,
+  installedDependencies: Record<string, string> = dependencies,
 ): void {
   const installPath = mkdtempSync(join(tmpdir(), "openclaw-plugin-drift-"));
   try {
@@ -48,6 +49,14 @@ function withPackageJson(
       join(installPath, "package.json"),
       JSON.stringify({ name: "@openclaw/codex", dependencies }, null, 2),
     );
+    for (const [dependencyName, version] of Object.entries(installedDependencies)) {
+      const dependencyDir = join(installPath, "node_modules", ...dependencyName.split("/"));
+      mkdirSync(dependencyDir, { recursive: true });
+      writeFileSync(
+        join(dependencyDir, "package.json"),
+        JSON.stringify({ name: dependencyName, version }, null, 2),
+      );
+    }
     callback(installPath);
   } finally {
     rmSync(installPath, { recursive: true, force: true });
@@ -369,10 +378,18 @@ describe("detectPluginVersionDrift", () => {
           expectedVersion: "0.142.5",
           source: "npm",
           installedVersion: "2026.6.11",
+          declaredDependencyVersion: "0.139.0",
           installedDependencyVersion: "0.139.0",
           packageName: "@openclaw/codex",
           spec: "@openclaw/codex",
           installPath,
+          dependencyPackageJsonPath: join(
+            installPath,
+            "node_modules",
+            "@openai",
+            "codex",
+            "package.json",
+          ),
         },
       ]);
     });
@@ -402,10 +419,45 @@ describe("detectPluginVersionDrift", () => {
       expect(result.runtimeDependencyDrifts).toHaveLength(1);
       expect(result.runtimeDependencyDrifts[0]).toMatchObject({
         pluginId: "codex",
+        declaredDependencyVersion: "0.139.0",
         installedDependencyVersion: "0.139.0",
         expectedVersion: "0.142.5",
       });
     });
+  });
+
+  it("reports Codex route runtime drift when the declaration is current but the nested runtime is stale", () => {
+    withPackageJson(
+      { "@openai/codex": "0.142.5" },
+      (installPath) => {
+        const result = detectPluginVersionDrift({
+          gatewayVersion: "2026.6.11",
+          installRecords: {
+            codex: npmRecord("2026.6.11", {
+              resolvedName: "@openclaw/codex",
+              spec: "@openclaw/codex",
+              installPath,
+            }),
+          },
+          runtimeDependencyExpectations: [
+            {
+              pluginId: "codex",
+              dependencyName: "@openai/codex",
+              expectedVersion: "0.142.5",
+            },
+          ],
+        });
+
+        expect(result.runtimeDependencyDrifts).toHaveLength(1);
+        expect(result.runtimeDependencyDrifts[0]).toMatchObject({
+          pluginId: "codex",
+          declaredDependencyVersion: "0.142.5",
+          installedDependencyVersion: "0.139.0",
+          expectedVersion: "0.142.5",
+        });
+      },
+      { "@openai/codex": "0.139.0" },
+    );
   });
 
   it("does not report Codex route runtime dependency drift when the embedded dependency matches", () => {
@@ -459,6 +511,7 @@ describe("detectPluginVersionDrift", () => {
           expectedVersion: "0.142.5",
         }),
       ]);
+      expect(result.runtimeDependencyDrifts[0]).not.toHaveProperty("declaredDependencyVersion");
       expect(result.runtimeDependencyDrifts[0]).not.toHaveProperty("installedDependencyVersion");
     });
   });

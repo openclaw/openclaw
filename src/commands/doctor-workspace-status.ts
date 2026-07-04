@@ -99,11 +99,15 @@ function pluginVersionDriftToHealthFindings(
         resolvePluginRuntimeDependencyDriftUpdateCommand(entry),
       );
       const installed = entry.installedDependencyVersion ?? "<missing>";
+      const installedDetail =
+        entry.declaredDependencyVersion && entry.declaredDependencyVersion !== installed
+          ? `${installed} (declared ${entry.declaredDependencyVersion})`
+          : installed;
       const pluginVersion = entry.installedVersion ? ` ${entry.installedVersion}` : "";
       return {
         checkId: WORKSPACE_STATUS_CHECK_ID,
         severity: "warning" as const,
-        message: `Plugin ${entry.pluginId}${pluginVersion} embeds ${entry.dependencyName} ${installed}, but this OpenClaw release expects ${entry.expectedVersion} for route runtime execution.`,
+        message: `Plugin ${entry.pluginId}${pluginVersion} embeds ${entry.dependencyName} ${installedDetail}, but this OpenClaw release expects ${entry.expectedVersion} for route runtime execution.`,
         path: `plugins.entries.${entry.pluginId}`,
         target: entry.pluginId,
         requirement: "plugin-runtime-dependency-drift",
@@ -197,8 +201,12 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
     ...drift.runtimeDependencyDrifts.map((entry) => {
       const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
       const installed = entry.installedDependencyVersion ?? "<missing>";
+      const installedDetail =
+        entry.declaredDependencyVersion && entry.declaredDependencyVersion !== installed
+          ? `${installed} (declared ${entry.declaredDependencyVersion})`
+          : installed;
       const pluginVersion = entry.installedVersion ? ` ${entry.installedVersion}` : "";
-      return `- ${entry.pluginId}${pluginVersion}: ${entry.dependencyName} ${installed} (${sourceLabel}) -> expected ${entry.expectedVersion}`;
+      return `- ${entry.pluginId}${pluginVersion}: ${entry.dependencyName} ${installedDetail} (${sourceLabel}) -> expected ${entry.expectedVersion}`;
     }),
     uniqueUpdateCommands.length === 1
       ? `Fix: ${uniqueUpdateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
