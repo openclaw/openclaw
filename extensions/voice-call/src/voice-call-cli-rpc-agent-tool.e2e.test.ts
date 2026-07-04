@@ -1,7 +1,6 @@
 // Voice Call E2E tests cover CLI, Gateway RPC, and agent tool through the mock provider.
 import fs from "node:fs";
 import { createServer } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -12,6 +11,7 @@ import plugin from "../index.js";
 import { testing as voiceCallCliTesting } from "./cli.js";
 import {
   createVoiceCallStateRuntimeForTests,
+  createTestStorePath,
   installVoiceCallStateRuntimeForTests,
 } from "./manager.test-harness.js";
 import { clearVoiceCallStateRuntime } from "./runtime-state.js";
@@ -48,8 +48,11 @@ function isAddressInUseError(error: unknown): boolean {
   return error instanceof Error && `${error.message}\n${error.stack ?? ""}`.includes("EADDRINUSE");
 }
 
+const tempDirs = new Set<string>();
+
 async function runVoiceCallEntryPointFixture(): Promise<void> {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-qa-"));
+  const stateDir = createTestStorePath();
+  tempDirs.add(stateDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   resetPluginStateStoreForTests();
   installVoiceCallStateRuntimeForTests();
@@ -167,7 +170,6 @@ async function runVoiceCallEntryPointFixture(): Promise<void> {
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-    fs.rmSync(stateDir, { force: true, recursive: true });
   }
 }
 
@@ -178,6 +180,10 @@ describe("QA Voice Call CLI, RPC, and agent tool", () => {
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { force: true, recursive: true });
+    }
+    tempDirs.clear();
   });
 
   it("routes all three entry points through one mock-provider runtime", async () => {
