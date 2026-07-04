@@ -7202,6 +7202,14 @@
       "id": "native.apple.a97cdae7c8e13f0e"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 100,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "What would you like to work on?",
+      "surface": "apple",
+      "id": "native.apple.202b97e93b938049"
+    },
+    {
       "kind": "ui-call",
       "line": 111,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
@@ -7248,6 +7256,54 @@
       "source": "Message \\(self.agentDisplayName)...",
       "surface": "apple",
       "id": "native.apple.e8173c7d24457256"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 298,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Check OpenClaw status",
+      "surface": "apple",
+      "id": "native.apple.14492e334b87e4f2"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 299,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "surface": "apple",
+      "id": "native.apple.bbf7bd23da1e7865"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 302,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "What can I control here?",
+      "surface": "apple",
+      "id": "native.apple.ea8cbb1b4230c652"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 303,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Show me which phone controls and device capabilities are available right now.",
+      "surface": "apple",
+      "id": "native.apple.451d25bdb3130ed0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 306,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Help me start voice chat",
+      "surface": "apple",
+      "id": "native.apple.503ec402d08bd43a"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 307,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Help me start a realtime voice session from this phone.",
+      "surface": "apple",
+      "id": "native.apple.65e462758be96174"
     },
     {
       "kind": "ui-call",

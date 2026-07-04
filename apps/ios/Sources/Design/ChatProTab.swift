@@ -97,7 +97,7 @@ struct ChatProTab: View {
                 composerChrome: .clean,
                 isComposerEnabled: self.gatewayConnected,
                 messagePlaceholder: self.messagePlaceholder,
-                emptyAssistantIntro: "What would you like to work on?",
+                emptyAssistantIntro: String(localized: "What would you like to work on?"),
                 emptyAssistantPrompts: Self.emptyAssistantPrompts,
                 talkControl: self.talkControl)
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
@@ -295,16 +295,16 @@ struct ChatProTab: View {
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [
         OpenClawChatView.StarterPrompt(
             id: "summarize-status",
-            title: "Check OpenClaw status",
-            prompt: "Summarize the current OpenClaw status and tell me what needs attention."),
+            title: String(localized: "Check OpenClaw status"),
+            prompt: String(localized: "Summarize the current OpenClaw status and tell me what needs attention.")),
         OpenClawChatView.StarterPrompt(
             id: "show-controls",
-            title: "What can I control here?",
-            prompt: "Show me which phone controls and device capabilities are available right now."),
+            title: String(localized: "What can I control here?"),
+            prompt: String(localized: "Show me which phone controls and device capabilities are available right now.")),
         OpenClawChatView.StarterPrompt(
             id: "start-voice",
-            title: "Help me start voice chat",
-            prompt: "Help me start a realtime voice session from this phone."),
+            title: String(localized: "Help me start voice chat"),
+            prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
 
     private func normalized(_ value: String?) -> String? {

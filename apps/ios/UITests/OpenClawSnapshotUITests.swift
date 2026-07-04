@@ -317,6 +317,31 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-starter-response")
     }
 
+    func testEmptyChatStarterPromptsLocalizeInGerman() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-empty-starters-german"),
+            additionalArguments: [
+                "--openclaw-empty-chat-fixture",
+                "-AppleLanguages",
+                "(de)",
+                "-AppleLocale",
+                "de_DE",
+            ])
+
+        XCTAssertTrue(self.app?.staticTexts["Woran möchtest du arbeiten?"].waitForExistence(timeout: 8) == true)
+        let starter = try XCTUnwrap(self.app?.buttons["OpenClaw-Status prüfen"])
+        XCTAssertTrue(starter.exists)
+        starter.tap()
+        XCTAssertTrue(
+            self.app?.staticTexts[
+                "Fasse den aktuellen OpenClaw-Status zusammen und sage mir, was Aufmerksamkeit erfordert."
+            ].waitForExistence(timeout: 5) == true)
+        self.attachScreenshot(named: "chat-empty-starters-german")
+    }
+
     func testOnboardingPairCommandAndCompletionOpenChat() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone onboarding proof only")
         self.addUIInterruptionMonitor(withDescription: "Local network access") { alert in
