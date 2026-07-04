@@ -6,9 +6,12 @@ enum GatewayOnboardingReset {
     static func prepareForBootstrapPairing(
         appModel: NodeAppModel,
         instanceId: String,
+        disconnectGateway: Bool = true,
         defaults: UserDefaults = .standard)
     {
-        appModel.disconnectGateway()
+        if disconnectGateway {
+            appModel.disconnectGateway()
+        }
 
         let trimmedInstanceId = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedInstanceId.isEmpty {

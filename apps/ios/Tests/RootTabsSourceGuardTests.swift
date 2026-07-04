@@ -921,6 +921,8 @@ struct RootTabsSourceGuardTests {
         #expect(stagedValidation.lowerBound < stagedConsumption.lowerBound)
         #expect(stagedReset.lowerBound < stagedConsumption.lowerBound)
         #expect(!stagedSetupConnect.contains("self.appModel.disconnectGateway()"))
+        #expect(stagedSetupConnect.contains(
+            "self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)"))
         #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
         #expect(onboardingSource.contains("self.setupLinkStaging.link == nil else { return }"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))

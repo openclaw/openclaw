@@ -971,7 +971,7 @@ extension OnboardingWizardView {
         await self.appModel.resetGatewaySessionsForTargetSwitch()
         guard self.setupLinkStaging.link == link else { return }
         _ = self.setupLinkStaging.take()
-        self.applyGatewayLink(link)
+        self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)
         self.setupCodeStatus = "Setup link applied. Connecting..."
         self.issue = .none
         self.connectMessage = "Connecting to \(link.host)…"
@@ -986,7 +986,10 @@ extension OnboardingWizardView {
         self.statusLine = message
     }
 
-    private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
+    private func applyGatewayLink(
+        _ link: GatewayConnectDeepLink,
+        disconnectExistingGatewayForBootstrap: Bool = true)
+    {
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualPortText = String(link.port)
@@ -995,7 +998,8 @@ extension OnboardingWizardView {
         if setupAuth.hasBootstrapToken {
             GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
-                instanceId: GatewaySettingsStore.currentInstanceID())
+                instanceId: GatewaySettingsStore.currentInstanceID(),
+                disconnectGateway: disconnectExistingGatewayForBootstrap)
         }
         self.saveGatewayBootstrapToken(setupAuth.bootstrapToken)
         if setupAuth.shouldApplyTokenField {
