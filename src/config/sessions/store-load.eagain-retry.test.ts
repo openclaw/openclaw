@@ -125,4 +125,54 @@ describe("loadSessionStore EAGAIN retry", () => {
     expect(store["agent:main:sess-d"]?.sessionId).toBe("sess-d");
     expect(calls).toBe(2);
   });
+
+  // P2 fix (#99994): missing store (ENOENT) must return immediately without
+  // burning two 50ms Atomics.wait pauses. The retry loop is for transient
+  // failures only; a genuinely absent store is the happy empty-store path.
+  it("returns an empty store immediately on ENOENT (no retry waits)", () => {
+    // No file written — readFileSync throws ENOENT on first call.
+    let calls = 0;
+    const start = Date.now();
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+      calls += 1;
+      const err: NodeJS.ErrnoException = new Error("ENOENT: no such file or directory");
+      err.code = "ENOENT";
+      err.errno = -2;
+      throw err;
+    });
+
+    const store = loadSessionStore(storePath!, { skipCache: true });
+    const elapsed = Date.now() - start;
+
+    expect(Object.keys(store)).toEqual([]);
+    // Single attempt — permanent failure breaks out of the retry loop.
+    expect(calls).toBe(1);
+    // Should complete well under 50ms; two Atomics.wait pauses would be ~100ms.
+    expect(elapsed).toBeLessThan(40);
+  });
+
+  // P2 fix (#99994): EACCES (permission denied) is also permanent and must
+  // not trigger retries.
+  it("returns an empty store immediately on EACCES (no retry waits)", () => {
+    writeSessionStoreForTest(storePath!, {
+      "agent:main:sess-e": makeEntry("sess-e"),
+    });
+
+    let calls = 0;
+    const start = Date.now();
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+      calls += 1;
+      const err: NodeJS.ErrnoException = new Error("EACCES: permission denied");
+      err.code = "EACCES";
+      err.errno = -13;
+      throw err;
+    });
+
+    const store = loadSessionStore(storePath!, { skipCache: true });
+    const elapsed = Date.now() - start;
+
+    expect(Object.keys(store)).toEqual([]);
+    expect(calls).toBe(1);
+    expect(elapsed).toBeLessThan(40);
+  });
 });

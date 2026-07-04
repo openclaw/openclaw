@@ -422,11 +422,27 @@ export function loadSessionStore(
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
-      if (attempt < maxReadAttempts - 1) {
+    } catch (err) {
+      // Only retry on transient read failures (empty reads, EAGAIN/EINTR, or
+      // the macOS "Unknown system error -11/-4" message form). Permanent
+      // failures such as ENOENT (missing store) or EACCES must return
+      // immediately so the heartbeat does not stall on every cycle.
+      // (#99994)
+      const anyErr = err as { code?: string; errno?: number; message?: string };
+      const isTransient =
+        anyErr.code === "EAGAIN" ||
+        anyErr.code === "EINTR" ||
+        anyErr.errno === -11 ||
+        anyErr.errno === -4 ||
+        (anyErr.message !== undefined && /Unknown system error -11/i.test(anyErr.message)) ||
+        (anyErr.message !== undefined && /system error -4\b/i.test(anyErr.message));
+      if (attempt < maxReadAttempts - 1 && isTransient) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }
+      // Permanent failure (ENOENT, EACCES, JSON parse error, etc.) or
+      // retries exhausted: stop retrying and fall back to the empty store.
+      break;
     }
   }
 
