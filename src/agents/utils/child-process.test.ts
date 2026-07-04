@@ -57,7 +57,7 @@ describe.skipIf(process.platform === "win32")("waitForChildProcess", () => {
       const fakeChild = Object.assign(new EventEmitter(), {
         stdout,
         stderr,
-      }) as ChildProcess;
+      }) as unknown as ChildProcess;
       let output = "";
       stdout.on("data", (chunk: Buffer) => {
         output += chunk.toString();
