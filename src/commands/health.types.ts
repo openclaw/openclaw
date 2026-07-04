@@ -55,6 +55,15 @@ export type ContextEngineHealthSummary = {
   quarantined: ContextEngineHealthQuarantineSummary[];
 };
 
+/** Dead-lettered delivery queue entries surfaced in health output. */
+export type DeliveryQueueHealthSummary = {
+  failed: Array<{
+    queueName: string;
+    count: number;
+    oldestFailedAt?: number;
+  }>;
+};
+
 /** Optional model pricing cache health reported by the gateway. */
 type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
@@ -67,6 +76,7 @@ export type HealthSummary = {
   eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
+  deliveryQueues?: DeliveryQueueHealthSummary;
   modelPricing?: ModelPricingHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];
