@@ -2203,12 +2203,12 @@ describe("initSessionState reset policy", () => {
       expectNewSession: false,
     },
     {
-      name: "main terminal rows rotate when transcript is newer than updatedAt",
+      name: "main status-done terminal rows reuse when transcript is newer than updatedAt",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
       transcriptMtimeOffsetMs: 0,
-      expectNewSession: true,
+      expectNewSession: false,
     },
     {
       name: "main endedAt-only rows rotate when transcript is newer than updatedAt",

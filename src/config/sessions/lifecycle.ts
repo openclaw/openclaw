@@ -213,9 +213,12 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (!hasTerminalLifecycle) {
     return undefined;
   }
-  if (params.entry.status === "failed") {
+  if (params.entry.status === "failed" || params.entry.status === "done") {
     // Failed rows with a present transcript stay reusable for retry/recovery.
     // Callers already rotate failed rows when the transcript is missing.
+    // Done rows stay reusable for continuation — transcript mtime may slightly
+    // trail registry updatedAt due to persistence ordering, and the guard is
+    // not needed for successful completions.
     return undefined;
   }
   // updatedAt is touched after managed transcript appends; endedAt can predate
