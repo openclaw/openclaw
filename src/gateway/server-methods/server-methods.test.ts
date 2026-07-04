@@ -2848,6 +2848,32 @@ describe("exec approval handlers", () => {
     await requestPromise;
   });
 
+  it("escapes unpaired surrogates before broadcasting an exec approval", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "echo \uD83D \uDE00 😀",
+        commandArgv: ["echo", "\uD83D", "\uDE00", "😀"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.command).toBe("echo \\u{D83D} \\u{DE00} 😀");
+    expect(() => encodeURIComponent(String(request.command))).not.toThrow();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({ handlers, id, respond: resolveRespond, context });
+    await requestPromise;
+  });
+
   it("attaches shared command analysis to gateway exec approval requests", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 

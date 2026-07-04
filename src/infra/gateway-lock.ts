@@ -1,6 +1,5 @@
 // Coordinates gateway lock files, ports, and stale owner detection.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -14,6 +13,7 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { sha256HexPrefix } from "./crypto-digest.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
@@ -221,7 +221,7 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
 function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
+  const hash = sha256HexPrefix(configPath, 8);
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
 }

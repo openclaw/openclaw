@@ -347,25 +347,35 @@ export async function prepareCliRunContext(
     }
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
-  // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
+  const bindingFacts = params.cliSessionBindingFacts;
+  const bindingExtraSystemPromptStatic =
+    bindingFacts?.extraSystemPromptStatic ?? params.extraSystemPromptStatic;
   const extraSystemPromptHash =
-    params.extraSystemPromptStatic !== undefined
-      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+    bindingExtraSystemPromptStatic !== undefined
+      ? hashCliSessionText(bindingExtraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
-  const messageToolPolicyHash =
-    params.sourceReplyDeliveryMode !== undefined ||
-    params.requireExplicitMessageTarget !== undefined ||
-    requireExplicitMessageTarget
-      ? hashCliSessionText(
-          JSON.stringify({
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            requireExplicitMessageTarget,
-          }),
-        )
-      : undefined;
+  const hasCliSessionBindingFacts = bindingFacts !== undefined;
+  const bindingRequireExplicitMessageTarget =
+    bindingFacts?.requireExplicitMessageTarget ?? requireExplicitMessageTarget;
+  const bindingSourceReplyDeliveryMode = hasCliSessionBindingFacts
+    ? bindingFacts.sourceReplyDeliveryMode
+    : params.sourceReplyDeliveryMode;
+  const hasBindingMessageToolPolicy =
+    bindingSourceReplyDeliveryMode !== undefined ||
+    (hasCliSessionBindingFacts
+      ? bindingFacts.requireExplicitMessageTarget !== undefined ||
+        bindingRequireExplicitMessageTarget
+      : params.requireExplicitMessageTarget !== undefined || bindingRequireExplicitMessageTarget);
+  const messageToolPolicyHash = hasBindingMessageToolPolicy
+    ? hashCliSessionText(
+        JSON.stringify({
+          sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+          requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+        }),
+      )
+    : undefined;
 
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
@@ -591,14 +601,16 @@ export async function prepareCliRunContext(
             sessionKey: params.sessionKey ?? "",
             messageProvider: params.messageChannel ?? params.messageProvider,
             currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            currentInboundAudio: params.currentInboundAudio,
+            // CLI binding hashes must use session-stable prompt facts. Per-sender
+            // and per-message scope stays in the runtime MCP env/list-call path.
+            currentThreadTs: undefined,
+            currentMessageId: undefined,
+            currentInboundAudio: undefined,
             accountId: params.agentAccountId,
-            inboundEventKind: params.currentInboundEventKind,
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            requireExplicitMessageTarget,
-            senderIsOwner: params.senderIsOwner,
+            inboundEventKind: undefined,
+            sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+            requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+            senderIsOwner: undefined,
           }).tools
         : [];
     const promptToolNamesHash =
@@ -708,8 +720,8 @@ export async function prepareCliRunContext(
           config: params.config,
           defaultThinkLevel: params.thinkLevel,
           extraSystemPrompt,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          requireExplicitMessageTarget,
+          sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+          requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
           silentReplyPromptMode: params.silentReplyPromptMode,
           runtimeChannel,
           runtimeChatType: params.sessionEntry?.chatType,

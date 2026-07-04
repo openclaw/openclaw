@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -1260,6 +1261,7 @@ class NodeRuntime(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
@@ -2193,6 +2195,10 @@ class NodeRuntime(
     chat.abort()
   }
 
+  fun startNewChat() {
+    chat.startNewChat()
+  }
+
   fun sendChat(
     message: String,
     thinking: String,
@@ -2206,6 +2212,10 @@ class NodeRuntime(
     thinking: String,
     attachments: List<OutgoingAttachment>,
   ): Boolean = chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
+
+  fun refreshChatCommands() {
+    chat.refreshCommands()
+  }
 
   private fun handleGatewayEvent(
     event: String,

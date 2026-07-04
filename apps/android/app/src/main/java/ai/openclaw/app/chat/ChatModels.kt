@@ -47,6 +47,18 @@ data class ChatSessionEntry(
 )
 
 /**
+ * Slash command metadata exposed by the gateway for text-surface chat clients.
+ */
+data class ChatCommandEntry(
+  val name: String,
+  val description: String,
+  val category: String? = null,
+  val textAliases: List<String> = emptyList(),
+  val acceptsArgs: Boolean = false,
+)
+
+
+/**
  * Snapshot of one chat session, including optional thinking level selected on the gateway.
  */
 data class ChatHistory(

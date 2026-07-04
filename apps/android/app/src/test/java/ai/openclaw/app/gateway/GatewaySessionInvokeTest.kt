@@ -199,13 +199,14 @@ class GatewaySessionInvokeTest {
       val secondEventHandled = CompletableDeferred<Unit>()
       val events = CopyOnWriteArrayList<String>()
       val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
       val server =
         startGatewayServer(json) { webSocket, id, method, _ ->
+          serverWebSocket.set(webSocket)
           if (method == "connect") {
             webSocket.send(connectResponseFrame(id))
             webSocket.send("""{"type":"event","event":"voice.first","payload":{}}""")
             webSocket.send("""{"type":"event","event":"voice.second","payload":{}}""")
-            webSocket.close(1000, "done")
           }
         }
 
@@ -237,6 +238,8 @@ class GatewaySessionInvokeTest {
         assertEquals(listOf("voice.first", "voice.second"), events.toList())
       } finally {
         releaseFirstEvent.complete(Unit)
+        runCatching { serverWebSocket.get()?.close(1000, "done") }
+        delay(100)
         shutdownHarness(harness, server)
       }
     }

@@ -3,6 +3,7 @@ import "../infra/fs-safe-defaults.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -111,10 +112,6 @@ function looksLikeGitHubHostPath(value: string): boolean {
   return /^github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/i.test(value);
 }
 
-function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value);
-}
-
 function isGitUrl(value: string): boolean {
   return (
     /^(?:ssh|git|file):\/\//i.test(value) || looksLikeScpGitUrl(value) || value.endsWith(".git")
@@ -153,7 +150,7 @@ function normalizeGitHubRepo(value: string): { url: string; label: string } {
 }
 
 function normalizeGitLabel(value: string): string {
-  if (isHttpUrl(value) || /^(?:ssh|git|file):\/\//i.test(value)) {
+  if (hasHttpUrlPrefix(value) || /^(?:ssh|git|file):\/\//i.test(value)) {
     try {
       const url = new URL(value);
       return stripGitSuffix(`${url.hostname}${url.pathname}`).replace(/^\/+/, "");
@@ -193,7 +190,7 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
   }
 
   if (
-    isHttpUrl(base) ||
+    hasHttpUrlPrefix(base) ||
     isGitUrl(base) ||
     base.startsWith("./") ||
     base.startsWith("../") ||

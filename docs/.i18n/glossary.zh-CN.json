@@ -44,6 +44,22 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawRouter (managed multi-provider routing)",
+    "target": "ClawRouter（托管式多提供商路由）"
+  },
+  {
+    "source": "ClawRouter",
+    "target": "ClawRouter"
+  },
+  {
+    "source": "ClawRouter plugin",
+    "target": "ClawRouter 插件"
+  },
+  {
+    "source": "clawrouter",
+    "target": "clawrouter"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },

@@ -66,7 +66,7 @@ import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isAbortError } from "../../infra/unhandled-rejections.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import {
   logMessageDispatchCompleted,
@@ -115,6 +115,7 @@ import {
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { BlockReplyContext, GetReplyOptions } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
@@ -897,13 +898,12 @@ function captureDeliveredTranscriptMirror(params: {
   return () => (observedFinal ? deliveredMetadata : metadata);
 }
 
-async function mirrorTranscriptAfterDispatcherDelivery(params: {
+async function mirrorTranscriptAfterDispatcherSettled(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
 }): Promise<void> {
-  await params.dispatcher.waitForIdle();
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
   if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
     return;
@@ -2047,6 +2047,7 @@ export async function dispatchReplyFromConfig(
   });
   const {
     sourceReplyDeliveryMode,
+    sessionStableSourceReplyDeliveryMode,
     suppressAutomaticSourceDelivery,
     suppressDelivery,
     sendPolicyDenied,
@@ -2206,11 +2207,13 @@ export async function dispatchReplyFromConfig(
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
-          if (
+          const isUnmentionedGroupFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !isExplicitSourceReplyCommand(ctx, cfg)
-          ) {
+            !explicitCommandTurnCtx;
+          const shouldSuppressUnmentionedFallback =
+            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
+          if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: pluginFallbackReason });
             commitInboundDedupeIfClaimed();
@@ -2579,19 +2582,25 @@ export async function dispatchReplyFromConfig(
             )
           : undefined);
       markInboundDedupeReplayUnsafe();
-      const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
-      const deliveredTranscriptMirror = captureDeliveredTranscriptMirror({
-        dispatcher,
-        metadata: transcriptMirror,
-      });
+      const finalOutcomeBefore = transcriptMirror
+        ? getDispatcherFinalOutcomeCounts(dispatcher)
+        : undefined;
+      const deliveredTranscriptMirror = transcriptMirror
+        ? captureDeliveredTranscriptMirror({ dispatcher, metadata: transcriptMirror })
+        : undefined;
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-      if (queuedFinal) {
-        await mirrorTranscriptAfterDispatcherDelivery({
-          dispatcher,
-          before: finalOutcomeBefore,
-          metadata: deliveredTranscriptMirror,
-          cfg,
-        });
+      if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
+        // The common settle owner runs this after successful delivery or
+        // cancellation. Keeping reconciliation out of the reply operation lets a
+        // newer foreground turn settle without creating an operation/idle cycle.
+        registerReplyDispatcherSettledTask(dispatcher, () =>
+          mirrorTranscriptAfterDispatcherSettled({
+            dispatcher,
+            before: finalOutcomeBefore,
+            metadata: deliveredTranscriptMirror,
+            cfg,
+          }),
+        );
       }
       return {
         queuedFinal,
@@ -3071,6 +3080,7 @@ export async function dispatchReplyFromConfig(
           {
             ...getReplyOptions(),
             sourceReplyDeliveryMode,
+            sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
             ...({
               onSessionMetadataChanges: notifySessionMetadataChanges,
               onSessionPrepared: notePreparedSession,

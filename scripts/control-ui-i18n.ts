@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const { formatGeneratedModule } = (await import(
@@ -632,12 +633,6 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
     "",
     JSON.stringify(payload, null, 2),
   ].join("\n");
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function formatDuration(ms: number): string {
