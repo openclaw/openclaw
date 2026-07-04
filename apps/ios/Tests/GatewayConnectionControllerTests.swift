@@ -357,6 +357,23 @@ import UIKit
     }
 
     @Test @MainActor func targetSwitchResetClearsPreviousReconnectRoute() async {
+        let defaults = UserDefaults.standard
+        let reconnectDefaults: [String: Any?] = [
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": "previous.gateway.invalid",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+        ]
+        var reconnectDefaultsSnapshot: [String: Any?] = [:]
+        for key in reconnectDefaults.keys {
+            reconnectDefaultsSnapshot[key] = defaults.object(forKey: key)
+        }
+        let gatewayService = "ai.openclawfoundation.app.gateway"
+        let lastConnectionAccount = "lastConnection"
+        let priorLastConnection = KeychainStore.loadString(
+            service: gatewayService,
+            account: lastConnectionAccount)
         let priorRelayConfig = ShareGatewayRelaySettings.loadConfig()
         defer {
             if let priorRelayConfig {
@@ -365,6 +382,31 @@ import UIKit
                 ShareGatewayRelaySettings.clearConfig()
             }
         }
+        defer {
+            for (key, value) in reconnectDefaultsSnapshot {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+            if let priorLastConnection {
+                _ = KeychainStore.saveString(
+                    priorLastConnection,
+                    service: gatewayService,
+                    account: lastConnectionAccount)
+            } else {
+                _ = KeychainStore.delete(service: gatewayService, account: lastConnectionAccount)
+            }
+        }
+        for (key, value) in reconnectDefaults {
+            defaults.set(value, forKey: key)
+        }
+        GatewaySettingsStore.saveLastGatewayConnectionManual(
+            host: "previous.gateway.invalid",
+            port: 443,
+            useTLS: true,
+            stableID: "manual|previous.gateway.invalid|443")
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
 
@@ -377,11 +419,64 @@ import UIKit
         await appModel.resetGatewaySessionsForTargetSwitch()
 
         #expect(!appModel.gatewayAutoReconnectEnabled)
+        #expect(!defaults.bool(forKey: "gateway.autoconnect"))
         #expect(appModel.activeGatewayConnectConfig == nil)
         #expect(appModel.gatewayServerName == nil)
         #expect(!appModel._test_hasGatewayLoopTasks().node)
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
         #expect(ShareGatewayRelaySettings.loadConfig() == nil)
+
+        let relaunchedModel = NodeAppModel()
+        defer { relaunchedModel.disconnectGateway() }
+        let relaunchedController = GatewayConnectionController(
+            appModel: relaunchedModel,
+            startDiscovery: false)
+        relaunchedController._test_triggerAutoConnect()
+
+        #expect(!relaunchedController._test_didAutoConnect())
+        #expect(relaunchedModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func targetSwitchResetReassertsPersistedReconnectPauseAfterTeardown() async {
+        let defaults = UserDefaults.standard
+        let priorAutoConnect = defaults.object(forKey: "gateway.autoconnect")
+        defer {
+            if let priorAutoConnect {
+                defaults.set(priorAutoConnect, forKey: "gateway.autoconnect")
+            } else {
+                defaults.removeObject(forKey: "gateway.autoconnect")
+            }
+        }
+        defaults.set(true, forKey: "gateway.autoconnect")
+
+        let teardownRelease = AsyncStream<Void>.makeStream()
+        let appModel = NodeAppModel()
+        defer {
+            appModel._test_setGatewaySessionResetTask(nil)
+            appModel.disconnectGateway()
+        }
+        let staleTeardownTask = Task {
+            for await _ in teardownRelease.stream {
+                defaults.set(true, forKey: "gateway.autoconnect")
+                return
+            }
+        }
+        appModel._test_setGatewaySessionResetTask(staleTeardownTask)
+
+        let targetResetTask = Task {
+            await appModel.resetGatewaySessionsForTargetSwitch()
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while defaults.bool(forKey: "gateway.autoconnect"), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(!defaults.bool(forKey: "gateway.autoconnect"))
+
+        teardownRelease.continuation.yield()
+        teardownRelease.continuation.finish()
+        await targetResetTask.value
+
+        #expect(!defaults.bool(forKey: "gateway.autoconnect"))
     }
 
     @Test @MainActor func newerGatewayConnectGenerationRejectsQueuedConfig() {

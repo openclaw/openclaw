@@ -2214,12 +2214,13 @@ extension NodeAppModel {
     func resetGatewaySessionsForTargetSwitch() async {
         // A target awaiting TLS trust must not retain a reconnect route to the previous gateway.
         self.invalidateGatewayConnectAttempts()
-        self.gatewayAutoReconnectEnabled = false
+        self.disableGatewayAutoReconnect()
         self.activeGatewayConnectConfig = nil
         ShareGatewayRelaySettings.clearConfig()
         await self.resetGatewaySessionsForForcedReconnect()
         guard !self.gatewayAutoReconnectEnabled, self.activeGatewayConnectConfig == nil else { return }
-        // A canceled loop may have persisted its relay config while teardown was in flight.
+        // A canceled loop may have persisted its reconnect flag and relay config while teardown was in flight.
+        self.disableGatewayAutoReconnect()
         ShareGatewayRelaySettings.clearConfig()
         self.gatewayHealthMonitor.stop()
         self.gatewayStatusText = "Offline"
@@ -2256,7 +2257,7 @@ extension NodeAppModel {
         self.invalidateGatewayConnectAttempts()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
-        self.gatewayAutoReconnectEnabled = false
+        self.disableGatewayAutoReconnect()
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
         self.lastGatewayProblem = nil
@@ -2285,6 +2286,13 @@ extension NodeAppModel {
         self.talkMode.updateMainSessionKey(self.mainSessionKey)
         ShareGatewayRelaySettings.clearConfig()
         self.showLocalCanvasOnDisconnect()
+    }
+
+    private func disableGatewayAutoReconnect() {
+        // Runtime teardown and persisted startup routing must move together. Otherwise a relaunch
+        // during target review silently reconnects the gateway the user just left.
+        self.gatewayAutoReconnectEnabled = false
+        UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
     }
 }
 
