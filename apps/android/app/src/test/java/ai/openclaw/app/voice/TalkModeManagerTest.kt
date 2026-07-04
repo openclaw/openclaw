@@ -151,6 +151,20 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeToolFinalBeforeRunMetadataIsHeldForToolCompletion() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    pendingRealtimeToolCalls(manager).add("call-1")
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "tool result"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+    assertTrue(pendingRealtimeToolCompletions(manager).containsKey("run-tool"))
+  }
+
+  @Test
   fun realtimeCloseErrorDisablesTalkButKeepsFailureStatus() {
     var stoppedByRelay = false
     val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
@@ -560,6 +574,12 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun realtimeToolRuns(manager: TalkModeManager) = readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
+
+  @Suppress("UNCHECKED_CAST")
+  private fun pendingRealtimeToolCalls(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCalls") as MutableSet<String>
+
+  @Suppress("UNCHECKED_CAST")
+  private fun pendingRealtimeToolCompletions(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCompletions") as MutableMap<String, Any>
 
   private fun setPrivateField(
     target: Any,
