@@ -68,6 +68,16 @@ function emitProjectedAgentEvent(
 import { readTurn, readTurnCompletedNotification } from "./protocol-validators.js";
 import type { JsonValue, RpcNotification, Turn } from "./types.js";
 
+/**
+ * The normalized stop-reason vocabulary openclaw's AgentMessage uses
+ * (`packages/llm-core/src/types.ts` StopReason). The claude bridge reports a
+ * turn-level `status`, not a per-message Anthropic `stop_reason`, so this is
+ * the honest signal available at turn/completed — mapped by
+ * `mapTurnStatusToStopReason` below and threaded onto the final assistant
+ * message in the snapshot (openclaw-0ld C3).
+ */
+export type SnapshotStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
 export type ProjectorAccumulator = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
@@ -85,7 +95,33 @@ export type ProjectorAccumulator = {
     }
   >;
   usage?: NormalizedUsage;
+  // Real stop reason for the turn, captured from turn/completed → Turn.status.
+  // Undefined until the turn settles; buildMessagesSnapshot falls back to
+  // "stop" for the final assistant message when unset.
+  stopReason?: SnapshotStopReason;
 };
+
+/**
+ * Map the bridge's turn-level status to openclaw's StopReason vocabulary.
+ * The bridge does not surface Anthropic's per-message stop_reason (end_turn /
+ * max_tokens / refusal) on the Turn snapshot, so "completed" collapses to
+ * "stop" — we cannot distinguish a length cutoff from a natural end here.
+ * "inProgress" should never reach a completed handler; treat it as unknown.
+ */
+export function mapTurnStatusToStopReason(
+  status: Turn["status"] | undefined,
+): SnapshotStopReason | undefined {
+  switch (status) {
+    case "completed":
+      return "stop";
+    case "interrupted":
+      return "aborted";
+    case "failed":
+      return "error";
+    default:
+      return undefined;
+  }
+}
 
 export type ProjectorHookContext = {
   runId?: string;
@@ -492,6 +528,11 @@ export class ClaudeAppServerEventProjector {
     const parsedNotification = readTurnCompletedNotification(p);
     const turn: Turn | undefined =
       parsedNotification?.turn ?? readTurn((p as { turn?: unknown }).turn);
+    // Capture the real stop reason so buildMessagesSnapshot can stamp the
+    // final assistant message with what the bridge actually reported instead
+    // of a hardcoded "stop" (openclaw-0ld C3). Left undefined on a malformed /
+    // inProgress turn, where the snapshot falls back to "stop".
+    this.acc.stopReason = mapTurnStatusToStopReason(turn?.status);
     if (turn?.status === "failed") {
       return {
         kind: "failed",

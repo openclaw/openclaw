@@ -70,7 +70,11 @@ import {
   type ResolvedClaudeAppServerConfig,
 } from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
-import { ClaudeAppServerEventProjector, extractItemName } from "./event-projector.js";
+import {
+  ClaudeAppServerEventProjector,
+  extractItemName,
+  type SnapshotStopReason,
+} from "./event-projector.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
 import { resolveOpenClawExecPolicyForClaudeAppServer } from "./policy.js";
 import { createClaudeProgressWatch, type ClaudeProgressWatch } from "./progress-watch.js";
@@ -939,6 +943,9 @@ type Accumulator = {
     }
   >;
   usage?: NormalizedUsage;
+  // Real stop reason captured by the projector from turn/completed →
+  // Turn.status (openclaw-0ld C3). Undefined until the turn settles.
+  stopReason?: SnapshotStopReason;
 };
 
 async function runTurn(
@@ -1297,12 +1304,18 @@ export function buildMessagesSnapshot(
 ): AgentMessage[] {
   const now = Date.now();
   const messages: AgentMessage[] = [];
+  // Single monotonic counter shared by every message so timestamps strictly
+  // increase in emission order — tool calls first, final reply last
+  // (openclaw-0ld C2). The prior scheme stamped tool messages `now + toolSeq`
+  // (1,2,3…) but the final assistant `now`, giving the final reply the
+  // smallest timestamp; a consumer sorting by timestamp placed the answer
+  // before the tool calls that produced it. Values stay within a few ms of
+  // `now`, so they remain valid epoch-ms.
+  let seq = 0;
   // Tool calls in encounter order (Map preserves insertion). Each becomes
   // an AssistantMessage with a toolCall content block + a paired
   // ToolResultMessage.
-  let toolSeq = 0;
   for (const [toolCallId, call] of acc.toolCalls) {
-    toolSeq += 1;
     const toolUseAssistant = {
       role: "assistant",
       content: [
@@ -1317,9 +1330,13 @@ export function buildMessagesSnapshot(
       provider: modelRef.provider,
       model: modelRef.model,
       usage: { input: 0, output: 0, total: 0 },
+      // A tool-use assistant message ends because the model chose to call a
+      // tool — "toolUse" is the correct reason regardless of how the overall
+      // turn later settled.
       stopReason: "toolUse",
-      timestamp: now + toolSeq,
+      timestamp: now + seq,
     } as unknown as AgentMessage;
+    seq += 1;
     messages.push(toolUseAssistant);
     const resultText =
       typeof call.result === "string"
@@ -1333,8 +1350,9 @@ export function buildMessagesSnapshot(
       toolName: call.name,
       content: [{ type: "text", text: resultText }],
       isError: call.isError === true,
-      timestamp: now + toolSeq,
+      timestamp: now + seq,
     } as unknown as AgentMessage;
+    seq += 1;
     messages.push(toolResult);
   }
   // Final assistant text(s). Attach real token usage from the accumulator so
@@ -1342,6 +1360,10 @@ export function buildMessagesSnapshot(
   // carries actual cache_read counts — without this, sessions.json totalTokens
   // stays null and /status shows 0% context.
   const turnUsage = acc.usage ?? { input: 0, output: 0, total: 0 };
+  // Real stop reason captured from the turn (openclaw-0ld C3). Falls back to
+  // "stop" when the turn settled without a status we could map (e.g. an
+  // abrupt/malformed turn/completed) — the pre-fix hardcoded value.
+  const finalStopReason = acc.stopReason ?? "stop";
   for (const text of acc.assistantTexts) {
     if (typeof text !== "string" || text.length === 0) {
       continue;
@@ -1353,9 +1375,10 @@ export function buildMessagesSnapshot(
       provider: modelRef.provider,
       model: modelRef.model,
       usage: turnUsage,
-      stopReason: "stop",
-      timestamp: now,
+      stopReason: finalStopReason,
+      timestamp: now + seq,
     } as unknown as AgentMessage;
+    seq += 1;
     messages.push(assistant);
   }
   return messages;

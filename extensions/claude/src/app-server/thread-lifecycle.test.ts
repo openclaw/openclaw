@@ -25,6 +25,7 @@ const BASE_CFG: ResolvedClaudeAppServerConfig = {
     turnTimeoutMs: 600_000,
     turnIdleTimeoutMs: 90_000,
     progressIdleTimeoutMs: 300_000,
+    subagentProgressIdleTimeoutMs: 600_000,
   },
   dynamicTools: { excludeNames: [] },
 };
@@ -264,6 +265,7 @@ describe("startOrResumeClaudeThread", () => {
         turnTimeoutMs: 600_000,
         turnIdleTimeoutMs: 90_000,
         progressIdleTimeoutMs: 300_000,
+        subagentProgressIdleTimeoutMs: 600_000,
       },
       dynamicTools: { excludeNames: [] },
     };

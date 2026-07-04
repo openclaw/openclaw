@@ -38,4 +38,85 @@ describe("buildMessagesSnapshot", () => {
     expect(toolCallAssistant.provider).toBe("anthropic");
     expect(toolCallAssistant.model).toBe("claude-sonnet-5");
   });
+
+  it("assigns strictly increasing timestamps so the final reply sorts after its tool calls (C2)", () => {
+    const acc = {
+      assistantTexts: ["final answer"],
+      toolMetas: [],
+      reasoning: "",
+      itemCount: 3,
+      toolCalls: new Map([
+        ["item-1", { name: "Read", args: {}, result: "a", isError: false }],
+        ["item-2", { name: "Bash", args: {}, result: "b", isError: false }],
+      ]),
+      usage: { input: 0, output: 0, total: 0 },
+    };
+    const messages = buildMessagesSnapshot(acc, {
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    // 2 tool calls → 2 (assistant + toolResult) pairs = 4 messages, + 1 final = 5.
+    expect(messages).toHaveLength(5);
+    const stamps = messages.map((m) => (m as unknown as { timestamp: number }).timestamp);
+    for (let i = 1; i < stamps.length; i += 1) {
+      expect(stamps[i]).toBeGreaterThan(stamps[i - 1]);
+    }
+    // The final assistant message must carry the largest timestamp — the bug
+    // was it carrying the smallest (`now`) while tool messages carried `now+n`.
+    const finalTimestamp = stamps[stamps.length - 1];
+    expect(Math.max(...stamps)).toBe(finalTimestamp);
+  });
+
+  it("stamps the final assistant message with the captured stop reason (C3)", () => {
+    const acc = {
+      assistantTexts: ["interrupted mid-thought"],
+      toolMetas: [],
+      reasoning: "",
+      itemCount: 1,
+      toolCalls: new Map(),
+      usage: { input: 0, output: 0, total: 0 },
+      stopReason: "aborted" as const,
+    };
+    const messages = buildMessagesSnapshot(acc, {
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    expect(messages).toHaveLength(1);
+    expect((messages[0] as unknown as { stopReason: string }).stopReason).toBe("aborted");
+  });
+
+  it("falls back to 'stop' for the final message when no stop reason was captured (C3)", () => {
+    const acc = {
+      assistantTexts: ["done"],
+      toolMetas: [],
+      reasoning: "",
+      itemCount: 1,
+      toolCalls: new Map(),
+      usage: { input: 0, output: 0, total: 0 },
+    };
+    const messages = buildMessagesSnapshot(acc, {
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    expect((messages[0] as unknown as { stopReason: string }).stopReason).toBe("stop");
+  });
+
+  it("keeps 'toolUse' on tool-call assistant messages regardless of the turn stop reason (C3)", () => {
+    const acc = {
+      assistantTexts: ["wrapped up"],
+      toolMetas: [],
+      reasoning: "",
+      itemCount: 2,
+      toolCalls: new Map([["item-1", { name: "Read", args: {}, result: "x", isError: false }]]),
+      usage: { input: 0, output: 0, total: 0 },
+      stopReason: "stop" as const,
+    };
+    const messages = buildMessagesSnapshot(acc, {
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+    });
+    expect((messages[0] as unknown as { stopReason: string }).stopReason).toBe("toolUse");
+    const finalMessage = messages[messages.length - 1] as unknown as { stopReason: string };
+    expect(finalMessage.stopReason).toBe("stop");
+  });
 });
