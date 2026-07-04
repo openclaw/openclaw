@@ -76,6 +76,78 @@ describe("session family carryover", () => {
     });
   });
 
+  it("keeps the newest current reset archive when current targets are capped", async () => {
+    const dir = makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const currentSessionId = "current-archive-order-carryover";
+    const activeSessionFile = path.join(dir, currentSessionId + ".jsonl");
+    writeTranscript(activeSessionFile, [
+      {
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "current active request" }],
+          timestamp: 2_000,
+        },
+      },
+    ]);
+    writeTranscript(
+      path.join(dir, `${currentSessionId}-topic-old.jsonl.reset.2026-06-04T00-03-00.000Z`),
+      [
+        {
+          type: "session",
+          version: 1,
+          id: currentSessionId,
+          timestamp: "2026-06-04T00:03:00.000Z",
+          cwd: dir,
+        },
+        {
+          type: "compaction",
+          id: "old-topic-carryover",
+          parentId: null,
+          timestamp: "2026-06-04T00:03:30.000Z",
+          summary: "Old topic carryover should be outside the current target cap.",
+          tokensBefore: 303,
+        },
+      ],
+    );
+    writeTranscript(path.join(dir, `${currentSessionId}.jsonl.reset.2026-06-04T00-04-00.000Z`), [
+      {
+        type: "session",
+        version: 1,
+        id: currentSessionId,
+        timestamp: "2026-06-04T00:04:00.000Z",
+        cwd: dir,
+      },
+      {
+        type: "compaction",
+        id: "new-plain-carryover",
+        parentId: null,
+        timestamp: "2026-06-04T00:04:30.000Z",
+        summary: "New current plain carryover survives the current target cap.",
+        tokensBefore: 404,
+      },
+    ]);
+
+    const entry = {
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      usageFamilySessionIds: [currentSessionId],
+    } as SessionEntry;
+
+    const carryover = await resolveSessionFamilyCarryoverSummary({
+      sessionId: currentSessionId,
+      sessionFile: activeSessionFile,
+      storePath,
+      entry,
+    });
+
+    expect(carryover).toMatchObject({
+      role: "compactionSummary",
+      summary: "New current plain carryover survives the current target cap.",
+      tokensBefore: 404,
+    });
+  });
+
   it("reads carryover summaries from the bounded tail of large reset archives", async () => {
     const dir = makeTempDir();
     const storePath = path.join(dir, "sessions.json");
