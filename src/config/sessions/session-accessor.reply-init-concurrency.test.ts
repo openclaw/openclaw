@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, updateSessionEntry, upsertSessionEntry } from "./session-accessor.js";
 
 vi.mock("../config.js", async () => ({
@@ -152,6 +152,24 @@ async function waitForChild(child: ReturnType<typeof spawn>): Promise<void> {
 }
 
 describe("reply session initialization concurrency", () => {
+  beforeAll(async () => {
+    const sessionAccessorUrl = pathToFileURL(
+      path.resolve("src/config/sessions/session-accessor.ts"),
+    ).href;
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `await import(${JSON.stringify(sessionAccessorUrl)})`,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    await waitForChild(child);
+  });
+
   it("commits after same-session activity from another process", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-init-"));
     const sessionAccessorUrl = pathToFileURL(

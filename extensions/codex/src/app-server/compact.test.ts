@@ -861,42 +861,49 @@ describe("maybeCompactCodexAppServerSession", () => {
     });
     const sessionFile = await writeTestBinding();
 
-    const pendingResult = maybeCompactCodexAppServerSessionImpl(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "manual",
-        config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
-      },
-      {
-        clientFactory: async () => fake.client,
-        nativeInterruptGraceMs: 10,
-      },
-    );
-    await vi.waitFor(() => expect(fake.request).toHaveBeenCalledOnce());
-    fake.emit({
-      method: "turn/started",
-      params: {
-        threadId: "thread-1",
-        turn: { id: "compact-turn-configured", threadId: "thread-1", status: "inProgress" },
-      },
-    });
+    vi.useFakeTimers();
+    try {
+      const pendingResult = maybeCompactCodexAppServerSessionImpl(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
+        },
+        {
+          clientFactory: async () => fake.client,
+          nativeInterruptGraceMs: 10,
+        },
+      );
+      await vi.waitFor(() => expect(fake.request).toHaveBeenCalledOnce());
+      fake.emit({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turn: { id: "compact-turn-configured", threadId: "thread-1", status: "inProgress" },
+        },
+      });
 
-    await expect(pendingResult).resolves.toMatchObject({
-      ok: false,
-      compacted: false,
-      reason: "codex app-server compaction did not reach terminal state after interruption",
-    });
-    expect(fake.request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      {
-        threadId: "thread-1",
-        turnId: "compact-turn-configured",
-      },
-      { timeoutMs: 10 },
-    );
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fake.request).toHaveBeenCalledWith(
+        "turn/interrupt",
+        {
+          threadId: "thread-1",
+          turnId: "compact-turn-configured",
+        },
+        { timeoutMs: 10 },
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(pendingResult).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: "codex app-server compaction did not reach terminal state after interruption",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("detaches a remote thread when its interrupted turn cannot be confirmed", async () => {
