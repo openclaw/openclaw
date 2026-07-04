@@ -65,7 +65,7 @@ import {
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
 import {
-  DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
+  claudeAppServerPoolKey,
   resolveClaudeAppServerConfig,
   type ResolvedClaudeAppServerConfig,
 } from "./config.js";
@@ -151,7 +151,7 @@ export async function runClaudeAppServerAttempt(
     // stay the same question. A second bridge-backed extension pointed at a
     // different provider (e.g. glm-bridge → Z.ai) resolves to a distinct
     // key here and gets its own concurrently-running process (openclaw-7ss).
-    const poolKey = `claude-bridge:${cfg.appServer.modelProvider ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER}`;
+    const poolKey = claudeAppServerPoolKey(cfg.appServer.modelProvider);
     client = getSharedClaudeAppServerClient(poolKey, startOptions);
     await client.start();
     // 1. Resolve sandbox + effective workspace once so dynamic-tool
@@ -453,7 +453,11 @@ export async function runClaudeAppServerAttempt(
     // claude-driven replies bypass the footer-injection path entirely. See
     // codex/run-attempt.ts:2629 (mirrorTranscriptBestEffort) for the codex
     // analog.
-    result.messagesSnapshot = buildMessagesSnapshot(accumulated);
+    result.messagesSnapshot = buildMessagesSnapshot(
+      accumulated,
+      params.model.provider,
+      params.modelId,
+    );
     // lastAssistant must be the actual AssistantMessage object, not just
     // text — the auto-reply dispatcher reads stopReason/usage off it.
     const lastAssistantMessage = [...result.messagesSnapshot]
@@ -1288,7 +1292,7 @@ function resolveClaudeAppServerApprovalPolicy(args: {
 // minimum that downstream consumers actually key on (role + content +
 // timestamp + tool linkage).
 
-function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
+function buildMessagesSnapshot(acc: Accumulator, provider: string, model: string): AgentMessage[] {
   const now = Date.now();
   const messages: AgentMessage[] = [];
   // Tool calls in encounter order (Map preserves insertion). Each becomes
@@ -1308,8 +1312,8 @@ function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
         },
       ],
       api: "messages",
-      provider: "anthropic",
-      model: "",
+      provider,
+      model,
       usage: { input: 0, output: 0, total: 0 },
       stopReason: "toolUse",
       timestamp: now + toolSeq,
@@ -1344,8 +1348,8 @@ function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
       role: "assistant",
       content: [{ type: "text", text }],
       api: "messages",
-      provider: "anthropic",
-      model: "",
+      provider,
+      model,
       usage: turnUsage,
       stopReason: "stop",
       timestamp: now,

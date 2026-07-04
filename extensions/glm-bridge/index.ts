@@ -27,15 +27,19 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createClaudeAppServerAgentHarness } from "../claude/harness.js";
 
 /** Z.ai's Anthropic-compatible Messages API endpoint. */
-const DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic";
+export const DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic";
 
 /**
  * Merge GLM-specific defaults (provider identity, Z.ai base URL) UNDER
  * whatever the operator explicitly configured for this plugin, so a bare
  * install works with just an API key while still letting every field be
  * overridden (e.g. to point at a different Anthropic-compatible endpoint).
+ *
+ * Exported for unit coverage of the merge contract (openclaw-6mt).
  */
-function applyGlmDefaults(config: Record<string, unknown> | undefined): Record<string, unknown> {
+export function applyGlmDefaults(
+  config: Record<string, unknown> | undefined,
+): Record<string, unknown> {
   const base = (config ?? {}) as { appServer?: Record<string, unknown> };
   const appServer = base.appServer ?? {};
   const env = (appServer.env ?? {}) as Record<string, string>;

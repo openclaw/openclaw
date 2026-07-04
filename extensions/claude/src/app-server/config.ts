@@ -40,6 +40,19 @@ export const DEFAULT_CLAUDE_APP_SERVER_SANDBOX: SandboxPolicy = { type: "dangerF
 // ANTHROPIC_PROVIDER_ID is only a fallback), so this is purely our consumer-side
 // identity, not a bridge-package change.
 export const DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER = "anthropic";
+/**
+ * Shared-client pool key for a given provider identity. The pool
+ * (client.ts) keys each long-lived bridge process by this string, so a
+ * second bridge-backed extension pointed at a different provider (e.g.
+ * glm-bridge → Z.ai) gets its own concurrently-alive process. Both the
+ * per-turn client lookup (run-attempt.ts) and the harness dispose path
+ * (harness.ts) MUST derive the key through this one helper so "same
+ * provider" and "same pool slot" cannot drift apart (openclaw-91t).
+ */
+export function claudeAppServerPoolKey(modelProvider?: string): string {
+  const provider = modelProvider?.trim() || DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER;
+  return `claude-bridge:${provider}`;
+}
 // Hard per-turn ceiling enforced via setTimeout(() => ac.abort(), …) at the
 // top of run-attempt.ts. Independent of the heartbeat-protected idle
 // watchdog (turnIdleTimeoutMs) below: heartbeats keep the idle timer alive
@@ -265,7 +278,8 @@ export function resolveClaudeAppServerConfig(
   const appServer: ClaudeAppServerRuntimeConfig = {
     command,
     commandSource,
-    modelProvider: readNonEmptyString(parsed?.modelProvider) ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
+    modelProvider:
+      readNonEmptyString(parsed?.modelProvider) ?? DEFAULT_CLAUDE_APP_SERVER_MODEL_PROVIDER,
     approvalPolicy: policy.approvalPolicy,
     sandbox: policy.sandbox,
     turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,

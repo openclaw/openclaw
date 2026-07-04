@@ -11,6 +11,7 @@
  */
 
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { claudeAppServerPoolKey } from "./src/app-server/config.js";
 
 const DEFAULT_CLAUDE_PROVIDER_IDS = new Set(["anthropic"]);
 
@@ -18,12 +19,20 @@ export function createClaudeAppServerAgentHarness(options?: {
   id?: string;
   label?: string;
   providerIds?: Iterable<string>;
+  poolKey?: string;
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
 }): AgentHarness {
   const providerIds = new Set(
     [...(options?.providerIds ?? DEFAULT_CLAUDE_PROVIDER_IDS)].map((id) => id.trim().toLowerCase()),
   );
+  // Each bridge-backed extension owns exactly one shared-client pool slot,
+  // keyed by its provider identity (client.ts / run-attempt.ts). dispose()
+  // must clear ONLY that slot: clearing the whole pool would tear down a
+  // co-installed sibling extension's live bridge process on reload/disable
+  // (e.g. reloading claude would kill glm-bridge, openclaw-91t). Derive the
+  // same key run-attempt.ts computes, honoring an explicit override.
+  const poolKey = options?.poolKey ?? claudeAppServerPoolKey([...providerIds][0]);
   return {
     id: options?.id ?? "claude-bridge",
     label: options?.label ?? "Claude app-server harness",
@@ -51,7 +60,7 @@ export function createClaudeAppServerAgentHarness(options?: {
     },
     dispose: async () => {
       const { clearSharedClaudeAppServerClient } = await import("./src/app-server/client.js");
-      await clearSharedClaudeAppServerClient();
+      await clearSharedClaudeAppServerClient(poolKey);
     },
   };
 }
