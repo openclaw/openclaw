@@ -13,6 +13,7 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -97,6 +98,12 @@ async function expectDeepseekFallbackError(
 describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent, {
+      config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+    });
   });
 
   beforeEach(() => {

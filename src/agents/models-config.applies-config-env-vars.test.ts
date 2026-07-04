@@ -1,9 +1,10 @@
 // Verifies models.json planning applies config env vars and discovery scope.
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { __testing as externalAuthTesting } from "./auth-profiles/external-auth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -15,6 +16,11 @@ import {
 } from "./models-config.plan.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
+
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderAuthAliasMap: () => Object.create(null) as Record<string, string>,
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
 
 const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
 
@@ -468,7 +474,11 @@ describe("models-config", () => {
   it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
     const agentDir = "/tmp/openclaw-google-vertex-models-profile";
     try {
+      externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
       replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          store: { version: 1, profiles: {} },
+        },
         {
           agentDir,
           store: {
@@ -525,6 +535,7 @@ describe("models-config", () => {
         "gemini-2.5-pro",
       ]);
     } finally {
+      externalAuthTesting.resetResolveExternalAuthProfilesForTest();
       clearRuntimeAuthProfileStoreSnapshots();
     }
   });
