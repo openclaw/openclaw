@@ -135,7 +135,7 @@ The monthly npm-only extended-stable path is the exception: dispatch both `OpenC
 Release` preflight and `Full Release Validation` from the exact
 `extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
 direct npm publish run. See [Monthly npm-only extended-stable
-publication](./reference/RELEASING.md#monthly-npm-only-extended-stable-publication) for
+publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
 the commands, exact identity requirements, registry readback, and selector
 repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
 Release, private dist-tag, or other platform publication.
