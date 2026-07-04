@@ -1041,6 +1041,31 @@ export function requeueAwaitingNextCompactionDelegates(options: {
   return requeued;
 }
 
+export function failStagedPostCompactionDelegatesForCleanup(
+  sessionKey: string,
+  blockedSummary: string,
+): number {
+  let failed = 0;
+  for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
+    if (
+      !isPostCompactionDelegateFlow(flow) ||
+      (flow.status !== "queued" && flow.status !== "running")
+    ) {
+      continue;
+    }
+    const result = failFlow({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep: "Dropped post-compaction delegate during subagent cleanup",
+      blockedSummary,
+    });
+    if (result.applied) {
+      failed++;
+    }
+  }
+  return failed;
+}
+
 export function failQueuedDelegatesCreatedAtOrAfter(
   sessionKey: string,
   createdAtOrAfter: number,
