@@ -79,17 +79,17 @@ describe("post-compaction substrate :: tool-stage and runner-consume share store
     expect(drained.map((d) => d.task)).toEqual(["stranding A", "stranding B"]);
   });
 
-  it("cleanup predicate sees queued and running post-compaction delegates", () => {
+  it("cleanup predicate ignores queued and running post-compaction delegates", () => {
     toolStage(sessionKey, {
       task: "cleanup gate queued",
       createdAt: Date.now(),
       silent: true,
       silentWake: true,
     });
-    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(true);
+    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(false);
 
     const claimed = runnerConsume(sessionKey);
     expect(claimed).toHaveLength(1);
-    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(true);
+    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(false);
   });
 });

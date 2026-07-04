@@ -139,6 +139,7 @@ import {
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
+  hasRecoverablePendingDelegate,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
@@ -189,6 +190,24 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(delegates).toHaveLength(1);
     expect(delegates[0].task).toBe("check CI");
     expect(pendingDelegateCount("session-1")).toBe(0);
+  });
+
+  it("uses only regular queued/running pending delegates for cleanup deferral", () => {
+    const regularSession = "session-cleanup-regular";
+    const postCompactionSession = "session-cleanup-post-compaction";
+
+    enqueuePendingDelegate(regularSession, { task: "regular cleanup blocker" });
+    expect(hasRecoverablePendingDelegate(regularSession)).toBe(true);
+    consumePendingDelegates(regularSession);
+    expect(hasRecoverablePendingDelegate(regularSession)).toBe(true);
+
+    stagePostCompactionDelegate(postCompactionSession, {
+      task: "post-compaction cleanup non-blocker",
+      stagedAt: Date.now(),
+    });
+    expect(hasRecoverablePendingDelegate(postCompactionSession)).toBe(false);
+    consumeStagedPostCompactionDelegates(postCompactionSession);
+    expect(hasRecoverablePendingDelegate(postCompactionSession)).toBe(false);
   });
 
   it("logs when acceptance cannot be committed after a claim", () => {
