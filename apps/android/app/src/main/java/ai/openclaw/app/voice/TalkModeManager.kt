@@ -94,6 +94,12 @@ private data class RealtimeToolCompletion(
   val messageEl: JsonElement?,
 )
 
+private data class RealtimeToolCompletionDispatch(
+  val toolRun: RealtimeToolRun,
+  val state: String,
+  val messageEl: JsonElement?,
+)
+
 class TalkModeManager internal constructor(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -170,6 +176,7 @@ class TalkModeManager internal constructor(
   private var realtimeAppendJob: Job? = null
 
   // Realtime tool calls can complete before their chat final arrives; cache by call/run id until both sides meet.
+  private val realtimeToolLock = Any()
   private val realtimeToolRuns = LinkedHashMap<String, RealtimeToolRun>()
   private val pendingRealtimeToolCalls = LinkedHashSet<String>()
   private val pendingRealtimeToolCompletions = LinkedHashMap<String, RealtimeToolCompletion>()
@@ -1028,9 +1035,11 @@ class TalkModeManager internal constructor(
     }
     realtimeCaptureJob = null
     realtimeAppendJob = null
-    realtimeToolRuns.clear()
-    pendingRealtimeToolCalls.clear()
-    pendingRealtimeToolCompletions.clear()
+    synchronized(realtimeToolLock) {
+      realtimeToolRuns.clear()
+      pendingRealtimeToolCalls.clear()
+      pendingRealtimeToolCompletions.clear()
+    }
     realtimeUserEntryId = null
     realtimeUserEntryAwaitingFinal = false
     realtimeUserEntryAwaitingFinalStartedAtMs = null
@@ -1065,7 +1074,9 @@ class TalkModeManager internal constructor(
     forced: Boolean = false,
   ) {
     val relaySessionId = realtimeSessionId ?: return
-    pendingRealtimeToolCalls.add(callId)
+    synchronized(realtimeToolLock) {
+      pendingRealtimeToolCalls.add(callId)
+    }
     scope.launch {
       try {
         if (name == REALTIME_AGENT_CONTROL_TOOL) {
@@ -1088,15 +1099,34 @@ class TalkModeManager internal constructor(
         val runId = parseRunId(response)
         if (!runId.isNullOrBlank()) {
           if (realtimeSessionId != relaySessionId) return@launch
-          realtimeToolRuns[runId] =
-            RealtimeToolRun(callId = callId, relaySessionId = relaySessionId)
-          val completion = pendingRealtimeToolCompletions.remove(runId)
-          if (completion != null) {
-            maybeCompleteRealtimeToolCall(
-              runId = runId,
-              state = completion.state,
-              messageEl = completion.messageEl,
-            )
+          var dispatch: RealtimeToolCompletionDispatch? = null
+          var sessionStillActive = true
+          val hasCachedCompletion =
+            synchronized(realtimeToolLock) {
+              if (realtimeSessionId != relaySessionId) {
+                sessionStillActive = false
+                return@synchronized false
+              }
+              val toolRun = RealtimeToolRun(callId = callId, relaySessionId = relaySessionId)
+              realtimeToolRuns[runId] =
+                toolRun
+              val completion = pendingRealtimeToolCompletions.remove(runId)
+              if (completion != null) {
+                realtimeToolRuns.remove(runId)
+                dispatch =
+                  RealtimeToolCompletionDispatch(
+                    toolRun = toolRun,
+                    state = completion.state,
+                    messageEl = completion.messageEl,
+                  )
+                true
+              } else {
+                false
+              }
+            }
+          if (!sessionStillActive) return@launch
+          if (hasCachedCompletion) {
+            dispatch?.let(::dispatchRealtimeToolCompletion)
           } else {
             _statusText.value = "Thinking…"
           }
@@ -1108,7 +1138,9 @@ class TalkModeManager internal constructor(
         Log.w(tag, "realtime toolCall failed: ${err.message ?: err::class.simpleName}")
         submitRealtimeToolError(callId, err.message ?: "tool call failed", relaySessionId)
       } finally {
-        pendingRealtimeToolCalls.remove(callId)
+        synchronized(realtimeToolLock) {
+          pendingRealtimeToolCalls.remove(callId)
+        }
       }
     }
   }
@@ -1118,11 +1150,35 @@ class TalkModeManager internal constructor(
     state: String,
     messageEl: JsonElement?,
   ): Boolean {
-    if (realtimeSessionId == null || pendingRealtimeToolCalls.isEmpty()) return false
     if (state != "final" && state != "aborted" && state != "error") return false
-    pendingRealtimeToolCompletions[runId] =
-      RealtimeToolCompletion(state = state, messageEl = messageEl)
-    return true
+    var dispatch: RealtimeToolCompletionDispatch? = null
+    val handled =
+      synchronized(realtimeToolLock) {
+        val toolRun = realtimeToolRuns[runId]
+        if (toolRun != null) {
+          realtimeToolRuns.remove(runId)
+          if (toolRun.relaySessionId == realtimeSessionId) {
+            dispatch =
+              RealtimeToolCompletionDispatch(
+                toolRun = toolRun,
+                state = state,
+                messageEl = messageEl,
+              )
+          }
+          return@synchronized true
+        }
+        if (realtimeSessionId == null || pendingRealtimeToolCalls.isEmpty()) return@synchronized false
+        pendingRealtimeToolCompletions[runId] =
+          RealtimeToolCompletion(state = state, messageEl = messageEl)
+        while (pendingRealtimeToolCompletions.size > maxCachedRunCompletions) {
+          pendingRealtimeToolCompletions.entries.firstOrNull()?.let {
+            pendingRealtimeToolCompletions.remove(it.key)
+          }
+        }
+        true
+      }
+    dispatch?.let(::dispatchRealtimeToolCompletion)
+    return handled
   }
 
   private fun maybeCompleteRealtimeToolCall(
@@ -1130,15 +1186,49 @@ class TalkModeManager internal constructor(
     state: String,
     messageEl: JsonElement?,
   ): Boolean {
-    val toolRun = realtimeToolRuns[runId] ?: return false
-    if (toolRun.relaySessionId != realtimeSessionId) {
-      realtimeToolRuns.remove(runId)
-      return true
-    }
-    when (state) {
+    var dispatch: RealtimeToolCompletionDispatch? = null
+    val handled =
+      synchronized(realtimeToolLock) {
+        val toolRun = realtimeToolRuns[runId] ?: return@synchronized false
+        if (toolRun.relaySessionId != realtimeSessionId) {
+          realtimeToolRuns.remove(runId)
+          return@synchronized true
+        }
+        when (state) {
+          "final" -> {
+            realtimeToolRuns.remove(runId)
+            dispatch =
+              RealtimeToolCompletionDispatch(
+                toolRun = toolRun,
+                state = state,
+                messageEl = messageEl,
+              )
+            true
+          }
+          "aborted", "error" -> {
+            realtimeToolRuns.remove(runId)
+            dispatch =
+              RealtimeToolCompletionDispatch(
+                toolRun = toolRun,
+                state = state,
+                messageEl = messageEl,
+              )
+            true
+          }
+          else -> false
+        }
+      }
+    if (!handled) return false
+
+    dispatch?.let(::dispatchRealtimeToolCompletion)
+    return true
+  }
+
+  private fun dispatchRealtimeToolCompletion(dispatch: RealtimeToolCompletionDispatch) {
+    when (dispatch.state) {
       "final" -> {
-        realtimeToolRuns.remove(runId)
-        val text = extractTextFromChatEventMessage(messageEl).orEmpty()
+        val text = extractTextFromChatEventMessage(dispatch.messageEl).orEmpty()
+        val toolRun = dispatch.toolRun
         scope.launch {
           submitRealtimeToolResult(
             callId = toolRun.callId,
@@ -1146,17 +1236,15 @@ class TalkModeManager internal constructor(
             sessionId = toolRun.relaySessionId,
           )
         }
-        return true
       }
       "aborted", "error" -> {
-        realtimeToolRuns.remove(runId)
+        val toolRun = dispatch.toolRun
+        val state = dispatch.state
         scope.launch {
           submitRealtimeToolError(toolRun.callId, state, toolRun.relaySessionId)
         }
-        return true
       }
     }
-    return false
   }
 
   private suspend fun submitRealtimeToolError(
