@@ -312,6 +312,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
+  - H2: Agent activity rows
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
