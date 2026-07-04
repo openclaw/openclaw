@@ -19,7 +19,10 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
-import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
+import {
+  resolvePluginRuntimeDependencyDriftUpdateCommand,
+  resolvePluginVersionDriftUpdateCommand,
+} from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -506,14 +509,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   const drift = status.pluginVersionDrift;
-  if (drift && drift.drifts.length > 0) {
-    defaultRuntime.log(
-      warnText(
-        `Plugin version drift: ${drift.drifts.length} active official plugin${
-          drift.drifts.length === 1 ? "" : "s"
-        } not on gateway ${drift.gatewayVersion}`,
-      ),
-    );
+  if (drift && (drift.drifts.length > 0 || drift.runtimeDependencyDrifts.length > 0)) {
+    const driftParts = [
+      drift.drifts.length > 0
+        ? `${drift.drifts.length} active official plugin${
+            drift.drifts.length === 1 ? "" : "s"
+          } not on gateway ${drift.gatewayVersion}`
+        : null,
+      drift.runtimeDependencyDrifts.length > 0
+        ? `${drift.runtimeDependencyDrifts.length} route runtime dependenc${
+            drift.runtimeDependencyDrifts.length === 1 ? "y" : "ies"
+          } not on the approved release version`
+        : null,
+    ].filter((line): line is string => Boolean(line));
+    defaultRuntime.log(warnText(`Plugin version drift: ${driftParts.join("; ")}`));
     if (opts.deep) {
       for (const entry of drift.drifts) {
         const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
@@ -521,16 +530,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
         );
       }
-      const updateCommands = drift.drifts.map((entry) =>
-        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
-      );
-      if (updateCommands.length === 1) {
+      for (const entry of drift.runtimeDependencyDrifts) {
+        const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+        const installed = entry.installedDependencyVersion ?? "<missing>";
+        const pluginVersion = entry.installedVersion ? ` in ${entry.installedVersion}` : "";
         defaultRuntime.log(
-          `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
+          `- ${warnText(entry.pluginId)}${pluginVersion}: ${entry.dependencyName} ${installed} (${sourceLabel}) → expected ${entry.expectedVersion}`,
+        );
+        if (entry.installPath) {
+          defaultRuntime.log(
+            `  ${label("Plugin root:")} ${infoText(shortenHomePath(entry.installPath))}`,
+          );
+        }
+      }
+      const updateCommands = [
+        ...drift.drifts.map((entry) =>
+          formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
+        ),
+        ...drift.runtimeDependencyDrifts.map((entry) =>
+          formatCliCommand(resolvePluginRuntimeDependencyDriftUpdateCommand(entry)),
+        ),
+      ];
+      const uniqueUpdateCommands = [...new Set(updateCommands)];
+      if (uniqueUpdateCommands.length === 1) {
+        defaultRuntime.log(
+          `${label("Fix:")} ${uniqueUpdateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
         );
       } else {
         defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
-        for (const command of updateCommands) {
+        for (const command of uniqueUpdateCommands) {
           defaultRuntime.log(`- ${command}`);
         }
         defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);

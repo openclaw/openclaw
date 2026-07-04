@@ -681,6 +681,7 @@ describe("printDaemonStatus", () => {
         },
         pluginVersionDrift: {
           gatewayVersion: "2026.5.4",
+          runtimeDependencyDrifts: [],
           drifts: [
             {
               pluginId: "whatsapp",
@@ -712,6 +713,7 @@ describe("printDaemonStatus", () => {
         },
         pluginVersionDrift: {
           gatewayVersion: "2026.5.4",
+          runtimeDependencyDrifts: [],
           drifts: [
             {
               pluginId: "whatsapp",
@@ -731,6 +733,44 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "openclaw gateway restart");
   });
 
+  it("prints detailed plugin route runtime dependency drift entries in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.11",
+          drifts: [],
+          runtimeDependencyDrifts: [
+            {
+              pluginId: "codex",
+              dependencyName: "@openai/codex",
+              expectedVersion: "0.142.5",
+              source: "npm",
+              installedVersion: "2026.6.11",
+              installedDependencyVersion: "0.139.0",
+              installPath:
+                "/home/eva/.openclaw/npm/projects/openclaw-codex/node_modules/@openclaw/codex",
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "route runtime dependency");
+    expectMockLineContains(runtime.log, "- codex in 2026.6.11: @openai/codex 0.139.0");
+    expectMockLineContains(runtime.log, "expected 0.142.5");
+    expectMockLineContains(runtime.log, "openclaw plugins update codex");
+    expectMockLineContains(runtime.log, "openclaw gateway restart");
+  });
+
   it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
     printDaemonStatus(
       {
@@ -743,6 +783,7 @@ describe("printDaemonStatus", () => {
         },
         pluginVersionDrift: {
           gatewayVersion: "2026.6.10-beta.1",
+          runtimeDependencyDrifts: [],
           drifts: [
             {
               pluginId: "brave",

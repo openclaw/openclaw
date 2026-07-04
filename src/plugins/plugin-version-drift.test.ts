@@ -1,9 +1,13 @@
 /** Tests plugin version drift detection between package, manifest, and install records. */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   detectPluginVersionDrift,
+  resolvePluginRuntimeDependencyDriftUpdateCommand,
   resolvePluginVersionDriftUpdateCommand,
 } from "./plugin-version-drift.js";
 
@@ -32,6 +36,22 @@ function clawhubRecord(
     resolvedVersion: version,
     ...overrides,
   };
+}
+
+function withPackageJson(
+  dependencies: Record<string, string>,
+  callback: (installPath: string) => void,
+): void {
+  const installPath = mkdtempSync(join(tmpdir(), "openclaw-plugin-drift-"));
+  try {
+    writeFileSync(
+      join(installPath, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", dependencies }, null, 2),
+    );
+    callback(installPath);
+  } finally {
+    rmSync(installPath, { recursive: true, force: true });
+  }
 }
 
 describe("detectPluginVersionDrift", () => {
@@ -320,6 +340,128 @@ describe("detectPluginVersionDrift", () => {
 
     expect(result.drifts.map((d) => d.pluginId)).toEqual(["discord", "matrix", "whatsapp"]);
   });
+
+  it("reports stale Codex route runtime dependencies even when the plugin version matches the gateway", () => {
+    withPackageJson({ "@openai/codex": "0.139.0" }, (installPath) => {
+      const result = detectPluginVersionDrift({
+        gatewayVersion: "2026.6.11",
+        installRecords: {
+          codex: npmRecord("2026.6.11", {
+            resolvedName: "@openclaw/codex",
+            spec: "@openclaw/codex",
+            installPath,
+          }),
+        },
+        runtimeDependencyExpectations: [
+          {
+            pluginId: "codex",
+            dependencyName: "@openai/codex",
+            expectedVersion: "0.142.5",
+          },
+        ],
+      });
+
+      expect(result.drifts).toEqual([]);
+      expect(result.runtimeDependencyDrifts).toEqual([
+        {
+          pluginId: "codex",
+          dependencyName: "@openai/codex",
+          expectedVersion: "0.142.5",
+          source: "npm",
+          installedVersion: "2026.6.11",
+          installedDependencyVersion: "0.139.0",
+          packageName: "@openclaw/codex",
+          spec: "@openclaw/codex",
+          installPath,
+        },
+      ]);
+    });
+  });
+
+  it("checks exact pinned official Codex plugin installs for route runtime dependency drift", () => {
+    withPackageJson({ "@openai/codex": "0.139.0" }, (installPath) => {
+      const result = detectPluginVersionDrift({
+        gatewayVersion: "2026.6.11",
+        installRecords: {
+          codex: npmRecord("2026.6.11", {
+            resolvedName: "@openclaw/codex",
+            spec: "@openclaw/codex@2026.6.11",
+            installPath,
+          }),
+        },
+        runtimeDependencyExpectations: [
+          {
+            pluginId: "codex",
+            dependencyName: "@openai/codex",
+            expectedVersion: "0.142.5",
+          },
+        ],
+      });
+
+      expect(result.drifts).toEqual([]);
+      expect(result.runtimeDependencyDrifts).toHaveLength(1);
+      expect(result.runtimeDependencyDrifts[0]).toMatchObject({
+        pluginId: "codex",
+        installedDependencyVersion: "0.139.0",
+        expectedVersion: "0.142.5",
+      });
+    });
+  });
+
+  it("does not report Codex route runtime dependency drift when the embedded dependency matches", () => {
+    withPackageJson({ "@openai/codex": "0.142.5" }, (installPath) => {
+      const result = detectPluginVersionDrift({
+        gatewayVersion: "2026.6.11",
+        installRecords: {
+          codex: npmRecord("2026.6.11", {
+            resolvedName: "@openclaw/codex",
+            spec: "@openclaw/codex",
+            installPath,
+          }),
+        },
+        runtimeDependencyExpectations: [
+          {
+            pluginId: "codex",
+            dependencyName: "@openai/codex",
+            expectedVersion: "0.142.5",
+          },
+        ],
+      });
+
+      expect(result.runtimeDependencyDrifts).toEqual([]);
+    });
+  });
+
+  it("reports missing Codex route runtime dependencies", () => {
+    withPackageJson({}, (installPath) => {
+      const result = detectPluginVersionDrift({
+        gatewayVersion: "2026.6.11",
+        installRecords: {
+          codex: npmRecord("2026.6.11", {
+            resolvedName: "@openclaw/codex",
+            spec: "@openclaw/codex",
+            installPath,
+          }),
+        },
+        runtimeDependencyExpectations: [
+          {
+            pluginId: "codex",
+            dependencyName: "@openai/codex",
+            expectedVersion: "0.142.5",
+          },
+        ],
+      });
+
+      expect(result.runtimeDependencyDrifts).toEqual([
+        expect.objectContaining({
+          pluginId: "codex",
+          dependencyName: "@openai/codex",
+          expectedVersion: "0.142.5",
+        }),
+      ]);
+      expect(result.runtimeDependencyDrifts[0]).not.toHaveProperty("installedDependencyVersion");
+    });
+  });
 });
 
 describe("resolvePluginVersionDriftUpdateCommand", () => {
@@ -385,5 +527,20 @@ describe("resolvePluginVersionDriftUpdateCommand", () => {
         spec: "@openclaw/brave-plugin@2026.6.9",
       }),
     ).toBe("openclaw plugins update brave");
+  });
+});
+
+describe("resolvePluginRuntimeDependencyDriftUpdateCommand", () => {
+  it("updates the plugin id for stale embedded route runtime dependencies", () => {
+    expect(
+      resolvePluginRuntimeDependencyDriftUpdateCommand({
+        pluginId: "codex",
+        dependencyName: "@openai/codex",
+        expectedVersion: "0.142.5",
+        source: "npm",
+        installedVersion: "2026.6.11",
+        installedDependencyVersion: "0.139.0",
+      }),
+    ).toBe("openclaw plugins update codex");
   });
 });

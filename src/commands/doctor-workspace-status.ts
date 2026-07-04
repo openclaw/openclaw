@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import {
+  resolvePluginRuntimeDependencyDriftUpdateCommand,
   resolvePluginVersionDriftUpdateCommand,
   type PluginVersionDriftReport,
 } from "../plugins/plugin-version-drift.js";
@@ -77,21 +78,39 @@ function noteFlowRecoveryHints() {
 function pluginVersionDriftToHealthFindings(
   drift: PluginVersionDriftReport | undefined,
 ): HealthFinding[] {
-  if (!drift || drift.drifts.length === 0) {
+  if (!drift || (drift.drifts.length === 0 && drift.runtimeDependencyDrifts.length === 0)) {
     return [];
   }
-  return drift.drifts.map((entry) => {
-    const updateCommand = formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry));
-    return {
-      checkId: WORKSPACE_STATUS_CHECK_ID,
-      severity: "warning",
-      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but the Gateway is ${drift.gatewayVersion}.`,
-      path: `plugins.entries.${entry.pluginId}`,
-      target: entry.pluginId,
-      requirement: "plugin-version-drift",
-      fixHint: `${updateCommand} && ${formatCliCommand("openclaw gateway restart")}`,
-    };
-  });
+  return [
+    ...drift.drifts.map((entry) => {
+      const updateCommand = formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry));
+      return {
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning" as const,
+        message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but the Gateway is ${drift.gatewayVersion}.`,
+        path: `plugins.entries.${entry.pluginId}`,
+        target: entry.pluginId,
+        requirement: "plugin-version-drift",
+        fixHint: `${updateCommand} && ${formatCliCommand("openclaw gateway restart")}`,
+      };
+    }),
+    ...drift.runtimeDependencyDrifts.map((entry) => {
+      const updateCommand = formatCliCommand(
+        resolvePluginRuntimeDependencyDriftUpdateCommand(entry),
+      );
+      const installed = entry.installedDependencyVersion ?? "<missing>";
+      const pluginVersion = entry.installedVersion ? ` ${entry.installedVersion}` : "";
+      return {
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning" as const,
+        message: `Plugin ${entry.pluginId}${pluginVersion} embeds ${entry.dependencyName} ${installed}, but this OpenClaw release expects ${entry.expectedVersion} for route runtime execution.`,
+        path: `plugins.entries.${entry.pluginId}`,
+        target: entry.pluginId,
+        requirement: "plugin-runtime-dependency-drift",
+        fixHint: `${updateCommand} && ${formatCliCommand("openclaw gateway restart")}`,
+      };
+    }),
+  ];
 }
 
 function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
@@ -158,26 +177,34 @@ export function collectWorkspaceStatusHealthFindings(
 }
 
 function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
-  if (!drift || drift.drifts.length === 0) {
+  if (!drift || (drift.drifts.length === 0 && drift.runtimeDependencyDrifts.length === 0)) {
     return;
   }
-  const singleDrift = drift.drifts.length === 1 ? drift.drifts[0] : undefined;
-  const updateCommands = drift.drifts.map((entry) =>
-    formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
-  );
+  const totalDrifts = drift.drifts.length + drift.runtimeDependencyDrifts.length;
+  const updateCommands = [
+    ...drift.drifts.map((entry) => formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry))),
+    ...drift.runtimeDependencyDrifts.map((entry) =>
+      formatCliCommand(resolvePluginRuntimeDependencyDriftUpdateCommand(entry)),
+    ),
+  ];
+  const uniqueUpdateCommands = [...new Set(updateCommands)];
   const lines = [
-    `${drift.drifts.length} active official plugin${
-      drift.drifts.length === 1 ? "" : "s"
-    } not on OpenClaw ${drift.gatewayVersion}`,
+    `${totalDrifts} active official plugin drift${totalDrifts === 1 ? "" : "s"} found for OpenClaw ${drift.gatewayVersion}`,
     ...drift.drifts.map((entry) => {
       const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
     }),
-    singleDrift
-      ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
+    ...drift.runtimeDependencyDrifts.map((entry) => {
+      const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+      const installed = entry.installedDependencyVersion ?? "<missing>";
+      const pluginVersion = entry.installedVersion ? ` ${entry.installedVersion}` : "";
+      return `- ${entry.pluginId}${pluginVersion}: ${entry.dependencyName} ${installed} (${sourceLabel}) -> expected ${entry.expectedVersion}`;
+    }),
+    uniqueUpdateCommands.length === 1
+      ? `Fix: ${uniqueUpdateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
       : [
           "Fix each drifted plugin:",
-          ...updateCommands.map((command) => `- ${command}`),
+          ...uniqueUpdateCommands.map((command) => `- ${command}`),
           `Then run ${formatCliCommand("openclaw gateway restart")}.`,
         ].join("\n"),
   ];

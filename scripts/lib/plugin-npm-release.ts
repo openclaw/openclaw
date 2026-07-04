@@ -13,6 +13,8 @@ export type PluginPackageJson = {
   version?: string;
   type?: string;
   private?: boolean;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   repository?:
     | string
     | {
@@ -25,6 +27,7 @@ export type PluginPackageJson = {
       defaultChoice?: string;
       minHostVersion?: string;
       npmSpec?: string;
+      requiredPlatformPackages?: string[];
     };
     compat?: {
       pluginApi?: string;
@@ -85,6 +88,17 @@ export type PublishablePluginPackageCandidate<
 };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const CODEX_ROUTE_PLUGIN_PACKAGE_NAME = "@openclaw/codex";
+const CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME = "@openai/codex";
+const CODEX_ROUTE_RUNTIME_PLATFORM_PACKAGES = [
+  "@openai/codex-linux-x64",
+  "@openai/codex-linux-arm64",
+  "@openai/codex-darwin-x64",
+  "@openai/codex-darwin-arm64",
+  "@openai/codex-win32-x64",
+  "@openai/codex-win32-arm64",
+] as const;
+const EXACT_NPM_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 
 function readPluginPackageJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -96,6 +110,107 @@ function readOptionalTextFile(path: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function readOptionalJsonFile<TValue>(path: string): TValue | undefined {
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as TValue;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function collectCodexRouteRuntimePackageErrors(
+  candidate: PublishablePluginPackageCandidate,
+): string[] {
+  if (candidate.packageJson.name !== CODEX_ROUTE_PLUGIN_PACKAGE_NAME) {
+    return [];
+  }
+  const errors: string[] = [];
+  const expectedVersion =
+    candidate.packageJson.dependencies?.[CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME]?.trim() ?? "";
+  const requiredPlatformPackages =
+    candidate.packageJson.openclaw?.install?.requiredPlatformPackages;
+
+  if (!expectedVersion) {
+    errors.push(
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} must declare dependencies["${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME}"] so route binary drift can be checked before publish.`,
+    );
+    return errors;
+  }
+  if (!EXACT_NPM_VERSION_PATTERN.test(expectedVersion)) {
+    errors.push(
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} must pin ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} to an exact version; found "${expectedVersion}".`,
+    );
+  }
+  if (
+    !Array.isArray(requiredPlatformPackages) ||
+    CODEX_ROUTE_RUNTIME_PLATFORM_PACKAGES.some((pkg) => !requiredPlatformPackages.includes(pkg))
+  ) {
+    errors.push(
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} openclaw.install.requiredPlatformPackages must include every ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} platform package.`,
+    );
+  }
+
+  const shrinkwrap = readOptionalJsonFile<{
+    packages?: Record<string, unknown>;
+  }>(join(candidate.packageDir, "npm-shrinkwrap.json"));
+  if (!shrinkwrap) {
+    errors.push(
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap.json is required so npm publishes the approved ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} route binary.`,
+    );
+    return errors;
+  }
+
+  const packages = shrinkwrap.packages;
+  const rootPackage = isRecord(packages?.[""]) ? packages[""] : undefined;
+  const rootDependencies = isRecord(rootPackage?.dependencies)
+    ? rootPackage.dependencies
+    : undefined;
+  const shrinkwrapRootVersion = rootDependencies?.[CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME];
+  if (shrinkwrapRootVersion !== expectedVersion) {
+    errors.push(
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap root dependency ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} must be ${expectedVersion}; found "${String(shrinkwrapRootVersion ?? "<missing>")}".`,
+    );
+  }
+
+  const runtimePackageKey = `node_modules/${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME}`;
+  const runtimePackage = isRecord(packages?.[runtimePackageKey])
+    ? packages[runtimePackageKey]
+    : undefined;
+  if (runtimePackage?.version !== expectedVersion) {
+    errors.push(
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${runtimePackageKey}.version must be ${expectedVersion}; found "${String(runtimePackage?.version ?? "<missing>")}".`,
+    );
+  }
+  const optionalDependencies = isRecord(runtimePackage?.optionalDependencies)
+    ? runtimePackage.optionalDependencies
+    : {};
+  for (const platformPackage of CODEX_ROUTE_RUNTIME_PLATFORM_PACKAGES) {
+    const platformSuffix = platformPackage.slice(`${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME}-`.length);
+    const expectedAlias = `npm:${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME}@${expectedVersion}-${platformSuffix}`;
+    if (optionalDependencies[platformPackage] !== expectedAlias) {
+      errors.push(
+        `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${runtimePackageKey}.optionalDependencies["${platformPackage}"] must be "${expectedAlias}"; found "${String(optionalDependencies[platformPackage] ?? "<missing>")}".`,
+      );
+    }
+    const platformPackageKey = `node_modules/${platformPackage}`;
+    const lockedPlatformPackage = isRecord(packages?.[platformPackageKey])
+      ? packages[platformPackageKey]
+      : undefined;
+    const expectedPlatformVersion = `${expectedVersion}-${platformSuffix}`;
+    if (lockedPlatformPackage?.version !== expectedPlatformVersion) {
+      errors.push(
+        `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${platformPackageKey}.version must be ${expectedPlatformVersion}; found "${String(lockedPlatformPackage?.version ?? "<missing>")}".`,
+      );
+    }
+  }
+
+  return errors;
 }
 
 export function collectExtensionPackageJsonCandidates<
@@ -298,6 +413,7 @@ export function collectPublishablePluginPackageErrors(
   errors.push(
     ...validateExternalCodePluginPackageJson(packageJson).issues.map((issue) => issue.message),
   );
+  errors.push(...collectCodexRouteRuntimePackageErrors(candidate));
 
   return errors;
 }

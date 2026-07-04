@@ -178,6 +178,7 @@ describe("noteWorkspaceStatus", () => {
       {
         pluginVersionDrift: {
           gatewayVersion: "2026.6.1",
+          runtimeDependencyDrifts: [],
           drifts: [
             {
               pluginId: "codex",
@@ -198,6 +199,51 @@ describe("noteWorkspaceStatus", () => {
         target: "codex",
         requirement: "plugin-version-drift",
         message: expect.stringContaining("2026.5.30-beta.1"),
+        fixHint: expect.stringContaining("openclaw plugins update codex"),
+      }),
+    ]);
+  });
+
+  it("collects Codex route runtime dependency drift as a structured finding", async () => {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult({ plugins: [] }),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+
+    const findings = collectWorkspaceStatusHealthFindings(
+      {
+        plugins: { entries: { codex: { enabled: true } } },
+      },
+      {
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.11",
+          drifts: [],
+          runtimeDependencyDrifts: [
+            {
+              pluginId: "codex",
+              dependencyName: "@openai/codex",
+              expectedVersion: "0.142.5",
+              source: "npm",
+              installedVersion: "2026.6.11",
+              installedDependencyVersion: "0.139.0",
+            },
+          ],
+        },
+      },
+    );
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        path: "plugins.entries.codex",
+        target: "codex",
+        requirement: "plugin-runtime-dependency-drift",
+        message: expect.stringContaining("@openai/codex 0.139.0"),
         fixHint: expect.stringContaining("openclaw plugins update codex"),
       }),
     ]);
@@ -288,6 +334,7 @@ describe("noteWorkspaceStatus", () => {
         },
         pluginVersionDrift: {
           gatewayVersion: "2026.6.1",
+          runtimeDependencyDrifts: [],
           drifts: [
             {
               pluginId: "codex",
@@ -303,7 +350,7 @@ describe("noteWorkspaceStatus", () => {
       const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
       expect(driftCalls).toHaveLength(1);
       const [[body]] = driftCalls;
-      expect(body).toContain("1 active official plugin not on OpenClaw 2026.6.1");
+      expect(body).toContain("1 active official plugin drift found for OpenClaw 2026.6.1");
       expect(body).toContain("codex: 2026.5.30-beta.1 (npm) -> expected 2026.6.1");
       expect(body).toContain("openclaw plugins update codex");
       expect(body).toContain("openclaw gateway restart");
@@ -335,6 +382,7 @@ describe("noteWorkspaceStatus", () => {
         },
         pluginVersionDrift: {
           gatewayVersion: "2026.6.10-beta.1",
+          runtimeDependencyDrifts: [],
           drifts: [
             {
               pluginId: "brave",
@@ -354,6 +402,56 @@ describe("noteWorkspaceStatus", () => {
       const [[body]] = driftCalls;
       expect(body).toContain("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
       expect(body).not.toContain("openclaw plugins update brave");
+      expect(body).toContain("openclaw gateway restart");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("surfaces Codex route runtime dependency drift in workspace notes", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "codex",
+            name: "Codex",
+            origin: "global",
+            source: "/tmp/codex/index.js",
+          }),
+        ],
+      }),
+      [],
+      {
+        cfg: {
+          plugins: {
+            entries: {
+              codex: { enabled: true },
+            },
+          },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.6.11",
+          drifts: [],
+          runtimeDependencyDrifts: [
+            {
+              pluginId: "codex",
+              dependencyName: "@openai/codex",
+              expectedVersion: "0.142.5",
+              source: "npm",
+              installedVersion: "2026.6.11",
+              installedDependencyVersion: "0.139.0",
+            },
+          ],
+        },
+      },
+    );
+    try {
+      const driftCalls = noteSpy.mock.calls.filter(([, title]) => title === "Plugin version drift");
+      expect(driftCalls).toHaveLength(1);
+      const [[body]] = driftCalls;
+      expect(body).toContain("1 active official plugin drift found for OpenClaw 2026.6.11");
+      expect(body).toContain("codex 2026.6.11: @openai/codex 0.139.0 (npm) -> expected 0.142.5");
+      expect(body).toContain("openclaw plugins update codex");
       expect(body).toContain("openclaw gateway restart");
     } finally {
       noteSpy.mockRestore();

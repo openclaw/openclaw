@@ -124,6 +124,81 @@ function writePluginReadme(repoDir: string, extensionId: string): void {
   writeFileSync(join(packageDir, "README.md"), `# ${extensionId}\n`);
 }
 
+function codexPackageJson(codexVersion = "0.142.5") {
+  return {
+    name: "@openclaw/codex",
+    version: "2026.6.11",
+    type: "module",
+    repository: {
+      type: "git",
+      url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+    },
+    dependencies: {
+      "@openai/codex": codexVersion,
+    },
+    openclaw: {
+      extensions: ["./index.ts"],
+      install: {
+        npmSpec: "@openclaw/codex",
+        requiredPlatformPackages: [
+          "@openai/codex-linux-x64",
+          "@openai/codex-linux-arm64",
+          "@openai/codex-darwin-x64",
+          "@openai/codex-darwin-arm64",
+          "@openai/codex-win32-x64",
+          "@openai/codex-win32-arm64",
+        ],
+      },
+      ...externalPluginContract("2026.6.11"),
+      release: {
+        publishToNpm: true,
+      },
+    },
+  };
+}
+
+function writeCodexShrinkwrap(packageDir: string, codexVersion = "0.142.5"): void {
+  const platformPackages = [
+    "@openai/codex-linux-x64",
+    "@openai/codex-linux-arm64",
+    "@openai/codex-darwin-x64",
+    "@openai/codex-darwin-arm64",
+    "@openai/codex-win32-x64",
+    "@openai/codex-win32-arm64",
+  ];
+  const packages: Record<string, unknown> = {
+    "": {
+      name: "@openclaw/codex",
+      version: "2026.6.11",
+      dependencies: {
+        "@openai/codex": codexVersion,
+      },
+    },
+    "node_modules/@openai/codex": {
+      version: codexVersion,
+      optionalDependencies: Object.fromEntries(
+        platformPackages.map((name) => {
+          const suffix = name.slice("@openai/codex-".length);
+          return [name, `npm:@openai/codex@${codexVersion}-${suffix}`];
+        }),
+      ),
+    },
+  };
+  for (const name of platformPackages) {
+    const suffix = name.slice("@openai/codex-".length);
+    packages[`node_modules/${name}`] = {
+      name: "@openai/codex",
+      version: `${codexVersion}-${suffix}`,
+    };
+  }
+  writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+    name: "@openclaw/codex",
+    version: "2026.6.11",
+    lockfileVersion: 3,
+    packages,
+  });
+}
+
 describe("collectPublishablePluginPackageErrors", () => {
   it("accepts a valid publishable plugin package candidate", () => {
     expect(
@@ -298,6 +373,44 @@ describe("collectPublishablePluginPackageErrors", () => {
         },
       }),
     ).toEqual(["README.md must exist and contain package documentation."]);
+  });
+
+  it("accepts the Codex route runtime package contract when package and shrinkwrap agree", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-codex-plugin-release-");
+    const packageDir = join(repoDir, "extensions", "codex");
+    mkdirSync(packageDir, { recursive: true });
+    writeCodexShrinkwrap(packageDir, "0.142.5");
+
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "codex",
+        packageDir,
+        readmeText: "# Codex\n",
+        packageJson: codexPackageJson("0.142.5"),
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("blocks Codex route runtime package drift before publishing", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-codex-plugin-release-");
+    const packageDir = join(repoDir, "extensions", "codex");
+    mkdirSync(packageDir, { recursive: true });
+    writeCodexShrinkwrap(packageDir, "0.139.0");
+
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "codex",
+        packageDir,
+        readmeText: "# Codex\n",
+        packageJson: codexPackageJson("0.142.5"),
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        '@openclaw/codex npm-shrinkwrap root dependency @openai/codex must be 0.142.5; found "0.139.0".',
+        '@openclaw/codex npm-shrinkwrap node_modules/@openai/codex.version must be 0.142.5; found "0.139.0".',
+        '@openclaw/codex npm-shrinkwrap node_modules/@openai/codex-linux-x64.version must be 0.142.5-linux-x64; found "0.139.0-linux-x64".',
+      ]),
+    );
   });
 });
 
