@@ -129,6 +129,9 @@
       "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
       "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
       "@openclaw/normalization-core": ["./packages/normalization-core/src/index.ts"],
+      "@openclaw/normalization-core/boolean-coercion": [
+        "./packages/normalization-core/src/boolean-coercion.ts"
+      ],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
