@@ -6,6 +6,8 @@ import { readRegularFile, statRegularFile } from "./fs-utils.js";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
+  DREAMING_NARRATIVE_RUN_PREFIX,
+  isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
@@ -36,7 +38,6 @@ export {
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
 
-const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
 // wrap pathological long messages so downstream indexers never ingest a single
 // toxic line. Wrapped continuation lines still map back to the same JSONL line.
@@ -176,20 +177,6 @@ function isDreamingNarrativeGeneratedRecord(record: unknown): boolean {
     sessionKey?: unknown;
   };
   return hasDreamingNarrativeRunId(nested.runId) || hasDreamingNarrativeRunId(nested.sessionKey);
-}
-
-function isDreamingNarrativeSessionStoreKey(sessionKey: string): boolean {
-  const trimmed = sessionKey.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const firstSeparator = trimmed.indexOf(":");
-  if (firstSeparator < 0) {
-    return trimmed.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
-  }
-  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
-  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
-  return sessionSegment.startsWith(DREAMING_NARRATIVE_RUN_PREFIX);
 }
 
 function hasCronRunSessionKey(value: unknown): boolean {

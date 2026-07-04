@@ -2,7 +2,8 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-async function readChunkWithIdleTimeout(
+/** Reads one chunk, rejecting and cancelling the reader after an idle timeout. */
+export async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
