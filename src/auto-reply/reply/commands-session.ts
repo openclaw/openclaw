@@ -1,5 +1,9 @@
 // Implements session commands for list, show, fork, reset, and routing state.
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -101,11 +105,7 @@ function resolveSessionBindingDurationMs(
   key: "idleTimeoutMs" | "maxAgeMs",
   fallbackMs: number,
 ): number {
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallbackMs;
-  }
-  return Math.max(0, Math.floor(raw));
+  return resolveNonNegativeIntegerOption(binding.metadata?.[key], fallbackMs);
 }
 
 function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): number {
@@ -144,20 +144,8 @@ function resolveUpdatedLifecycleDurationMs(
   binding: UpdatedLifecycleBinding | SessionBindingRecord,
   key: "idleTimeoutMs" | "maxAgeMs",
 ): number | undefined {
-  if (!isSessionBindingRecord(binding)) {
-    const raw = binding[key];
-    if (typeof raw === "number" && Number.isFinite(raw)) {
-      return Math.max(0, Math.floor(raw));
-    }
-  }
-  if (!isSessionBindingRecord(binding)) {
-    return undefined;
-  }
-  const raw = binding.metadata?.[key];
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  return Math.max(0, Math.floor(raw));
+  const raw = isSessionBindingRecord(binding) ? binding.metadata?.[key] : binding[key];
+  return resolveOptionalIntegerOption(raw, { min: 0 });
 }
 
 function toUpdatedLifecycleBinding(

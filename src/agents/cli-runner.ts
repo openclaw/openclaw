@@ -29,7 +29,11 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
+import type {
+  CliReusableSession,
+  PreparedCliRunContext,
+  RunCliAgentParams,
+} from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -86,6 +90,12 @@ function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
 }
 
+function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
+  return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
+    ? reusableCliSession.sessionId
+    : undefined;
+}
+
 function shouldRetryFreshCliSessionAfterFailover(params: {
   error: FailoverError;
   hasHistoryPrompt: boolean;
@@ -98,8 +108,12 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return true;
     case "unknown":
       return params.error.code === "cli_unknown_empty_failure";
+    case "empty_response":
+      return params.error.code === "cli_unknown_empty_failure";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
+    case "context_overflow":
+      return params.error.code === "cli_context_overflow";
     default:
       return false;
   }
@@ -723,7 +737,9 @@ export async function runPreparedCliAgent(
           sessionId: "",
           provider: params.provider,
           model: context.modelId,
-          ...(context.reusableCliSession.sessionId ? { clearCliSessionBinding: true } : {}),
+          ...(resolveReusableCliSessionId(context.reusableCliSession)
+            ? { clearCliSessionBinding: true }
+            : {}),
         },
       },
       didSendViaMessagingTool: true,
@@ -1154,10 +1170,11 @@ export async function runPreparedCliAgent(
       ctx: hookContext,
       hookRunner,
     });
+    const reusableCliSessionId = resolveReusableCliSessionId(context.reusableCliSession);
     try {
       return await finishCliAttempt(
-        await executeCliAttempt(context.reusableCliSession.sessionId),
-        context.reusableCliSession.sessionId,
+        await executeCliAttempt(reusableCliSessionId),
+        reusableCliSessionId,
       );
     } catch (err) {
       const deliveredFailure = await finishDeliveredFailure(err);
@@ -1165,7 +1182,7 @@ export async function runPreparedCliAgent(
         return deliveredFailure;
       }
       if (isFailoverError(err)) {
-        const retryableSessionId = context.reusableCliSession.sessionId;
+        const retryableSessionId = reusableCliSessionId;
         if (
           shouldRetryFreshCliSessionAfterFailover({
             error: err,

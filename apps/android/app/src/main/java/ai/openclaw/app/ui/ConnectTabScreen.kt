@@ -67,16 +67,16 @@ private enum class ConnectInputMode {
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
-  val statusText by viewModel.statusText.collectAsState()
-  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val statusText = gatewayConnectionDisplay.statusText
+  val gatewayConnectionProblem = gatewayConnectionDisplay.problem
+  val isConnected = gatewayConnectionDisplay.isConnected
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
-  val gatewayBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
@@ -94,6 +94,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   var manualHostInput by rememberSaveable { mutableStateOf(manualHost.ifBlank { "10.0.2.2" }) }
   var manualPortInput by rememberSaveable { mutableStateOf(manualPort.toString()) }
   var manualTlsInput by rememberSaveable { mutableStateOf(manualTls) }
+  var tokenInput by remember { mutableStateOf("") }
   var passwordInput by rememberSaveable { mutableStateOf("") }
   var validationText by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -259,8 +260,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             return@Button
           }
 
-          val config =
-            resolveGatewayConnectConfig(
+          val plan =
+            resolveGatewayConnectPlan(
               useSetupCode = inputMode == ConnectInputMode.SetupCode,
               setupCode = setupCode,
               savedManualHost = manualHost,
@@ -269,12 +270,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               manualHostInput = manualHostInput,
               manualPortInput = manualPortInput,
               manualTlsInput = manualTlsInput,
-              fallbackBootstrapToken = gatewayBootstrapToken,
-              fallbackToken = gatewayToken,
-              fallbackPassword = passwordInput,
+              bootstrapTokenInput = "",
+              tokenInput = tokenInput,
+              passwordInput = passwordInput,
             )
 
-          if (config == null) {
+          if (plan == null) {
             validationText =
               if (inputMode == ConnectInputMode.SetupCode) {
                 val parsedSetup = decodeGatewaySetupCode(setupCode)
@@ -299,15 +300,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           }
 
           validationText = null
-          viewModel.saveGatewayConfigAndConnect(
-            host = config.host,
-            port = config.port,
-            tls = config.tls,
-            token = config.token,
-            bootstrapToken = config.bootstrapToken,
-            password = config.password,
-            resetSetupAuth = inputMode == ConnectInputMode.SetupCode,
-          )
+          viewModel.saveGatewayConfigAndConnect(plan)
+          tokenInput = ""
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),
@@ -537,9 +531,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 
             Text(stringResource(R.string.token_optional), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
-              value = gatewayToken,
-              onValueChange = { viewModel.setGatewayToken(it) },
-              placeholder = { Text("token", style = mobileBody, color = mobileTextTertiary) },
+              value = tokenInput,
+              onValueChange = { tokenInput = it },
+              placeholder = { Text("Leave blank to keep saved token", style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
               keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),

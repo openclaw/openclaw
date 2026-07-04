@@ -11,6 +11,7 @@ struct CommandCenterTab: View {
     @State private var defaultChatSessionEntry: OpenClawChatSessionEntry?
     @State private var recentChatSessions: [OpenClawChatSessionEntry] = []
     var ownsNavigationStack: Bool = true
+    var usesNativeNavigationChrome: Bool = false
     var headerTitle: String = "OpenClaw"
     var headerLeadingAction: OpenClawSidebarHeaderAction?
     var showsHeaderMark: Bool = true
@@ -57,7 +58,9 @@ struct CommandCenterTab: View {
                 self.commandAmbientOverlay
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        self.header
+                        if !self.usesNativeNavigationChrome {
+                            self.header
+                        }
                         self.gatewayCard
                         if Self.usesSplitSectionsLayout(
                             horizontalSizeClass: self.horizontalSizeClass,
@@ -83,7 +86,19 @@ struct CommandCenterTab: View {
                 .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
             }
         }
-        .navigationBarHidden(true)
+        .navigationTitle(self.headerTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar {
+            if self.usesNativeNavigationChrome {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: self.openSettings) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                    }
+                    .accessibilityLabel("Gateway settings")
+                }
+            }
+        }
     }
 
     static func usesSplitSectionsLayout(
@@ -105,8 +120,8 @@ struct CommandCenterTab: View {
         OpenClawAdaptiveHeaderRow(
             title: self.headerTitle,
             subtitle: self.gatewaySubtitle,
-            titleFont: .title3.weight(.semibold),
-            subtitleFont: .caption,
+            titleFont: OpenClawType.title3SemiBold,
+            subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
         {
             if let headerLeadingAction {
@@ -120,7 +135,7 @@ struct CommandCenterTab: View {
         } accessory: {
             Button(action: self.openSettings) {
                 Image(systemName: "gearshape.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .frame(width: OpenClawProMetric.compactControlSize, height: OpenClawProMetric.compactControlSize)
             }
             .openClawGlassButton()
@@ -162,13 +177,13 @@ struct CommandCenterTab: View {
                         icon: "server.rack",
                         title: "Address",
                         value: self.gatewayAddressText,
-                        color: OpenClawBrand.accent)
+                        color: OpenClawBrand.accentForeground)
                     Divider().frame(height: 38)
                     self.gatewayFact(
                         icon: "person.2.fill",
                         title: "Agents",
                         value: self.gatewayAgentCountText,
-                        color: OpenClawBrand.accentHot)
+                        color: OpenClawBrand.accentHotForeground)
                 }
                 .padding(.vertical, 7)
             }
@@ -180,15 +195,15 @@ struct CommandCenterTab: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.caption2.weight(.bold))
+                    .font(OpenClawType.caption2Bold)
                     .foregroundStyle(color)
                 Text(title)
-                    .font(.caption2.weight(.medium))
+                    .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Text(value)
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(title == "Connection" ? color : .primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -242,7 +257,9 @@ struct CommandCenterTab: View {
                                 .buttonStyle(.plain)
                             } else {
                                 NavigationLink {
-                                    CommandSessionsScreen(openChat: self.openChat)
+                                    CommandSessionsScreen(
+                                        usesNativeNavigationChrome: self.usesNativeNavigationChrome,
+                                        openChat: self.openChat)
                                 } label: {
                                     CommandViewMoreRow()
                                 }
@@ -258,7 +275,7 @@ struct CommandCenterTab: View {
     private func cardHeader(title: String) -> some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
         }
@@ -598,10 +615,16 @@ struct CommandSessionsScreen: View {
     @State private var isLoading = false
     @State private var loadErrorText: String?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
 
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, openChat: @escaping () -> Void) {
+    init(
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
+        openChat: @escaping () -> Void)
+    {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
     }
 
@@ -610,7 +633,9 @@ struct CommandSessionsScreen: View {
             CommandControlBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    self.header
+                    if !self.usesNativeNavigationChrome {
+                        self.header
+                    }
                     self.sessionsPanel
                 }
                 .padding(.top, 16)
@@ -620,6 +645,7 @@ struct CommandSessionsScreen: View {
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
         .task(id: self.refreshID) {
             await self.refreshSessions()
         }
@@ -633,9 +659,9 @@ struct CommandSessionsScreen: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sessions")
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .font(OpenClawType.title2)
                 Text(self.headerDetail)
-                    .font(.caption.weight(.medium))
+                    .font(OpenClawType.captionMedium)
                     .foregroundStyle(.secondary)
             }
         }
@@ -647,7 +673,7 @@ struct CommandSessionsScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Text("Recent sessions")
-                        .font(.subheadline.weight(.bold))
+                        .font(OpenClawType.subheadBold)
                     Spacer(minLength: 8)
                     if self.isLoading {
                         ProgressView()

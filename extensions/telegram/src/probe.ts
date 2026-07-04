@@ -87,7 +87,9 @@ function setCachedProbeTransport(
   if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
     const oldestKey = probeTransportCache.keys().next().value;
     if (oldestKey !== undefined) {
+      const oldestTransport = probeTransportCache.get(oldestKey);
       probeTransportCache.delete(oldestKey);
+      void oldestTransport?.close();
     }
   }
   return transport;

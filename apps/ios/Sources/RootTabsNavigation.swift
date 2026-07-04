@@ -3,6 +3,21 @@ import Foundation
 import SwiftUI
 
 extension RootTabs {
+    struct PhoneChatReturn: Equatable {
+        let destination: SidebarDestination
+        let openChatRequestID: Int
+    }
+
+    struct PhoneControlNavigationRequest: Equatable {
+        enum Target: Equatable {
+            case root
+            case detail(SidebarDestination)
+        }
+
+        let id: Int
+        let target: Target
+    }
+
     private static var sidebarPersistentWidthThreshold: CGFloat {
         980
     }
@@ -276,11 +291,14 @@ extension RootTabs {
     ]
 
     static var phoneControlGroups: [SidebarGroup] {
-        self.sidebarGroups
+        // Agents owns a bottom tab and its hub entry duplicated the same destination;
+        // Chat and Talk stay per the tested Control-hub IA contract.
+        let tabOwned: Set<SidebarDestination> = [.agents]
+        return self.sidebarGroups
             .map { group in
                 SidebarGroup(
                     title: group.title,
-                    destinations: group.destinations.filter { $0 != .agents })
+                    destinations: group.destinations.filter { !tabOwned.contains($0) })
             }
             .filter { !$0.destinations.isEmpty }
     }

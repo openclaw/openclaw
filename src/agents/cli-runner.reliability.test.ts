@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   testing as replyRunTesting,
@@ -24,6 +25,7 @@ import {
 } from "../gateway/mcp-http.loopback-runtime.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunExit } from "../process/supervisor/types.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -37,6 +39,7 @@ import {
   requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   resolveCliNoOutputTimeoutMs,
@@ -62,6 +65,7 @@ vi.mock("../tts/tts.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 type HookRunnerGlobalStateForTest = {
@@ -203,7 +207,9 @@ function buildPreparedContext(params?: {
       backend,
       env: {},
     },
-    reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    reusableCliSession: params?.cliSessionId
+      ? { mode: "reuse", sessionId: params.cliSessionId }
+      : { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
     modelId: model,
@@ -304,6 +310,7 @@ describe("runCliAgent reliability", () => {
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
+    resetClaudeLiveSessionsForTest();
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -661,6 +668,132 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("clears a soft-resumed binding after confirmed message send followed by failure", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before failure",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before failure",
+        },
+        result: { status: "sent" },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "failed after delivery",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:soft-drift-delivered-failure",
+      runId: "run-soft-drift-delivered-failure",
+      cliSessionId: "soft-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.reusableCliSession = {
+      mode: "reuse-with-drift",
+      sessionId: "soft-cli-session",
+      drift: { reasons: ["system-prompt"] },
+    };
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent before failure"]);
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry context overflow after a confirmed message send", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before overflow",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before overflow",
+        },
+        result: { status: "sent" },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "Prompt is too long",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:delivered-overflow",
+      runId: "run-delivered-overflow",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent before overflow"]);
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -733,6 +866,43 @@ describe("runCliAgent reliability", () => {
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes soft-resumed binding hashes without clearing the stored binding", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:soft-drift-refresh",
+      runId: "run-soft-drift-refresh",
+      cliSessionId: "soft-cli-session",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+    });
+    context.reusableCliSession = {
+      mode: "reuse-with-drift",
+      sessionId: "soft-cli-session",
+      drift: { reasons: ["system-prompt"] },
+    };
+    context.extraSystemPromptHash = "new-system-prompt-hash";
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.cliSessionBinding).toMatchObject({
+      sessionId: "soft-cli-session",
+      extraSystemPromptHash: "new-system-prompt-hash",
+    });
   });
 
   it("returns only the source-reply mirror after a successful CLI turn", async () => {
@@ -1390,6 +1560,211 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
+  it("does not fresh retry context overflow when the run timeout budget is exhausted", async () => {
+    supervisorSpawnMock.mockClear();
+    const clearBeforeRetry = vi.fn(async () => true);
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "Prompt is too long",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:expired-overflow-budget",
+      runId: "run-expired-overflow-budget",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    const expiredBudgetContext = {
+      ...context,
+      started: Date.now() - context.params.timeoutMs - 1,
+    };
+
+    await expect(
+      runPreparedCliAgent({
+        ...expiredBudgetContext,
+        params: {
+          ...expiredBudgetContext.params,
+          onBeforeFreshCliSessionRetry: clearBeforeRetry,
+        },
+      }),
+    ).rejects.toThrow("Prompt is too long");
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(clearBeforeRetry).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-capture live-session artifacts through fresh recovery retry", async () => {
+    supervisorSpawnMock.mockClear();
+    const artifactDir = autoCleanupTempDirs.make("openclaw-live-retry-artifacts-");
+    const mcpConfigPath = path.join(artifactDir, "mcp.json");
+    const skillsDir = path.join(artifactDir, "skills-plugin");
+    fs.writeFileSync(mcpConfigPath, "{}\n", "utf-8");
+    fs.mkdirSync(skillsDir);
+
+    const resolveArg = (argv: string[] | undefined, flag: string) => {
+      const index = argv?.indexOf(flag) ?? -1;
+      if (index < 0) {
+        throw new Error(`expected ${flag}`);
+      }
+      const value = argv?.[index + 1];
+      if (!value) {
+        throw new Error(`expected value after ${flag}`);
+      }
+      return value;
+    };
+
+    let notifyFirstSpawn: (() => void) | undefined;
+    const firstSpawned = new Promise<void>((resolve) => {
+      notifyFirstSpawn = resolve;
+    });
+    let spawnCount = 0;
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      spawnCount += 1;
+      const input = args[0] as {
+        argv?: string[];
+        onStdout?: (chunk: string) => void;
+      };
+      expect(resolveArg(input.argv, "--mcp-config")).toBe(mcpConfigPath);
+      expect(resolveArg(input.argv, "--skills-plugin-dir")).toBe(skillsDir);
+      expect(fs.existsSync(mcpConfigPath)).toBe(true);
+      expect(fs.existsSync(skillsDir)).toBe(true);
+
+      if (spawnCount === 1) {
+        notifyFirstSpawn?.();
+        let resolveExit: ((value: RunExit) => void) | undefined;
+        const exited = new Promise<RunExit>((resolve) => {
+          resolveExit = resolve;
+        });
+        return {
+          runId: "live-retry-timeout",
+          pid: 3301,
+          startedAtMs: Date.now(),
+          stdin: {
+            write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => cb?.()),
+            end: vi.fn(),
+          },
+          wait: vi.fn(() => exited),
+          cancel: vi.fn(() =>
+            resolveExit?.({
+              reason: "manual-cancel",
+              exitCode: null,
+              exitSignal: null,
+              durationMs: 1,
+              stdout: "",
+              stderr: "",
+              timedOut: false,
+              noOutputTimedOut: false,
+            }),
+          ),
+        };
+      }
+
+      const stdoutListener = input.onStdout;
+      return {
+        runId: "live-retry-fresh",
+        pid: 3302,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            stdoutListener?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: "fresh-live" }),
+                JSON.stringify({ type: "result", session_id: "fresh-live", result: "fresh ok" }),
+              ].join("\n") + "\n",
+            );
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const liveBackend = {
+      command: "claude",
+      args: [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--mcp-config",
+        mcpConfigPath,
+        "--skills-plugin-dir",
+        skillsDir,
+      ],
+      resumeArgs: [
+        "-p",
+        "--resume",
+        "{sessionId}",
+        "--output-format",
+        "stream-json",
+        "--mcp-config",
+        mcpConfigPath,
+        "--skills-plugin-dir",
+        skillsDir,
+      ],
+      output: "jsonl" as const,
+      input: "stdin" as const,
+      modelArg: "--model",
+      sessionArg: "--session-id",
+      sessionMode: "always" as const,
+      liveSession: "claude-stdio" as const,
+      reliability: {
+        watchdog: {
+          resume: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
+          fresh: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
+        },
+      },
+      serialize: true,
+    };
+    const cleanup = vi.fn(async () => {
+      fs.rmSync(artifactDir, { recursive: true, force: true });
+    });
+    const clearBeforeRetry = vi.fn(async () => true);
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:live-artifacts",
+      runId: "run-live-artifact-retry",
+      cliSessionId: "stale-live",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.preparedBackend.backend = liveBackend;
+    context.preparedBackend.cleanup = cleanup;
+    context.backendResolved.config = liveBackend;
+
+    const resultPromise = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        timeoutMs: 5_000,
+        onBeforeFreshCliSessionRetry: clearBeforeRetry,
+      },
+    });
+    await firstSpawned;
+    const result = await resultPromise;
+
+    expect(result.payloads).toEqual([{ text: "fresh ok" }]);
+    expect(result.meta.finalPromptText).toContain("User: earlier context");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(clearBeforeRetry).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      reason: "timeout",
+      sessionId: "stale-live",
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+
   it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
@@ -1468,7 +1843,7 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it.each(["timeout", "unknown"] as const)(
+  it.each(["timeout", "unknown", "context_overflow"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
       const hookRunner = {
@@ -1498,6 +1873,18 @@ describe("runCliAgent reliability", () => {
             stderr: "",
             timedOut: true,
             noOutputTimedOut: true,
+          });
+        }
+        if (spawnCount === 1 && reason === "context_overflow") {
+          return createManagedRun({
+            reason: "exit",
+            exitCode: 1,
+            exitSignal: null,
+            durationMs: 150,
+            stdout: "",
+            stderr: "Prompt is too long",
+            timedOut: false,
+            noOutputTimedOut: false,
           });
         }
         if (spawnCount === 1) {
@@ -1552,6 +1939,8 @@ describe("runCliAgent reliability", () => {
         });
 
         expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
+        expect(result.meta.finalPromptText).toContain("User: earlier context");
+        expect(result.meta.finalPromptText).toContain("<next_user_message>");
         expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
         expect(events).toEqual(["spawn-1", `clear-${reason}`, "spawn-2"]);
         if (reason === "timeout") {

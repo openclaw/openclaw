@@ -786,14 +786,122 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+type ToolResultCapTarget = {
+  agentId?: string;
+  configuredCap?: number;
+  path?: string;
+  scopeLabel: string;
+  target?: string;
+};
+
+async function collectToolResultCapFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const { resolveAgentContextLimits } = await loadAgentScopeModule();
+  const { normalizeAgentId } = await import("../routing/session-key.js");
+  const targets: ToolResultCapTarget[] = [];
+  const defaultsConfiguredCap = cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
+  if (defaultsConfiguredCap !== undefined) {
+    targets.push({
+      configuredCap: defaultsConfiguredCap,
+      path: "agents.defaults.contextLimits.toolResultMaxChars",
+      scopeLabel: "defaults",
+      target: "agents.defaults",
+    });
+  }
+  for (const entry of cfg.agents?.list ?? []) {
+    const normalizedAgentId = normalizeAgentId(entry.id);
+    if (
+      !normalizedAgentId ||
+      (defaultsConfiguredCap === undefined && entry.contextLimits?.toolResultMaxChars === undefined)
+    ) {
+      continue;
+    }
+    targets.push({
+      agentId: normalizedAgentId,
+      configuredCap: resolveAgentContextLimits(cfg, normalizedAgentId)?.toolResultMaxChars,
+      path:
+        entry.contextLimits?.toolResultMaxChars === undefined
+          ? "agents.defaults.contextLimits.toolResultMaxChars"
+          : `agents.list.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
+      scopeLabel: `agent "${normalizedAgentId}"`,
+      target: `agents.list.${normalizedAgentId}`,
+    });
+  }
+  if (targets.length === 0) {
+    return [];
+  }
+
+  const { collectToolResultCapDoctorIssues, toolResultCapDoctorIssueToHealthFinding } =
+    await import("./doctor-tool-result-cap-advice.js");
+
+  return collectToolResultCapTargetAdvice({
+    cfg,
+    readOnlyCatalog: true,
+    targets,
+  }).then((entries) =>
+    entries.flatMap((entry) =>
+      collectToolResultCapDoctorIssues(entry).map(toolResultCapDoctorIssueToHealthFinding),
+    ),
+  );
+}
+
+async function collectToolResultCapTargetAdvice(params: {
+  cfg: OpenClawConfig;
+  readOnlyCatalog?: boolean;
+  targets: readonly ToolResultCapTarget[];
+}): Promise<
+  Array<{
+    contextWindowTokens: number;
+    modelKey: string;
+    configuredCap?: number;
+    deep?: boolean;
+    path?: string;
+    scopeLabel?: string;
+    target?: string;
+  }>
+> {
+  const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
+  const { loadModelCatalog, findModelCatalogEntry } = await loadModelCatalogModule();
+  const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
+  const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
+  const catalog = await loadModelCatalog({
+    config: params.cfg,
+    ...(params.readOnlyCatalog ? { readOnly: true } : {}),
+  });
+
+  return params.targets.map((target) => {
+    const modelRef = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: target.agentId,
+    });
+    const entry = findModelCatalogEntry(catalog, {
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+    });
+    const contextWindow = resolveContextWindowInfo({
+      cfg: params.cfg,
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      modelContextTokens: entry?.contextTokens,
+      modelContextWindow: entry?.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    });
+    return {
+      contextWindowTokens: contextWindow.tokens,
+      modelKey: modelKey(modelRef.provider, modelRef.model),
+      configuredCap: target.configuredCap,
+      path: target.path,
+      scopeLabel: target.scopeLabel,
+      target: target.target,
+    };
+  });
+}
+
 async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveAgentContextLimits } = await loadAgentScopeModule();
   const { normalizeAgentId } = await import("../routing/session-key.js");
-  const targets: Array<{
-    agentId?: string;
-    configuredCap?: number;
-    scopeLabel: string;
-  }> = [];
+  const targets: ToolResultCapTarget[] = [];
   const defaultsConfiguredCap = ctx.cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
   if (ctx.options.deep === true || defaultsConfiguredCap !== undefined) {
     targets.push({
@@ -821,39 +929,18 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
     return;
   }
 
-  const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
-  const { loadModelCatalog, findModelCatalogEntry } = await loadModelCatalogModule();
-  const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
-  const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
   const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
   const { note } = await loadNoteModule();
-
-  const catalog = await loadModelCatalog({ config: ctx.cfg });
-  const lines = targets.flatMap((target) => {
-    const modelRef = resolveDefaultModelForAgent({
-      cfg: ctx.cfg,
-      agentId: target.agentId,
-    });
-    const entry = findModelCatalogEntry(catalog, {
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-    });
-    const contextWindow = resolveContextWindowInfo({
-      cfg: ctx.cfg,
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-      modelContextTokens: entry?.contextTokens,
-      modelContextWindow: entry?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
-    return buildToolResultCapDoctorAdvice({
-      contextWindowTokens: contextWindow.tokens,
-      modelKey: modelKey(modelRef.provider, modelRef.model),
-      configuredCap: target.configuredCap,
-      deep: ctx.options.deep === true,
-      scopeLabel: target.scopeLabel,
-    });
+  const entries = await collectToolResultCapTargetAdvice({
+    cfg: ctx.cfg,
+    targets,
   });
+  const lines = entries.flatMap((entry) =>
+    buildToolResultCapDoctorAdvice({
+      ...entry,
+      deep: ctx.options.deep === true,
+    }),
+  );
   if (lines.length > 0) {
     note(lines.join("\n"), "Tool result cap");
   }
@@ -893,7 +980,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function hasActiveGatewayExecCredential(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "cfg">,
   mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
 ): Promise<boolean> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
@@ -1339,7 +1426,56 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-manifests",
+        description: "Legacy plugin manifest capability keys are reported as findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            collectLegacyPluginManifestContractMigrations,
+            legacyPluginManifestContractMigrationToHealthFinding,
+          } = await import("../commands/doctor-plugin-manifests.js");
+          return collectLegacyPluginManifestContractMigrations({
+            config: ctx.cfg,
+            env: process.env,
+          }).map(legacyPluginManifestContractMigrationToHealthFinding);
+        },
+      },
       run: runLegacyPluginManifestHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-dependencies",
+      label: "Legacy plugin dependencies",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-dependencies",
+        description: "Legacy plugin dependency state roots are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const {
+            detectLegacyPluginDependencyStateIssues,
+            legacyPluginDependencyStateIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
+          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
+            legacyPluginDependencyStateIssueToHealthFinding,
+          );
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:stale-plugin-runtime-symlinks",
+      label: "Stale plugin runtime symlinks",
+      healthChecks: {
+        id: "core/doctor/stale-plugin-runtime-symlinks",
+        description: "Stale plugin-runtime symlinks are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { collectStalePluginRuntimeSymlinkHealthFindings } =
+            await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+          return await collectStalePluginRuntimeSymlinkHealthFindings();
+        },
+      },
+      run: async () => {},
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
@@ -1434,6 +1570,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:disk-space",
       label: "Disk space",
+      healthChecks: {
+        id: "core/doctor/disk-space",
+        description: "Low disk space around the OpenClaw state directory is a finding.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectDiskSpaceHealthFindings } =
+            await import("../commands/doctor-disk-space.js");
+          return collectDiskSpaceHealthFindings(ctx.cfg);
+        },
+      },
       run: runDiskSpaceHealth,
     }),
     createDoctorHealthContribution({
@@ -1587,7 +1733,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab"],
+      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({
@@ -1638,18 +1784,37 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
-      healthChecks: {
-        id: "core/doctor/channel-plugin-blockers",
-        description: "Configured channels must have loadable backing channel plugins.",
-        defaultEnabled: false,
-        async detect(ctx) {
-          const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
-            await import("../commands/doctor/shared/channel-plugin-blockers.js");
-          return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
-            channelPluginBlockerHitToHealthFinding,
-          );
+      healthCheckIds: [
+        "core/doctor/channel-plugin-blockers",
+        "core/doctor/channel-preview-warnings",
+      ],
+      healthChecks: [
+        {
+          id: "core/doctor/channel-plugin-blockers",
+          description: "Configured channels must have loadable backing channel plugins.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
+              await import("../commands/doctor/shared/channel-plugin-blockers.js");
+            return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+              channelPluginBlockerHitToHealthFinding,
+            );
+          },
         },
-      },
+        {
+          id: "core/doctor/channel-preview-warnings",
+          description: "Channel doctor preview warnings are captured as structured findings.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const { collectChannelPreviewWarningHealthFindings } =
+              await import("./doctor-startup-channel-maintenance.js");
+            return collectChannelPreviewWarningHealthFindings({
+              cfg: ctx.cfg,
+              allowExec: ctx.allowExecSecretRefs === true,
+            });
+          },
+        },
+      ],
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({
@@ -1679,6 +1844,13 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:tool-result-cap",
       label: "Tool result cap",
+      healthChecks: {
+        id: "core/doctor/tool-result-cap",
+        description:
+          "Detect explicit toolResultMaxChars settings that fight model-window defaults.",
+        defaultEnabled: false,
+        detect: async (ctx) => collectToolResultCapFindings(ctx.cfg),
+      },
       run: runToolResultCapHealth,
     }),
     createDoctorHealthContribution({
@@ -1735,6 +1907,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:heartbeat-template-repair",
       label: "Heartbeat template repair",
+      healthChecks: {
+        id: "core/doctor/heartbeat-template",
+        description: "Legacy HEARTBEAT.md documentation templates are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectHeartbeatTemplateHealthFindings } =
+            await import("../commands/doctor-heartbeat-template-repair.js");
+          return await collectHeartbeatTemplateHealthFindings(ctx.cfg);
+        },
+      },
       run: runHeartbeatTemplateRepairHealth,
     }),
     createDoctorHealthContribution({
@@ -1752,6 +1934,33 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      healthChecks: {
+        id: "core/doctor/whatsapp-responsiveness",
+        description:
+          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectWhatsappResponsivenessHealthFindings } =
+            await import("../commands/doctor-whatsapp-responsiveness.js");
+          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          if (
+            !(
+              (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
+              ctx.allowExecSecretRefs !== true
+            )
+          ) {
+            const { callGateway } = await import("../gateway/call.js");
+            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+              method: "status",
+              params: { includeChannelSummary: false },
+              timeoutMs: 3000,
+              config: ctx.cfg,
+              deviceIdentity: null,
+            }).catch(() => undefined);
+          }
+          return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
+        },
+      },
       run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({

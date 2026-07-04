@@ -75,10 +75,10 @@ export type {
 } from "./session-cost-usage.types.js";
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
-// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
-// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// caches written by older builds are rebuilt instead of served stale. Bumped to 5:
+// recorded zero costs for known-priced token usage are recomputed, and unpriced
+// zero-cost usage counts toward missingCostEntries.
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1153,6 +1153,26 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
+  costBreakdown?.total === 0 &&
+  [
+    costBreakdown.input,
+    costBreakdown.output,
+    costBreakdown.cacheRead,
+    costBreakdown.cacheWrite,
+  ].some((value) => value !== undefined && value !== 0);
+
+const shouldRecomputeRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costBreakdown: CostBreakdown | undefined;
+  costTotal: number | undefined;
+  usage: NormalizedUsage;
+}): boolean =>
+  params.costTotal === 0 &&
+  !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
+  isModelPricingKnown(params.cost) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1251,7 +1271,10 @@ async function scanTranscriptFile(params: {
         provider: entry.provider,
         model: entry.model,
       });
-      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+      const usageTotals = computeUsageTokenTotals(entry.usage);
+      const pricingKnown = isModelPricingKnown(cost);
+      const preserveRecordedZeroCost = shouldPreserveRecordedZeroCost(entry.costBreakdown);
+      if (cost?.tieredPricing && cost.tieredPricing.length > 0 && !preserveRecordedZeroCost) {
         // When tiered pricing is configured, always recompute to override
         // the flat-rate cost that the transport layer wrote into the transcript.
         // Clear costBreakdown so downstream aggregation uses the recomputed total
@@ -1259,9 +1282,10 @@ async function scanTranscriptFile(params: {
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (
-        !isModelPricingKnown(cost) &&
+        !pricingKnown &&
+        !preserveRecordedZeroCost &&
         (entry.costTotal === undefined || entry.costTotal === 0) &&
-        computeUsageTokenTotals(entry.usage).totalTokens > 0
+        usageTotals.totalTokens > 0
       ) {
         // Pricing for this model is unknown: it has no positive per-token rate and no
         // trustworthy recorded cost. The transport either recorded nothing or a
@@ -1272,9 +1296,20 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (
+        entry.costTotal === undefined ||
+        shouldRecomputeRecordedZeroCost({
+          usage: entry.usage,
+          cost,
+          costBreakdown: entry.costBreakdown,
+          costTotal: entry.costTotal,
+        })
+      ) {
+        // Fill in missing estimates and override fabricated API-provided zeros
+        // for known-priced models such as DeepSeek V4. Providers that reconcile
+        // only the total keep their authoritative zero when components are nonzero.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       }
     }
 
@@ -2748,13 +2783,25 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
+          const costConfig = resolveCost({
+            provider:
+              (typeof message.provider === "string" ? message.provider : undefined) ??
+              (typeof parsed.provider === "string" ? parsed.provider : undefined),
+            model:
+              (typeof message.model === "string" ? message.model : undefined) ??
+              (typeof parsed.model === "string" ? parsed.model : undefined),
+          });
+          if (
+            breakdown?.total !== undefined &&
+            !shouldRecomputeRecordedZeroCost({
+              usage,
+              cost: costConfig,
+              costBreakdown: breakdown,
+              costTotal: breakdown.total,
+            })
+          ) {
             cost = breakdown.total;
           } else {
-            const costConfig = resolveCost({
-              provider: message.provider as string | undefined,
-              model: message.model as string | undefined,
-            });
             cost = estimateUsageCost({ usage, cost: costConfig });
           }
         }

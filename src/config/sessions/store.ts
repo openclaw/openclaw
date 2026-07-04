@@ -7,6 +7,7 @@ import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-ke
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   deliveryContextFromChannelRoute,
   deliveryContextFromSession,
@@ -115,26 +116,18 @@ export type SessionEntryPatchProjectionResult<TFailure extends SessionEntryPatch
   { ok: true; entry: SessionEntry } | TFailure;
 
 const log = createSubsystemLogger("sessions/store");
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
-let trajectoryCleanupRuntimePromise: Promise<typeof import("../../trajectory/cleanup.js")> | null =
-  null;
 const writerStoreFileStats = new WeakMap<
   Record<string, SessionEntry>,
   ReturnType<typeof getFileStatSnapshot> | null
 >();
 
-function loadSessionArchiveRuntime() {
-  // Archive cleanup is a cold maintenance path, so keep it lazy to avoid gateway import cycles.
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
+const loadSessionArchiveRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
-function loadTrajectoryCleanupRuntime() {
-  trajectoryCleanupRuntimePromise ??= import("../../trajectory/cleanup.js");
-  return trajectoryCleanupRuntimePromise;
-}
+const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
+  () => import("../../trajectory/cleanup.js"),
+);
 
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context || context.threadId == null) {

@@ -110,7 +110,6 @@ function sanitizeFreshCronSessionEntry(
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  sourceSessionKey?: string;
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
@@ -121,9 +120,7 @@ export function resolveCronSession(params: {
     agentId: params.agentId,
   });
   const store = params.store ?? loadSessionStore(storePath);
-  const sourceSessionKey = params.sourceSessionKey?.trim();
-  const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
-  const entry = store[sourceSessionKey || params.sessionKey];
+  const entry = store[params.sessionKey];
 
   let sessionId: string;
   let isNewSession: boolean;
@@ -165,7 +162,7 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
-  const previousSessionId = isNewSession && !sourceSessionDiffers ? entry?.sessionId : undefined;
+  const previousSessionId = isNewSession ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactSecrets, redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -22,10 +23,6 @@ const MIME_KEY_CANDIDATES = [
 const TEXTUAL_MIME_PATTERN =
   /^(?:text\/|application\/(?:json|ld\+json|x-ndjson|xml|javascript|x-www-form-urlencoded)|[^/]+\/[^+]+\+(?:json|xml)$)/i;
 const OPAQUE_OR_BINARY_FIELD_RE = /^(?:blob|buffer|bytes|encrypted_content|encrypted_stdout)$/i;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function readMimeType(value: unknown): string | undefined {
   if (!isRecord(value)) {

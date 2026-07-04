@@ -761,6 +761,97 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `private lan bootstrap persists handoff tokens for reconnect`() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let url = try #require(URL(string: "ws://192.168.50.164:18889"))
+        let bootstrapSession = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "lan-node-token",
+            "role": "node",
+            "scopes": [],
+            "deviceTokens": [
+                [
+                    "deviceToken": "lan-operator-token",
+                    "role": "operator",
+                    "scopes": [
+                        "operator.approvals",
+                        "operator.read",
+                    ],
+                ],
+            ],
+        ])
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: true)
+
+        try await gateway.connect(
+            url: url,
+            token: nil,
+            bootstrapToken: "fresh-bootstrap-token",
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: bootstrapSession),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+        await gateway.disconnect()
+
+        let nodeEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node"))
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
+        #expect(nodeEntry.token == "lan-node-token")
+        #expect(nodeEntry.scopes == [])
+        #expect(operatorEntry.token == "lan-operator-token")
+        #expect(operatorEntry.scopes == [
+            "operator.approvals",
+            "operator.read",
+        ])
+
+        let reconnectSession = FakeGatewayWebSocketSession()
+        try await gateway.connect(
+            url: url,
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: reconnectSession),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let reconnectAuth = try #require(reconnectSession.latestTask()?.latestConnectAuth())
+        #expect(reconnectAuth["token"] as? String == "lan-node-token")
+        #expect(reconnectAuth["bootstrapToken"] == nil)
+        #expect(reconnectAuth["deviceToken"] == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
     func `normalize canvas host url preserves explicit secure canvas port`() throws {
         let normalized = try canonicalizeCanvasHostUrl(
             raw: "https://canvas.example.com:9443/__openclaw__/cap/token",

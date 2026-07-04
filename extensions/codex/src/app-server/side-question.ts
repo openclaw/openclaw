@@ -56,7 +56,10 @@ import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
-import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import {
+  buildCodexPluginAppsConfigPatchFromPolicyContext,
+  mergeCodexThreadConfigs,
+} from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
@@ -420,10 +423,16 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
+    // Codex reloads config for thread/fork, so replay the persisted app policy or
+    // app-scoped reviewers disappear while sibling apps inherit the thread reviewer.
+    const pluginAppsConfigPatch = binding.pluginAppPolicyContext
+      ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
+      : undefined;
     const threadConfig =
       mergeCodexThreadConfigs(
         nativeHookRelayConfig,
         runtimeThreadConfig,
+        pluginAppsConfigPatch,
         modelScopedAppServer.networkProxy?.configPatch,
       ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(

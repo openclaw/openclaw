@@ -555,13 +555,19 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
+      const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+      const fallbackA2ASessionKey =
+        timeoutSeconds === 0 && isIsolatedCronRequester
+          ? resolveCronRunScopedFallbackSessionKey(displayKey)
+          : undefined;
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
       // before we reach the post-run read, which would otherwise make the new
       // reply look like the baseline and hide it from the caller.
       // Fire-and-forget same-session sends still need this baseline because the
-      // A2A follow-up may deliver directly to the source channel.
+      // A2A follow-up may deliver directly to the source channel. Isolated cron
+      // requesters also need it to avoid attributing a stale target reply.
       const baselineReply =
         timeoutSeconds !== 0
           ? await readLatestAssistantReplySnapshot({
@@ -569,13 +575,23 @@ export function createSessionsSendTool(opts?: {
               limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
               callGateway: gatewayCall,
             })
-          : sameSessionA2A
+          : sameSessionA2A || isIsolatedCronRequester
             ? await readLatestAssistantReplySnapshot({
                 sessionKey: resolvedKey,
                 limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
                 callGateway: gatewayCall,
               }).catch(() => undefined)
             : undefined;
+      // Active-run delivery can fall back to the durable cron parent. Snapshot
+      // that target before dispatch so a fast reply cannot become its baseline.
+      const fallbackBaselineReply =
+        fallbackA2ASessionKey && fallbackA2ASessionKey !== resolvedKey
+          ? await readLatestAssistantReplySnapshot({
+              sessionKey: fallbackA2ASessionKey,
+              limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+              callGateway: gatewayCall,
+            }).catch(() => undefined)
+          : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
@@ -653,15 +669,19 @@ export function createSessionsSendTool(opts?: {
         if (skipA2AFlow) {
           return;
         }
+        const flowBaseline =
+          flowTargetSessionKey === fallbackA2ASessionKey ? fallbackBaselineReply : baselineReply;
         void runSessionsSendA2AFlow({
           targetSessionKey: flowTargetSessionKey,
           displayKey: flowDisplayKey,
           message,
           announceTimeoutMs,
-          maxPingPongTurns,
+          // Cron runs are isolated jobs; target replies must not become new
+          // requester turns, but the target-side announce still runs.
+          maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
-          baseline: baselineReply,
+          baseline: flowBaseline,
           roundOneReply,
           waitRunId,
         });

@@ -1353,6 +1353,9 @@ export const uk: TranslationMap = {
     updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
     switchedSession: "Перемкнуто на {session}",
+    sidebar: {
+      allSessions: "Усі сеанси",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

@@ -1341,6 +1341,9 @@ export const vi: TranslationMap = {
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
+    sidebar: {
+      allSessions: "Tất cả phiên",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

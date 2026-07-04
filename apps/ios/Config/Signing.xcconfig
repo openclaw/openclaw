@@ -1,5 +1,5 @@
 // Shared iOS signing defaults for local development + CI.
-#include "Version.xcconfig"
+#include "../build/Version.xcconfig"
 
 OPENCLAW_IOS_DEFAULT_TEAM = FWJYW4S8P8
 OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)

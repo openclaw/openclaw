@@ -11,26 +11,17 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 
-type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
-type DoctorCronModule = typeof import("./doctor/cron/index.js");
+const loadDoctorStateMigrations = createLazyRuntimeModule(
+  () => import("./doctor-state-migrations.js"),
+);
 
-let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
-let doctorCronPromise: Promise<DoctorCronModule> | null = null;
-
-function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
-  doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
-  return doctorStateMigrationsPromise;
-}
-
-function loadDoctorCron(): Promise<DoctorCronModule> {
-  doctorCronPromise ??= import("./doctor/cron/index.js");
-  return doctorCronPromise;
-}
+const loadDoctorCron = createLazyRuntimeModule(() => import("./doctor/cron/index.js"));
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];

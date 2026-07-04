@@ -106,6 +106,25 @@ export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): vo
   entry.claudeCliSessionId = undefined;
 }
 
+export type CliSessionInvalidatedReason =
+  | "auth-profile"
+  | "auth-epoch"
+  | "message-policy"
+  | "cwd"
+  | "mcp";
+
+export type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
+
+export type CliSessionReuseResult =
+  | { mode: "none" }
+  | { mode: "reuse"; sessionId: string }
+  | {
+      mode: "reuse-with-drift";
+      sessionId: string;
+      drift: { reasons: CliSessionContentDriftReason[] };
+    }
+  | { mode: "invalidate"; invalidatedReason: CliSessionInvalidatedReason };
+
 /** Decide whether a stored CLI session can be reused for the current auth/prompt/cwd/MCP state. */
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
@@ -118,17 +137,14 @@ export function resolveCliSessionReuse(params: {
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
-}): {
-  sessionId?: string;
-  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "cwd" | "mcp";
-} {
+}): CliSessionReuseResult {
   const binding = params.binding;
   const sessionId = normalizeOptionalString(binding?.sessionId);
   if (!sessionId) {
-    return {};
+    return { mode: "none" };
   }
   if (binding?.forceReuse === true) {
-    return { sessionId };
+    return { mode: "reuse", sessionId };
   }
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
@@ -147,43 +163,50 @@ export function resolveCliSessionReuse(params: {
     storedAuthEpoch === currentAuthEpoch;
   if (storedAuthProfileId !== currentAuthProfileId) {
     if (!hasMatchingVersionedAuthEpoch) {
-      return { invalidatedReason: "auth-profile" };
+      return { mode: "invalidate", invalidatedReason: "auth-profile" };
     }
   }
   if (
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== currentAuthEpoch
   ) {
-    return { invalidatedReason: "auth-epoch" };
-  }
-  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
-  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
-    return { invalidatedReason: "system-prompt" };
+    return { mode: "invalidate", invalidatedReason: "auth-epoch" };
   }
   const storedMessageToolPolicyHash = normalizeOptionalString(binding?.messageToolPolicyHash);
   if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {
-    return { invalidatedReason: "system-prompt" };
-  }
-  const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
-  if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
-    return { invalidatedReason: "system-prompt" };
+    return { mode: "invalidate", invalidatedReason: "message-policy" };
   }
   const storedCwdHash = normalizeOptionalString(binding?.cwdHash);
   if (storedCwdHash !== undefined && storedCwdHash !== currentCwdHash) {
-    return { invalidatedReason: "cwd" };
+    return { mode: "invalidate", invalidatedReason: "cwd" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
   if (storedMcpResumeHash && currentMcpResumeHash) {
     // Resume hashes are stricter than raw MCP config hashes: a match proves the
     // exact resumed CLI tool topology still belongs to this session.
     if (storedMcpResumeHash !== currentMcpResumeHash) {
-      return { invalidatedReason: "mcp" };
+      return { mode: "invalidate", invalidatedReason: "mcp" };
     }
-    return { sessionId };
+  } else {
+    const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
+    if (storedMcpConfigHash !== currentMcpConfigHash) {
+      return { mode: "invalidate", invalidatedReason: "mcp" };
+    }
   }
-  const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
-  if (storedMcpConfigHash !== currentMcpConfigHash) {
-    return { invalidatedReason: "mcp" };
+
+  const driftReasons: CliSessionContentDriftReason[] = [];
+  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
+  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
+    driftReasons.push("system-prompt");
   }
-  return { sessionId };
+  const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
+  if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
+    driftReasons.push("prompt-tools");
+  }
+  if (driftReasons.length > 0) {
+    // Content drift resumes by contract (#99729): the transcript remains usable.
+    // Deleting this binding here makes queued turns spawn without session history.
+    return { mode: "reuse-with-drift", sessionId, drift: { reasons: driftReasons } };
+  }
+  return { mode: "reuse", sessionId };
 }

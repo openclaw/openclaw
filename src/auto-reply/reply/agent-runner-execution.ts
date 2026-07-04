@@ -23,6 +23,7 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
+  formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
@@ -140,6 +141,7 @@ import {
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import {
   classifyProviderRequestError,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
@@ -962,11 +964,41 @@ function supportsChannelCodexLogin(provider: string | null | undefined): boolean
 
 function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
-  options?: { includeDetails?: boolean; isHeartbeat?: boolean },
+  options?: {
+    includeAuthProfileId?: boolean;
+    includeDetails?: boolean;
+    isHeartbeat?: boolean;
+  },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const oauthRefreshFailure =
+    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
+  if (oauthRefreshFailure) {
+    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
+      profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
+    });
+    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
+    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
+    const channelLoginHint = supportsCodexLogin
+      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "Re-auth";
+    const retryLoginHint = supportsCodexLogin
+      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
+      : "re-auth";
+    if (oauthRefreshFailure.reason) {
+      return {
+        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with ${loginCommandMarkdown} in a terminal, then try again.`,
+        isGenericRunnerFailure: false,
+      };
+    }
+    return {
+      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with ${loginCommandMarkdown} in a terminal.`,
+      isGenericRunnerFailure: false,
+    };
+  }
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
@@ -984,29 +1016,6 @@ function buildExternalRunFailureReply(
   });
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
-  }
-  const oauthRefreshFailure =
-    classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
-  if (oauthRefreshFailure) {
-    const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider);
-    const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
-    const supportsCodexLogin = supportsChannelCodexLogin(oauthRefreshFailure.provider);
-    const channelLoginHint = supportsCodexLogin
-      ? "Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
-      : "Re-auth";
-    const retryLoginHint = supportsCodexLogin
-      ? "send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth"
-      : "re-auth";
-    if (oauthRefreshFailure.reason) {
-      return {
-        text: `⚠️ Model login expired on the gateway${providerText}. ${channelLoginHint} with \`${loginCommand}\` in a terminal, then try again.`,
-        isGenericRunnerFailure: false,
-      };
-    }
-    return {
-      text: `⚠️ Model login failed on the gateway${providerText}. Please try again. If this keeps happening, ${retryLoginHint} with \`${loginCommand}\` in a terminal.`,
-      isGenericRunnerFailure: false,
-    };
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
@@ -1108,6 +1117,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const externalRunFailureReply = buildExternalRunFailureReply(
     { message, error: params.err },
     {
+      includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
       includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
     },
   );
@@ -1466,16 +1476,25 @@ function resolveRestartLifecycleError(
 }
 
 function isReplyOperationUserAbort(replyOperation?: ReplyOperation): boolean {
-  return (
-    replyOperation?.result?.kind === "aborted" && replyOperation.result.code === "aborted_by_user"
-  );
+  if (
+    replyOperation?.result?.kind === "aborted" &&
+    replyOperation.result.code === "aborted_by_user"
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && !isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
 function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean {
-  return (
+  if (
     replyOperation?.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_for_restart"
-  );
+  ) {
+    return true;
+  }
+  const abortSignal = replyOperation?.abortSignal;
+  return abortSignal?.aborted === true && isAgentRunRestartAbortReason(abortSignal.reason);
 }
 
 function emitModelFallbackStepLifecycle(params: {
@@ -1584,42 +1603,44 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   };
 }
 
-/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
-export async function runAgentTurnWithFallback(params: {
-  commandBody: string;
-  transcriptCommandBody?: string;
-  followupRun: FollowupRun;
-  sessionCtx: TemplateContext;
-  replyThreading?: TemplateContext["ReplyThreading"];
-  replyOperation?: ReplyOperation;
-  opts?: GetReplyOptions;
-  typingSignals: TypingSignaler;
-  blockReplyPipeline: BlockReplyPipeline | null;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  shouldEmitToolResult: () => boolean;
-  shouldEmitToolOutput: () => boolean;
-  pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
-  isHeartbeat: boolean;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  getActiveSessionEntry: () => SessionEntry | undefined;
-  activeSessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
-  replyMediaContext?: ReplyMediaContext;
-  onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => boolean;
-}): Promise<AgentRunLoopResult> {
+async function runAgentTurnWithFallbackInternal(
+  params: {
+    commandBody: string;
+    transcriptCommandBody?: string;
+    followupRun: FollowupRun;
+    sessionCtx: TemplateContext;
+    replyThreading?: TemplateContext["ReplyThreading"];
+    replyOperation?: ReplyOperation;
+    opts?: GetReplyOptions;
+    typingSignals: TypingSignaler;
+    blockReplyPipeline: BlockReplyPipeline | null;
+    blockStreamingEnabled: boolean;
+    blockReplyChunking?: {
+      minChars: number;
+      maxChars: number;
+      breakPreference: "paragraph" | "newline" | "sentence";
+      flushOnParagraph?: boolean;
+    };
+    resolvedBlockStreamingBreak: "text_end" | "message_end";
+    applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
+    shouldEmitToolResult: () => boolean;
+    shouldEmitToolOutput: () => boolean;
+    pendingToolTasks: Set<Promise<void>>;
+    resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
+    isHeartbeat: boolean;
+    sessionKey?: string;
+    runtimePolicySessionKey?: string;
+    getActiveSessionEntry: () => SessionEntry | undefined;
+    activeSessionStore?: Record<string, SessionEntry>;
+    storePath?: string;
+    resolvedVerboseLevel: VerboseLevel;
+    toolProgressDetail?: "explain" | "raw";
+    replyMediaContext?: ReplyMediaContext;
+    onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+    isRestartRecoveryArmed?: () => boolean;
+  },
+  commitTerminalOutcome: () => void,
+): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
@@ -2445,6 +2466,7 @@ export async function runAgentTurnWithFallback(params: {
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                    cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
@@ -3037,6 +3059,20 @@ export async function runAgentTurnWithFallback(params: {
           ? restartAbortReason
           : createAgentRunRestartAbortError();
       }
+      if (isReplyOperationUserAbort(params.replyOperation)) {
+        settledLifecycleTerminal?.emit("end", runResult);
+        await drainPendingToolTasks({
+          tasks: params.pendingToolTasks,
+          onTimeout: logVerbose,
+        });
+        return {
+          kind: "final",
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
+        };
+      }
+      commitTerminalOutcome();
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: attempt.provider,
@@ -3204,8 +3240,16 @@ export async function runAgentTurnWithFallback(params: {
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      const oauthRefreshFailure =
+        classifyOAuthRefreshFailureError(err) ?? classifyOAuthRefreshFailure(message);
+      const hasAuthProfileFailoverFailure = buildAuthProfileFailoverFailureText(err) !== null;
       const providerRequestError =
-        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
+        !isBilling &&
+        !oauthRefreshFailure &&
+        !hasAuthProfileFailoverFailure &&
+        !shouldSurfaceToControlUi
+          ? classifyProviderRequestError(err)
+          : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       // Drain/restart aborts stay silent and defer to post-restart
@@ -3343,6 +3387,7 @@ export async function runAgentTurnWithFallback(params: {
           ? buildExternalRunFailureReply(
               { message, error: err },
               {
+                includeAuthProfileId: !isNonDirectConversationContext(params.sessionCtx),
                 includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
                 isHeartbeat: params.isHeartbeat,
               },
@@ -3493,4 +3538,23 @@ export async function runAgentTurnWithFallback(params: {
       (payload): payload is ReplyPayload => payload !== undefined,
     ),
   };
+}
+
+/** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
+export async function runAgentTurnWithFallback(
+  params: Parameters<typeof runAgentTurnWithFallbackInternal>[0],
+): Promise<AgentRunLoopResult> {
+  let terminalOutcomeCommitted = false;
+  const commitTerminalOutcome = () => {
+    if (terminalOutcomeCommitted) {
+      return;
+    }
+    terminalOutcomeCommitted = true;
+    params.replyOperation?.freezeAbort();
+  };
+  try {
+    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+  } finally {
+    commitTerminalOutcome();
+  }
 }

@@ -13,7 +13,7 @@ struct OpenClawLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.state.statusText)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawActivityType.subheadSemiBold)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
@@ -37,10 +37,10 @@ struct OpenClawLiveActivity: Widget {
                 .background(.thinMaterial, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
-                    .font(.subheadline.bold())
+                    .font(OpenClawActivityType.subheadBold)
                     .lineLimit(1)
                 Text(context.state.statusText)
-                    .font(.caption)
+                    .font(OpenClawActivityType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -54,7 +54,7 @@ struct OpenClawLiveActivity: Widget {
 
     private func trailingView(state: OpenClawActivityAttributes.ContentState) -> some View {
         self.statusIcon(state: state)
-            .font(.system(size: 16, weight: .semibold))
+            .font(OpenClawActivityType.symbol(size: 16, weight: .semibold))
             .frame(width: 28, height: 28)
     }
 
@@ -66,7 +66,7 @@ struct OpenClawLiveActivity: Widget {
 
     private func compactStatusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
         self.statusIcon(state: state)
-            .font(.system(size: 12, weight: .semibold))
+            .font(OpenClawActivityType.symbol(size: 12, weight: .semibold))
             .frame(width: 18, height: 18)
     }
 

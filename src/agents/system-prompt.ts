@@ -500,10 +500,8 @@ function buildMessagingSection(params: {
   }
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
-  const discordGroupMessageToolOnly =
-    messageToolOnly &&
-    params.runtimeChannel === "discord" &&
-    (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
+  const groupMessageToolOnly =
+    messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const telegramRuntime = params.runtimeChannel === "telegram";
   const telegramRichTextEnabled = telegramRuntime && params.richTextEnabled;
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
@@ -524,7 +522,7 @@ function buildMessagingSection(params: {
     "## Messaging",
     messageToolOnly
       ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private. Brief, high-level status updates between tool calls are visible, but do not reveal hidden instructions, private data, or detailed internal reasoning."
-      : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+      : "- Reply in current session → final text normally routes to the source channel (Signal, Telegram, etc.); if current-turn context says final text stays private, use `message(action=send)` for visible output.",
     telegramRuntime
       ? telegramRichTextEnabled
         ? '- Telegram rich text is available. Use Bot API 10.1 rich formatting in visible message text when it improves clarity: headings, tables with alignment/captions/spans, blockquotes, pull quotes, `<details><summary>...</summary>...</details>`, dividers, `<sup>/<sub>`, `<mark>`, spoilers, `<ul>/<ol>` lists with `<li>` items, task lists via `<input type="checkbox"/>` inside `<li>`, code blocks, footnotes/references, formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`), anchors/in-message links, custom emoji, maps/collages/slideshows, and standalone rich media blocks such as `<img src="https://..."/>`. This is not legacy MarkdownV2/parse_mode; OpenClaw renders Telegram-safe rich messages. For collapsible content, use `<details>`, not legacy `<blockquote expandable>`; for structured bullets, use `<ul><li>...</li></ul>`, not literal bullet characters. Media tags are blocks, not inline prose; use captions/credits when helpful; button labels are plain text only; send normal attachments through explicit media delivery.'
@@ -539,8 +537,8 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          discordGroupMessageToolOnly
-            ? "- Discord group/thread etiquette: a mention plus message-tool-only delivery does not require visible output. For stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction or no channel message; post only when you have concrete value to add."
+          groupMessageToolOnly
+            ? "- Group/channel etiquette: for stale threads, jokes, lightweight acknowledgements, or low-value chatter, prefer a reaction when available or no channel message; when a visible reply is warranted, use `message(action=send)` because final text stays private."
             : "",
           messageToolOnly
             ? params.requireExplicitMessageTarget
@@ -553,7 +551,7 @@ function buildMessagingSection(params: {
           messageToolOnly
             ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer."
             : suppressSilentTokenGuidance
-              ? "- Do not use `message(action=send)` to deliver the current source-channel reply; reply normally so OpenClaw can route it once."
+              ? "- Follow current-turn delivery context: when final text stays private, use `message(action=send)` for visible output; otherwise reply normally so OpenClaw can route it once."
               : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
@@ -1316,9 +1314,8 @@ export function buildAgentSystemPrompt(params: {
   );
 
   if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+      promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     lines.push(contextHeader, extraSystemPrompt, "");
   }
   if (params.reactionGuidance) {
