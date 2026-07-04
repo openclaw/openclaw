@@ -163,4 +163,38 @@ describe("startSshPortForward", () => {
 
     await tunnel.stop();
   });
+
+  it("rejects with the spawn error when ssh binary is missing", async () => {
+    const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");
+    (spawnError as NodeJS.ErrnoException).code = "ENOENT";
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        pid: number;
+        stderr: EventEmitter & { setEncoding: (enc: string) => void };
+        kill: (signal?: string) => boolean;
+      };
+      child.killed = false;
+      child.pid = 0;
+      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
+      stderr.setEncoding = () => {};
+      child.stderr = stderr;
+      child.kill = () => {
+        child.killed = true;
+        queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+        return true;
+      };
+      // Emit the error asynchronously, matching real spawn behavior
+      queueMicrotask(() => child.emit("error", spawnError));
+      return child;
+    });
+
+    await expect(
+      startSshPortForward({
+        target: "me@example.com:2222",
+        remotePort: 18789,
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow("ENOENT");
+  });
 });
