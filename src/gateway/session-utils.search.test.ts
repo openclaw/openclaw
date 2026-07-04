@@ -327,6 +327,20 @@ function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
 describe("listSessionsFromStore search", () => {
   beforeAll(() => {
     listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4-6" }),
+      store: {
+        "agent:main:warm-runtime": {
+          sessionId: "sess-warm-runtime",
+          updatedAt: Date.now(),
+        } as SessionEntry,
+      },
+      storePath: "/tmp/openclaw-session-search-warm.json",
+      opts: { search: "anthropic" },
+    });
+  });
+
+  beforeAll(() => {
+    listSessionsFromStore({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
       storePath: "/tmp/sessions.json",
       store: {
