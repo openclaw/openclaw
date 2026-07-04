@@ -142,6 +142,7 @@ function candidateBinDirs(
     append.push(process.env.XDG_BIN_HOME);
   }
   append.push(path.join(homeDir, ".local", "bin"));
+  append.push(path.join(homeDir, "go", "bin"));
   append.push(path.join(homeDir, ".local", "share", "pnpm"));
   append.push(path.join(homeDir, ".bun", "bin"));
   append.push(path.join(homeDir, ".yarn", "bin"));

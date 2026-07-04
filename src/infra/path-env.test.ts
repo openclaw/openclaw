@@ -269,6 +269,23 @@ describe("ensureOpenClawCliOnPath", () => {
     expectPathsAfter(updated, "/usr/bin", [localBin]);
   });
 
+  it("adds an existing default Go bin after system directories", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-go-bin");
+    const goBin = path.join(tmp, "go", "bin");
+    setDir(path.join(tmp, "go"));
+    setDir(goBin);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expectPathsAfter(updated, "/usr/bin", [goBin]);
+  });
+
   it("places all user-writable home dirs after system dirs", () => {
     const { tmp, appCli } = setupAppCliRoot("case-user-writable-after-system");
     const localBin = path.join(tmp, ".local", "bin");

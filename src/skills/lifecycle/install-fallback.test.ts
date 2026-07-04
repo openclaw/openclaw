@@ -1,5 +1,4 @@
 // Install fallback tests cover alternate skill install paths when primary paths fail.
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -137,7 +136,7 @@ const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-fallback-te
 
 describe("skills-install fallback edge cases", () => {
   let workspaceDir: string;
-  let pathEnvSnapshot: ReturnType<typeof captureEnv>;
+  let installEnvSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
     workspaceDir = await suiteTempDirs.setup();
@@ -155,7 +154,7 @@ describe("skills-install fallback edge cases", () => {
   });
 
   beforeEach(() => {
-    pathEnvSnapshot = captureEnv(["PATH"]);
+    installEnvSnapshot = captureEnv(["PATH", "GOBIN"]);
     runCommandWithTimeoutMock.mockReset();
     hasBinaryMock.mockReset();
     skillsInstallTesting.setDepsForTest({
@@ -166,7 +165,7 @@ describe("skills-install fallback edge cases", () => {
   });
 
   afterEach(() => {
-    pathEnvSnapshot.restore();
+    installEnvSnapshot.restore();
   });
 
   afterAll(async () => {
@@ -395,6 +394,7 @@ describe("skills-install fallback edge cases", () => {
       PATH: ["/usr/bin", "/managed/go/bin"].join(path.delimiter),
     });
     expect(process.env.PATH).toBe(["/usr/bin", "/managed/go/bin"].join(path.delimiter));
+    expect(process.env.GOBIN).toBe("/managed/go/bin");
   });
 
   it("uses the first GOPATH bin when an existing Go installation has no GOBIN", async () => {
@@ -422,6 +422,7 @@ describe("skills-install fallback edge cases", () => {
       GOBIN: "/first/go/bin",
       PATH: ["/usr/bin", "/first/go/bin"].join(path.delimiter),
     });
+    expect(process.env.GOBIN).toBe("/first/go/bin");
   });
 
   it("leaves an existing Go destination untouched when go env fails", async () => {
@@ -447,6 +448,7 @@ describe("skills-install fallback edge cases", () => {
     expect(result.ok).toBe(true);
     expect(commandCallAt(1)[1].env).toBeUndefined();
     expect(process.env.PATH).toBe("/usr/bin");
+    expect(process.env.GOBIN).toBeUndefined();
   });
 
   describe("resolveInstallerKindReadiness", () => {

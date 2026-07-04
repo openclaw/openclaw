@@ -812,6 +812,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   if (installResult.ok && installedGoBin && envOverrides.PATH) {
     // Keep the just-installed command discoverable without requiring a gateway restart.
     process.env.PATH = envOverrides.PATH;
+    process.env.GOBIN = installedGoBin;
   }
   const normalizedResult =
     spec.kind === "go" && !installResult.ok && isGoToolchainPrerequisiteFailure(installResult)
