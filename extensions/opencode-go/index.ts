@@ -13,6 +13,7 @@ import {
   resolveOpencodeGoModel,
 } from "./provider-catalog.js";
 import { createOpencodeGoWrapper } from "./stream.js";
+import { resolveOpencodeGoDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "opencode-go";
 const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
@@ -137,6 +138,8 @@ export default definePluginEntry({
       augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
+      resolveThinkingProfile: ({ modelId }) =>
+        resolveOpencodeGoDeepSeekV4ThinkingProfile(modelId),
       isModernModelRef: () => true,
     });
     api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);
