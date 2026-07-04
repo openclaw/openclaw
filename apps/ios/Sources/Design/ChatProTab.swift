@@ -113,7 +113,7 @@ struct ChatProTab: View {
     /// Flat circular avatar for the nav bar — no gradient/shadow, per Apple bar-button sizing.
     private var headerIdentityBadge: some View {
         Text(self.agentBadge)
-            .font(.system(size: self.agentBadge.count > 2 ? 12 : 15, weight: .semibold, design: .rounded))
+            .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 15))
             .foregroundStyle(.white)
             .minimumScaleFactor(0.6)
             .lineLimit(1)
@@ -191,7 +191,7 @@ struct ChatProTab: View {
         HStack(spacing: 5) {
             ProStatusDot(color: self.gatewayPillColor)
             Text(Self.gatewayPillTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
-                .font(.subheadline.weight(.medium))
+                .font(OpenClawType.subheadMedium)
                 .lineLimit(1)
         }
         .foregroundStyle(self.gatewayPillColor)

@@ -116,6 +116,7 @@ struct SettingsProTab: View {
             self.gatewaySection
             self.settingsListSection
         }
+        .font(OpenClawType.body)
         .navigationTitle("Settings")
         .navigationDestination(for: SettingsRoute.self) { route in
             self.destination(for: route)
@@ -298,8 +299,8 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(Color(uiColor: .systemBlue))
+                        .font(OpenClawType.title2SemiBold)
+                        .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
                         .font(OpenClawType.title3SemiBold)
                     Text(self.message)
@@ -329,7 +330,7 @@ struct HostedPushRelayDisclosureSheet: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .tint(Color(uiColor: .systemBlue))
+        .tint(OpenClawBrand.accent)
         .padding(24)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

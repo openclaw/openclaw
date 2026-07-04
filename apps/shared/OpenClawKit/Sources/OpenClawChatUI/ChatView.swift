@@ -810,7 +810,7 @@ private struct ChatAssistantIntroCard: View {
         // Rendered as a grey assistant bubble so the greeting reads like the
         // agent's first message, matching the in-conversation bubble style.
         Text(self.text)
-            .font(.body)
+            .font(OpenClawChatTypography.body)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .multilineTextAlignment(.leading)
             .padding(.vertical, 10)
@@ -853,13 +853,18 @@ private struct ChatNoticeCard: View {
         // Native empty/error state: SwiftUI's standard ContentUnavailableView, not a custom card.
         ContentUnavailableView {
             Label(self.title, systemImage: self.systemImage)
+                .font(OpenClawChatTypography.headline)
         } description: {
             Text(self.message)
+                .font(OpenClawChatTypography.body)
         } actions: {
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
         }
     }

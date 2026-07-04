@@ -18,7 +18,7 @@ struct OnboardingIntroStep: View {
                         .padding(.bottom, 20)
 
                     Text("Welcome to OpenClaw")
-                        .font(.largeTitle.bold())
+                        .font(OpenClawType.title1)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 24)
                         .padding(.bottom, 40)
@@ -33,12 +33,12 @@ struct OnboardingIntroStep: View {
                                 "The connected agent can use capabilities you enable, including camera, "
                                     + "microphone, photos, contacts, calendar, and location. Continue only if "
                                     + "you trust the gateway and agent.")
-                                .font(.footnote)
+                                .font(OpenClawType.footnote)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         } label: {
                             Label("Security", systemImage: "lock.shield.fill")
-                                .font(.headline)
+                                .font(OpenClawType.headline)
                         }
                         .tint(OpenClawBrand.warn)
                     }
@@ -51,13 +51,13 @@ struct OnboardingIntroStep: View {
 
             VStack(spacing: 16) {
                 Text("You can change permissions later in Settings.")
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
 
                 Button(action: self.onContinue) {
                     Text("Continue")
-                        .fontWeight(.semibold)
+                        .font(OpenClawType.headline)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -81,7 +81,7 @@ struct KeycapText: View {
 
     var body: some View {
         Text(self.text)
-            .font(.callout.monospaced().weight(.medium))
+            .font(OpenClawType.monoFootnote)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background {
@@ -103,16 +103,16 @@ private struct OnboardingFeatureRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             Image(systemName: self.icon)
-                .font(.title2)
+                .font(OpenClawType.title2)
                 .foregroundStyle(OpenClawBrand.accent)
                 .frame(width: 34, alignment: .center)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.title)
-                    .font(.headline)
+                    .font(OpenClawType.headline)
                 Text(self.detail)
-                    .font(.subheadline)
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -135,14 +135,14 @@ struct OnboardingWelcomeStep: View {
                 .padding(.bottom, 24)
 
             Text("Connect Gateway")
-                .font(.largeTitle.bold())
+                .font(OpenClawType.title1)
                 .padding(.bottom, 12)
 
             KeycapText("/pair qr")
                 .padding(.bottom, 10)
 
             Text("Run this in your OpenClaw chat, then scan the code.")
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
@@ -154,25 +154,28 @@ struct OnboardingWelcomeStep: View {
                     self.onScanQRCode()
                 } label: {
                     Label("Scan QR Code", systemImage: "qrcode")
-                        .fontWeight(.semibold)
+                        .font(OpenClawType.headline)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(OpenClawBrand.accent)
 
-                Button("Set Up Manually", action: self.onManualSetup)
-                    .buttonStyle(.borderless)
-                    .controlSize(.large)
-                    .tint(OpenClawBrand.accent)
-                    .padding(.top, 12)
+                Button(action: self.onManualSetup) {
+                    Text("Set Up Manually")
+                        .font(OpenClawType.headline)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.large)
+                .tint(OpenClawBrand.accent)
+                .padding(.top, 12)
             }
             .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 12)
 
             if !self.statusLine.isEmpty {
                 Text(self.statusLine)
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)

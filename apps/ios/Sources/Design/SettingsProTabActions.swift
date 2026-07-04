@@ -25,7 +25,7 @@ extension SettingsProTab {
                 }
                 Spacer(minLength: 8)
                 Text(value)
-                    .font(.subheadline.weight(.medium))
+                    .font(OpenClawType.subheadMedium)
                     .foregroundStyle(color)
             }
         }
@@ -89,6 +89,7 @@ extension SettingsProTab {
             SettingsIcon(systemName: icon, color: color)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
+                    .font(OpenClawType.subheadSemiBold)
                 Text(detail)
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
@@ -96,7 +97,7 @@ extension SettingsProTab {
             }
             Spacer(minLength: 8)
             Text(value)
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
         }
     }
@@ -110,6 +111,7 @@ extension SettingsProTab {
     func detailRow(_ label: String, value: String) -> some View {
         LabeledContent(label) {
             Text(value)
+                .font(OpenClawType.subhead)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

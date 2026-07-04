@@ -454,7 +454,7 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                .font(.system(size: 14, weight: .semibold))
+                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
                 .foregroundStyle(.white)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
                 // Prominent filled circle so the mic reads as the primary action,

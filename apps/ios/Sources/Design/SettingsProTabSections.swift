@@ -41,10 +41,12 @@ private struct AppearanceSettingsRow: View {
                 color: .secondary)
 
             Text("Appearance")
+                .font(OpenClawType.subheadSemiBold)
 
             Spacer(minLength: 8)
 
             Text(self.preference.label)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
         }
     }
@@ -64,6 +66,7 @@ private struct AppearanceSettingsScreen: View {
                         Label {
                             HStack {
                                 Text(preference.label)
+                                    .font(OpenClawType.body)
                                 Spacer()
                                 if preference == self.appearanceModel.preference {
                                     Image(systemName: "checkmark")
@@ -81,6 +84,7 @@ private struct AppearanceSettingsScreen: View {
                 }
             } footer: {
                 Text("System follows this device’s appearance setting.")
+                    .font(OpenClawType.footnote)
             }
         }
         .navigationTitle("Appearance")
@@ -119,9 +123,11 @@ extension SettingsProTab {
     var gatewayConnectionRow: some View {
         LabeledContent {
             Text(self.gatewayStatusDetail)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(self.gatewayStatusColor)
         } label: {
             Text("Connection")
+                .font(OpenClawType.subheadSemiBold)
         }
     }
 
@@ -198,11 +204,12 @@ extension SettingsProTab {
         NavigationLink(value: route) {
             Label {
                 Text(title)
+                    .font(OpenClawType.subheadSemiBold)
             } icon: {
                 SettingsIcon(systemName: icon, color: iconColor)
             }
         }
-        .badge(badgeValue.map { Text($0) })
+        .badge(badgeValue.map { Text($0).font(OpenClawType.captionSemiBold) })
     }
 
     @ViewBuilder
@@ -237,6 +244,7 @@ extension SettingsProTab {
                     EmptyView()
                 }
             }
+            .font(OpenClawType.body)
             .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -245,11 +253,11 @@ extension SettingsProTab {
                         OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                     }
                 }
-            }
-            ToolbarItem(placement: .principal) {
-                Text(title(for: route))
-                    .font(OpenClawType.headline)
-                    .foregroundStyle(.primary)
+                ToolbarItem(placement: .principal) {
+                    Text(title(for: route))
+                        .font(OpenClawType.headline)
+                        .foregroundStyle(.primary)
+                }
             }
         }
     }
@@ -276,12 +284,14 @@ extension SettingsProTab {
                     Task { await self.reconnectGateway() }
                 } label: {
                     Label("Reconnect", systemImage: "arrow.triangle.2.circlepath")
+                        .font(OpenClawType.body)
                 }
                 .disabled(self.isReconnectingGateway || self.appModel.isAppleReviewDemoModeEnabled)
                 Button {
                     Task { await self.runDiagnostics() }
                 } label: {
                     Label("Diagnose", systemImage: "cross.case")
+                        .font(OpenClawType.body)
                 }
                 .disabled(self.isRefreshingGateway)
             }
@@ -323,9 +333,9 @@ extension SettingsProTab {
         Section {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Notifications are off")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                 Text("Enable Notifications to receive approval alerts while OpenClaw is not open.")
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -334,6 +344,7 @@ extension SettingsProTab {
                     self.openNotificationsRouteFromApprovals()
                 } label: {
                     Label("Open Notifications", systemImage: "bell.badge")
+                        .font(OpenClawType.body)
                 }
             }
         }
@@ -348,13 +359,14 @@ extension SettingsProTab {
                 }
                 if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
                     Text(errorText)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.danger)
                 }
                 Button {
                     Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
                 } label: {
                     Label("Allow", systemImage: "checkmark")
+                        .font(OpenClawType.body)
                 }
                 .disabled(self.appModel.pendingExecApprovalPromptResolving)
                 if pendingApproval.allowsAllowAlways {
@@ -362,6 +374,7 @@ extension SettingsProTab {
                         Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always") }
                     } label: {
                         Label("Always Allow", systemImage: "checkmark.shield")
+                            .font(OpenClawType.body)
                     }
                     .disabled(self.appModel.pendingExecApprovalPromptResolving)
                 }
@@ -369,6 +382,7 @@ extension SettingsProTab {
                     Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
                 } label: {
                     Label("Deny", systemImage: "xmark")
+                        .font(OpenClawType.body)
                 }
                 .disabled(self.appModel.pendingExecApprovalPromptResolving)
             }
@@ -377,8 +391,9 @@ extension SettingsProTab {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No approvals waiting")
+                            .font(OpenClawType.subheadSemiBold)
                         Text(self.approvalEmptyDetail)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                     }
                 } icon: {
@@ -434,6 +449,7 @@ extension SettingsProTab {
                     Task { await self.runDiagnostics() }
                 } label: {
                     Label("Run Diagnostics", systemImage: "cross.case")
+                        .font(OpenClawType.body)
                 }
                 .disabled(self.isRefreshingGateway)
             }
@@ -550,6 +566,7 @@ extension SettingsProTab {
                 "No Licenses Bundled",
                 systemImage: "doc.text",
                 description: Text("License files are not available in this build."))
+                .font(OpenClawType.body)
         } else {
             Section {
                 ForEach(documents) { document in
@@ -558,6 +575,7 @@ extension SettingsProTab {
                     } label: {
                         Label {
                             Text(document.title)
+                                .font(OpenClawType.subhead)
                         } icon: {
                             SettingsIcon(systemName: "doc.text", color: .gray)
                         }
@@ -565,6 +583,7 @@ extension SettingsProTab {
                 }
             } footer: {
                 Text("OpenClaw appreciates its partners in the open-source community.")
+                    .font(OpenClawType.footnote)
             }
             .accessibilityIdentifier("settings-licenses-list")
         }
@@ -582,6 +601,7 @@ extension SettingsProTab {
         Button(action: action) {
             HStack {
                 Label(title, systemImage: icon)
+                    .font(OpenClawType.body)
                 Spacer()
                 if isBusy {
                     ProgressView().controlSize(.small)
@@ -606,7 +626,10 @@ extension SettingsProTab {
 
     func toggleCard(title: String, isOn: Binding<Bool>) -> some View {
         Section {
-            Toggle(title, isOn: isOn)
+            Toggle(isOn: isOn) {
+                Text(title)
+                    .font(OpenClawType.body)
+            }
         }
     }
 
@@ -664,22 +687,25 @@ extension SettingsProTab {
     var agentSelectionCard: some View {
         Section {
             Picker("Default Agent", selection: self.$selectedAgentPickerId) {
-                Text("Default").tag("")
+                Text("Default").font(OpenClawType.body).tag("")
                 let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
                     let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    Text(name.isEmpty ? agent.id : name).tag(agent.id)
+                    Text(name.isEmpty ? agent.id : name).font(OpenClawType.body).tag(agent.id)
                 }
             }
+            .font(OpenClawType.body)
         } footer: {
             Text("Used for new Chat and Talk sessions.")
+                .font(OpenClawType.footnote)
         }
     }
 
     var gatewaySetupCard: some View {
         Section {
             TextField("Paste setup code", text: self.$setupCode)
+                .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             self.gatewayActionButton(
@@ -703,11 +729,13 @@ extension SettingsProTab {
             }
         } header: {
             Text("Setup Code")
+                .font(OpenClawType.subheadSemiBold)
         } footer: {
             if let warning = self.tailnetWarningText {
-                Text(warning).foregroundStyle(OpenClawBrand.warn)
+                Text(warning).font(OpenClawType.footnote).foregroundStyle(OpenClawBrand.warn)
             } else if let status = self.setupStatusLine {
                 Text(status)
+                    .font(OpenClawType.footnote)
             }
         }
     }
@@ -716,6 +744,7 @@ extension SettingsProTab {
         Section("Discovered Gateways") {
             if self.gatewayController.gateways.isEmpty {
                 Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
+                    .font(OpenClawType.subhead)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(self.gatewayController.gateways) { gateway in
@@ -754,13 +783,21 @@ extension SettingsProTab {
 
     var manualGatewayCard: some View {
         Section("Manual Gateway") {
-            Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
+            Toggle(isOn: self.$manualGatewayEnabled) {
+                Text("Use Manual Gateway")
+                    .font(OpenClawType.body)
+            }
             TextField("Host", text: self.$manualGatewayHost)
+                .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             TextField("Port", text: self.manualPortBinding)
+                .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Toggle("Use TLS", isOn: self.$manualGatewayTLS)
+            Toggle(isOn: self.$manualGatewayTLS) {
+                Text("Use TLS")
+                    .font(OpenClawType.body)
+            }
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
@@ -776,42 +813,18 @@ extension SettingsProTab {
 
     var gatewayAdvancedCard: some View {
         Section {
-            Toggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-            SecureField("Gateway Auth Token", text: self.$gatewayToken)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            SecureField("Gateway Password", text: self.$gatewayPassword)
+            Toggle(isOn: self.$gatewayAutoConnect) {
+                Text("Auto-connect on launch")
+                    .font(OpenClawType.body)
+            }
+            self.gatewaySecureField("Gateway Auth Token", text: self.$gatewayToken)
+            self.gatewaySecureField("Gateway Password", text: self.$gatewayPassword)
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {
                 Label("Reset Onboarding", systemImage: "arrow.counterclockwise")
+                    .font(OpenClawType.body)
             }
-        }
-    }
-
-    func gatewayButtonToggle(
-        _ title: String,
-        isOn: Binding<Bool>,
-        onChange: ((Bool) -> Void)? = nil) -> some View
-    {
-        Button {
-            isOn.wrappedValue.toggle()
-        } label: {
-            HStack {
-                Text(title)
-                    .font(OpenClawType.subheadSemiBold)
-                Spacer(minLength: 8)
-                self.settingsSwitchIndicator(isOn: isOn.wrappedValue)
-            }
-            .font(OpenClawType.subheadSemiBold)
-            .contentShape(Rectangle())
-        }
-        .font(OpenClawType.subheadSemiBold)
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
-        .onChange(of: isOn.wrappedValue) { _, enabled in
-            onChange?(enabled)
         }
     }
 
@@ -819,7 +832,8 @@ extension SettingsProTab {
         ZStack(alignment: .leading) {
             SecureField("", text: text)
                 .font(OpenClawType.subhead)
-                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
                 .accessibilityLabel(placeholder)
             if text.wrappedValue.isEmpty {
                 Text(placeholder)
@@ -848,9 +862,10 @@ extension SettingsProTab {
             .disabled(self.appModel.isAppleReviewDemoModeEnabled)
             Picker("Speech Language", selection: self.$talkSpeechLocale) {
                 ForEach(TalkSpeechLocale.supportedOptions()) { option in
-                    Text(option.label).tag(option.id)
+                    Text(option.label).font(OpenClawType.body).tag(option.id)
                 }
             }
+            .font(OpenClawType.body)
             self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
             self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
             NavigationLink {
@@ -880,16 +895,18 @@ extension SettingsProTab {
             Section("Voice") {
                 Picker("Provider", selection: self.talkProviderSelectionBinding) {
                     ForEach(TalkModeProviderSelection.allCases) { option in
-                        Text(option.label).tag(option.rawValue)
+                        Text(option.label).font(OpenClawType.body).tag(option.rawValue)
                     }
                 }
+                .font(OpenClawType.body)
                 if self.shouldShowRealtimeVoicePicker {
                     Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
-                        Text("Gateway Default").tag("")
+                        Text("Gateway Default").font(OpenClawType.body).tag("")
                         ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
-                            Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                            Text(TalkModeRealtimeVoiceSelection.label(for: voice)).font(OpenClawType.body).tag(voice)
                         }
                     }
+                    .font(OpenClawType.body)
                 }
                 self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
                 self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
@@ -904,17 +921,23 @@ extension SettingsProTab {
 
     var shareSettingsCard: some View {
         Section {
-            Toggle("Show Talk Control", isOn: self.$talkButtonEnabled)
+            Toggle(isOn: self.$talkButtonEnabled) {
+                Text("Show Talk Control")
+                    .font(OpenClawType.body)
+            }
             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                .font(OpenClawType.body)
                 .lineLimit(2...5)
                 .textInputAutocapitalization(.sentences)
             Button {
                 Task { await self.appModel.runSharePipelineSelfTest() }
             } label: {
                 Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                    .font(OpenClawType.body)
             }
         } footer: {
             Text(self.appModel.lastShareEventText)
+                .font(OpenClawType.footnote)
         }
     }
 
@@ -941,6 +964,7 @@ extension SettingsProTab {
     var deviceIdentityCard: some View {
         Section("Device") {
             TextField("Device Name", text: self.$displayName)
+                .font(OpenClawType.body)
             self.detailRow("Instance ID", value: self.instanceId)
         }
     }
@@ -962,6 +986,7 @@ extension SettingsProTab {
     func simpleSettingsRow(title: String, value: String) -> some View {
         LabeledContent(title) {
             Text(value)
+                .font(OpenClawType.subhead)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }

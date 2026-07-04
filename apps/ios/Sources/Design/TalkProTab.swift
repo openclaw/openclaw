@@ -122,17 +122,17 @@ struct TalkProTab: View {
 
                 VStack(spacing: 4) {
                     Text(self.state.title)
-                        .font(.title3.weight(.semibold))
+                        .font(OpenClawType.title3SemiBold)
                         .multilineTextAlignment(.center)
                     Text(self.heroSubtitle)
-                        .font(.subheadline)
+                        .font(OpenClawType.subhead)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
                 Button(action: self.handlePrimaryAction) {
                     Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
-                        .fontWeight(.semibold)
+                        .font(OpenClawType.subheadSemiBold)
                         // Match the icon to the label; otherwise the symbol picks up the tint color.
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -171,17 +171,24 @@ struct TalkProTab: View {
 
     private var controlsSection: some View {
         Section("Controls") {
-            Toggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
-                .accessibilityIdentifier("talk-speakerphone-control")
-            Toggle("Background listening", isOn: self.$talkBackgroundEnabled)
-                .accessibilityIdentifier("talk-background-listening-control")
+            Toggle(isOn: self.talkSpeakerphoneBinding) {
+                Text("Speakerphone")
+                    .font(OpenClawType.body)
+            }
+            .accessibilityIdentifier("talk-speakerphone-control")
+            Toggle(isOn: self.$talkBackgroundEnabled) {
+                Text("Background listening")
+                    .font(OpenClawType.body)
+            }
+            .accessibilityIdentifier("talk-background-listening-control")
             Button(action: self.openVoiceSettings) {
                 HStack {
                     Label("Voice & Talk Settings", systemImage: "slider.horizontal.3")
+                        .font(OpenClawType.body)
                         .foregroundStyle(.primary)
                     Spacer()
                     Image(systemName: "chevron.forward")
-                        .font(.footnote.weight(.semibold))
+                        .font(OpenClawType.footnoteSemiBold)
                         .foregroundStyle(.tertiary)
                 }
                 .contentShape(Rectangle())
