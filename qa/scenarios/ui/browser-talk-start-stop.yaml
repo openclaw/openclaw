@@ -5,6 +5,8 @@ scenario:
   surface: browser-control-ui-and-webchat
   category: browser-control-ui-and-webchat.browser-realtime-talk
   coverage:
+    primary:
+      - voice.browser-talk-start-stop-ui
     secondary:
       - ui.browser-talk-start-stop
   objective: Link deterministic browser realtime Talk transport start/stop coverage to UI maturity accounting.
@@ -16,8 +18,9 @@ scenario:
     - docs/web/control-ui.md
     - docs/help/testing.md
   codeRefs:
-    - ui/src/ui/realtime-talk-google-live.test.ts
+    - ui/src/ui/e2e/browser-talk-start-stop.e2e.test.ts
+    - ui/src/test-helpers/control-ui-e2e.ts
   execution:
-    kind: vitest
-    path: ui/src/ui/realtime-talk-google-live.test.ts
-    summary: Vitest coverage for browser realtime Talk transport start and stop behavior.
+    kind: playwright
+    path: ui/src/ui/e2e/browser-talk-start-stop.e2e.test.ts
+    summary: Playwright coverage for browser realtime Talk start and stop through the Control UI.

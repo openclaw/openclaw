@@ -2,6 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
+import { createAbortError } from "./abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
@@ -194,9 +195,7 @@ export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: st
   if (lifecycleGeneration === getAgentEventState().lifecycleGeneration) {
     return;
   }
-  const error = new Error("Agent run belongs to a stale gateway lifecycle");
-  error.name = "AbortError";
-  throw error;
+  throw createAbortError("Agent run belongs to a stale gateway lifecycle");
 }
 
 /** Captures immutable lifecycle ownership for one admitted execution. */

@@ -4504,14 +4504,9 @@
       "translated": "Sẵn sàng"
     },
     {
-      "id": "native.apple.e4d6867912dc7a57",
-      "source": "Chat is preparing",
-      "translated": "Chat đang chuẩn bị"
-    },
-    {
-      "id": "native.apple.3a97c70e0e573740",
-      "source": "The operator session will attach when the gateway is ready.",
-      "translated": "Phiên điều hành sẽ được đính kèm khi gateway sẵn sàng."
+      "id": "native.apple.32179ce0b6d4543f",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "Phiên sẽ được đính kèm khi gateway sẵn sàng."
     },
     {
       "id": "native.apple.d19c9577e0fdfea7",
@@ -5434,6 +5429,11 @@
       "translated": "Không phải bây giờ"
     },
     {
+      "id": "native.apple.d77230c105bfb69f",
+      "source": "Checks",
+      "translated": "Kiểm tra"
+    },
+    {
       "id": "native.apple.00a5d93faa0d6491",
       "source": "Last Run",
       "translated": "Lần chạy gần nhất"
@@ -5594,7 +5594,7 @@
       "translated": "OpenClaw không thể xác định trạng thái quyền thông báo hiện tại."
     },
     {
-      "id": "native.apple.cfec8b4d042a8066",
+      "id": "native.apple.80fade864c8ad242",
       "source": "Choose system, light, or dark appearance",
       "translated": "Chọn giao diện hệ thống, sáng hoặc tối"
     },
@@ -5604,24 +5604,19 @@
       "translated": "Giao diện"
     },
     {
-      "id": "native.apple.0b50dca4526336be",
-      "source": "1 agent",
-      "translated": "1 tác nhân"
+      "id": "native.apple.f459c262b181a64b",
+      "source": "Selected",
+      "translated": "Đã chọn"
     },
     {
-      "id": "native.apple.4e579fbdce03c39a",
-      "source": "\\(agentCount) agents",
-      "translated": "\\(agentCount) tác nhân"
+      "id": "native.apple.998482352d20ebaa",
+      "source": "System follows this device’s appearance setting.",
+      "translated": "Hệ thống tuân theo cài đặt giao diện của thiết bị này."
     },
     {
-      "id": "native.apple.31f9c5fa6c3ca5dd",
-      "source": "Reconnect",
-      "translated": "Kết nối lại"
-    },
-    {
-      "id": "native.apple.1dc0c6ff4da2deca",
-      "source": "Diagnose",
-      "translated": "Chẩn đoán"
+      "id": "native.apple.70eca66c79335a6e",
+      "source": "Connection",
+      "translated": "Kết nối"
     },
     {
       "id": "native.apple.2c2cdafd79f8ba5b",
@@ -5649,6 +5644,31 @@
       "translated": "Giấy phép"
     },
     {
+      "id": "native.apple.5c4427c5a67068d6",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.800b6502b5b49941",
+      "source": "Address",
+      "translated": "Địa chỉ"
+    },
+    {
+      "id": "native.apple.fde8b41db7ec49f3",
+      "source": "Server",
+      "translated": "Máy chủ"
+    },
+    {
+      "id": "native.apple.624f9dc99e8f9ff4",
+      "source": "Discovered",
+      "translated": "Đã phát hiện"
+    },
+    {
+      "id": "native.apple.8e3656d85f092897",
+      "source": "Agents",
+      "translated": "Tác nhân"
+    },
+    {
       "id": "native.apple.3c8f5bb5ce507cf9",
       "source": "Approvals",
       "translated": "Phê duyệt"
@@ -5674,9 +5694,9 @@
       "translated": "Thông báo đang tắt"
     },
     {
-      "id": "native.apple.91124246863fcbb2",
-      "source": "Enable Notifications to receive approval notifications while OpenClaw is not open.",
-      "translated": "Bật Thông báo để nhận thông báo phê duyệt khi OpenClaw không mở."
+      "id": "native.apple.2e042499c42824f5",
+      "source": "Enable Notifications to receive approval alerts while OpenClaw is not open.",
+      "translated": "Bật Thông báo để nhận cảnh báo phê duyệt khi OpenClaw không mở."
     },
     {
       "id": "native.apple.fc1f2fdbe437cb9d",
@@ -5687,6 +5707,11 @@
       "id": "native.apple.34b198d5caa2f6de",
       "source": "Allow",
       "translated": "Cho phép"
+    },
+    {
+      "id": "native.apple.53c2c08c522ceb97",
+      "source": "Always Allow",
+      "translated": "Luôn cho phép"
     },
     {
       "id": "native.apple.47aa34a39a9e05e5",
@@ -5704,19 +5729,9 @@
       "translated": "Camera"
     },
     {
-      "id": "native.apple.68d3c5dbdb054a8b",
-      "source": "Allow the gateway to request photos or video while OpenClaw is foregrounded.",
-      "translated": "Cho phép gateway yêu cầu ảnh hoặc video khi OpenClaw đang ở nền trước."
-    },
-    {
       "id": "native.apple.1826e2be7765ee28",
       "source": "Keep Awake",
       "translated": "Giữ luôn bật"
-    },
-    {
-      "id": "native.apple.1b32ce3678bba852",
-      "source": "Keep the screen awake while OpenClaw is open.",
-      "translated": "Giữ màn hình luôn bật khi OpenClaw đang mở."
     },
     {
       "id": "native.apple.1dc29a33b5cd648a",
@@ -5734,7 +5749,7 @@
       "translated": "Chạy kiểm tra ứng dụng, quyền và các mục liên quan đến gateway mà không chỉnh sửa thiết lập."
     },
     {
-      "id": "native.apple.5b8f207013e270d1",
+      "id": "native.apple.e06f8e5c2bb61fe0",
       "source": "Run Diagnostics",
       "translated": "Chạy chẩn đoán"
     },
@@ -5769,19 +5784,9 @@
       "translated": "Truy cập camera"
     },
     {
-      "id": "native.apple.3a6fd1b30501990f",
-      "source": "Disable to block camera capture requests from the gateway.",
-      "translated": "Tắt để chặn các yêu cầu chụp bằng camera từ Gateway."
-    },
-    {
       "id": "native.apple.a0ed2e431173327d",
       "source": "Background Listening",
       "translated": "Lắng nghe trong nền"
-    },
-    {
-      "id": "native.apple.3b12afefbeaca766",
-      "source": "Allow active Talk sessions to continue while the app is backgrounded.",
-      "translated": "Cho phép các phiên Talk đang hoạt động tiếp tục khi ứng dụng chạy trong nền."
     },
     {
       "id": "native.apple.e16cdd169d3376c2",
@@ -5789,24 +5794,14 @@
       "translated": "Thông báo"
     },
     {
-      "id": "native.apple.35714980723b430d",
-      "source": "OpenClaw app version",
-      "translated": "Phiên bản ứng dụng OpenClaw"
+      "id": "native.apple.31f9c5fa6c3ca5dd",
+      "source": "Reconnect",
+      "translated": "Kết nối lại"
     },
     {
-      "id": "native.apple.f0a16e985312895b",
-      "source": "Device",
-      "translated": "Thiết bị"
-    },
-    {
-      "id": "native.apple.bbb2c589c2049217",
-      "source": "iOS",
-      "translated": "iOS"
-    },
-    {
-      "id": "native.apple.5abfcc15e933c483",
-      "source": "No licenses bundled",
-      "translated": "Không có giấy phép đi kèm"
+      "id": "native.apple.1dc0c6ff4da2deca",
+      "source": "Diagnose",
+      "translated": "Chẩn đoán"
     },
     {
       "id": "native.apple.af22fba4150f2c1d",
@@ -5819,29 +5814,14 @@
       "translated": "OpenClaw trân trọng các đối tác của mình trong cộng đồng mã nguồn mở."
     },
     {
-      "id": "native.apple.4b8dfe776225b172",
-      "source": "Gateway",
-      "translated": "Gateway"
+      "id": "native.apple.35714980723b430d",
+      "source": "OpenClaw app version",
+      "translated": "Phiên bản ứng dụng OpenClaw"
     },
     {
-      "id": "native.apple.800b6502b5b49941",
-      "source": "Address",
-      "translated": "Địa chỉ"
-    },
-    {
-      "id": "native.apple.fde8b41db7ec49f3",
-      "source": "Server",
-      "translated": "Máy chủ"
-    },
-    {
-      "id": "native.apple.624f9dc99e8f9ff4",
-      "source": "Discovered",
-      "translated": "Đã phát hiện"
-    },
-    {
-      "id": "native.apple.8e3656d85f092897",
-      "source": "Agents",
-      "translated": "Tác nhân"
+      "id": "native.apple.bbb2c589c2049217",
+      "source": "iOS",
+      "translated": "iOS"
     },
     {
       "id": "native.apple.0f4e7486619df175",
@@ -5879,19 +5859,9 @@
       "translated": "Mặc định"
     },
     {
-      "id": "native.apple.bf6ddc5fa4832324",
-      "source": "Agent",
-      "translated": "Agent"
-    },
-    {
       "id": "native.apple.3de045f17ea3c6d0",
       "source": "Used for new Chat and Talk sessions.",
       "translated": "Được dùng cho các phiên Chat và Talk mới."
-    },
-    {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "Mã thiết lập"
     },
     {
       "id": "native.apple.313eb24efcb8d4a0",
@@ -5909,6 +5879,11 @@
       "translated": "Kết nối"
     },
     {
+      "id": "native.apple.d8a5510f1a2e1701",
+      "source": "Setup Code",
+      "translated": "Mã thiết lập"
+    },
+    {
       "id": "native.apple.adb22453596f1d78",
       "source": "Discovered Gateways",
       "translated": "Gateway đã phát hiện"
@@ -5917,6 +5892,11 @@
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "Chưa tìm thấy gateway nào. Dùng thiết lập thủ công nếu Bonjour bị chặn."
+    },
+    {
+      "id": "native.apple.08a67e763668db42",
+      "source": "Manual Gateway",
+      "translated": "Gateway thủ công"
     },
     {
       "id": "native.apple.c39f3a597f674aca",
@@ -5989,6 +5969,11 @@
       "translated": "Từ đánh thức"
     },
     {
+      "id": "native.apple.698d47c5569f8d3b",
+      "source": "Voice",
+      "translated": "Giọng nói"
+    },
+    {
       "id": "native.apple.24ee619948d75837",
       "source": "Provider",
       "translated": "Nhà cung cấp"
@@ -6059,6 +6044,11 @@
       "translated": "Nhật ký khám phá"
     },
     {
+      "id": "native.apple.f0a16e985312895b",
+      "source": "Device",
+      "translated": "Thiết bị"
+    },
+    {
       "id": "native.apple.540b648f9486bb50",
       "source": "Device Name",
       "translated": "Tên thiết bị"
@@ -6067,11 +6057,6 @@
       "id": "native.apple.b7c2d54bc3894446",
       "source": "Instance ID",
       "translated": "ID phiên bản"
-    },
-    {
-      "id": "native.apple.0fca0d66e1fc4fa0",
-      "source": "On",
-      "translated": "Bật"
     },
     {
       "id": "native.apple.1e38b2ba7a1c1e45",
@@ -6224,34 +6209,84 @@
       "translated": "Không phải bây giờ"
     },
     {
-      "id": "native.apple.96d3e8f61c156202",
+      "id": "native.apple.e4b15aef3c2e3da7",
       "source": "Talk",
       "translated": "Nói chuyện"
     },
     {
-      "id": "native.apple.959cbf0dc86b975f",
+      "id": "native.apple.ab3381742bdff650",
+      "source": "Conversation",
+      "translated": "Cuộc trò chuyện"
+    },
+    {
+      "id": "native.apple.7af100f6640c6a69",
+      "source": "Agent",
+      "translated": "Tác nhân"
+    },
+    {
+      "id": "native.apple.49c4de60117b1a98",
+      "source": "Session",
+      "translated": "Phiên"
+    },
+    {
+      "id": "native.apple.37c29d2506b955e9",
+      "source": "Runtime",
+      "translated": "Thời gian chạy"
+    },
+    {
+      "id": "native.apple.13e0ad79b141576e",
+      "source": "Voice Mode",
+      "translated": "Chế độ giọng nói"
+    },
+    {
+      "id": "native.apple.e8035b71bab833c7",
+      "source": "Configured",
+      "translated": "Đã cấu hình"
+    },
+    {
+      "id": "native.apple.1b2845ec89d20eef",
+      "source": "Active",
+      "translated": "Đang hoạt động"
+    },
+    {
+      "id": "native.apple.a82c07df64d13b23",
+      "source": "Transport",
+      "translated": "Truyền tải"
+    },
+    {
+      "id": "native.apple.384e097278f76954",
+      "source": "Last issue",
+      "translated": "Sự cố gần nhất"
+    },
+    {
+      "id": "native.apple.a6d8fc7bfd98836f",
+      "source": "Permission",
+      "translated": "Quyền"
+    },
+    {
+      "id": "native.apple.983bdcd5e3f1baa8",
+      "source": "Speech language",
+      "translated": "Ngôn ngữ nói"
+    },
+    {
+      "id": "native.apple.32e7fa2b1798e9c3",
+      "source": "Controls",
+      "translated": "Điều khiển"
+    },
+    {
+      "id": "native.apple.0eb012a5d3d81b32",
       "source": "Speakerphone",
       "translated": "Loa ngoài"
     },
     {
-      "id": "native.apple.a970f0cda8dbd58e",
+      "id": "native.apple.ef8699e2718346da",
       "source": "Background listening",
       "translated": "Nghe trong nền"
     },
     {
-      "id": "native.apple.76b07adcc9de7470",
-      "source": "Voice & Talk settings",
-      "translated": "Cài đặt Giọng nói & Nói chuyện"
-    },
-    {
-      "id": "native.apple.942dedfe130d0750",
-      "source": "Off",
-      "translated": "Tắt"
-    },
-    {
-      "id": "native.apple.82725d788d542179",
-      "source": "On",
-      "translated": "Bật"
+      "id": "native.apple.1e6938a09b4fbe77",
+      "source": "Voice & Talk Settings",
+      "translated": "Cài đặt Giọng nói & Trò chuyện"
     },
     {
       "id": "native.apple.05c434bb5fe3c275",
@@ -6277,26 +6312,6 @@
       "id": "native.apple.364bb50be18c79c7",
       "source": "Voice config failed",
       "translated": "Cấu hình giọng nói thất bại"
-    },
-    {
-      "id": "native.apple.cf6697421a83de7f",
-      "source": "Needs approval",
-      "translated": "Cần phê duyệt"
-    },
-    {
-      "id": "native.apple.1fce63d9610404eb",
-      "source": "Pending",
-      "translated": "Đang chờ"
-    },
-    {
-      "id": "native.apple.431c0caa27837957",
-      "source": "API key",
-      "translated": "Khóa API"
-    },
-    {
-      "id": "native.apple.80a285e8c353f87f",
-      "source": "Config",
-      "translated": "Cấu hình"
     },
     {
       "id": "native.apple.87fca324b443b623",
@@ -6859,34 +6874,19 @@
       "translated": "Chào mừng đến với OpenClaw"
     },
     {
-      "id": "native.apple.116e17ea3a036818",
-      "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
-      "translated": "Biến thiết bị này thành một nút OpenClaw bảo mật cho trò chuyện, giọng nói, camera và công cụ thiết bị."
+      "id": "native.apple.aec45c66e9d1436e",
+      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
+      "translated": "Tác nhân được kết nối có thể sử dụng các khả năng bạn bật, bao gồm camera, micrô, ảnh, danh bạ, lịch và vị trí. Chỉ tiếp tục nếu bạn tin tưởng gateway và tác nhân."
     },
     {
-      "id": "native.apple.a715ab755d539d54",
-      "source": "Connect to your gateway",
-      "translated": "Kết nối với gateway của bạn"
+      "id": "native.apple.f755248f69e3e497",
+      "source": "Security",
+      "translated": "Bảo mật"
     },
     {
-      "id": "native.apple.701ae9ceb7952290",
-      "source": "Choose device permissions",
-      "translated": "Chọn quyền thiết bị"
-    },
-    {
-      "id": "native.apple.3d6efa9b4d988d3a",
-      "source": "Use OpenClaw from your phone",
-      "translated": "Sử dụng OpenClaw từ điện thoại của bạn"
-    },
-    {
-      "id": "native.apple.09e7832b23cf14f6",
-      "source": "Security notice",
-      "translated": "Thông báo bảo mật"
-    },
-    {
-      "id": "native.apple.26d5f6d128f7d123",
-      "source": "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.",
-      "translated": "Tác nhân OpenClaw đã kết nối có thể sử dụng các chức năng của thiết bị mà bạn bật, chẳng hạn như camera, micrô, ảnh, danh bạ, lịch và vị trí. Chỉ tiếp tục nếu bạn tin tưởng gateway và tác nhân mà bạn kết nối."
+      "id": "native.apple.116debd4caba7aff",
+      "source": "You can change permissions later in Settings.",
+      "translated": "Bạn có thể thay đổi quyền sau trong Cài đặt."
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -6899,29 +6899,14 @@
       "translated": "Kết nối Gateway"
     },
     {
-      "id": "native.apple.e38067caa3fed1cd",
-      "source": "Scan a QR code from your OpenClaw gateway or continue with manual setup.",
-      "translated": "Quét mã QR từ gateway OpenClaw của bạn hoặc tiếp tục thiết lập thủ công."
-    },
-    {
-      "id": "native.apple.90592a5f545c102a",
-      "source": "How to pair",
-      "translated": "Cách ghép nối"
-    },
-    {
-      "id": "native.apple.005ae52ec5edd8a1",
-      "source": "In your OpenClaw chat, run",
-      "translated": "Trong cuộc trò chuyện OpenClaw của bạn, chạy"
-    },
-    {
       "id": "native.apple.9f65b2eadb6aee92",
       "source": "/pair qr",
       "translated": "/pair qr"
     },
     {
-      "id": "native.apple.470229f716c184bb",
-      "source": "Then scan the QR code here to connect this device.",
-      "translated": "Sau đó quét mã QR tại đây để kết nối thiết bị này."
+      "id": "native.apple.b727174424127618",
+      "source": "Run this in your OpenClaw chat, then scan the code.",
+      "translated": "Chạy lệnh này trong cuộc trò chuyện OpenClaw của bạn, sau đó quét mã."
     },
     {
       "id": "native.apple.429ac70f39c21302",
@@ -7987,6 +7972,26 @@
       "id": "native.apple.69b64bb81b900cc4",
       "source": "\\(user)@\\(host):\\(port)",
       "translated": "\\(user)@\\(host):\\(port)"
+    },
+    {
+      "id": "native.apple.cfc2509b8bbcf1d7",
+      "source": "OpenClaw Gateway \\(version) is ready.",
+      "translated": "OpenClaw Gateway \\(version) đã sẵn sàng."
+    },
+    {
+      "id": "native.apple.9b767e46895714f9",
+      "source": "OpenClaw Gateway is not installed yet.",
+      "translated": "OpenClaw Gateway chưa được cài đặt."
+    },
+    {
+      "id": "native.apple.b4dc58a1b294e140",
+      "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
+      "translated": "Không thể xác minh OpenClaw Gateway. Quá trình thiết lập sẽ sửa lỗi này."
+    },
+    {
+      "id": "native.apple.4088056ae7b0f3b4",
+      "source": "Gateway \\(found) does not match app \\(required). Setup will update it.",
+      "translated": "Gateway \\(found) không khớp với ứng dụng \\(required). Quá trình thiết lập sẽ cập nhật Gateway."
     },
     {
       "id": "native.apple.6f14c557e2573526",
@@ -10244,29 +10249,54 @@
       "translated": "Chào mừng đến với OpenClaw"
     },
     {
-      "id": "native.apple.69f81c58c14a5df4",
-      "source": "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.",
-      "translated": "OpenClaw là một trợ lý AI cá nhân mạnh mẽ có thể kết nối với WhatsApp hoặc Telegram."
+      "id": "native.apple.dd7411f18b0fe203",
+      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
+      "translated": "OpenClaw là trợ lý AI cá nhân của bạn. OpenClaw có thể trả lời câu hỏi, làm việc với tệp và ứng dụng, cũng như kết nối với các dịch vụ như WhatsApp và Telegram thông qua Gateway do bạn kiểm soát."
     },
     {
-      "id": "native.apple.e75671ec2ae4bf9d",
-      "source": "Security notice",
-      "translated": "Thông báo bảo mật"
+      "id": "native.apple.86e4509eb0626ec8",
+      "source": "Ask, create, and automate",
+      "translated": "Hỏi, tạo và tự động hóa"
     },
     {
-      "id": "native.apple.c4778e8647a5aa9f",
-      "source": "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, including running commands, reading/writing files, and capturing screenshots — depending on the permissions you grant.\n\nOnly enable OpenClaw if you understand the risks and trust the prompts and integrations you use.",
-      "translated": "Tác nhân AI được kết nối (ví dụ: Claude) có thể kích hoạt các hành động mạnh mẽ trên máy Mac của bạn, bao gồm chạy lệnh, đọc/ghi tệp và chụp ảnh màn hình — tùy thuộc vào các quyền bạn cấp.\n\nChỉ bật OpenClaw nếu bạn hiểu các rủi ro và tin tưởng các lời nhắc cũng như tích hợp mà bạn sử dụng."
+      "id": "native.apple.a6950fed99ae450d",
+      "source": "Give your assistant tasks and let it help across your Mac.",
+      "translated": "Giao nhiệm vụ cho trợ lý của bạn và để trợ lý hỗ trợ trên máy Mac của bạn."
     },
     {
-      "id": "native.apple.9fb535bde270a73e",
-      "source": "Choose your Gateway",
-      "translated": "Chọn Gateway của bạn"
+      "id": "native.apple.16ab10ed9293b718",
+      "source": "Connect the tools you use",
+      "translated": "Kết nối các công cụ bạn dùng"
     },
     {
-      "id": "native.apple.16dfe3ecc39e7bd5",
-      "source": "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.",
-      "translated": "OpenClaw sử dụng một Gateway duy nhất luôn chạy. Chọn máy Mac này, kết nối với một gateway được phát hiện ở gần, hoặc cấu hình sau."
+      "id": "native.apple.687c1c2abdb8581e",
+      "source": "Bring conversations and services together in one assistant.",
+      "translated": "Tập hợp các cuộc trò chuyện và dịch vụ vào một trợ lý duy nhất."
+    },
+    {
+      "id": "native.apple.caf822c2d393914f",
+      "source": "Stay in control",
+      "translated": "Luôn nắm quyền kiểm soát"
+    },
+    {
+      "id": "native.apple.203bfa5e80135faa",
+      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
+      "translated": "Chọn nơi Gateway chạy và những quyền mà OpenClaw nhận được."
+    },
+    {
+      "id": "native.apple.fb64a5b187cfdc15",
+      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "translated": "OpenClaw có thể thực hiện hành động bằng các quyền và dịch vụ bạn bật. Hãy xem lại lời nhắc và chỉ kết nối các công cụ bạn tin tưởng."
+    },
+    {
+      "id": "native.apple.2033d33228ce52d7",
+      "source": "Where should OpenClaw run?",
+      "translated": "OpenClaw nên chạy ở đâu?"
+    },
+    {
+      "id": "native.apple.4791cce2ae762f19",
+      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
+      "translated": "Để thiết lập đơn giản nhất, hãy chạy Gateway trên máy Mac này. OpenClaw sẽ cài đặt Gateway và duy trì Gateway chạy cho bạn."
     },
     {
       "id": "native.apple.300a583f28880928",
@@ -10449,39 +10479,44 @@
       "translated": "Làm mới trạng thái"
     },
     {
-      "id": "native.apple.507f071d2b76be9e",
-      "source": "Install the CLI",
-      "translated": "Cài đặt CLI"
+      "id": "native.apple.8d7590f1d8f61a1d",
+      "source": "Setting up OpenClaw",
+      "translated": "Đang thiết lập OpenClaw"
     },
     {
-      "id": "native.apple.5ced9b0fad1555e0",
-      "source": "Required for local mode: installs `openclaw` so launchd can run the gateway.",
-      "translated": "Bắt buộc cho chế độ cục bộ: cài đặt `openclaw` để launchd có thể chạy gateway."
+      "id": "native.apple.e88512a0fe7fb140",
+      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
+      "translated": "OpenClaw đang cài đặt Gateway cục bộ và runtime được quản lý của Gateway."
     },
     {
-      "id": "native.apple.fa55cb789ef49397",
-      "source": "Install CLI",
-      "translated": "Cài đặt CLI"
+      "id": "native.apple.0c05ab4b362710de",
+      "source": "Checking existing setup…",
+      "translated": "Đang kiểm tra thiết lập hiện có…"
     },
     {
-      "id": "native.apple.03ab2f6a2e08734d",
-      "source": "Reinstall CLI",
-      "translated": "Cài đặt lại CLI"
+      "id": "native.apple.56b68eb592ecf449",
+      "source": "Installing the Gateway…",
+      "translated": "Đang cài đặt Gateway…"
     },
     {
-      "id": "native.apple.d977c700e4ece7fb",
-      "source": "Copy install command",
-      "translated": "Sao chép lệnh cài đặt"
+      "id": "native.apple.80155398d97fbe63",
+      "source": "Gateway installed",
+      "translated": "Đã cài đặt Gateway"
     },
     {
-      "id": "native.apple.e6a9668517354178",
-      "source": "Installed at \\(loc)",
-      "translated": "Đã cài đặt tại \\(loc)"
+      "id": "native.apple.2d2acbf2e16f8604",
+      "source": "Retry setup",
+      "translated": "Thử thiết lập lại"
     },
     {
-      "id": "native.apple.ac9f9e9da6ae6605",
-      "source": "Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).\nRerun anytime to reinstall or update.",
-      "translated": "Cài đặt runtime Node 22.19+ trong không gian người dùng và CLI (không dùng Homebrew).\nChạy lại bất cứ lúc nào để cài đặt lại hoặc cập nhật."
+      "id": "native.apple.4d58294df8d0b1e6",
+      "source": "Check again",
+      "translated": "Kiểm tra lại"
+    },
+    {
+      "id": "native.apple.15cfa96c75b57b04",
+      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
+      "translated": "Sử dụng bản cài đặt riêng trong không gian người dùng. Không cần Terminal, quyền quản trị viên hoặc Homebrew."
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10687,6 +10722,21 @@
       "id": "native.apple.5ad203347ffbe0e8",
       "source": "Retry",
       "translated": "Thử lại"
+    },
+    {
+      "id": "native.apple.4850230e903ad303",
+      "source": "Setup is paused",
+      "translated": "Thiết lập đang tạm dừng"
+    },
+    {
+      "id": "native.apple.860797a4ad8455d2",
+      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
+      "translated": "Tiếp tục OpenClaw để khởi động Gateway cục bộ và tiếp tục thiết lập."
+    },
+    {
+      "id": "native.apple.9781249acc361d32",
+      "source": "Resume setup",
+      "translated": "Tiếp tục thiết lập"
     },
     {
       "id": "native.apple.48cc28b5b02b9140",
@@ -12202,6 +12252,26 @@
       "id": "native.apple.72e5aa4446eaca9e",
       "source": "Stop",
       "translated": "Dừng"
+    },
+    {
+      "id": "native.apple.9d4bdedcbf74d86c",
+      "source": "Loading commands",
+      "translated": "Đang tải lệnh"
+    },
+    {
+      "id": "native.apple.fdd34aa94629c962",
+      "source": "Commands unavailable",
+      "translated": "Lệnh không khả dụng"
+    },
+    {
+      "id": "native.apple.a1953e3e9be8b8d5",
+      "source": "Retry",
+      "translated": "Thử lại"
+    },
+    {
+      "id": "native.apple.0f942ca442f88936",
+      "source": "No matching commands",
+      "translated": "Không có lệnh phù hợp"
     },
     {
       "id": "native.apple.afd8a2b9e3bf6d60",

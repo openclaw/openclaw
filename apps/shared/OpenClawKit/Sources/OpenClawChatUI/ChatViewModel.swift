@@ -19,6 +19,19 @@ public final class OpenClawChatViewModel {
     public private(set) var thinkingLevelOptions: [OpenClawChatThinkingLevelOption]
     public private(set) var modelSelectionID: String = "__default__"
     public private(set) var modelChoices: [OpenClawChatModelChoice] = []
+    public private(set) var slashCommands: [OpenClawChatCommandChoice] = []
+    public private(set) var isLoadingSlashCommands = false
+    public private(set) var slashCommandsErrorText: String?
+    public private(set) var hasLoadedSlashCommands = false
+    @ObservationIgnored
+    private var slashFilterCache: SlashFilterCache?
+
+    private struct SlashFilterCache {
+        let query: String
+        let filter: OpenClawChatCommandFilter
+        let result: [OpenClawChatCommandChoice]
+    }
+
     public private(set) var isLoading = false
     public private(set) var isSending = false
     public private(set) var isAborting = false
@@ -232,6 +245,36 @@ public final class OpenClawChatViewModel {
 
     public func selectModel(_ selectionID: String) {
         Task { await self.performSelectModel(selectionID) }
+    }
+
+    public func loadSlashCommandsIfNeeded() {
+        guard self.transport.supportsSlashCommandCatalog else { return }
+        guard !self.hasLoadedSlashCommands, !self.isLoadingSlashCommands else { return }
+        Task { await self.loadSlashCommands(force: false) }
+    }
+
+    public func refreshSlashCommands() {
+        guard self.transport.supportsSlashCommandCatalog else { return }
+        Task { await self.loadSlashCommands(force: true) }
+    }
+
+    public func slashCommandMatches(
+        query: String,
+        filter: OpenClawChatCommandFilter) -> [OpenClawChatCommandChoice]
+    {
+        if let cache = self.slashFilterCache, cache.query == query, cache.filter == filter {
+            return cache.result
+        }
+        let result = Self.filteredSlashCommands(self.slashCommands, query: query, filter: filter)
+        self.slashFilterCache = SlashFilterCache(query: query, filter: filter, result: result)
+        return result
+    }
+
+    public func applySlashCommandSelection(_ command: OpenClawChatCommandChoice) {
+        let invocation = command.preferredInvocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !invocation.isEmpty else { return }
+        self.input = command.acceptsArgs ? "\(invocation) " : invocation
+        self.errorText = nil
     }
 
     public var sessionChoices: [OpenClawChatSessionEntry] {
@@ -962,6 +1005,223 @@ public final class OpenClawChatViewModel {
     private static let resetTriggers: Set<String> = ["/reset", "/clear"]
     private static let compactTriggers: Set<String> = ["/compact"]
 
+    private func loadSlashCommands(force: Bool) async {
+        guard self.transport.supportsSlashCommandCatalog else { return }
+        guard force || !self.hasLoadedSlashCommands else { return }
+        guard !self.isLoadingSlashCommands else { return }
+        let sessionSnapshot = self.currentSessionSnapshot()
+        self.isLoadingSlashCommands = true
+        defer { self.isLoadingSlashCommands = false }
+
+        do {
+            let commands = try await self.transport.listCommands(sessionKey: sessionSnapshot.key)
+            guard self.isCurrentSession(sessionSnapshot) else { return }
+            self.slashCommands = commands
+            self.slashFilterCache = nil
+            self.slashCommandsErrorText = nil
+            self.hasLoadedSlashCommands = true
+        } catch {
+            guard self.isCurrentSession(sessionSnapshot) else { return }
+            self.slashCommandsErrorText = error.localizedDescription
+        }
+    }
+
+    private func waitForSlashCommandLoadIfNeeded() async {
+        guard self.transport.supportsSlashCommandCatalog else { return }
+        if !self.hasLoadedSlashCommands, !self.isLoadingSlashCommands {
+            await self.loadSlashCommands(force: false)
+            return
+        }
+        while self.isLoadingSlashCommands {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func validateSlashCommandDraftForSend(trimmed: String) async -> Bool {
+        guard let slashName = Self.slashCommandName(from: trimmed) else {
+            return true
+        }
+        guard !slashName.isEmpty else {
+            self.errorText = "Choose a command."
+            return false
+        }
+
+        await self.waitForSlashCommandLoadIfNeeded()
+
+        if self.hasLoadedSlashCommands,
+           Self.isKnownSlashCommandText(trimmed, commands: self.slashCommands),
+           !self.attachments.isEmpty
+        {
+            self.errorText = "Commands cannot be sent with attachments."
+            return false
+        }
+        return true
+    }
+
+    private func resetSlashCommandCatalog() {
+        self.slashCommands = []
+        self.slashFilterCache = nil
+        self.slashCommandsErrorText = nil
+        self.hasLoadedSlashCommands = false
+    }
+
+    private static func slashCommandName(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/"), !trimmed.hasPrefix("//") else { return nil }
+        let body = trimmed.dropFirst()
+        guard let rawName = body.split(whereSeparator: { $0.isWhitespace }).first else {
+            return ""
+        }
+        let name = rawName.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
+        return String(name).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isKnownSlashCommandText(
+        _ text: String,
+        commands: [OpenClawChatCommandChoice]) -> Bool
+    {
+        guard let commandName = self.slashCommandName(from: text), !commandName.isEmpty else {
+            return false
+        }
+        if self.commands(commands, containInvocationName: commandName) {
+            return true
+        }
+        guard commandName == "skill" else { return false }
+        let parts = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+        guard parts.count >= 2 else {
+            return self.commands(commands, containInvocationName: commandName)
+        }
+        let skillName = String(parts[1]).lowercased()
+        return commands.contains { command in
+            command.source == .skill && self.command(command, matchesInvocationName: skillName)
+        }
+    }
+
+    private static func commands(
+        _ commands: [OpenClawChatCommandChoice],
+        containInvocationName name: String) -> Bool
+    {
+        commands.contains { self.command($0, matchesInvocationName: name) }
+    }
+
+    private static func command(
+        _ command: OpenClawChatCommandChoice,
+        matchesInvocationName name: String) -> Bool
+    {
+        let normalizedName = name.lowercased()
+        if command.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedName {
+            return true
+        }
+        return command.textAliases.contains { alias in
+            self.slashCommandName(from: alias) == normalizedName
+        }
+    }
+
+    private static func filteredSlashCommands(
+        _ commands: [OpenClawChatCommandChoice],
+        query rawQuery: String,
+        filter: OpenClawChatCommandFilter) -> [OpenClawChatCommandChoice]
+    {
+        let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = self.normalizedSlashQuery(trimmed)
+        let effectiveFilter: OpenClawChatCommandFilter =
+            self.queryTargetsSkills(trimmed) && filter == .all ? .skills : filter
+        return commands.enumerated()
+            .compactMap { index, command -> (Int, Int, OpenClawChatCommandChoice)? in
+                guard self.command(command, isIncludedIn: effectiveFilter) else { return nil }
+                guard let rank = self.commandSearchRank(command, query: query) else { return nil }
+                return (rank, index, command)
+            }
+            .sorted {
+                if $0.0 != $1.0 { return $0.0 < $1.0 }
+                return $0.1 < $1.1
+            }
+            .map(\.2)
+    }
+
+    private static func normalizedSlashQuery(_ query: String) -> String {
+        let withoutSlash = query.hasPrefix("/") ? String(query.dropFirst()) : query
+        let lower = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower == "skill" {
+            return ""
+        }
+        if lower.hasPrefix("skill ") {
+            return String(lower.dropFirst("skill ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return lower
+    }
+
+    private static func queryTargetsSkills(_ query: String) -> Bool {
+        let withoutSlash = query.hasPrefix("/") ? String(query.dropFirst()) : query
+        let lower = withoutSlash.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "skill" || lower.hasPrefix("skill ")
+    }
+
+    private static func command(
+        _ command: OpenClawChatCommandChoice,
+        isIncludedIn filter: OpenClawChatCommandFilter) -> Bool
+    {
+        switch filter {
+        case .all:
+            true
+        case .commands:
+            command.source != .skill
+        case .skills:
+            command.source == .skill
+        }
+    }
+
+    private static func commandSearchRank(
+        _ command: OpenClawChatCommandChoice,
+        query: String) -> Int?
+    {
+        guard !query.isEmpty else { return 0 }
+        let names = ([command.name, command.preferredInvocation] + command.textAliases)
+            .map { candidate in
+                let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                let withoutSlash = trimmed.hasPrefix("/") ? String(trimmed.dropFirst()) : trimmed
+                return withoutSlash.lowercased()
+            }
+            .filter { !$0.isEmpty }
+        if names.contains(where: { $0.hasPrefix(query) }) {
+            return 0
+        }
+        if names.contains(where: { $0.contains(query) }) {
+            return 1
+        }
+        if command.description.lowercased().contains(query) {
+            return 2
+        }
+        if command.source.rawValue.lowercased().contains(query) {
+            return 3
+        }
+        return nil
+    }
+
+    private func handleLocalSlashCommandIfNeeded(_ command: String) async -> Bool {
+        if command == "/new" {
+            self.input = ""
+            await self.performStartNewSession()
+            return true
+        }
+        if Self.resetTriggers.contains(command) {
+            self.input = ""
+            await self.performReset()
+            return true
+        }
+        if Self.compactTriggers.contains(command) {
+            self.input = ""
+            await self.performCompact()
+            return true
+        }
+        return false
+    }
+
     private func performSend() async {
         guard !self.isSending else {
             self.logDiagnostic("chat.ui send ignored reason=sending sessionKey=\(self.sessionKey)")
@@ -980,19 +1240,10 @@ public final class OpenClawChatViewModel {
         }
 
         let command = trimmed.lowercased()
-        if command == "/new" {
-            self.input = ""
-            await self.performStartNewSession()
+        if await self.handleLocalSlashCommandIfNeeded(command) {
             return
         }
-        if Self.resetTriggers.contains(command) {
-            self.input = ""
-            await self.performReset()
-            return
-        }
-        if Self.compactTriggers.contains(command) {
-            self.input = ""
-            await self.performCompact()
+        guard await self.validateSlashCommandDraftForSend(trimmed: trimmed) else {
             return
         }
 
@@ -1186,6 +1437,7 @@ public final class OpenClawChatViewModel {
         self.sessionId = nil
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
+        self.resetSlashCommandCatalog()
         self.clearPendingRuns(reason: nil)
         self.startBootstrap(sessionKey: next)
     }
@@ -1222,6 +1474,7 @@ public final class OpenClawChatViewModel {
         self.sessionId = nil
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
+        self.resetSlashCommandCatalog()
         self.clearPendingRuns(reason: nil)
         self.errorText = nil
         self.startBootstrap()

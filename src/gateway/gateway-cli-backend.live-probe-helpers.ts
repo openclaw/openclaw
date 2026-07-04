@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { sleep } from "../utils/sleep.js";
 import type { GatewayClient } from "./client.js";
 import {
   shouldRetryCliCronMcpProbeReply,
@@ -43,12 +44,6 @@ function logCliCronProbe(step: string, details?: Record<string, unknown>): void 
   }
   const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
   console.error(`[gateway-cli-live:cron] ${step}${suffix}`);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function pollCliCronJobVisible(params: {

@@ -4964,7 +4964,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/bundled-gateway
 - Headings:
-  - H2: Install the CLI (required for local mode)
+  - H2: Automatic setup
+  - H2: Manual recovery
   - H2: Launchd (Gateway as LaunchAgent)
   - H2: Version compatibility
   - H2: State directory on macOS
@@ -5004,7 +5005,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Prerequisites
   - H2: 1. Install Dependencies
   - H2: 2. Build and Package the App
-  - H2: 3. Install the CLI
+  - H2: 3. Install the CLI and Gateway
   - H2: Troubleshooting
   - H3: Build fails: toolchain or SDK mismatch
   - H3: App crashes on permission grant
@@ -5853,6 +5854,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/chutes
 - Headings:
   - H1: Chutes plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/clawrouter.md
+
+- Route: /plugins/reference/clawrouter
+- Headings:
+  - H1: ClawRouter plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -7270,6 +7280,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in catalog
   - H2: Advanced configuration
   - H2: Notes
+  - H2: Related
+
+## providers/clawrouter.md
+
+- Route: /providers/clawrouter
+- Headings:
+  - H2: Getting started
+  - H2: Model discovery
+  - H2: Protocol and provider plugins
+  - H2: Quotas and usage
+  - H2: Troubleshooting
+  - H2: Security behavior
   - H2: Related
 
 ## providers/cloudflare-ai-gateway.md

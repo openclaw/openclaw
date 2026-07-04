@@ -38,6 +38,20 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
     }
 
+    func testOnboardingExplainsCapabilitiesAndTrust() {
+        let app = XCUIApplication()
+        app.launchArguments += ["--openclaw-reset-onboarding"]
+        app.launch()
+        self.app = app
+
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Security"].exists)
+        let disclosure = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS[c] 'camera' AND label CONTAINS[c] 'trust the gateway and agent'")).firstMatch
+        XCTAssertTrue(disclosure.exists)
+        self.attachScreenshot(named: "onboarding-capabilities-and-trust")
+    }
+
     func testControlOverviewNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone control hub only")
         self.launchApp(for: ScreenshotTarget(
@@ -140,6 +154,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
             name: "talk-settings-back"))
 
         let voiceSettings = try XCTUnwrap(self.app?.buttons["talk-voice-settings-control"])
+        for _ in 0..<3 where !voiceSettings.exists {
+            self.app?.swipeUp()
+        }
         XCTAssertTrue(voiceSettings.waitForExistence(timeout: 8))
         voiceSettings.tap()
         let voiceNavigationBar = try XCTUnwrap(self.app?.navigationBars["Voice & Talk"])
@@ -232,15 +249,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let gatewayStatus = try XCTUnwrap(app?.buttons["chat-gateway-status"])
         XCTAssertTrue(gatewayStatus.waitForExistence(timeout: 5))
         let sendButton = try XCTUnwrap(app?.buttons["chat-send-message"])
-        XCTAssertTrue(sendButton.waitForExistence(timeout: 5))
-        XCTAssertTrue(composerSurface.frame.contains(attachmentButton.frame))
-        XCTAssertTrue(composerSurface.frame.contains(talkButton.frame))
+        XCTAssertFalse(sendButton.exists)
+        XCTAssertLessThanOrEqual(attachmentButton.frame.maxX, composerSurface.frame.minX)
+        XCTAssertLessThanOrEqual(composerSurface.frame.maxX, talkButton.frame.minX)
         XCTAssertGreaterThanOrEqual(attachmentButton.frame.width, 44)
         XCTAssertGreaterThanOrEqual(attachmentButton.frame.height, 44)
         XCTAssertGreaterThanOrEqual(talkButton.frame.width, 44)
         XCTAssertGreaterThanOrEqual(talkButton.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(sendButton.frame.width, 44)
-        XCTAssertGreaterThanOrEqual(sendButton.frame.height, 44)
         let compactHeight = textField.frame.height
         XCTAssertLessThanOrEqual(compactHeight, 44)
         XCTAssertLessThanOrEqual(abs(talkButton.frame.midY - textField.frame.midY), 1)
@@ -254,6 +269,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
             for: NSPredicate { _, _ in textField.frame.height >= compactHeight + 12 },
             evaluatedWith: textField)
         wait(for: [composerGrew], timeout: 4)
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(talkButton.waitForNonExistence(timeout: 3))
+        XCTAssertGreaterThanOrEqual(sendButton.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(sendButton.frame.height, 44)
         self.attachScreenshot(named: "chat-composer-expanded")
 
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
@@ -274,69 +293,87 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-light")
     }
 
-    func testTalkUsesCompactIconControls() throws {
+    func testTalkUsesNativeControls() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Talk controls only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "talk",
             initialDestination: "talk",
-            name: "talk-icon-controls"))
+            name: "talk-native-controls"))
 
-        let speakerphone = try XCTUnwrap(app?.buttons["talk-speakerphone-control"])
-        let backgroundListening = try XCTUnwrap(app?.buttons["talk-background-listening-control"])
+        let speakerphone = try XCTUnwrap(app?.switches["talk-speakerphone-control"])
+        let backgroundListening = try XCTUnwrap(app?.switches["talk-background-listening-control"])
         let voiceSettings = try XCTUnwrap(app?.buttons["talk-voice-settings-control"])
+        for _ in 0..<3 where !speakerphone.exists {
+            self.app?.swipeUp()
+        }
         XCTAssertTrue(speakerphone.waitForExistence(timeout: 8))
         XCTAssertTrue(backgroundListening.exists)
         XCTAssertTrue(voiceSettings.exists)
-        XCTAssertFalse(self.app?.switches["Speakerphone"].exists == true)
-        XCTAssertFalse(self.app?.switches["Background listening"].exists == true)
 
         let originalValue = speakerphone.value as? String
         defer {
             if speakerphone.value as? String != originalValue {
-                speakerphone.tap()
+                speakerphone.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
             }
         }
-        if originalValue == "Off" {
-            speakerphone.tap()
+        if originalValue == "0" {
+            speakerphone.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            self.waitForValue("1", of: speakerphone)
         }
-        XCTAssertEqual(speakerphone.value as? String, "On")
-        self.attachScreenshot(named: "talk-icon-controls")
+        XCTAssertEqual(speakerphone.value as? String, "1")
+        self.attachScreenshot(named: "talk-native-controls")
 
-        let initialValue = speakerphone.value as? String
-        speakerphone.tap()
-        XCTAssertNotEqual(speakerphone.value as? String, initialValue)
+        speakerphone.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        self.waitForValue("0", of: speakerphone)
     }
 
     func testAppearanceUsesSettingsRow() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Settings proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
             initialDestination: "settings",
-            name: "appearance-compact"), appearance: nil)
+            name: "appearance-compact"), appearance: nil, screenshotMode: false)
 
+        if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
+            self.app?.buttons["Close"].tap()
+        }
         let row = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
         XCTAssertTrue(row.waitForExistence(timeout: 8))
         XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
         XCTAssertFalse(self.app?.segmentedControls["settings-appearance-picker"].exists == true)
 
         row.tap()
-        XCTAssertTrue(self.app?.buttons["System"].waitForExistence(timeout: 3) == true)
-        XCTAssertTrue(self.app?.buttons["Light"].exists == true)
-        XCTAssertTrue(self.app?.buttons["Dark"].exists == true)
-        self.app?.buttons["System"].firstMatch.tap()
-        self.waitForValue("System", of: row)
+        let navigationBar = try XCTUnwrap(self.app?.navigationBars["Appearance"])
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 3))
+        let system = try XCTUnwrap(self.app?.buttons["settings-appearance-system"])
+        let light = try XCTUnwrap(self.app?.buttons["settings-appearance-light"])
+        let dark = try XCTUnwrap(self.app?.buttons["settings-appearance-dark"])
+        XCTAssertTrue(system.exists)
+        XCTAssertTrue(light.exists)
+        XCTAssertTrue(dark.exists)
+        if system.value as? String != "Selected" {
+            system.tap()
+            XCTAssertTrue(row.waitForExistence(timeout: 3))
+            self.waitForValue("System", of: row)
+            row.tap()
+            XCTAssertTrue(navigationBar.waitForExistence(timeout: 3))
+            self.waitForValue("Selected", of: system)
+        }
+        Thread.sleep(forTimeInterval: 1)
         self.attachScreenshot(named: "appearance-system")
 
-        row.tap()
-        XCTAssertTrue(self.app?.buttons["Dark"].waitForExistence(timeout: 3) == true)
-        self.app?.buttons["Dark"].firstMatch.tap()
+        dark.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
         self.waitForValue("Dark", of: row)
-        self.attachScreenshot(named: "appearance-dark")
+        self.assertDarkAppearanceTextVisible()
+        self.attachScreenshot(named: "settings-dark")
 
         row.tap()
-        XCTAssertTrue(self.app?.buttons["System"].waitForExistence(timeout: 3) == true)
-        self.app?.buttons["System"].firstMatch.tap()
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 3))
+        system.tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
         self.waitForValue("System", of: row)
+        Thread.sleep(forTimeInterval: 1)
+        self.attachScreenshot(named: "appearance-system-restored")
     }
 
     func testChatReturnsToOriginatingControlDetail() throws {
@@ -562,13 +599,16 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "photos-limited-access")
     }
 
-    private func launchApp(for target: ScreenshotTarget, appearance: String? = "dark") {
+    private func launchApp(
+        for target: ScreenshotTarget,
+        appearance: String? = "dark",
+        screenshotMode: Bool = true)
+    {
         self.app?.terminate()
 
         let app = XCUIApplication()
         setupSnapshot(app)
         app.launchArguments += [
-            "--openclaw-screenshot-mode",
             "--openclaw-initial-tab",
             target.initialTab,
             "--openclaw-initial-destination",
@@ -576,6 +616,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
             "--openclaw-sidebar-visibility",
             "hidden",
         ]
+        if screenshotMode {
+            app.launchArguments.append("--openclaw-screenshot-mode")
+        }
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
@@ -682,6 +725,59 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
+    }
+
+    private func assertDarkAppearanceTextVisible(
+        file: StaticString = #filePath,
+        line: UInt = #line)
+    {
+        guard let app, let image = app.screenshot().image.cgImage else {
+            XCTFail("App screenshot has no CGImage", file: file, line: line)
+            return
+        }
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let rendered = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else {
+                return false
+            }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard rendered else {
+            XCTFail("Could not render the appearance screenshot", file: file, line: line)
+            return
+        }
+
+        // Sample the full List content, excluding navigation/tab chrome. The regression left
+        // entire labels transparent while isolated row crops could still look healthy.
+        let sampleX = (width / 12)..<(width * 11 / 12)
+        let sampleY = (height / 8)..<(height * 4 / 5)
+        var brightPixels = 0
+        for y in sampleY {
+            for x in sampleX {
+                let offset = (y * width + x) * 4
+                if pixels[offset] > 190, pixels[offset + 1] > 190, pixels[offset + 2] > 190 {
+                    brightPixels += 1
+                }
+            }
+        }
+        let sampledPixels = max(1, sampleX.count * sampleY.count)
+        XCTAssertGreaterThan(
+            Double(brightPixels) / Double(sampledPixels),
+            0.002,
+            "Dark appearance must keep the settings labels visibly light",
+            file: file,
+            line: line)
     }
 
     private func attachScreenshot(named name: String) {

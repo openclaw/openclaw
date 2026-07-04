@@ -251,6 +251,7 @@ struct ChatMessageBubble: View {
 
 @MainActor
 private struct ChatMessageBody: View {
+    @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     let message: OpenClawChatMessage
     let isUser: Bool
     let style: OpenClawChatView.Style
@@ -338,7 +339,9 @@ private struct ChatMessageBody: View {
     }
 
     private var usesBubble: Bool {
-        self.isUser || self.style == .onboarding || !self.isClean
+        // Keep the guarded base condition; iOS additionally opts assistant
+        // messages into bubbles via the clean-chrome environment flag.
+        self.isUser || self.style == .onboarding || !self.isClean || self.assistantBubblesInClean
     }
 
     private var primaryText: String {
@@ -625,21 +628,31 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     }
 }
 
+extension EnvironmentValues {
+    /// Clients that want iMessage-style assistant bubbles in the clean chrome
+    /// (the iOS app) opt in; the default keeps the plain clean look elsewhere.
+    @Entry public var openClawAssistantBubblesInCleanChrome: Bool = false
+}
+
 private struct AssistantBubbleContainerStyle: ViewModifier {
     let isClean: Bool
     let cornerRadius: CGFloat
 
+    @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
+
     func body(content: Content) -> some View {
-        if self.isClean {
+        if self.isClean, !self.bubblesInClean {
             content
         } else {
             content
-                .background(
-                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .fill(OpenClawChatTheme.assistantBubble))
-                .overlay(
-                    RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                    .padding(self.isClean ? 8 : 0)
+                    .background(
+                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                            .fill(OpenClawChatTheme.assistantBubble))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
         }
     }
 }
