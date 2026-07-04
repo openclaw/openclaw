@@ -219,6 +219,62 @@ describeUnix("inspectPortUsage", () => {
     }
   });
 
+  it("does not match ss listener ports by substring", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return {
+          stdout: 'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(1878);
+
+    expect(result.listeners).toEqual([]);
+  });
+
+  it("matches ss listener on exact port within multi-listener output", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return {
+          stdout: [
+            'LISTEN 0 4096 127.0.0.1:8080 0.0.0.0:* users:(("app",pid=100,fd=3))',
+            'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+            'LISTEN 0 4096 127.0.0.1:18790 0.0.0.0:* users:(("other",pid=456,fd=7))',
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners).toHaveLength(1);
+    expect(result.listeners[0]).toMatchObject({
+      pid: 123,
+      address: "127.0.0.1:18789",
+    });
+  });
+
   it("reports established gateway client connections from lsof", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
