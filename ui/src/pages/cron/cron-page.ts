@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
-import { property, state } from "lit/decorators.js";
+import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -39,12 +39,6 @@ import { createDefaultDraft, draftToCronFormPatch, renderCronQuickCreate } from 
 import type { CronQuickCreateDraft, CronQuickCreateStep } from "./quick-create.ts";
 import { renderCron } from "./view.ts";
 
-export type CronRouteData = {
-  connected: boolean;
-  cron: CronState;
-  agentsList: AgentsListResult | null;
-};
-
 const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const TIMEZONE_SUGGESTIONS = [
   "UTC",
@@ -56,18 +50,6 @@ const TIMEZONE_SUGGESTIONS = [
   "Europe/Berlin",
   "Asia/Tokyo",
 ];
-
-function cloneCronState(state: CronState): CronState {
-  return {
-    ...state,
-    cronJobs: [...state.cronJobs],
-    cronFieldErrors: { ...state.cronFieldErrors },
-    cronRuns: [...state.cronRuns],
-    cronRunsStatuses: [...state.cronRunsStatuses],
-    cronRunsDeliveryStatuses: [...state.cronRunsDeliveryStatuses],
-    cronForm: { ...state.cronForm },
-  };
-}
 
 function unique(values: string[]): string[] {
   return sortUniqueStrings(values.map((value) => value.trim()).filter(Boolean));
@@ -81,8 +63,6 @@ export class CronPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeData?: CronRouteData;
-
   @state() private cron = createInitialCronState();
   @state() private agentsList: AgentsListResult | null = null;
   @state() private cronModelSuggestions: string[] = [];
@@ -92,25 +72,17 @@ export class CronPage extends LitElement {
 
   private stopGatewaySubscription?: () => void;
   private stopGatewayEvents?: () => void;
+  private stopAgentsSubscription?: () => void;
   private stopChannelsSubscription?: () => void;
   private stopConfigSubscription?: () => void;
   private modelSuggestionsClient: GatewayBrowserClient | null = null;
-  private routeDataInitialized = false;
-  private routeDataApplied = false;
 
   override connectedCallback() {
     super.connectedCallback();
     this.syncGatewayState();
-    this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
-      const previousClient = this.cron.client;
+    this.syncAgentsState();
+    this.stopGatewaySubscription = this.context.gateway.subscribe(() => {
       this.syncGatewayState();
-      if (previousClient !== snapshot.client) {
-        this.cron = createInitialCronState(snapshot);
-        this.agentsList = null;
-        this.cronModelSuggestions = [];
-        this.modelSuggestionsClient = null;
-        this.routeDataApplied = false;
-      }
       this.ensureInitialData();
     });
     this.stopGatewayEvents = this.context.gateway.subscribeEvents((event) => {
@@ -118,21 +90,13 @@ export class CronPage extends LitElement {
         void this.refreshCron({ tableFilters: true });
       }
     });
+    this.stopAgentsSubscription = this.context.agents.subscribe(() => {
+      this.syncAgentsState();
+      this.requestUpdate();
+    });
     this.stopChannelsSubscription = this.context.channels.subscribe(() => this.requestUpdate());
     this.stopConfigSubscription = this.context.runtimeConfig.subscribe(() => this.requestUpdate());
     this.ensureInitialData();
-  }
-
-  override willUpdate(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("routeData")) {
-      this.applyRouteData();
-    }
-  }
-
-  override updated(changed: Map<PropertyKey, unknown>) {
-    if (changed.has("routeData")) {
-      this.ensureInitialData();
-    }
   }
 
   override disconnectedCallback() {
@@ -140,6 +104,8 @@ export class CronPage extends LitElement {
     this.stopGatewaySubscription = undefined;
     this.stopGatewayEvents?.();
     this.stopGatewayEvents = undefined;
+    this.stopAgentsSubscription?.();
+    this.stopAgentsSubscription = undefined;
     this.stopChannelsSubscription?.();
     this.stopChannelsSubscription = undefined;
     this.stopConfigSubscription?.();
@@ -149,43 +115,31 @@ export class CronPage extends LitElement {
 
   private syncGatewayState() {
     const gateway = this.context.gateway.snapshot;
-    if (this.cron.client === gateway.client && this.cron.connected === gateway.connected) {
+    if (this.cron.client !== gateway.client) {
+      this.cron = createInitialCronState(gateway);
+      this.cronModelSuggestions = [];
+      this.modelSuggestionsClient = null;
       return;
     }
-    this.cron = {
-      ...this.cron,
-      client: gateway.client,
-      connected: gateway.connected,
-    };
+    if (this.cron.connected === gateway.connected) {
+      return;
+    }
+    this.cron.connected = gateway.connected;
+    this.requestUpdate();
   }
 
-  private applyRouteData() {
-    const data = this.routeData;
-    if (!data) {
-      return;
-    }
-    const gateway = this.context.gateway.snapshot;
-    if (data.cron.client !== gateway.client) {
-      return;
-    }
-    this.routeDataInitialized = true;
-    this.cron = cloneCronState({
-      ...data.cron,
-      client: gateway.client,
-      connected: gateway.connected,
-    });
-    this.agentsList = data.agentsList;
-    this.routeDataApplied = true;
+  private syncAgentsState() {
+    this.agentsList = this.context.agents.state.agentsList;
   }
 
   private ensureInitialData() {
     if (!this.cron.connected || !this.cron.client) {
       return;
     }
-    if (!this.routeDataInitialized) {
-      return;
+    if (!this.agentsList && !this.context.agents.state.agentsLoading) {
+      void this.context.agents.ensureList();
     }
-    if (!this.routeDataApplied && !this.cron.cronLoading) {
+    if (!this.cron.cronStatus && !this.cron.cronLoading) {
       void this.refreshCron({ tableFilters: true });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
@@ -196,8 +150,10 @@ export class CronPage extends LitElement {
     }
   }
 
-  private commitCron() {
-    this.cron = cloneCronState(this.cron);
+  private requestCronUpdate(state: CronState = this.cron) {
+    if (this.cron === state) {
+      this.requestUpdate();
+    }
   }
 
   private async refreshCron(options: { tableFilters: boolean }) {
@@ -206,24 +162,18 @@ export class CronPage extends LitElement {
       return;
     }
     const activeCronJobId = state.cronRunsScope === "job" ? state.cronRunsJobId : null;
-    const runs = this.loadRuns(activeCronJobId);
-    void runs;
+    void this.loadRuns(activeCronJobId);
+    void this.context.channels.refresh(false);
     await Promise.all([
-      this.context.channels.refresh(false),
-      loadCronStatus(state),
-      loadCronJobsPage(state, { tableFilters: options.tableFilters }),
+      this.runCronTask((current) => loadCronStatus(current)),
+      this.runCronTask((current) =>
+        loadCronJobsPage(current, { tableFilters: options.tableFilters }),
+      ),
     ]);
-    if (this.cron === state) {
-      this.commitCron();
-    }
   }
 
-  private async loadRuns(jobId: string | null) {
-    const state = this.cron;
-    await loadCronRuns(state, jobId);
-    if (this.cron === state) {
-      this.commitCron();
-    }
+  private loadRuns(jobId: string | null) {
+    return this.runCronTask((state) => loadCronRuns(state, jobId));
   }
 
   private async loadModelSuggestions() {
@@ -238,11 +188,14 @@ export class CronPage extends LitElement {
     }
   }
 
-  private async runCronTask(task: (state: CronState) => Promise<unknown>) {
+  private async runCronTask<T>(task: (state: CronState) => Promise<T>): Promise<T> {
     const state = this.cron;
-    await task(state);
-    if (this.cron === state) {
-      this.commitCron();
+    try {
+      const result = task(state);
+      this.requestCronUpdate(state);
+      return await result;
+    } finally {
+      this.requestCronUpdate(state);
     }
   }
 
@@ -264,18 +217,17 @@ export class CronPage extends LitElement {
       ...draftToCronFormPatch(draft),
     });
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
-    this.commitCron();
+    this.requestCronUpdate();
   }
 
   private async createFromQuickCreate() {
     this.draftToForm();
-    const saved = await addCronJob(this.cron);
+    const saved = await this.runCronTask((state) => addCronJob(state));
     if (saved) {
       this.quickCreateOpen = false;
       this.quickCreateStep = "what";
       this.quickCreateDraft = null;
     }
-    this.commitCron();
   }
 
   private suggestions() {
@@ -325,13 +277,13 @@ export class CronPage extends LitElement {
   private editJob(job: CronJob) {
     this.cron.cronFormCollapsed = false;
     startCronEdit(this.cron, job);
-    this.commitCron();
+    this.requestCronUpdate();
   }
 
   private cloneJob(job: CronJob) {
     this.cron.cronFormCollapsed = false;
     startCronClone(this.cron, job);
-    this.commitCron();
+    this.requestCronUpdate();
   }
 
   override render() {
@@ -366,7 +318,7 @@ export class CronPage extends LitElement {
               this.quickCreateStep = "what";
               this.quickCreateDraft = null;
               this.cron.cronFormCollapsed = false;
-              this.commitCron();
+              this.requestCronUpdate();
             },
           })}
           ${renderCron({
@@ -415,7 +367,7 @@ export class CronPage extends LitElement {
             onFormChange: (patch) => {
               this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
               this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
-              this.commitCron();
+              this.requestCronUpdate();
             },
             onRefresh: () => void this.refreshCron({ tableFilters: true }),
             onAdd: () =>
@@ -429,11 +381,11 @@ export class CronPage extends LitElement {
             onCancelEdit: () => {
               cancelCronEdit(this.cron);
               this.cron.cronFormCollapsed = true;
-              this.commitCron();
+              this.requestCronUpdate();
             },
             onToggleFormCollapsed: (collapsed) => {
               this.cron.cronFormCollapsed = collapsed;
-              this.commitCron();
+              this.requestCronUpdate();
             },
             onToggle: (job, enabled) =>
               void this.runCronTask((state) => toggleCronJob(state, job, enabled)),
