@@ -345,6 +345,12 @@ export function createWhatsAppCallTool(
   return createWhatsAppCallToolWithDependencies(api, context, defaultDependencies);
 }
 
+export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
+  api.registerTool((context) => createWhatsAppCallTool(api, context), {
+    name: "whatsapp_call",
+  });
+}
+
 export const testing = {
   createWhatsAppCallToolWithDependencies,
   normalizeTelephonyPcm,
