@@ -485,8 +485,10 @@ export async function executePreparedCliRun(
   } = await prepareCliPromptImagePayload({
     backend,
     prompt,
+    imagePrompt: params.imagePrompt,
     workspaceDir: context.workspaceDir,
     images: params.images,
+    imageOrder: params.imageOrder,
   });
   prompt = promptWithImages;
 

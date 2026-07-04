@@ -155,10 +155,15 @@ async function executeCompact(
 ): Promise<SlashCommandResult> {
   try {
     const result = await client.request<{
+      ok?: boolean;
       compacted?: boolean;
       reason?: string;
       result?: { tokensBefore?: number; tokensAfter?: number };
     }>("sessions.compact", { key: sessionKey, ...selectedGlobalScope(sessionKey, context) });
+    if (result?.ok !== true) {
+      const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
+      return { content: reason ? `Compaction failed: ${reason}` : "Compaction failed." };
+    }
     if (result?.compacted) {
       const before = result.result?.tokensBefore;
       const after = result.result?.tokensAfter;

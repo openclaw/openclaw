@@ -107,7 +107,9 @@ const mocks = vi.hoisted(() => ({
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
   collectLegacyCronStoreHealthFindings: vi.fn(async (): Promise<readonly HealthFinding[]> => []),
-  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(async () => undefined),
+  collectLegacyWhatsAppCrontabHealthWarning: vi.fn(
+    async (): Promise<string | undefined> => undefined,
+  ),
   maybeRepairLegacyCronStore: vi.fn().mockResolvedValue(undefined),
   noteLegacyWhatsAppCrontabHealthCheck: vi.fn().mockResolvedValue(undefined),
   scanConfiguredChannelPluginBlockers: vi.fn(
@@ -1990,6 +1992,46 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" })],
     });
     expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
+  });
+
+  it("keeps legacy WhatsApp crontab opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const crontabCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/legacy-whatsapp-crontab",
+    );
+    expect(crontabCheck).toMatchObject({ defaultEnabled: false });
+    expect(crontabCheck).toBeDefined();
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [crontabCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectLegacyWhatsAppCrontabHealthWarning).not.toHaveBeenCalled();
+
+    mocks.collectLegacyWhatsAppCrontabHealthWarning.mockResolvedValueOnce(
+      "Legacy WhatsApp crontab health check detected.\nRemove the stale crontab entry.",
+    );
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/legacy-whatsapp-crontab"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-whatsapp-crontab",
+          severity: "warning",
+        }),
+      ],
+    });
+    expect(mocks.collectLegacyWhatsAppCrontabHealthWarning).toHaveBeenCalledTimes(1);
   });
 
   it("keeps channel plugin blockers opt-in for default lint selection", async () => {

@@ -98,6 +98,10 @@
     grid-template-areas:
       "topbar"
       "content";
+    /* The nav collapses to an overlay drawer here, so it no longer reserves a
+       column. Zero the width the docked terminal reads or it would leave a
+       258px gap and waste most of a phone viewport. */
+    --shell-nav-width: 0px;
   }
 
   .shell-nav,

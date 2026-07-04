@@ -758,15 +758,20 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string) {
+function serveResolvedIndexHtml(
+  res: ServerResponse,
+  body: string,
+  basePath?: string,
+  allowWasm?: boolean,
+) {
   const prepared = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
   const hashes = computeInlineScriptHashes(prepared);
-  if (hashes.length > 0) {
-    res.setHeader(
-      "Content-Security-Policy",
-      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
-    );
-  }
+  // Always set the document CSP here (the index carries inline scripts) so the
+  // terminal's WASM relaxation is applied to the page that loads ghostty-web.
+  res.setHeader(
+    "Content-Security-Policy",
+    buildControlUiCspHeader({ inlineScriptHashes: hashes, allowWasm }),
+  );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(prepared);
@@ -921,6 +926,9 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
+  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
+  // when the terminal is enabled (default true).
+  const terminalEnabled = opts?.config?.gateway?.terminal?.enabled ?? true;
   const route = classifyControlUiRequest({
     basePath,
     pathname,
@@ -997,6 +1005,7 @@ export async function handleControlUiHttpRequest(
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
+      terminalEnabled: config?.gateway?.terminal?.enabled ?? true,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -1086,7 +1095,12 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd), basePath);
+        serveResolvedIndexHtml(
+          res,
+          await readOpenedFileText(safeFile.fd),
+          basePath,
+          terminalEnabled,
+        );
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1114,7 +1128,12 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd), basePath);
+      serveResolvedIndexHtml(
+        res,
+        await readOpenedFileText(safeIndex.fd),
+        basePath,
+        terminalEnabled,
+      );
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

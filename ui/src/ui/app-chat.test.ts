@@ -54,6 +54,7 @@ let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQ
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
 let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
+let createChatSessionsLoadOverrides: typeof import("./app-chat.ts").createChatSessionsLoadOverrides;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -70,6 +71,7 @@ async function loadChatHelpers(): Promise<void> {
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
+    createChatSessionsLoadOverrides,
   } = await import("./app-chat.ts"));
 }
 
@@ -247,6 +249,15 @@ async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" 
 describe("refreshChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
+  });
+
+  it("keeps Chat session refreshes active-only when Sessions shows archived rows", () => {
+    expect(createChatSessionsLoadOverrides({ sessionsShowArchived: true })).toMatchObject({
+      activeMinutes: 0,
+      limit: 50,
+      showArchived: false,
+      preserveSessionsViewResult: true,
+    });
   });
 
   it("dispatches chat refresh work without waiting for slow history or metadata RPCs", async () => {
@@ -1487,6 +1498,48 @@ describe("handleSendChat", () => {
       sessionStatus: "killed",
     });
     expect(host.refreshSessionsAfterChat.size).toBe(0);
+  });
+
+  it("keeps a completed reset successful without replacing the Sessions table", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "chat send payload");
+        return { runId: payload.idempotencyKey, status: "ok" };
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([
+          row("agent:main", { hasActiveRun: false, status: "done" }),
+        ]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const archivedSessions = createSessionsResult([
+      row("agent:main:archived", { archived: true, status: "done" }),
+    ]);
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:main",
+      tab: "sessions",
+      sessionsShowArchived: true,
+      sessionsResult: archivedSessions,
+    });
+
+    await handleSendChat(host);
+
+    const runState = host as ChatHost & { lastLocalTerminalReconcile?: unknown };
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "done",
+      sessionKey: "agent:main",
+      sessionStatus: "done",
+    });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "sessions.list")).toBe(true),
+    );
+    expect(host.sessionsResult).toBe(archivedSessions);
   });
 
   it("marks terminal error ACK sends failed instead of accepting the queued message", async () => {

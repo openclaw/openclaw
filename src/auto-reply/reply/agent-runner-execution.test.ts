@@ -465,6 +465,7 @@ function createMockReplyOperation(): {
       terminalRecovery: false,
       phase: "running",
       result: null,
+      hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
       setPhase: vi.fn(),
       updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),

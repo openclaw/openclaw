@@ -28,6 +28,7 @@ import {
   collectPublishablePluginPackages,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
 } from "../scripts/lib/plugin-npm-release.ts";
+import { runPluginClawHubReleaseCheck } from "../scripts/plugin-clawhub-release-check.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -114,6 +115,24 @@ describe("collectClawHubPublishablePluginPackages", () => {
         packageNames: ["@openclaw/demo-plugin"],
       }).map((plugin) => plugin.packageName),
     ).toEqual(["@openclaw/demo-plugin"]);
+  });
+
+  it("collects exact release dependencies that must match npm latest", () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+
+    expect(collectClawHubPublishablePluginPackages(repoDir)).toEqual([
+      expect.objectContaining({
+        packageName: "@openclaw/demo-plugin",
+        requiredLatestDependencies: [
+          {
+            packageName: "demo-runtime",
+            version: "1.2.3",
+          },
+        ],
+      }),
+    ]);
   });
 });
 
@@ -354,6 +373,85 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it("rejects stale required dependencies before querying ClawHub", async () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        resolveLatestVersion: () => "1.2.4",
+        fetchImpl: async () => {
+          throw new Error("ClawHub should not be queried for a stale dependency.");
+        },
+      }),
+    ).rejects.toThrow(
+      '@openclaw/demo-plugin@2026.4.1: demo-runtime must match npm latest for release; found "1.2.3", latest is "1.2.4".',
+    );
+  });
+
+  it("accepts required dependencies matching npm latest", async () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+    const { fetchImpl } = createClawHubPlanFetch({
+      packages: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+        },
+      },
+      trustedPublishers: {
+        "@openclaw/demo-plugin": {
+          status: 200,
+          body: {
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          },
+        },
+      },
+      versions: {
+        "@openclaw/demo-plugin@2026.4.1": 404,
+      },
+    });
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      resolveLatestVersion: () => "1.2.3",
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+    });
+
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual([
+      "@openclaw/demo-plugin",
+    ]);
+  });
+
+  it("fails closed when npm latest cannot be resolved", async () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        resolveLatestVersion: () => {
+          throw new Error("registry unavailable");
+        },
+        fetchImpl: async () => {
+          throw new Error("ClawHub should not be queried when npm latest is unavailable.");
+        },
+      }),
+    ).rejects.toThrow(
+      "@openclaw/demo-plugin@2026.4.1: could not resolve npm latest for demo-runtime: registry unavailable",
+    );
+  });
+
   it("keeps existing trusted packages with missing versions as normal candidates", async () => {
     const repoDir = createTempPluginRepo();
     const { fetchImpl, requests } = createClawHubPlanFetch({
@@ -1053,6 +1151,58 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
   });
 });
 
+describe("runPluginClawHubReleaseCheck", () => {
+  it("rejects stale required dependencies", async () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+
+    await expect(
+      runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
+        rootDir: repoDir,
+        resolveLatestVersion: () => "1.2.4",
+      }),
+    ).rejects.toThrow(
+      '@openclaw/demo-plugin@2026.4.1: demo-runtime must match npm latest for release; found "1.2.3", latest is "1.2.4".',
+    );
+  });
+
+  it("accepts required dependencies matching npm latest", async () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
+          rootDir: repoDir,
+          resolveLatestVersion: () => "1.2.3",
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("fails closed when npm latest cannot be resolved", async () => {
+    const repoDir = createTempPluginRepo({
+      requiredLatestDependencyVersion: "1.2.3",
+    });
+
+    await expect(
+      runPluginClawHubReleaseCheck(["--plugins", "@openclaw/demo-plugin"], {
+        rootDir: repoDir,
+        resolveLatestVersion: () => {
+          throw new Error("registry unavailable");
+        },
+      }),
+    ).rejects.toThrow(
+      "@openclaw/demo-plugin@2026.4.1: could not resolve npm latest for demo-runtime: registry unavailable",
+    );
+  });
+});
+
 describe("buildOpenClawReleaseClawHubRuntimeState", () => {
   it("includes the normal ClawHub run in verifier args when the release waits for it", () => {
     const state = buildOpenClawReleaseClawHubRuntimeState({
@@ -1407,6 +1557,7 @@ function createTempPluginRepo(
     extraExtensionIds?: string[];
     publishToClawHub?: boolean;
     includeClawHubContract?: boolean;
+    requiredLatestDependencyVersion?: string;
   } = {},
 ) {
   const repoDir = makeTempRepoRoot(tempDirs, "openclaw-clawhub-release-");
@@ -1431,6 +1582,13 @@ function createTempPluginRepo(
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
           },
+          ...(options.requiredLatestDependencyVersion
+            ? {
+                dependencies: {
+                  "demo-runtime": options.requiredLatestDependencyVersion,
+                },
+              }
+            : {}),
           openclaw: {
             extensions: ["./index.ts"],
             ...(options.includeClawHubContract === false
@@ -1448,6 +1606,11 @@ function createTempPluginRepo(
             },
             release: {
               publishToClawHub: options.publishToClawHub ?? true,
+              ...(options.requiredLatestDependencyVersion
+                ? {
+                    requireLatestDependencies: ["demo-runtime"],
+                  }
+                : {}),
             },
           },
         },

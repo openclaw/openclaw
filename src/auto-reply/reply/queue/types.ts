@@ -62,6 +62,8 @@ export type FollowupRun = {
   currentInboundContext?: CurrentInboundPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
+  /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
+  queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
   /** Provider message ID, when available (for deduplication). */
@@ -160,8 +162,10 @@ export type FollowupRun = {
   };
 };
 
-export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
-  return run.abortSignal?.aborted === true;
+export function isFollowupRunAborted(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): boolean {
+  return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
 }
 
 const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();

@@ -8,6 +8,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
+import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -35,15 +36,6 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
     return undefined;
   }
   return Math.floor(value);
-}
-
-function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntry {
-  const next = { ...entry };
-  delete next.status;
-  delete next.startedAt;
-  delete next.endedAt;
-  delete next.runtimeMs;
-  return next;
 }
 
 /** Applies run result metadata, usage, and CLI bindings to a session entry. */
@@ -283,14 +275,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
-    : removeLifecycleStateFromMetadataPatch(next);
+    : next;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await patchSessionEntry(
     {
       storePath,
       sessionKey,
     },
-    (_currentEntry, context) => {
+    (currentEntry, context) => {
       if (
         (!preserveUserFacingRunState &&
           context.existingEntry &&
@@ -301,7 +293,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
         // Do not merge stale finalizer metadata after a delete or a competing reset.
         return null;
       }
-      return metadataPatch;
+      return preserveUserFacingRunState
+        ? metadataPatch
+        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),

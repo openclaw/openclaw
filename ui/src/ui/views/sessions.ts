@@ -6,6 +6,7 @@ import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+import { parseAgentSessionKey } from "../session-key.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
@@ -34,6 +35,7 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   showArchived: boolean;
+  mainKey: string;
   filtersCollapsed: boolean;
   basePath: string;
   searchQuery: string;
@@ -66,6 +68,8 @@ export type SessionsProps = {
     key: string,
     patch: {
       label?: string | null;
+      archived?: boolean;
+      pinned?: boolean;
       thinkingLevel?: string | null;
       fastMode?: FastMode | null;
       verboseLevel?: string | null;
@@ -285,6 +289,10 @@ function sortRows(
 ): GatewaySessionRow[] {
   const cmp = dir === "asc" ? 1 : -1;
   return [...rows].toSorted((a, b) => {
+    const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+    if (pinnedDiff !== 0) {
+      return pinnedDiff;
+    }
     let diff = 0;
     switch (column) {
       case "key":
@@ -448,6 +456,12 @@ function sessionDetailItems(params: {
       value: row.archived ? t("common.yes") : t("common.no"),
     });
   }
+  if (typeof row.pinned === "boolean") {
+    details.push({
+      label: t("sessionsView.pinned"),
+      value: row.pinned ? t("common.yes") : t("common.no"),
+    });
+  }
   return details;
 }
 
@@ -503,7 +517,7 @@ export function renderSessions(props: SessionsProps) {
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");
-  const showArchivedTooltip = t("sessionsView.showArchivedTooltip");
+  const showArchivedTooltip = t("sessionsView.archivedOnlyTooltip");
   const filtersExpanded = !props.filtersCollapsed;
   const filterPanelTitle = t("sessionsView.filters");
   const filterToggleLabel = filtersExpanded
@@ -638,7 +652,7 @@ export function renderSessions(props: SessionsProps) {
                   ${renderFilterToggle({
                     name: "showArchived",
                     checked: props.showArchived,
-                    label: t("sessionsView.showArchived"),
+                    label: t("sessionsView.archivedOnly"),
                     title: showArchivedTooltip,
                     extraClass: "session-archive-toggle",
                     onChange: (checked) =>
@@ -829,6 +843,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
   const keyParts = parseSessionKeyParts(row.key);
+  const isMainSession =
+    row.key === "main" ||
+    parseAgentSessionKey(row.key)?.rest === normalizeLowercaseStringOrEmpty(props.mainKey);
   const agentIdentity = keyParts
     ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
     : null;
@@ -1052,6 +1069,39 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         </select>
       </td>
       <td>
+        <button
+          class="icon-btn"
+          title=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+          aria-label=${row.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+          ?disabled=${props.loading || row.archived === true}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            props.onPatch(row.key, { pinned: row.pinned !== true });
+          }}
+        >
+          ${row.pinned ? icons.pinOff : icons.pin}
+        </button>
+        <button
+          class="icon-btn"
+          title=${row.archived
+            ? t("sessionsView.restoreSession")
+            : t("sessionsView.archiveSession")}
+          aria-label=${row.archived
+            ? t("sessionsView.restoreSession")
+            : t("sessionsView.archiveSession")}
+          ?disabled=${props.loading ||
+          (!row.archived &&
+            (isMainSession ||
+              row.hasActiveRun === true ||
+              row.kind === "global" ||
+              row.kind === "unknown"))}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            props.onPatch(row.key, { archived: row.archived !== true });
+          }}
+        >
+          ${row.archived ? icons.archiveRestore : icons.archive}
+        </button>
         ${props.onAddToWorkboard && canLink
           ? html`
               <button

@@ -93,6 +93,8 @@ export type AppViewState = {
   userAvatar?: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
+  /** Whether the gateway advertises the operator terminal as enabled. */
+  terminalEnabled: boolean;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
   sessionKey: string;
@@ -142,6 +144,8 @@ export type AppViewState = {
   chatSessionPickerError: string | null;
   chatSessionPickerResult: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
+  sessionsResultShowArchived?: boolean;
+  selectedChatSessionArchived?: boolean;
   chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];

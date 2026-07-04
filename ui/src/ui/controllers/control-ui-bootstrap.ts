@@ -38,6 +38,7 @@ export type ControlUiBootstrapState = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
+  terminalEnabled?: boolean;
   sessionKey?: string | null;
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
@@ -188,6 +189,20 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    // Default true when older gateways omit the flag; only an explicit false hides it.
+    const terminalEnabled = parsed.terminalEnabled !== false;
+    if (terminalEnabled && state.terminalEnabled === false) {
+      // Only a refetch (reconnect after the enabling gateway restart) can flip
+      // an explicit false to true, which means the document was served while
+      // the terminal was disabled and its CSP lacks ghostty-web's WASM
+      // allowances. Headers cannot change on a live document, so reload once
+      // to pick up the relaxed policy; the enabled->disabled direction just
+      // hides the panel and needs no reload. Loop-safe: after the reload the
+      // flag starts true, so this branch cannot fire again.
+      window.location.reload();
+      return;
+    }
+    state.terminalEnabled = terminalEnabled;
     applyControlUiSeamColor(parsed.seamColor);
     setUiTimeFormatPreference(parsed.timeFormat);
   } catch {

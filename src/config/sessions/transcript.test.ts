@@ -1359,6 +1359,57 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(fs.existsSync(replacementSessionFile)).toBe(false);
   });
 
+  it("rejects a concurrent lifecycle owner change without a session id rotation", async () => {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          lifecycleRevision: "original-revision",
+          chatType: "direct",
+          channel: "discord",
+        },
+      }),
+      "utf-8",
+    );
+    let releaseOwnerChange = () => {};
+    const ownerChangeGate = new Promise<void>((resolve) => {
+      releaseOwnerChange = resolve;
+    });
+    let markOwnerChangeStarted = () => {};
+    const ownerChangeStarted = new Promise<void>((resolve) => {
+      markOwnerChangeStarted = resolve;
+    });
+    const ownerChange = updateSessionStoreEntry({
+      storePath: fixture.storePath(),
+      sessionKey,
+      update: async () => {
+        markOwnerChangeStarted();
+        await ownerChangeGate;
+        return { lifecycleRevision: "replacement-revision" };
+      },
+    });
+    await ownerChangeStarted;
+
+    const append = appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedSessionId: sessionId,
+      expectedLifecycleRevision: "original-revision",
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseOwnerChange();
+
+    await ownerChange;
+    await expect(append).resolves.toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
+  });
+
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {
     writeTranscriptStore();
     const idempotencyKey = "mirror:concurrent-assistant";

@@ -95,7 +95,7 @@ export type PublishablePluginPackageCandidate<
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
-function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
+export function collectRequiredLatestDependencies(packageJson: PluginPackageJson): {
   dependencies: RequiredLatestDependency[];
   errors: string[];
 } {
@@ -650,8 +650,9 @@ export function collectPluginReleaseDependencyFreshnessErrors(
 export function assertPluginReleaseDependencyFreshness(
   plugins: readonly PublishablePluginPackage[],
   label: string,
+  resolveLatestVersion: NpmLatestVersionResolver = resolveNpmLatestVersion,
 ): void {
-  const errors = collectPluginReleaseDependencyFreshnessErrors(plugins);
+  const errors = collectPluginReleaseDependencyFreshnessErrors(plugins, resolveLatestVersion);
   if (errors.length === 0) {
     return;
   }
