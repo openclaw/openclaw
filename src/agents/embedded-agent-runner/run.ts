@@ -134,6 +134,7 @@ import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { AgentSessionLaneBusyError } from "../session-lane-busy.js";
 import {
   resolveSessionSuspensionReason,
   resolveSessionSuspensionTarget,
@@ -705,8 +706,8 @@ async function runEmbeddedAgentInternal(
     }
     return {
       ...opts,
-      onWait: (waitMs, queuedAhead) => {
-        opts?.onWait?.(waitMs, queuedAhead);
+      onWait: (waitMs, queuedAhead, info) => {
+        opts?.onWait?.(waitMs, queuedAhead, info);
         params.onLaneWait?.({ waitMs, queuedAhead, waiting: true });
       },
     } satisfies CommandQueueEnqueueOptions;
@@ -768,7 +769,17 @@ async function runEmbeddedAgentInternal(
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
+    const sessionOpts: CommandQueueEnqueueOptions = {
+      ...opts,
+      priority: sessionQueuePriority,
+      ...(params.failOnSessionLaneWait === true
+        ? {
+            warnAfterMs: opts?.warnAfterMs ?? params.timeoutMs,
+            rejectOnWait: (info) =>
+              opts?.rejectOnWait?.(info) ?? new AgentSessionLaneBusyError(info),
+          }
+        : {}),
+    };
     const taskWithLaneAdmission = () => {
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       return task();

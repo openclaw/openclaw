@@ -833,6 +833,7 @@ export function runAgentAttempt(params: {
     // Hidden internal runs have no assistant-event consumer. Visible subagent
     // lanes can still feed Control UI, session subscribers, and ACP parent relays.
     suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
+    failOnSessionLaneWait: params.opts.failOnSessionLaneWait,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,

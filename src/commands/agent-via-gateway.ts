@@ -9,6 +9,11 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  AGENT_SESSION_LANE_BUSY_CODE,
+  formatAgentSessionLaneBusyMessage,
+  normalizeAgentSessionLaneBusyDetails,
+} from "../agents/session-lane-busy.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -17,7 +22,6 @@ import {
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -28,6 +32,7 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -55,6 +60,8 @@ type GatewayAgentResponse = {
   runId?: string;
   status?: string;
   summary?: string;
+  errorCode?: string;
+  laneWait?: unknown;
   result?: AgentGatewayResult;
   deliveryStatus?: unknown;
 };
@@ -679,6 +686,14 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
     : "Agent run is already in flight; not starting a duplicate run.";
 }
 
+function resolveGatewayAgentLaneBusyMessage(response: GatewayAgentResponse): string | undefined {
+  if (response.errorCode !== AGENT_SESSION_LANE_BUSY_CODE) {
+    return undefined;
+  }
+  const details = normalizeAgentSessionLaneBusyDetails(response.laneWait);
+  return details ? formatAgentSessionLaneBusyMessage(details) : response.summary;
+}
+
 async function agentViaGatewayCommand(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
@@ -771,6 +786,7 @@ async function agentViaGatewayCommand(
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
             cleanupBundleMcpOnRunEnd: true,
+            sourceCliLaneBusyRejection: true,
             idempotencyKey,
           },
           expectFinal: true,
@@ -835,6 +851,9 @@ async function agentViaGatewayCommand(
 
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
+    if (resolveGatewayAgentLaneBusyMessage(response)) {
+      runtime.exit(1);
+    }
     return response;
   }
 
@@ -843,6 +862,13 @@ async function agentViaGatewayCommand(
 
   if (isInFlightGatewayAgentResponse(response)) {
     runtime.error?.(formatInFlightGatewayAgentMessage(response));
+    return response;
+  }
+
+  const laneBusyMessage = resolveGatewayAgentLaneBusyMessage(response);
+  if (laneBusyMessage) {
+    runtime.error?.(laneBusyMessage);
+    runtime.exit(1);
     return response;
   }
 

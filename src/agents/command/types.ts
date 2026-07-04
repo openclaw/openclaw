@@ -136,6 +136,8 @@ export type AgentCommandOpts = {
   disableMessageTool?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
+  /** Internal CLI relay runs can fail stale queued turns when session-lane wait exceeds threshold. */
+  failOnSessionLaneWait?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Resolved per-run fast mode from channel/directive handling. */
