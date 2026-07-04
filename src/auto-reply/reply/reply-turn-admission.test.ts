@@ -16,7 +16,7 @@ import {
 } from "./reply-run-registry.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createDeferred() {
   let resolve = () => {};

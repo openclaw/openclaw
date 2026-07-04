@@ -70,7 +70,7 @@ vi.mock("../../routing/session-key.js", () => ({
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {

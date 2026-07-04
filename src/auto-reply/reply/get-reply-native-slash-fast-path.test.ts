@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
@@ -20,7 +20,7 @@ vi.mock("./commands.runtime.js", () => ({
 const { maybeResolveNativeSlashCommandFastReply } =
   await import("./get-reply-native-slash-fast-path.js");
 
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},

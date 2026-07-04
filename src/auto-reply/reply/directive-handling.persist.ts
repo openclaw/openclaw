@@ -299,12 +299,10 @@ export async function persistInlineDirectives(params: {
         if (runtimeOverride?.kind === "clear") {
           if (sessionEntry.agentRuntimeOverride) {
             delete sessionEntry.agentRuntimeOverride;
-            updated = true;
           }
         } else if (runtimeOverride?.kind === "set") {
           if (sessionEntry.agentRuntimeOverride) {
             delete sessionEntry.agentRuntimeOverride;
-            updated = true;
           }
           modelRuntimeEvent = {
             text: `Ignored session runtime ${runtimeOverride.runtime}; configure provider or model runtime policy instead.`,
@@ -313,7 +311,6 @@ export async function persistInlineDirectives(params: {
         } else if (runtimeOverride?.kind === "invalid") {
           if (sessionEntry.agentRuntimeOverride) {
             delete sessionEntry.agentRuntimeOverride;
-            updated = true;
           }
           modelRuntimeEvent = {
             text: `Ignored unsupported runtime ${runtimeOverride.runtime} for ${modelResolution.modelSelection.provider}.`,
@@ -348,7 +345,6 @@ export async function persistInlineDirectives(params: {
               provider,
               model,
             };
-            updated = true;
           }
         }
         const nextLabel = `${provider}/${model}`;
@@ -391,7 +387,6 @@ export async function persistInlineDirectives(params: {
         if (persistence.status === "current") {
           const persistedEntry = persistence.entry;
           sessionStore[sessionKey] = persistedEntry;
-          appliedSessionEntry = persistedEntry;
           sessionChangesApplied = sessionSnapshotChangesApplied({
             initial: initialSessionEntry,
             next: sessionEntry,

@@ -85,6 +85,7 @@ import {
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
@@ -99,7 +100,6 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { isAbortError } from "../../infra/abort-signal.js";
 import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
@@ -1873,10 +1873,16 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (lifecycleRotatedDuringAdmission || !resolvedSessionKey) {
           return;
         }
-        const latestEntry = loadSessionEntry(resolvedSessionKey, {
+        let latestEntry = loadSessionEntry(resolvedSessionKey, {
           ...(resolvedSessionKey === "global" ? { agentId: admissionAgentId() } : {}),
           clone: false,
         }).entry;
+        // Legacy stores may only carry the requested spelling (e.g. bare
+        // "main"); a canonical-only re-read would misreport those sessions
+        // as deleted mid-start.
+        if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
+          latestEntry = loadSessionEntry(requestedSessionKey, { clone: false }).entry;
+        }
         if (sessionPersistedBeforeGatewayAdmission && !latestEntry) {
           throw new Error(
             `Session "${resolvedSessionKey}" was deleted while starting work. Retry.`,
@@ -2551,7 +2557,11 @@ export const agentHandlers: GatewayRequestHandlers = {
                 );
                 // A completed delete must win over this request's earlier read;
                 // otherwise the initial touch would recreate the removed row.
-                if (entry && !initialEntry) {
+                // The row counts as deleted only when both the requested and
+                // canonical alias sets miss it: exec-approval followups read
+                // under the canonical key while legacy stores may only carry
+                // the requested spelling (e.g. bare "main").
+                if (entry && !preMigrationEntry && !initialEntry) {
                   deletedDuringStoreUpdateError = `Session "${canonicalSessionKey}" was deleted while starting work. Retry.`;
                   throw new Error(deletedDuringStoreUpdateError);
                 }

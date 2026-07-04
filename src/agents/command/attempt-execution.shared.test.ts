@@ -1,7 +1,7 @@
 // Covers shared attempt-execution helpers for prompt materialization and
 // guarded session-store persistence.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearSessionStoreCacheForTest,
@@ -20,7 +20,7 @@ import {
 } from "./attempt-execution.shared.js";
 import type { AgentCommandOpts } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeTaskCompletionEvents(): NonNullable<AgentCommandOpts["internalEvents"]> {
   // The result deliberately contains internal markers to prove child output

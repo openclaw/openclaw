@@ -1195,7 +1195,9 @@ describe("maybeCompactCodexAppServerSession", () => {
 
     const outcome = await Promise.race([
       startCompaction(sessionFile).then(() => "settled" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 20);
+      }),
     ]);
 
     expect(outcome).toBe("pending");

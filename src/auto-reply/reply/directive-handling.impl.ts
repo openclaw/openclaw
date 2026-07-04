@@ -515,7 +515,6 @@ export async function handleDirectiveOnly(
       if (persistence.status === "current") {
         const persistedEntry = persistence.entry;
         sessionStore[sessionKey] = persistedEntry;
-        appliedSessionEntry = persistedEntry;
         sessionChangesApplied = sessionSnapshotChangesApplied({
           initial: initialSessionEntry,
           next: sessionEntry,

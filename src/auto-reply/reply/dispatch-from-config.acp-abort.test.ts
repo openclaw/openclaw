@@ -887,8 +887,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
 
     await hookStartedPromise;
-    expect(hookAbortSignal).toBe(existingOperation.abortSignal);
+    // The hook signal composes the operation signal with lifecycle/upstream
+    // signals, so assert propagation instead of instance identity.
+    expect(hookAbortSignal?.aborted).toBe(false);
     expect(replyRunRegistry.abort("agent:already-active-reply-dispatch")).toBe(true);
+    expect(existingOperation.abortSignal.aborted).toBe(true);
+    expect(hookAbortSignal?.aborted).toBe(true);
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
