@@ -1639,6 +1639,162 @@ describe("renderWorkboard", () => {
     }
   });
 
+  it("renders action buttons in the detail drawer for writable cards", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Test action buttons",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        "button[aria-label='View details']",
+      );
+      expect(launcher).toBeInstanceOf(HTMLButtonElement);
+      launcher?.click();
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-detail-drawer")).toBeInstanceOf(HTMLElement);
+      expect(
+        container.querySelector<HTMLButtonElement>('button[title="Edit card"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+      expect(
+        container.querySelector<HTMLButtonElement>('button[title="Archive card"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+      expect(
+        container.querySelector<HTMLButtonElement>('button[title="Delete card"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("hides action buttons in the detail drawer for read-only cards", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Read-only card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      canWrite: false,
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        "button[aria-label='View details']",
+      );
+      launcher?.click();
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-detail-drawer")).toBeInstanceOf(HTMLElement);
+      expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')).toBeNull();
+      expect(container.querySelector<HTMLButtonElement>('button[title="Archive card"]')).toBeNull();
+      expect(container.querySelector<HTMLButtonElement>('button[title="Delete card"]')).toBeNull();
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
+  it("hides the edit button and shows unarchive for archived cards in the detail drawer", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.showArchived = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Archived card",
+        status: "done",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: { archivedAt: Date.now() },
+      },
+    ];
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+      onRequestUpdate: () => renderInto(container, props),
+    };
+
+    try {
+      renderInto(container, props);
+      const launcher = container.querySelector<HTMLButtonElement>(
+        "button[aria-label='View details']",
+      );
+      launcher?.click();
+      await nextFrame();
+
+      expect(container.querySelector(".workboard-detail-drawer")).toBeInstanceOf(HTMLElement);
+      expect(container.querySelector<HTMLButtonElement>('button[title="Edit card"]')).toBeNull();
+      expect(
+        container.querySelector<HTMLButtonElement>('button[title="Restore from archive"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+      expect(container.querySelector<HTMLButtonElement>('button[title="Archive card"]')).toBeNull();
+      expect(
+        container.querySelector<HTMLButtonElement>('button[title="Delete card"]'),
+      ).toBeInstanceOf(HTMLButtonElement);
+    } finally {
+      render(nothing, container);
+      container.remove();
+    }
+  });
+
   it("does not restore focus to a disconnected modal opener", async () => {
     const host = {};
     const state = getWorkboardState(host);

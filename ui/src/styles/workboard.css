@@ -1501,6 +1501,18 @@
   justify-content: center;
 }
 
+.workboard-detail__actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workboard-detail__actions-row .btn {
+  flex: 0 0 auto;
+  justify-content: center;
+  min-width: 0;
+}
+
 @media (max-width: 860px) {
   .workboard-modal {
     padding: 0;

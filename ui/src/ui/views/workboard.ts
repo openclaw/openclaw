@@ -1883,6 +1883,14 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const events = (card.events ?? []).slice(-6).toReversed();
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const showStartControls = writable && cardCanStart(state, props.sessions, card);
+  const session = findWorkboardSession(card, props.sessions);
+  const activeTask = cardHasActiveOrRunningUnresolvedTask(card, task, state.missingTaskIds);
+  const live =
+    activeTask ||
+    cardHasUnresolvedStartedRun(card) ||
+    session?.hasActiveRun === true ||
+    (session?.hasActiveRun !== false && session?.status === "running");
+  const archived = Boolean(card.metadata?.archivedAt);
   const dependencies = getWorkboardDependencyState(card, state.cards);
   return html`
     <aside
@@ -2085,6 +2093,92 @@ function renderCardDetailsPanel(props: WorkboardProps) {
         </section>
 
         <div class="workboard-detail__actions">
+          ${writable ? renderCardMoveControl(props, card, busy) : nothing}
+          <div class="workboard-detail__actions-row">
+            ${writable && (linkedSessionKey ? live : activeTask)
+              ? html`
+                  <button
+                    class="btn btn--icon"
+                    type="button"
+                    title=${t("workboard.stopSession")}
+                    aria-label=${t("workboard.stopSession")}
+                    ?disabled=${busy || !props.connected}
+                    @click=${() =>
+                      stopWorkboardCard({
+                        host: props.host,
+                        client: props.client,
+                        card,
+                        requestUpdate: props.onRequestUpdate,
+                      })}
+                  >
+                    ${icons.stop}<span>${t("workboard.stopSession")}</span>
+                  </button>
+                `
+              : nothing}
+            ${writable && !archived
+              ? html`
+                  <button
+                    class="btn btn--icon"
+                    type="button"
+                    title=${t("workboard.editCard")}
+                    aria-label=${t("workboard.editCard")}
+                    ?disabled=${state.dispatching}
+                    @click=${(event: MouseEvent) => {
+                      rememberWorkboardReturnFocus(event.currentTarget);
+                      openEditModal(state, card);
+                      props.onRequestUpdate?.();
+                    }}
+                  >
+                    ${icons.edit}<span>${t("workboard.editCard")}</span>
+                  </button>
+                `
+              : nothing}
+            ${writable
+              ? html`
+                  <button
+                    class="btn btn--icon"
+                    type="button"
+                    title=${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}
+                    aria-label=${archived
+                      ? t("workboard.unarchiveCard")
+                      : t("workboard.archiveCard")}
+                    ?disabled=${busy}
+                    @click=${() =>
+                      archiveWorkboardCard({
+                        host: props.host,
+                        client: props.client,
+                        cardId: card.id,
+                        archived: !archived,
+                        requestUpdate: props.onRequestUpdate,
+                      })}
+                  >
+                    ${archived ? icons.archiveRestore : icons.archive}<span
+                      >${archived ? t("workboard.unarchiveCard") : t("workboard.archiveCard")}</span
+                    >
+                  </button>
+                `
+              : nothing}
+            ${writable
+              ? html`
+                  <button
+                    class="btn btn--icon workboard-card__delete"
+                    type="button"
+                    title=${t("workboard.deleteCard")}
+                    aria-label=${t("workboard.deleteCard")}
+                    ?disabled=${busy}
+                    @click=${() =>
+                      deleteWorkboardCard({
+                        host: props.host,
+                        client: props.client,
+                        cardId: card.id,
+                        requestUpdate: props.onRequestUpdate,
+                      })}
+                  >
+                    ${icons.trash}<span>${t("workboard.deleteCard")}</span>
+                  </button>
+                `
+              : nothing}
+          </div>
           ${linkedSessionKey
             ? html`
                 <button
