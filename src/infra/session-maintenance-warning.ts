@@ -31,6 +31,7 @@ function resetSessionMaintenanceWarningForTests() {
 }
 
 export const testing = {
+  buildWarningContextForTests: buildWarningContext,
   resetSessionMaintenanceWarningForTests,
 } as const;
 
@@ -44,13 +45,11 @@ function buildWarningContext(params: WarningParams): string {
   const { warning } = params;
   return [
     warning.activeSessionKey,
-    warning.pruneAfterMs,
-    warning.maxEntries,
+    String(warning.pruneAfterMs),
+    String(warning.maxEntries),
     warning.wouldPrune ? "prune" : "",
     warning.wouldCap ? "cap" : "",
-  ]
-    .filter(Boolean)
-    .join("|");
+  ].join("|");
 }
 
 function formatDuration(ms: number): string {

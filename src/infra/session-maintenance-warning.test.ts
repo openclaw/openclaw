@@ -33,6 +33,7 @@ vi.mock("./outbound/deliver.js", () => ({
 type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
+let buildWarningContextForTests: SessionMaintenanceWarningModule["testing"]["buildWarningContextForTests"];
 let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["testing"]["resetSessionMaintenanceWarningForTests"];
 
 function createParams(
@@ -94,7 +95,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     }));
     ({
       deliverSessionMaintenanceWarning,
-      testing: { resetSessionMaintenanceWarningForTests },
+      testing: { buildWarningContextForTests, resetSessionMaintenanceWarningForTests },
     } = await import("./session-maintenance-warning.js"));
   });
 
@@ -147,6 +148,22 @@ describe("deliverSessionMaintenanceWarning", () => {
     await deliverSessionMaintenanceWarning(params);
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves zero-valued warning fields in the dedupe context", () => {
+    const sessionKey = `agent:${randomUUID()}:main`;
+    const params = createParams({
+      sessionKey,
+      warning: {
+        activeSessionKey: sessionKey,
+        pruneAfterMs: 0,
+        maxEntries: 10,
+        wouldPrune: true,
+        wouldCap: false,
+      } as never,
+    });
+
+    expect(buildWarningContextForTests(params)).toBe(`${sessionKey}|0|10|prune|`);
   });
 
   it("falls back to a system event when the last target is not deliverable", async () => {
