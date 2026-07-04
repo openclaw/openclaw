@@ -2136,9 +2136,18 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     });
     expect(claimed).toHaveLength(1);
 
-    expect(requeueReleasedPostCompactionDelegate(claimed[0]!)).toBe(true);
+    const delegate = claimed[0];
+    expect(delegate).toBeDefined();
+    if (!delegate) {
+      throw new Error("expected claimed post-compaction delegate");
+    }
+    expect(requeueReleasedPostCompactionDelegate(delegate)).toBe(true);
 
-    const flowId = claimed[0]?.flowId as string;
+    const flowId = delegate.flowId;
+    expect(flowId).toBeDefined();
+    if (!flowId) {
+      throw new Error("expected claimed delegate flow id");
+    }
     expect(mockFlows.get(flowId)).toMatchObject({ status: "queued" });
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
     expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
