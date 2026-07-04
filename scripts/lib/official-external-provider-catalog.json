@@ -1201,7 +1201,8 @@
               "llm"
             ],
             "envVars": [
-              "TOKENHUB_API_KEY"
+              "TOKENHUB_API_KEY",
+              "TENCENT_TOKENHUB_API_KEY"
             ],
             "authChoices": [
               {
@@ -1216,6 +1217,52 @@
                 "cliFlag": "--tokenhub-api-key",
                 "cliOption": "--tokenhub-api-key <key>",
                 "cliDescription": "Tencent TokenHub API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key-tencent",
+                "choiceId": "tencent-tokenhub-api-key",
+                "choiceLabel": "Tencent TokenHub",
+                "choiceHint": "Hy via Tencent TokenHub Gateway",
+                "groupId": "tencent",
+                "groupLabel": "Tencent Cloud",
+                "groupHint": "Tencent TokenHub",
+                "optionKey": "tencentTokenHubApiKey",
+                "cliFlag": "--tencent-tokenhub-api-key",
+                "cliOption": "--tencent-tokenhub-api-key <key>",
+                "cliDescription": "Tencent TokenHub API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "tencent-tokenplan",
+            "name": "Tencent TokenPlan",
+            "docs": "/providers/tencent",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TENCENT_TOKENPLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "tencent-tokenplan-api-key",
+                "choiceLabel": "Tencent TokenPlan",
+                "choiceHint": "Hy via Tencent TokenPlan Gateway",
+                "groupId": "tencent",
+                "groupLabel": "Tencent Cloud",
+                "groupHint": "Tencent TokenPlan",
+                "optionKey": "tencentTokenPlanApiKey",
+                "cliFlag": "--tencent-tokenplan-api-key",
+                "cliOption": "--tencent-tokenplan-api-key <key>",
+                "cliDescription": "Tencent TokenPlan API key",
                 "onboardingScopes": [
                   "text-inference"
                 ]

@@ -1,4 +1,5 @@
 // Tencent tests cover index plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
@@ -53,24 +54,70 @@ function hyReasoningModel(params: {
   } as OpenAICompletionsModel;
 }
 
+function captureTencentPayload(params: {
+  provider: Awaited<ReturnType<typeof getTokenHubProvider>>;
+  model: OpenAICompletionsModel;
+  reasoning: string;
+}) {
+  let captured: Record<string, unknown> | undefined;
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    const payload = { reasoning_effort: "high" };
+    options?.onPayload?.(payload, _model);
+    captured = payload;
+    return {} as ReturnType<StreamFn>;
+  };
+  const wrapped = params.provider.wrapStreamFn?.({
+    streamFn: baseStreamFn,
+    provider: params.model.provider,
+    modelId: params.model.id,
+    model: params.model,
+    thinkingLevel: "high",
+  });
+  if (!wrapped) {
+    throw new Error("expected Tencent provider stream wrapper");
+  }
+  void wrapped(
+    params.model,
+    { messages: [] } as never,
+    {
+      reasoning: params.reasoning,
+    } as never,
+  );
+  return captured;
+}
+
 describe("tencent provider plugin", () => {
-  it("registers Tencent TokenHub api-key auth metadata", async () => {
+  it("preserves Tencent TokenHub legacy api-key auth metadata", async () => {
     const { providers } = await registerTencentPlugin();
     const provider = requireRegisteredProvider(providers, "tencent-tokenhub");
     const resolved = resolveProviderPluginChoice({
       providers,
-      choice: "tencent-tokenhub-api-key",
+      choice: "tokenhub-api-key",
     });
 
     expect(provider.id).toBe("tencent-tokenhub");
     expect(provider.label).toBe("Tencent TokenHub");
-    expect(provider.envVars).toEqual(["TENCENT_TOKENHUB_API_KEY"]);
-    expect(provider.auth).toHaveLength(1);
+    expect(provider.envVars).toEqual(["TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY"]);
+    expect(provider.auth).toHaveLength(2);
     if (!resolved) {
       throw new Error("expected Tencent TokenHub api-key auth choice");
     }
     expect(resolved.provider.id).toBe("tencent-tokenhub");
     expect(resolved.method.id).toBe("api-key");
+  });
+
+  it("registers Tencent TokenHub prefixed api-key auth alias", async () => {
+    const { providers } = await registerTencentPlugin();
+    const resolved = resolveProviderPluginChoice({
+      providers,
+      choice: "tencent-tokenhub-api-key",
+    });
+
+    if (!resolved) {
+      throw new Error("expected Tencent TokenHub prefixed api-key auth choice");
+    }
+    expect(resolved.provider.id).toBe("tencent-tokenhub");
+    expect(resolved.method.id).toBe("api-key-tencent");
   });
 
   it("registers Tencent TokenPlan api-key auth metadata", async () => {
@@ -92,9 +139,8 @@ describe("tencent provider plugin", () => {
     expect(resolved.method.id).toBe("api-key");
   });
 
-  it("does not resolve legacy short-name auth choices (manifest is source of truth)", async () => {
+  it("does not resolve removed TokenPlan short-name auth choice", async () => {
     const { providers } = await registerTencentPlugin();
-    expect(resolveProviderPluginChoice({ providers, choice: "tokenhub-api-key" })).toBeNull();
     expect(resolveProviderPluginChoice({ providers, choice: "tokenplan-api-key" })).toBeNull();
   });
 
@@ -117,7 +163,7 @@ describe("tencent provider plugin", () => {
     const hy3Preview = catalogProvider.models?.find((m) => m.id === "hy3-preview");
     expect(hy3Preview?.reasoning).toBe(true);
     expect(hy3Preview?.compat?.supportsReasoningEffort).toBe(true);
-    expect(hy3Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "high"]);
+    expect(hy3Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
   });
 
   it("builds the static Tencent TokenPlan model catalog with reasoning flags", async () => {
@@ -193,5 +239,22 @@ describe("tencent provider plugin", () => {
     const payload = buildOpenAICompletionsParams(model, context, undefined);
 
     expect(payload.reasoning_effort).toBe("high");
+  });
+
+  it("preserves low reasoning_effort for TokenHub hy3-preview", async () => {
+    const provider = await getTokenHubProvider();
+    const model = hyReasoningModel({
+      provider: "tencent-tokenhub",
+      id: "hy3-preview",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+    });
+
+    const payload = captureTencentPayload({
+      provider,
+      model,
+      reasoning: "low",
+    });
+
+    expect(payload?.reasoning_effort).toBe("low");
   });
 });

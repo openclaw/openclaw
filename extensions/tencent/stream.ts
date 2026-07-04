@@ -37,9 +37,18 @@ function resolveRequestedEffort(
   return raw ? raw.trim().toLowerCase() : undefined;
 }
 
-function mapEffortForTencent(effort: string | undefined): string | undefined {
+function mapEffortForTencent(model: StreamModel, effort: string | undefined): string | undefined {
   if (!effort) {
     return undefined;
+  }
+  // TokenHub hy3-preview advertises low reasoning; mapping it to none would
+  // silently discard the user-selected preview effort.
+  if (
+    (model as { provider?: unknown }).provider === TOKENHUB_PROVIDER_ID &&
+    (model as { id?: unknown }).id === "hy3-preview" &&
+    effort === "low"
+  ) {
+    return "low";
   }
   return TENCENT_REASONING_EFFORT_MAP[effort];
 }
@@ -57,9 +66,9 @@ function isTencentCompletionsCall(model: StreamModel): boolean {
 export function wrapTencentProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   return createPayloadPatchStreamWrapper(
     ctx.streamFn,
-    ({ payload, options }) => {
+    ({ payload, model, options }) => {
       const requested = resolveRequestedEffort(ctx.thinkingLevel, options);
-      const mapped = mapEffortForTencent(requested);
+      const mapped = mapEffortForTencent(model, requested);
 
       if (mapped === undefined) {
         return;

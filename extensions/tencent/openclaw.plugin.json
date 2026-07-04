@@ -51,7 +51,7 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "high"]
+              "supportedReasoningEfforts": ["none", "low", "high"]
             }
           },
           {
@@ -98,7 +98,7 @@
     "providers": [
       {
         "id": "tencent-tokenhub",
-        "envVars": ["TENCENT_TOKENHUB_API_KEY"]
+        "envVars": ["TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY"]
       },
       {
         "id": "tencent-tokenplan",
@@ -110,6 +110,19 @@
     {
       "provider": "tencent-tokenhub",
       "method": "api-key",
+      "choiceId": "tokenhub-api-key",
+      "choiceLabel": "Tencent TokenHub",
+      "groupId": "tencent",
+      "groupLabel": "Tencent Cloud",
+      "groupHint": "Tencent TokenHub",
+      "optionKey": "tokenhubApiKey",
+      "cliFlag": "--tokenhub-api-key",
+      "cliOption": "--tokenhub-api-key <key>",
+      "cliDescription": "Tencent TokenHub API key"
+    },
+    {
+      "provider": "tencent-tokenhub",
+      "method": "api-key-tencent",
       "choiceId": "tencent-tokenhub-api-key",
       "choiceLabel": "Tencent TokenHub",
       "groupId": "tencent",
