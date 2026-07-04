@@ -220,6 +220,31 @@ describe("user turn transcript persistence", () => {
       ).toBe(blocked);
     });
 
+    it("preserves runtime multimodal content while merging prepared metadata", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "canonical image caption", timestamp: 123 },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+      const runtimeContent = [
+        { type: "text", text: "canonical image caption" },
+        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      ];
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: runtimeContent,
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        role: "user",
+        content: runtimeContent,
+        timestamp: 123,
+      });
+    });
+
     it("does not apply prepared user metadata to assistant messages", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "display prompt" },
