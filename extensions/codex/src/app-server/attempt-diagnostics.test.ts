@@ -142,6 +142,7 @@ describe("Codex app-server attempt diagnostics", () => {
         stopReason: "toolUse",
         outputContentBlocks: 2,
         outputToolCalls: 1,
+        contextOverflowDetected: false,
         usage: {
           input: 80,
           output: 0,
@@ -152,5 +153,60 @@ describe("Codex app-server attempt diagnostics", () => {
       }),
     );
     expect(JSON.stringify(completedEvent)).not.toContain("secret-call-id");
+  });
+
+  it("emits terminal facts on context overflow errors", () => {
+    emitTrustedDiagnosticEventWithPrivateData.mockClear();
+    const emitter = createCodexModelCallDiagnosticEmitter({
+      baseFields: {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        contextTokenBudget: 100,
+      },
+      capture: {},
+      tools: [],
+      buildInputMessages: () => [],
+      buildSystemPrompt: () => undefined,
+      now: () => 10,
+    });
+
+    emitter.emitStarted();
+    emitter.emitError("Codex ran out of room in the model's context window", {
+      contextOverflowDetected: true,
+      result: {
+        attemptUsage: {
+          input: 80,
+          output: 0,
+          cacheRead: 19,
+          cacheWrite: 0,
+          total: 99,
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          content: [],
+        },
+      },
+    });
+
+    const errorEvent = emitTrustedDiagnosticEventWithPrivateData.mock.calls[1]?.[0];
+    expect(errorEvent).toEqual(
+      expect.objectContaining({
+        type: "model.call.error",
+        stopReason: "error",
+        outputContentBlocks: 0,
+        outputToolCalls: 0,
+        contextOverflowDetected: true,
+        usage: {
+          input: 80,
+          output: 0,
+          cacheRead: 19,
+          cacheWrite: 0,
+          total: 99,
+        },
+      }),
+    );
   });
 });
