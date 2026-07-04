@@ -1551,6 +1551,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "index.ts",
       distFile: "index.mjs",
     });
+    const normalizationBooleanCoercion = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "normalization-core",
+      srcFile: "boolean-coercion.ts",
+      distFile: "boolean-coercion.mjs",
+    });
     const normalizationStringCoerce = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "normalization-core",
@@ -1612,6 +1618,7 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(acpCore.distFile);
     fs.rmSync(acpCoreRuntimeTypes.distFile);
     fs.rmSync(normalizationCore.distFile);
+    fs.rmSync(normalizationBooleanCoercion.distFile);
     fs.rmSync(normalizationStringCoerce.distFile);
     fs.rmSync(terminalCore.distFile);
     fs.rmSync(terminalCoreTheme.distFile);
@@ -1665,6 +1672,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core"] ?? "")).toBe(
       fs.realpathSync(normalizationCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/normalization-core/boolean-coercion"] ?? "")).toBe(
+      fs.realpathSync(normalizationBooleanCoercion.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/string-coerce"] ?? "")).toBe(
       fs.realpathSync(normalizationStringCoerce.srcFile),
