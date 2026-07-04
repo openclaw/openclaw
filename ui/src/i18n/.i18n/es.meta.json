@@ -1,11 +1,26 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-04T18:34:04.861Z",
+  "fallbackKeys": [
+    "agents.cronPanel.loadedForAgent",
+    "agents.cronPanel.openFilesTab",
+    "agents.cronPanel.payload",
+    "agents.cronPanel.schedule",
+    "agents.cronPanel.state",
+    "agents.cronPanel.target",
+    "agents.files.fileSize",
+    "agents.files.lastUpdated",
+    "agents.files.missingCount",
+    "agents.files.notSelected",
+    "agents.files.openCronTab",
+    "agents.files.selectedFile",
+    "agents.files.totalFiles",
+    "agents.files.workspaceSummary"
+  ],
+  "generatedAt": "2026-07-04T18:41:39.383Z",
   "locale": "es",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "f2d6998c09b3009d63c98ca8b0187b55c47e60df8b8b33bc1f4dab2ba65130cc",
-  "totalKeys": 1462,
-  "translatedKeys": 1462,
+  "sourceHash": "e6cb7ab0e013cd9c18d314c4bfda4f3b93e468f8995352763324b840fd5608dd",
+  "totalKeys": 1477,
+  "translatedKeys": 1463,
   "workflow": 1
 }

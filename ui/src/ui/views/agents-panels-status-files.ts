@@ -72,6 +72,10 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
   return normalizedPath;
 }
 
+function formatFileMissingCount(count: number) {
+  return t("agents.files.missingCount", { count: String(count) });
+}
+
 function toDomId(value: string) {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   return normalized.replace(/^-+|-+$/g, "") || "preview";
@@ -350,26 +354,38 @@ export function renderAgentCron(params: {
             ${params.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
-        <div class="stat-grid" style="margin-top: 16px;">
-          <div class="stat">
-            <div class="stat-label">${t("common.enabled")}</div>
-            <div class="stat-value">
+        <div class="agent-cron-summary" style="margin-top: 16px;">
+          <div class="agent-cron-summary__metric">
+            <span>${t("common.enabled")}</span>
+            <strong>
               ${params.status
                 ? params.status.enabled
                   ? t("common.yes")
                   : t("common.no")
                 : t("common.na")}
-            </div>
+            </strong>
           </div>
-          <div class="stat">
-            <div class="stat-label">${t("agents.cronPanel.jobs")}</div>
-            <div class="stat-value">${params.status?.jobs ?? t("common.na")}</div>
+          <div class="agent-cron-summary__metric">
+            <span>${t("agents.cronPanel.jobs")}</span>
+            <strong>${params.status?.jobs ?? t("common.na")}</strong>
           </div>
-          <div class="stat">
-            <div class="stat-label">${t("agents.cronPanel.nextWake")}</div>
-            <div class="stat-value">${formatNextRun(params.status?.nextWakeAtMs ?? null)}</div>
+          <div class="agent-cron-summary__metric">
+            <span>${t("agents.cronPanel.loadedForAgent")}</span>
+            <strong>${jobs.length}</strong>
+          </div>
+          <div class="agent-cron-summary__metric agent-cron-summary__metric--wide">
+            <span>${t("agents.cronPanel.nextWake")}</span>
+            <strong>${formatNextRun(params.status?.nextWakeAtMs ?? null)}</strong>
           </div>
         </div>
+        <button
+          type="button"
+          class="btn btn--sm btn--ghost"
+          style="margin-top: 12px;"
+          @click=${() => params.onSelectPanel("files")}
+        >
+          ${t("agents.cronPanel.openFilesTab")}
+        </button>
         ${params.error
           ? html`<div class="callout danger" style="margin-top: 12px;">${params.error}</div>`
           : nothing}
@@ -379,38 +395,53 @@ export function renderAgentCron(params: {
       <div class="card-title">${t("agents.cronPanel.agentJobsTitle")}</div>
       <div class="card-sub">${t("agents.cronPanel.agentJobsSubtitle")}</div>
       ${jobs.length === 0
-        ? html` <div class="muted" style="margin-top: 16px">${t("agents.cronPanel.noJobs")}</div>`
+        ? html`
+            <div class="callout info" style="margin-top: 16px">${t("agents.cronPanel.noJobs")}</div>
+          `
         : html`
-            <div class="list" style="margin-top: 16px;">
+            <div class="agent-cron-job-grid" style="margin-top: 16px;">
               ${jobs.map(
                 (job) => html`
-                  <div class="list-item">
-                    <div class="list-main">
-                      <div class="list-title">${job.name}</div>
-                      ${job.description
-                        ? html`<div class="list-sub">${job.description}</div>`
-                        : nothing}
-                      <div class="chip-row" style="margin-top: 6px;">
-                        <span class="chip">${formatCronSchedule(job)}</span>
-                        <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
-                          ${job.enabled ? t("common.enabled") : t("common.disabled")}
-                        </span>
-                        <span class="chip">${job.sessionTarget}</span>
+                  <article class="agent-cron-job-card">
+                    <div class="agent-cron-job-card__header">
+                      <div>
+                        <div class="list-title">${job.name}</div>
+                        ${job.description
+                          ? html`<div class="list-sub">${job.description}</div>`
+                          : nothing}
+                      </div>
+                      <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
+                        ${job.enabled ? t("common.enabled") : t("common.disabled")}
+                      </span>
+                    </div>
+                    <div class="agent-cron-job-card__facts">
+                      <div>
+                        <span>${t("agents.cronPanel.schedule")}</span>
+                        <strong>${formatCronSchedule(job)}</strong>
+                      </div>
+                      <div>
+                        <span>${t("agents.cronPanel.target")}</span>
+                        <strong>${job.sessionTarget}</strong>
+                      </div>
+                      <div>
+                        <span>${t("agents.cronPanel.state")}</span>
+                        <strong class="mono">${formatCronState(job)}</strong>
+                      </div>
+                      <div>
+                        <span>${t("agents.cronPanel.payload")}</span>
+                        <strong>${formatCronPayload(job)}</strong>
                       </div>
                     </div>
-                    <div class="list-meta">
-                      <div class="mono">${formatCronState(job)}</div>
-                      <div class="muted">${formatCronPayload(job)}</div>
+                    <div class="agent-cron-job-card__actions">
                       <button
                         class="btn btn--sm"
-                        style="margin-top: 6px;"
                         ?disabled=${!job.enabled}
                         @click=${() => params.onRunNow(job.id)}
                       >
                         ${t("agents.cronPanel.runNow")}
                       </button>
                     </div>
-                  </div>
+                  </article>
                 `,
               )}
             </div>
@@ -441,6 +472,13 @@ export function renderAgentFiles(params: {
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
+  const missingCount = files.filter((file) => file.missing).length;
+  const selectedSizeLabel = activeEntry ? formatBytes(activeEntry.size ?? 0) : t("common.na");
+  const selectedUpdatedLabel = activeEntry?.updatedAtMs
+    ? formatRelativeTimestamp(activeEntry.updatedAtMs)
+    : activeEntry?.missing
+      ? t("agents.files.notCreatedYet")
+      : t("agents.files.updatedUnknown");
   const previewHtml = activeEntry
     ? applyPreviewTheme(marked.parse(draft, { gfm: true, breaks: true }) as string, {
         sanitize: (h: string) => DOMPurify.sanitize(h),
@@ -484,11 +522,6 @@ export function renderAgentFiles(params: {
           ${params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
         </button>
       </div>
-      ${list
-        ? html`<div class="muted mono" style="margin-top: 8px;">
-            ${t("agents.files.workspace")}: <span>${list.workspace}</span>
-          </div>`
-        : nothing}
       ${params.agentFilesError
         ? html`<div class="callout danger" style="margin-top: 12px;">
             ${params.agentFilesError}
@@ -501,18 +534,51 @@ export function renderAgentFiles(params: {
         : files.length === 0
           ? html` <div class="muted" style="margin-top: 16px">${t("agents.files.empty")}</div> `
           : html`
-              <div class="agent-tabs" style="margin-top: 14px;">
+              <div class="agent-workspace-summary" style="margin-top: 14px;">
+                <div class="agent-workspace-summary__main">
+                  <div class="label">${t("agents.files.workspaceSummary")}</div>
+                  <div class="mono">${list.workspace}</div>
+                </div>
+                <div class="agent-workspace-summary__metric">
+                  <strong>${files.length}</strong>
+                  <span>${t("agents.files.totalFiles")}</span>
+                </div>
+                <div class="agent-workspace-summary__metric">
+                  <strong>${missingCount}</strong>
+                  <span>${formatFileMissingCount(missingCount)}</span>
+                </div>
+                <div class="agent-workspace-summary__metric">
+                  <strong>${activeEntry ? activeEntry.name : t("agents.files.notSelected")}</strong>
+                  <span>${t("agents.files.selectedFile")}</span>
+                </div>
+                ${activeEntry
+                  ? html`
+                      <div class="agent-workspace-summary__metric">
+                        <strong>${selectedSizeLabel}</strong>
+                        <span>${t("agents.files.fileSize")}</span>
+                      </div>
+                      <div class="agent-workspace-summary__metric">
+                        <strong>${selectedUpdatedLabel}</strong>
+                        <span>${t("agents.files.lastUpdated")}</span>
+                      </div>
+                    `
+                  : nothing}
+              </div>
+              <div class="agent-workspace-file-grid" style="margin-top: 14px;">
                 ${files.map((file) => {
                   const isActive = active === file.name;
                   const label = file.name.replace(/\.md$/i, "");
+                  const filePathLabel = formatWorkspaceRelativePath(file.path, list.workspace);
                   return html`
                     <button
-                      class="agent-tab ${isActive ? "active" : ""} ${file.missing
-                        ? "agent-tab--missing"
-                        : ""}"
+                      class="agent-workspace-file-card ${isActive
+                        ? "agent-workspace-file-card--active"
+                        : ""} ${file.missing ? "agent-workspace-file-card--missing" : ""}"
                       @click=${() => params.onSelectFile(file.name)}
                     >
-                      ${label}${file.missing
+                      <span>${label}</span>
+                      <small class="mono">${filePathLabel}</small>
+                      ${file.missing
                         ? html` <span class="agent-tab-badge">${t("agents.files.missing")}</span> `
                         : nothing}
                     </button>

@@ -4656,6 +4656,170 @@ td.data-table-key-col {
   min-width: 200px;
 }
 
+.agent-workspace-summary,
+.agent-cron-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  align-items: stretch;
+}
+
+.agent-workspace-summary__main,
+.agent-workspace-summary__metric,
+.agent-cron-summary__metric {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 82%, var(--bg-elevated));
+}
+
+.agent-workspace-summary__main {
+  display: grid;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
+.agent-workspace-summary__metric,
+.agent-cron-summary__metric {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.agent-workspace-summary__metric strong,
+.agent-cron-summary__metric strong {
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.agent-workspace-summary__metric span,
+.agent-cron-summary__metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-cron-summary__metric--wide {
+  grid-column: span 2;
+}
+
+.agent-workspace-file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.agent-workspace-file-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.agent-workspace-file-card:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--card) 92%, var(--bg-hover));
+}
+
+.agent-workspace-file-card:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.agent-workspace-file-card--active {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 58%, var(--card));
+}
+
+.agent-workspace-file-card--missing {
+  border-style: dashed;
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+.agent-workspace-file-card > span,
+.agent-workspace-file-card > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-cron-job-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-cron-job-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+}
+
+.agent-cron-job-card__header,
+.agent-cron-job-card__actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.agent-cron-job-card__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.agent-cron-job-card__facts > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-accent) 74%, transparent);
+}
+
+.agent-cron-job-card__facts span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agent-cron-job-card__facts strong {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 560px) {
+  .agent-workspace-summary,
+  .agent-cron-summary,
+  .agent-cron-job-card__facts {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-cron-summary__metric--wide {
+    grid-column: auto;
+  }
+}
+
 .agent-file-field {
   min-height: clamp(320px, 56vh, 720px);
 }

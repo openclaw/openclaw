@@ -3,7 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { renderAgentFiles } from "./agents-panels-status-files.ts";
+import { renderAgentCron, renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderAgents, type AgentsProps } from "./agents.ts";
 
 function createSkill() {
@@ -392,6 +392,61 @@ describe("renderAgents", () => {
 });
 
 describe("renderAgentFiles", () => {
+  it("renders workspace summary and file cards", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "USER.md",
+              path: "/tmp/workspace/USER.md",
+              missing: false,
+              size: 128,
+              updatedAtMs: 1_700_000_000_000,
+            },
+            {
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
+              missing: true,
+              size: 0,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "USER.md",
+        agentFileContents: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileDrafts: {
+          "USER.md": "# User Profile\n\nHello world",
+        },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile: () => undefined,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".agent-workspace-summary")).toBeInstanceOf(HTMLElement);
+    expect(container.querySelector(".agent-workspace-summary__metric strong")?.textContent).toBe(
+      "2",
+    );
+    expect(container.querySelector(".agent-workspace-file-card--active")).toBeInstanceOf(
+      HTMLButtonElement,
+    );
+    expect(container.textContent).toContain("1 missing");
+    expect(container.textContent).toContain("Selected file");
+  });
+
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");
 
@@ -566,5 +621,75 @@ describe("renderAgentFiles", () => {
     ]);
     expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
     expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
+  });
+});
+
+describe("renderAgentCron", () => {
+  it("renders agent cron summary and job cards", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentCron({
+        context: {
+          workspace: "/tmp/workspace",
+          model: "openai/gpt-5.5",
+          runtime: "default",
+          identityName: "Alpha",
+          identityAvatar: "-",
+          skillsLabel: "all skills",
+          isDefault: true,
+        },
+        agentId: "alpha",
+        jobs: [
+          {
+            id: "job-alpha",
+            name: "Morning brief",
+            enabled: true,
+            createdAtMs: 0,
+            updatedAtMs: 1_700_000_000_000,
+            agentId: "alpha",
+            description: "Summarize workspace state",
+            schedule: { kind: "cron", expr: "0 9 * * *" },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "agentTurn", message: "Check the repo" },
+            state: {
+              nextRunAtMs: 1_700_000_360_000,
+              lastRunAtMs: 1_699_996_800_000,
+              lastStatus: "ok",
+            },
+          },
+          {
+            id: "job-beta",
+            name: "Other agent",
+            enabled: true,
+            createdAtMs: 0,
+            updatedAtMs: 0,
+            agentId: "beta",
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "ping" },
+          },
+        ],
+        status: {
+          enabled: true,
+          jobs: 2,
+          nextWakeAtMs: 1_700_000_360_000,
+        },
+        loading: false,
+        error: null,
+        onRefresh: () => undefined,
+        onRunNow: () => undefined,
+        onSelectPanel: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".agent-cron-summary")).toBeInstanceOf(HTMLElement);
+    expect(container.querySelector(".agent-cron-job-card")).toBeInstanceOf(HTMLElement);
+    expect(container.textContent).toContain("Loaded for agent");
+    expect(container.textContent).toContain("Jobs");
+    expect(container.textContent).toContain("Payload");
   });
 });
