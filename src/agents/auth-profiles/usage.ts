@@ -186,6 +186,27 @@ function isWhamWindowExhausted(window: WhamUsageWindow | undefined): boolean {
   );
 }
 
+// Decides the blockedModel to persist when a new subscription_limit block is
+// recorded on top of a possibly-still-active existing block. Naively
+// overwriting blockedModel with the incoming modelId would silently narrow an
+// unrelated existing block (unscoped, or scoped to a different model) to just
+// the new model — dropping coverage for whichever model the *existing* block
+// was actually protecting. Widen to profile-wide (undefined) whenever the
+// existing active block doesn't already agree with the incoming model.
+function mergeBlockedModel(
+  existingBlockedModel: string | undefined,
+  existingActiveBlockedUntil: number,
+  incomingModelId: string | undefined,
+): string | undefined {
+  const noActiveExistingBlock = existingActiveBlockedUntil <= 0;
+  if (noActiveExistingBlock || existingBlockedModel === incomingModelId) {
+    return incomingModelId;
+  }
+  // Existing active block is unscoped or scoped to a different model than the
+  // incoming one — widen to profile-wide so neither model's coverage is lost.
+  return undefined;
+}
+
 function applyWhamCooldownResult(params: {
   existing: ProfileUsageStats;
   computed: ProfileUsageStats;
@@ -213,7 +234,11 @@ function applyWhamCooldownResult(params: {
       blockedUntil: Math.max(existingActiveBlockedUntil, params.whamResult.blockedUntil),
       blockedReason: "subscription_limit",
       blockedSource: params.whamResult.blockedSource ?? "wham",
-      blockedModel: params.modelId,
+      blockedModel: mergeBlockedModel(
+        params.existing.blockedModel,
+        existingActiveBlockedUntil,
+        params.modelId,
+      ),
       cooldownUntil: undefined,
       cooldownReason: undefined,
       cooldownModel: undefined,
