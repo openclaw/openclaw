@@ -9,7 +9,12 @@ import {
   extractAssistantVisibleText,
   extractFirstTextBlock,
 } from "../../shared/chat-message-content.js";
-import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
+import {
+  OPENCLAW_DELIVERY_MIRROR_MODEL,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  isTranscriptOnlyOpenClawAssistantModel,
+} from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
@@ -358,9 +363,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     message: {
       role: "assistant" as const,
       content: [{ type: "text", text: mirrorText }],
-      api: "openai-responses",
-      provider: "openclaw",
-      model: "delivery-mirror",
+      api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+      provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+      model: OPENCLAW_DELIVERY_MIRROR_MODEL,
       usage: {
         input: 0,
         output: 0,
@@ -548,7 +553,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  return message.provider === "openclaw" && message.model === "delivery-mirror";
+  return (
+    message.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
+    message.model === OPENCLAW_DELIVERY_MIRROR_MODEL
+  );
 }
 
 function isChannelFinalDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

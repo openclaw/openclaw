@@ -7,6 +7,7 @@ import type {
   Usage,
 } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -887,7 +888,7 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
-  it("repairs a message-tool delivery-mirror poisoned OpenAI Responses replay", async () => {
+  it("repairs a message-tool delivery-mirror poisoned replay", async () => {
     const messages: AgentMessage[] = [
       makeUserMessage("start"),
       makeAssistantMessage(
@@ -905,7 +906,7 @@ describe("sanitizeSessionHistory", () => {
         role: "assistant",
         provider: "openclaw",
         model: "delivery-mirror",
-        api: "openai-responses",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         content: [{ type: "text", text: "visible reply" }],
         stopReason: "stop",
       }),
