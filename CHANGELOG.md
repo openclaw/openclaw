@@ -16,6 +16,10 @@ Docs: https://docs.openclaw.ai
 - **Mac local Gateway setup:** the macOS app can now install and start its local Gateway automatically, reducing the manual setup needed before first use. (#99767)
 - **Control UI navigation:** a session-first sidebar, compact context meter, warm light theme, reasoning-effort slider, streamlined composer, and slash-command picker make active conversations and commands easier to reach. (#99289, #99426, #99838) Thanks @VicZhang6 and @Solvely-Colin.
 
+### Fixes
+
+- Feishu: fix topic session splitting for both native `topic_group` and normal groups using topic message format. Hydrate now queries the replied-to message (`rootId`) instead of the newly sent message, expands the hydrate condition to cover `chat_type="group"` groups with Feishu topic messaging, and suppresses stale `rootId` after successful hydration so the canonical `omt_*` topic ID is used consistently. Refs #78262. Thanks @joeyzenghuan.
+
 ### Changes
 
 - **ClawRouter routing and quotas:** add the bundled ClawRouter provider plugin with credential-scoped dynamic model discovery, OpenAI-compatible and native Anthropic/Gemini transports, and managed budget reporting across OpenClaw usage surfaces. (#99658)
