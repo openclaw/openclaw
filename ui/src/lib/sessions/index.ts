@@ -1,4 +1,4 @@
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   FastMode,
   GatewaySessionRow,
@@ -16,13 +16,20 @@ import {
   resolveSessionCreateParams,
   type SessionCreateParams,
 } from "./create.ts";
+import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
   reconcileSessionChanged,
   reconcileSessionHistory,
   type SessionChangedResult,
   type SessionReconcileOptions,
 } from "./reconcile.ts";
-import { normalizeAgentId } from "./session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
+} from "./session-key.ts";
 export {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -51,6 +58,12 @@ export type SessionListOptions = {
   configuredAgentsOnly?: boolean;
   showArchived?: boolean;
   append?: boolean;
+};
+
+export type SessionRefreshOptions = SessionListOptions & {
+  force?: boolean;
+  // Sidebar startup hydration must not block session creation or drop the open session.
+  backgroundHydrate?: boolean;
 };
 
 export type SessionPatch = {
@@ -99,6 +112,9 @@ export type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
+    hello?: GatewayHelloOk | null;
+    assistantAgentId?: string | null;
+    sessionKey?: string;
   };
   subscribe: (listener: (snapshot: SessionGateway["snapshot"]) => void) => () => void;
   subscribeEvents: (listener: (event: GatewayEventFrame) => void) => () => void;
@@ -120,7 +136,7 @@ export type SessionCapability = {
     options?: SessionReconcileOptions,
   ) => boolean;
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
-  refresh: (options?: SessionListOptions & { force?: boolean }) => Promise<void>;
+  refresh: (options?: SessionRefreshOptions) => Promise<void>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: (
     key: string,
@@ -469,7 +485,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     deletedKeys: [],
   };
   let inFlight: Promise<void> | null = null;
-  let queuedRefresh: (SessionListOptions & { force?: boolean }) | null = null;
+  let queuedRefresh: SessionRefreshOptions | null = null;
   let disposed = false;
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
@@ -517,40 +533,72 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     publish({ ...state, modelOverrides });
   };
 
-  const load = async (options: SessionListOptions & { force?: boolean }) => {
+  const load = async (options: SessionRefreshOptions) => {
     const client = gateway.snapshot.client;
     if (!client || !gateway.snapshot.connected || disposed) {
       return;
     }
-    const { append: _append, force: _force, ...requestOptions } = options;
+    const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
     lastListOptions = requestOptions;
-    publish({ ...state, loading: true, error: null, deletedKeys: [] });
+    if (!backgroundHydrate) {
+      publish({ ...state, loading: true, error: null, deletedKeys: [] });
+    }
     try {
-      const result = await requestList(options);
+      const result = await requestList(requestOptions);
       if (disposed || gateway.snapshot.client !== client) {
         return;
       }
-      const nextResult =
-        result && options.append && options.offset && state.result
+      let nextResult =
+        result && append && requestOptions.offset && state.result
           ? appendSessionResults(state.result, result)
           : result;
+      if (backgroundHydrate && nextResult) {
+        const currentKey = gateway.snapshot.sessionKey?.trim();
+        if (currentKey) {
+          const currentAgentId = normalizeAgentId(
+            parseAgentSessionKey(currentKey)?.agentId ??
+              resolveUiSelectedGlobalAgentId(gateway.snapshot),
+          );
+          const previousCurrentRow =
+            state.result?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, currentKey)) ??
+            (state.agentId === currentAgentId
+              ? state.result?.sessions.find((row) =>
+                  uiSessionRowMatchesSelectedChat(gateway.snapshot, row.key, currentKey),
+                )
+              : undefined);
+          if (
+            previousCurrentRow &&
+            !nextResult.sessions.some((row) =>
+              uiSessionRowMatchesSelectedChat(gateway.snapshot, row.key, currentKey),
+            )
+          ) {
+            const sessions = [...nextResult.sessions, previousCurrentRow];
+            nextResult = { ...nextResult, count: sessions.length, sessions };
+          }
+        }
+      }
       publish({
         result: nextResult,
-        agentId: options.agentId?.trim() ? normalizeAgentId(options.agentId) : null,
+        agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
         modelOverrides: state.modelOverrides,
-        loading: false,
+        loading: backgroundHydrate ? state.loading : false,
         error: null,
         deletedKeys: [],
       });
     } catch (error) {
       if (!disposed && gateway.snapshot.client === client) {
-        publish({ ...state, loading: false, error: String(error), deletedKeys: [] });
+        publish({
+          ...state,
+          loading: backgroundHydrate ? state.loading : false,
+          error: String(error),
+          deletedKeys: [],
+        });
       }
     }
   };
 
-  const drainRefreshQueue = async (options: SessionListOptions & { force?: boolean }) => {
-    let next: (SessionListOptions & { force?: boolean }) | null = options;
+  const drainRefreshQueue = async (options: SessionRefreshOptions) => {
+    let next: SessionRefreshOptions | null = options;
     while (next) {
       await load(next);
       next = queuedRefresh;
@@ -558,7 +606,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const refresh = (options: SessionListOptions & { force?: boolean } = {}) => {
+  const refresh = (options: SessionRefreshOptions = {}) => {
     if (!gateway.snapshot.connected || !gateway.snapshot.client || disposed) {
       return Promise.resolve();
     }
@@ -567,7 +615,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return inFlight;
     }
     const hasListOverrides = Object.entries(options).some(
-      ([key, value]) => key !== "force" && value !== undefined,
+      ([key, value]) => key !== "force" && key !== "backgroundHydrate" && value !== undefined,
     );
     if (state.result && !options.force && !hasListOverrides) {
       return Promise.resolve();
@@ -897,7 +945,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           }
         } finally {
           if (!disposed && gateway.snapshot.client === client) {
-            await refresh();
+            const sessionKey = gateway.snapshot.sessionKey?.trim();
+            await refresh({
+              ...(sessionKey ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey) : {}),
+              backgroundHydrate: true,
+              force: true,
+            });
           }
         }
       })();

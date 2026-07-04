@@ -235,7 +235,6 @@ class OpenClawShell extends LitElement {
   @state() private recentSessionsCollapsed = false;
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
-  @state() private gatewayVersion = "";
   @state() private routeState: ShellRouteState = {};
   @state() private overlaySnapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
@@ -396,16 +395,11 @@ class OpenClawShell extends LitElement {
     this.requestUpdate();
   };
 
-  private readonly updateGatewayStatus = (snapshot: {
-    connected: boolean;
-    hello: ApplicationRuntime["context"]["gateway"]["snapshot"]["hello"];
-  }) => {
-    const version = snapshot.hello?.server?.version ?? "";
-    if (snapshot.connected === this.gatewayConnected && version === this.gatewayVersion) {
+  private readonly updateGatewayStatus = (snapshot: { connected: boolean }) => {
+    if (snapshot.connected === this.gatewayConnected) {
       return;
     }
     this.gatewayConnected = snapshot.connected;
-    this.gatewayVersion = version;
   };
 
   private readonly updateNavigationPreferences = (
@@ -471,7 +465,6 @@ class OpenClawShell extends LitElement {
             .routeLocation=${this.routeState.location}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
-            .version=${this.gatewayVersion}
             .navGroupsCollapsed=${this.navGroupsCollapsed}
             .recentSessionsCollapsed=${this.recentSessionsCollapsed}
             .themeMode=${context.theme.mode}

@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "../string-coerce.ts";
 import {
+  areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
@@ -16,9 +17,11 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
 export type SessionNavigationInput = {
   result: SessionsListResult | null;
+  resultAgentId?: string | null;
   sessionKey: string;
   assistantAgentId?: string | null;
   hello?: GatewayHelloOk | null;
@@ -218,20 +221,32 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   });
   const selectedAgentId = parseAgentSessionKey(currentSessionKey)?.agentId ?? defaultAgentId;
   const shouldFilterByAgent = currentSessionKey.toLowerCase() !== "unknown";
+  const resultScopeMatches =
+    normalizeOptionalString(input.resultAgentId) !== undefined &&
+    normalizeAgentId(input.resultAgentId) === normalizeAgentId(selectedAgentId);
+  const matchesCurrentSession = (row: GatewaySessionRow) =>
+    areUiSessionKeysEquivalent(row.key, currentSessionKey) ||
+    (resultScopeMatches && uiSessionRowMatchesSelectedChat(input, row.key, currentSessionKey));
+  const selectedSession = input.result?.sessions.find(matchesCurrentSession);
+  const activeSession =
+    currentSessionKey && currentSessionKey.toLowerCase() !== "unknown"
+      ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
+      : undefined;
   const recentSessions = getVisibleSessionRows(input.result, {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,
     filterByAgent: shouldFilterByAgent,
   })
+    .filter((row) => !matchesCurrentSession(row))
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 5);
+    .slice(0, 9);
   return {
     currentSessionKey,
     selectedAgentId,
     defaultAgentId,
-    selectedSession: input.result?.sessions.find((row) => row.key === currentSessionKey),
-    recentSessions,
+    selectedSession: activeSession,
+    recentSessions: activeSession ? [activeSession, ...recentSessions] : recentSessions,
   };
 }
 

@@ -14,6 +14,7 @@ import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
 } from "../../components/markdown.ts";
+import { renderProviderQuotaPill } from "../../components/provider-quota-pill.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
@@ -28,7 +29,6 @@ import {
 } from "./attachment-payload-store.ts";
 import { renderChat, resetChatViewState } from "./chat-view.ts";
 import { renderChatQueue } from "./components/chat-composer.ts";
-import { renderChatQuotaPill } from "./components/chat-controls.ts";
 import {
   renderChatModelControls,
   type ChatModelControlsProps,
@@ -2717,7 +2717,7 @@ describe("chat model controls", () => {
     };
     const container = document.createElement("div");
     render(
-      renderChatQuotaPill({
+      renderProviderQuotaPill({
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
       }),

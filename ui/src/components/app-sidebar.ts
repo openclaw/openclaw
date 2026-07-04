@@ -2,7 +2,8 @@ import { consume } from "@lit/context";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ModelAuthStatusResult, SessionsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
   isSettingsNavigationRoute,
@@ -25,6 +26,8 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
 import { icons } from "./icons.ts";
+
+type ProviderQuotaPillRenderer = typeof import("./provider-quota-pill.ts").renderProviderQuotaPill;
 
 type SidebarRecentSession = {
   key: string;
@@ -62,11 +65,15 @@ export class AppSidebar extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context?: ApplicationContext<RouteId>;
   @state() private sessionsResult: SessionsListResult | null = null;
+  @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
+  @state() private modelAuthStatusResult: ModelAuthStatusResult | null = null;
+  @state() private providerQuotaPillRenderer: ProviderQuotaPillRenderer | null = null;
 
   private stopSessionsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
+  private modelAuthClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -85,6 +92,7 @@ export class AppSidebar extends LitElement {
     this.stopAgentSelectionSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    this.modelAuthClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
@@ -103,13 +111,15 @@ export class AppSidebar extends LitElement {
       return;
     }
     this.updateSessions(context.sessions.state);
-    this.stopSessionsSubscription = context.sessions.subscribe((state) => {
-      this.updateSessions(state);
+    this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
+      this.updateSessions(snapshot);
     });
     this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
       this.requestUpdate();
     });
-    this.stopGatewaySubscription = context.gateway.subscribe(() => {
+    this.updateModelAuthStatus(context.gateway.snapshot);
+    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
+      this.updateModelAuthStatus(snapshot);
       this.requestUpdate();
     });
   }
@@ -120,21 +130,59 @@ export class AppSidebar extends LitElement {
 
   private readonly updateSessions = (snapshot: {
     result: SessionsListResult | null;
+    agentId: string | null;
     loading: boolean;
   }) => {
     this.sessionsResult = snapshot.result;
+    this.sessionsAgentId = snapshot.agentId;
     this.sessionsLoading = snapshot.loading;
   };
 
-  private getRouteSessionKey(): string {
-    if (this.activeRouteId !== "chat") {
-      return "";
+  private updateModelAuthStatus(snapshot: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+  }) {
+    const client = snapshot.connected ? snapshot.client : null;
+    if (client === this.modelAuthClient) {
+      return;
     }
-    return (
-      new URLSearchParams(this.routeLocation?.search).get("session")?.trim() ||
-      this.context?.gateway.snapshot.sessionKey.trim() ||
-      ""
-    );
+    this.modelAuthClient = client;
+    this.modelAuthStatusResult = null;
+    if (!client) {
+      return;
+    }
+    void import("../lib/model-auth.ts")
+      .then(async ({ isMonitoredAuthProvider, loadModelAuthStatus }) => {
+        const result = await loadModelAuthStatus(client);
+        if (this.modelAuthClient !== client) {
+          return;
+        }
+        this.modelAuthStatusResult = result;
+        const hasQuota = result.providers.some(
+          (provider) =>
+            isMonitoredAuthProvider(provider) && Boolean(provider.usage?.windows?.length),
+        );
+        if (!hasQuota || this.providerQuotaPillRenderer) {
+          return;
+        }
+        const { renderProviderQuotaPill } = await import("./provider-quota-pill.ts");
+        if (this.modelAuthClient === client) {
+          this.providerQuotaPillRenderer = renderProviderQuotaPill;
+        }
+      })
+      .catch(() => {
+        if (this.modelAuthClient === client) {
+          this.modelAuthStatusResult = null;
+        }
+      });
+  }
+
+  private getRouteSessionKey(): string {
+    const routeSessionKey =
+      this.activeRouteId === "chat"
+        ? new URLSearchParams(this.routeLocation?.search).get("session")?.trim()
+        : "";
+    return routeSessionKey || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
   private getSessionNavigationState() {
@@ -142,6 +190,7 @@ export class AppSidebar extends LitElement {
     const routeSessionKey = this.getRouteSessionKey();
     const navigation = resolveSessionNavigation({
       result: this.sessionsResult,
+      resultAgentId: this.sessionsAgentId,
       sessionKey: routeSessionKey,
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
@@ -207,9 +256,9 @@ export class AppSidebar extends LitElement {
     );
   }
 
-  private cancelPreload(event: Event) {
+  private readonly cancelPreload = (event: Event) => {
     cancelRoutePreload(this.routePreloadTimers, event);
-  }
+  };
 
   private isRouteEnabled(routeId: NavigationRouteId): boolean {
     return this.enabledRouteIds?.includes(routeId) ?? true;
@@ -399,6 +448,12 @@ export class AppSidebar extends LitElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const quotaPill = this.collapsed
+      ? ""
+      : (this.providerQuotaPillRenderer?.({
+          basePath: this.basePath,
+          modelAuthStatusResult: this.modelAuthStatusResult,
+        }) ?? "");
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <div class="sidebar-shell">
@@ -461,6 +516,7 @@ export class AppSidebar extends LitElement {
           </div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-utility-group">
+              ${quotaPill ? html`<div class="sidebar-quota">${quotaPill}</div>` : nothing}
               ${this.collapsed
                 ? html`
                     <openclaw-tooltip

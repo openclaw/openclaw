@@ -1,24 +1,18 @@
 // Chat-owned quota, settings, refresh, and display controls.
 import { html } from "lit";
-import type {
-  AgentsListResult,
-  ModelAuthStatusResult,
-  SessionsListResult,
-} from "../../../api/types.ts";
-import { normalizeBasePath } from "../../../app-routes.ts";
+import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
 import {
   normalizeChatAutoScrollMode,
   type ChatAutoScrollMode,
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  renderProviderQuotaPill,
+  type ProviderQuotaPillProps,
+} from "../../../components/provider-quota-pill.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
-import {
-  collectQuotaWindowsFromAuthStatus,
-  formatQuotaReset,
-} from "../../../lib/provider-quota-summary.ts";
 import { isCronSessionKey } from "../../../lib/session-display.ts";
 import {
   isSessionKeyTiedToAgent,
@@ -26,11 +20,6 @@ import {
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
-
-type ChatQuotaPillProps = {
-  basePath?: string;
-  modelAuthStatusResult?: ModelAuthStatusResult | null;
-};
 
 export type ChatControlsProps = {
   agentsList: AgentsListResult | null;
@@ -40,7 +29,7 @@ export type ChatControlsProps = {
   manualRefreshInFlight: boolean;
   model: ChatModelControlsProps;
   onboarding: boolean;
-  quota: ChatQuotaPillProps;
+  quota: ProviderQuotaPillProps;
   runId: string | null;
   sending: boolean;
   settings: UiSettings;
@@ -198,7 +187,7 @@ export function renderChatControls(props: ChatControlsProps) {
     >
       ${renderChatModelControls(props.model)}
     </div>
-    ${renderChatQuotaPill(props.quota)}
+    ${renderProviderQuotaPill(props.quota)}
     <div class="chat-settings-popover-wrapper">
       <openclaw-tooltip .content=${settingsTitle}>
         <button
@@ -327,43 +316,5 @@ export function renderChatControls(props: ChatControlsProps) {
         </div>
       </div>
     </div>
-  `;
-}
-
-export function renderChatQuotaPill(props: ChatQuotaPillProps) {
-  const windows = collectQuotaWindowsFromAuthStatus(
-    props.modelAuthStatusResult ?? null,
-    isMonitoredAuthProvider,
-  );
-  const primary = windows[0];
-  if (!primary) {
-    return "";
-  }
-  const secondary = windows.find(
-    (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
-  );
-  const reset = formatQuotaReset(primary.resetAt);
-  const detail = [primary.displayName, primary.label, reset ? `resets ${reset}` : null]
-    .filter(Boolean)
-    .join(" · ");
-  const secondaryDetail = secondary
-    ? `${secondary.displayName}${secondary.label ? ` ${secondary.label}` : ""} ${secondary.remaining}% left`
-    : null;
-  const title = [detail, secondaryDetail].filter(Boolean).join(" · ");
-  const severity = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "ok";
-  const basePath = normalizeBasePath(props.basePath ?? "");
-  const href = `${basePath}/usage`;
-
-  return html`
-    <a
-      class="chat-controls__quota chat-controls__quota--${severity}"
-      href=${href}
-      title=${title}
-      aria-label=${`Provider usage: ${title}`}
-      data-chat-provider-usage="true"
-    >
-      <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
-      <span class="chat-controls__quota-value">${primary.remaining}%</span>
-    </a>
   `;
 }
