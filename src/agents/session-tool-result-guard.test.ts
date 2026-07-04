@@ -363,6 +363,64 @@ describe("installSessionToolResultGuard", () => {
     expect(getPersistedMessages(sm)).toHaveLength(0);
   });
 
+  it("rewrites alias-named tool calls to the canonical allowed name and keeps the pair replay-safe", () => {
+    // The runtime executes alias calls under the canonical tool, so the
+    // toolResult persists canonically. Dropping the alias-named assistant
+    // block would orphan that result; it must be rewritten instead.
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      allowedToolNames: ["memory_search", "read"],
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_alias", name: "KnowledgeSearch", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_alias",
+        toolName: "memory_search",
+        content: [{ type: "text", text: "found" }],
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    const assistant = messages[0] as {
+      content: Array<{ type: string; id: string; name: string }>;
+    };
+    expect(assistant.content).toHaveLength(1);
+    expect(assistant.content[0]?.name).toBe("memory_search");
+    expect(assistant.content[0]?.id).toBe("call_alias");
+    const toolResult = messages[1] as { toolCallId: string; toolName?: string };
+    expect(toolResult.toolCallId).toBe("call_alias");
+    expect(toolResult.toolName).toBe("memory_search");
+  });
+
+  it("still drops alias-named tool calls when the canonical target is not allowed", () => {
+    // Alias rewriting must not widen policy: KnowledgeSearch only survives when
+    // its canonical target (memory_search etc.) is itself in allowedToolNames.
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      allowedToolNames: ["read"],
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_alias_denied", name: "KnowledgeSearch", arguments: {} },
+        ],
+      }),
+    );
+
+    expect(getPersistedMessages(sm)).toHaveLength(0);
+  });
+
   it("flushes pending tool results when a sanitized assistant message is dropped", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

@@ -862,6 +862,51 @@ function normalizeToolName(name: string): string {
     .replace(/[^a-z0-9]/g, "");
 }
 
+// Name-level variant of resolveToolAlias for callers that hold a tool-name
+// catalog rather than AgentTool instances (e.g. transcript sanitizers keeping
+// persisted alias-named calls consistent with the canonical name the runtime
+// executed under). Returns the matching entry exactly as it appears in
+// `candidateNames`, so rewrites land on the canonical casing.
+export function resolveAliasedToolName(
+  requestedName: string,
+  candidateNames: Iterable<string>,
+): string | undefined {
+  const trimmed = requestedName.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  // 1. Case-insensitive exact match.
+  const lower = trimmed.toLowerCase();
+  // 2. Normalised alias map — strip non-alphanumeric, look up candidates.
+  const normalizedIndex = new Map<string, string>();
+  for (const name of candidateNames) {
+    if (typeof name !== "string") {
+      continue;
+    }
+    const candidate = name.trim();
+    if (!candidate) {
+      continue;
+    }
+    if (candidate.toLowerCase() === lower) {
+      return candidate;
+    }
+    const n = normalizeToolName(candidate);
+    if (n && !normalizedIndex.has(n)) {
+      normalizedIndex.set(n, candidate);
+    }
+  }
+  const aliasTargets = TOOL_NAME_ALIASES[normalizeToolName(trimmed)];
+  if (aliasTargets) {
+    for (const target of aliasTargets) {
+      const found = normalizedIndex.get(normalizeToolName(target));
+      if (found !== undefined) {
+        return found;
+      }
+    }
+  }
+  return undefined;
+}
+
 function resolveToolAlias(
   requestedName: string,
   tools: readonly AgentTool[] | undefined,
@@ -869,30 +914,14 @@ function resolveToolAlias(
   if (!tools?.length) {
     return undefined;
   }
-  // 1. Case-insensitive exact match.
-  const lower = requestedName.trim().toLowerCase();
-  const caseMatch = tools.find((t) => t.name.toLowerCase() === lower);
-  if (caseMatch) {
-    return caseMatch;
-  }
-  // 2. Normalised alias map — strip non-alphanumeric, look up candidates.
-  const normalizedIndex = new Map<string, AgentTool>();
+  const byName = new Map<string, AgentTool>();
   for (const tool of tools) {
-    const n = normalizeToolName(tool.name);
-    if (n && !normalizedIndex.has(n)) {
-      normalizedIndex.set(n, tool);
+    if (!byName.has(tool.name)) {
+      byName.set(tool.name, tool);
     }
   }
-  const aliasTargets = TOOL_NAME_ALIASES[normalizeToolName(requestedName)];
-  if (aliasTargets) {
-    for (const target of aliasTargets) {
-      const found = normalizedIndex.get(normalizeToolName(target));
-      if (found) {
-        return found;
-      }
-    }
-  }
-  return undefined;
+  const resolvedName = resolveAliasedToolName(requestedName, byName.keys());
+  return resolvedName === undefined ? undefined : byName.get(resolvedName);
 }
 
 async function resolveToolCallTool(

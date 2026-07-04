@@ -10,6 +10,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "./runtime/index.js";
+import { resolveAliasedToolName } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import {
   extractToolCallsFromAssistant,
@@ -352,6 +353,27 @@ function collectFollowingToolResults(
   return { ids, displaced };
 }
 
+// A tool-call block whose name misses the allowed set may still be an alias the
+// runtime executed under a canonical registered tool (agent-core resolves
+// KnowledgeSearch → memory_search etc. at dispatch). Resolve to the canonical
+// catalog name so the caller can rewrite the block instead of dropping it and
+// orphaning the paired toolResult. Returns undefined when no allowed-name
+// resolution exists — callers fall back to dropping.
+function resolveReplaySafeAliasedToolName(
+  name: unknown,
+  allowedToolNames: Set<string> | null,
+  rawAllowedToolNames: readonly string[],
+): string | undefined {
+  if (!allowedToolNames || typeof name !== "string") {
+    return undefined;
+  }
+  const resolved = resolveAliasedToolName(name, rawAllowedToolNames);
+  if (resolved === undefined) {
+    return undefined;
+  }
+  return isAllowedToolCallName(resolved, allowedToolNames) ? resolved : undefined;
+}
+
 function repairToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
@@ -361,6 +383,11 @@ function repairToolCallInputs(
   let changed = false;
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
+  // Original-cased catalog names for alias rewrites — normalizeAllowedToolNames
+  // lowercases its lookup set, which would lose the canonical casing.
+  const rawAllowedToolNames: readonly string[] = options?.allowedToolNames
+    ? [...options.allowedToolNames]
+    : [];
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
@@ -417,22 +444,40 @@ function repairToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
+      let workBlock = block;
       if (isRawToolCallBlock(block)) {
         // Drop genuinely incomplete streaming artifacts (missing required fields).
-        if (
-          !hasToolCallInput(block) ||
-          !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
-        ) {
+        if (!hasToolCallInput(block) || !hasToolCallId(block)) {
           droppedToolCalls += 1;
           droppedInMessage += 1;
           changed = true;
           messageChanged = true;
           continue;
         }
+        if (!isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)) {
+          const aliasedName = resolveReplaySafeAliasedToolName(
+            (block as RawToolCallBlock).name,
+            allowedToolNames,
+            rawAllowedToolNames,
+          );
+          if (aliasedName === undefined) {
+            droppedToolCalls += 1;
+            droppedInMessage += 1;
+            changed = true;
+            messageChanged = true;
+            continue;
+          }
+          // The runtime executes alias-named calls under the canonical tool
+          // (agent-core resolveAliasedToolName), so the persisted toolResult
+          // carries the canonical name. Rewrite the assistant block to match
+          // instead of dropping it — dropping orphans the paired toolResult
+          // and breaks replay.
+          workBlock = { ...(block as object), name: aliasedName } as typeof block;
+          changed = true;
+          messageChanged = true;
+        }
       }
-      let workBlock = block;
-      if (isRawToolCallBlock(block) && hasPartialJson(block)) {
+      if (isRawToolCallBlock(workBlock) && hasPartialJson(workBlock)) {
         if (!isFinalizedOpenAIResponsesToolCall(msg, block)) {
           droppedToolCalls += 1;
           droppedInMessage += 1;
@@ -444,7 +489,7 @@ function repairToolCallInputs(
         // Legacy generic Responses transport persisted successful toolUse turns
         // with the scratch buffer intact. Strip it only when terminal state and
         // the provider-specific finalized shape both prove completion.
-        const stripped = { ...block };
+        const stripped = { ...workBlock };
         delete (stripped as RawToolCallBlock & { partialJson?: unknown }).partialJson;
         workBlock = stripped;
         changed = true;
