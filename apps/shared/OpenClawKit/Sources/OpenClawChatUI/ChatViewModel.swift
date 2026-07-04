@@ -2573,6 +2573,17 @@ public final class OpenClawChatViewModel {
         in messages: [OpenClawChatMessage])
         -> Bool
     {
+        // Hooks may transform persisted user content while preserving this key.
+        // Prefer the durable turn identity so a completed refresh rejects older history.
+        if let idempotencyKey = user.idempotencyKey {
+            guard let userIndex = messages.lastIndex(where: { message in
+                message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" &&
+                    self.normalizedIdempotencyKey(message.idempotencyKey) == idempotencyKey
+            }) else {
+                return false
+            }
+            return self.hasAssistantMessage(after: userIndex, in: messages)
+        }
         guard let refreshKey = user.refreshKey else { return false }
         var occurrence = 0
         var latestMatchingUserIndex: [OpenClawChatMessage].Index?
@@ -2581,14 +2592,7 @@ public final class OpenClawChatViewModel {
             occurrence += 1
             latestMatchingUserIndex = index
             guard occurrence == user.occurrence else { continue }
-            let nextIndex = messages.index(after: index)
-            guard nextIndex < messages.endIndex else { return false }
-            return messages[nextIndex...].contains { message in
-                guard message.role.lowercased() == "assistant" else { return false }
-                let text = message.content.compactMap(\.text).joined(separator: "\n")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return !text.isEmpty || message.errorMessage != nil
-            }
+            return self.hasAssistantMessage(after: index, in: messages)
         }
         guard let latestMatchingUserIndex,
               messages.lastIndex(where: { $0.role.lowercased() == "user" }) == latestMatchingUserIndex
@@ -2601,7 +2605,14 @@ public final class OpenClawChatViewModel {
         {
             return false
         }
-        let nextIndex = messages.index(after: latestMatchingUserIndex)
+        return self.hasAssistantMessage(after: latestMatchingUserIndex, in: messages)
+    }
+
+    private static func hasAssistantMessage(
+        after userIndex: [OpenClawChatMessage].Index,
+        in messages: [OpenClawChatMessage]) -> Bool
+    {
+        let nextIndex = messages.index(after: userIndex)
         guard nextIndex < messages.endIndex else { return false }
         return messages[nextIndex...].contains { message in
             guard message.role.lowercased() == "assistant" else { return false }

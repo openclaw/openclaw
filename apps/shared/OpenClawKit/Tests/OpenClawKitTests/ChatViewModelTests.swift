@@ -659,6 +659,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.patchedThinkingLevels
     }
 
+    func healthCallCount() async -> Int {
+        await self.state.healthCallCount
+    }
+
     func resetSessionKeys() async -> [String] {
         await self.state.resetSessionKeys
     }
@@ -2373,6 +2377,72 @@ struct ChatViewModelTests {
                 message.content.contains { $0.text == "second answer" }
             }
         })
+    }
+
+    @Test @MainActor func `transformed canonical reply invalidates older stale refresh`() async throws {
+        let staleRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let staleTurn = [
+            chatTextMessage(role: "user", text: "older question", timestamp: now - 2),
+            chatTextMessage(role: "assistant", text: "older answer", timestamp: now - 1),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionId: "sess-bootstrap", messages: staleTurn),
+                historyPayload(sessionId: "sess-stale", messages: staleTurn),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await staleRefreshGate.wait()
+                }
+            },
+            historyResponseHook: { _, index, sentRunIds in
+                guard index == 2, let runId = sentRunIds.first else { return nil }
+                return historyPayload(
+                    sessionId: "sess-canonical",
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "canonical redacted request",
+                            timestamp: now,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "canonical answer",
+                            timestamp: now + 1,
+                            idempotencyKey: runId),
+                    ])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-bootstrap")
+
+        transport.emit(OpenClawChatTransportEvent.seqGap)
+        try await waitUntil("stale transformed refresh is in flight") {
+            await historyCount.current() == 2
+        }
+
+        vm.input = "original request"
+        vm.send()
+        _ = try await waitForLastSentRunId(transport)
+        try await waitUntil("transformed canonical answer applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-canonical" &&
+                    vm.messages.containsUserText("canonical redacted request") &&
+                    vm.messages.contains { $0.content.contains { $0.text == "canonical answer" } }
+            }
+        }
+
+        let healthCallsBeforeRelease = await transport.healthCallCount()
+        await staleRefreshGate.release()
+        try await waitUntil("older transformed refresh completes") {
+            await transport.healthCallCount() > healthCallsBeforeRelease
+        }
+
+        #expect(vm.sessionId == "sess-canonical")
+        #expect(vm.messages.containsUserText("canonical redacted request"))
+        #expect(vm.messages.contains { $0.content.contains { $0.text == "canonical answer" } })
     }
 
     @Test func `accepts canonical session key events for own pending run`() async throws {
