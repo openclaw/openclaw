@@ -84,28 +84,13 @@ export default defineToolPlugin({
   schema and the generated manifest still includes `configSchema`.
 - `execute` returns a plain string or JSON-serializable value. The helper wraps
   it as a text tool result with `details`.
+- For custom tool results, `openclaw/plugin-sdk/tool-results` exports
+  `textResult` and `jsonResult`.
 - Tool names are static. `openclaw plugins build` derives `contracts.tools`
   from the declared tools, so authors do not duplicate names by hand.
 - Runtime loading stays strict. Installed plugins still need
   `openclaw.plugin.json` and `package.json` `openclaw.extensions`; OpenClaw does
   not execute plugin code to infer missing manifest data.
-
-## Tool result helpers
-
-**Import:** `openclaw/plugin-sdk/tool-results`
-
-Use `textResult(text, details)` for custom text or `jsonResult(payload)` for
-pretty-printed JSON with the typed payload in `details`.
-
-```typescript
-import { jsonResult, textResult } from "openclaw/plugin-sdk/tool-results";
-
-return jsonResult({ ok: true, messageId });
-return textResult("Message sent.", { ok: true, messageId });
-```
-
-These helpers do not cover MCP, transport, media, approval, or channel-specific
-results.
 
 ## `definePluginEntry`
 
