@@ -67,6 +67,7 @@ import {
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
   normalizeUpdateChannel,
+  type UpdateChannel,
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "../../infra/update-channels.js";
 import {
@@ -1307,9 +1308,9 @@ type UpdateDryRunPreview = {
   switchToGit: boolean;
   switchToPackage: boolean;
   restart: boolean;
-  requestedChannel: "stable" | "beta" | "dev" | null;
-  storedChannel: "stable" | "beta" | "dev" | null;
-  effectiveChannel: "stable" | "beta" | "dev";
+  requestedChannel: UpdateChannel | null;
+  storedChannel: UpdateChannel | null;
+  effectiveChannel: UpdateChannel;
   tag: string;
   currentVersion: string | null;
   targetVersion: string | null;
@@ -1751,7 +1752,7 @@ async function runGitUpdate(params: {
   timeoutMs: number | undefined;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   tag: string;
   showProgress: boolean;
   opts: UpdateCommandOptions;
@@ -1845,7 +1846,7 @@ async function runGitUpdate(params: {
 
 export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
@@ -2554,7 +2555,7 @@ async function maybeRestartService(params: {
 
 async function runPostCorePluginUpdate(params: {
   root: string;
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
@@ -2578,7 +2579,7 @@ type UpdateFinalizeResult = {
   status: "ok" | "warning" | "error";
   mode: "finalize";
   root: string;
-  channel: "stable" | "beta" | "dev";
+  channel: UpdateChannel;
   restart: false;
   postUpdate: {
     doctor: {
@@ -2643,7 +2644,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       : undefined);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
     defaultRuntime.exit(1);
     return;
   }
@@ -2746,7 +2749,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
 async function persistRequestedUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  requestedChannel: "stable" | "beta" | "dev" | null;
+  requestedChannel: UpdateChannel | null;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
   if (!params.requestedChannel || !params.configSnapshot.valid) {
     return params.configSnapshot;
@@ -3105,8 +3108,8 @@ function preparePostCorePluginInstallRecordsForFreshProcess(params: {
 
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
-  channel: "stable" | "beta" | "dev";
-  requestedChannel: "stable" | "beta" | "dev" | null;
+  channel: UpdateChannel;
+  requestedChannel: UpdateChannel | null;
   opts: UpdateCommandOptions;
   pluginInstallRecords: Record<string, PluginInstallRecord>;
   preUpdateConfig?: PreUpdateConfigRestoreInput;
@@ -3356,6 +3359,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   if (postCoreUpdateResume) {
     if (
       postCoreUpdateChannel !== "stable" &&
+      postCoreUpdateChannel !== "extended-stable" &&
       postCoreUpdateChannel !== "beta" &&
       postCoreUpdateChannel !== "dev"
     ) {
@@ -3445,7 +3449,9 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
     defaultRuntime.exit(1);
     return;
   }

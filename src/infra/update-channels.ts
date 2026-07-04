@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { parseComparableSemver } from "./semver-compare.js";
 
 /** Release stream used to choose registry tags and update policy defaults. */
-export type UpdateChannel = "stable" | "beta" | "dev";
+export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
 /** Evidence source that decided the effective update channel. */
 export type UpdateChannelSource =
   | "config"
@@ -33,7 +33,12 @@ export function normalizeUpdateChannel(value?: string | null): UpdateChannel | n
   if (!normalized) {
     return null;
   }
-  if (normalized === "stable" || normalized === "beta" || normalized === "dev") {
+  if (
+    normalized === "stable" ||
+    normalized === "extended-stable" ||
+    normalized === "beta" ||
+    normalized === "dev"
+  ) {
     return normalized;
   }
   return null;
@@ -41,6 +46,9 @@ export function normalizeUpdateChannel(value?: string | null): UpdateChannel | n
 
 /** Maps an OpenClaw update channel to the npm dist-tag used for package lookups. */
 export function channelToNpmTag(channel: UpdateChannel): string {
+  if (channel === "extended-stable") {
+    return "extended-stable";
+  }
   if (channel === "beta") {
     return "beta";
   }
@@ -79,6 +87,7 @@ export function resolveRegistryUpdateChannel(params: {
   if (
     params.currentVersion &&
     isBetaTag(params.currentVersion) &&
+    params.configChannel !== "extended-stable" &&
     params.configChannel !== "beta" &&
     params.configChannel !== "dev"
   ) {
@@ -97,6 +106,7 @@ export function resolveEffectiveUpdateChannel(params: {
   if (
     params.currentVersion &&
     isBetaTag(params.currentVersion) &&
+    params.configChannel !== "extended-stable" &&
     params.configChannel !== "beta" &&
     params.configChannel !== "dev"
   ) {
