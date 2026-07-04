@@ -18,6 +18,7 @@ import { isPathWithin } from "../commands/cleanup-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { writeJson } from "./json-files.js";
@@ -165,12 +166,6 @@ function isTarEofRaceError(err: unknown): boolean {
   // protocol" and "unexpected eof while reading", causing pointless retries.
   const message = (err as Error).message ?? "";
   return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export type BackupTarRetryLogger = (message: string) => void;

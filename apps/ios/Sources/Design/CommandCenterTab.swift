@@ -120,8 +120,8 @@ struct CommandCenterTab: View {
         OpenClawAdaptiveHeaderRow(
             title: self.headerTitle,
             subtitle: self.gatewaySubtitle,
-            titleFont: .title3.weight(.semibold),
-            subtitleFont: .caption,
+            titleFont: OpenClawType.title3SemiBold,
+            subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
         {
             if let headerLeadingAction {
@@ -135,7 +135,7 @@ struct CommandCenterTab: View {
         } accessory: {
             Button(action: self.openSettings) {
                 Image(systemName: "gearshape.fill")
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .frame(width: OpenClawProMetric.compactControlSize, height: OpenClawProMetric.compactControlSize)
             }
             .openClawGlassButton()
@@ -195,15 +195,15 @@ struct CommandCenterTab: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.caption2.weight(.bold))
+                    .font(OpenClawType.caption2Bold)
                     .foregroundStyle(color)
                 Text(title)
-                    .font(.caption2.weight(.medium))
+                    .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Text(value)
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(title == "Connection" ? color : .primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -275,7 +275,7 @@ struct CommandCenterTab: View {
     private func cardHeader(title: String) -> some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
         }
@@ -659,9 +659,9 @@ struct CommandSessionsScreen: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sessions")
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .font(OpenClawType.title2)
                 Text(self.headerDetail)
-                    .font(.caption.weight(.medium))
+                    .font(OpenClawType.captionMedium)
                     .foregroundStyle(.secondary)
             }
         }
@@ -673,7 +673,7 @@ struct CommandSessionsScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Text("Recent sessions")
-                        .font(.subheadline.weight(.bold))
+                        .font(OpenClawType.subheadBold)
                     Spacer(minLength: 8)
                     if self.isLoading {
                         ProgressView()

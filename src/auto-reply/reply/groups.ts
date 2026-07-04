@@ -241,17 +241,11 @@ export function buildGroupChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
-  const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
   const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
   const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
-  if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
-    lines.push(
-      `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
-    );
-  }
   if (messageToolOnly) {
     lines.push(
       `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,

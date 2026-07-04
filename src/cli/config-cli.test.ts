@@ -1191,8 +1191,9 @@ describe("config cli", () => {
           issues: [
             {
               path: "update.channel",
-              message: 'Invalid input (allowed: "stable", "beta", "dev")',
-              allowedValues: ["stable", "beta", "dev"],
+              message:
+                'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+              allowedValues: ["stable", "extended-stable", "beta", "dev"],
               allowedValuesHiddenCount: 0,
             },
           ],
@@ -1205,8 +1206,8 @@ describe("config cli", () => {
       expect(payload.issues).toEqual([
         {
           path: "update.channel",
-          message: 'Invalid input (allowed: "stable", "beta", "dev")',
-          allowedValues: ["stable", "beta", "dev"],
+          message: 'Invalid input (allowed: "stable", "extended-stable", "beta", "dev")',
+          allowedValues: ["stable", "extended-stable", "beta", "dev"],
         },
       ]);
       expect(mockError).not.toHaveBeenCalled();

@@ -1,6 +1,7 @@
 // Control UI controller manages control ui bootstrap gateway state.
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -38,6 +39,7 @@ export type ControlUiBootstrapState = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
+  terminalEnabled?: boolean;
   sessionKey?: string | null;
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
@@ -188,6 +190,21 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    // The host shell is opt-in; absent flags from older gateways stay disabled.
+    const terminalEnabled = parsed.terminalEnabled === true;
+    const documentTerminalState = document.documentElement.getAttribute(
+      CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
+    );
+    const documentTerminalEnabled =
+      documentTerminalState === "true" ? true : documentTerminalState === "false" ? false : null;
+    if (documentTerminalEnabled !== null && terminalEnabled !== documentTerminalEnabled) {
+      // CSP headers cannot change on a live document. Reload in either
+      // direction so enable gains the WASM allowance and disable removes it.
+      // Loop-safe: the replacement document carries the accepted state.
+      window.location.reload();
+      return;
+    }
+    state.terminalEnabled = terminalEnabled;
     applyControlUiSeamColor(parsed.seamColor);
     setUiTimeFormatPreference(parsed.timeFormat);
   } catch {

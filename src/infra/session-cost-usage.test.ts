@@ -529,7 +529,7 @@ describe("session cost usage", () => {
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 4;
+      cache.version = 5;
       await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
@@ -1102,6 +1102,15 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       await refreshCostUsageCache({ config: configFor(1, 1) });
+      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+      const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as {
+        pricingFingerprint?: unknown;
+        files: Record<string, Record<string, unknown>>;
+      };
+      expect(typeof cache.pricingFingerprint).toBe("string");
+      expect(cache.files[sessionFile]).not.toHaveProperty("pricingFingerprint");
+      expect(cache.files[sessionFile]).not.toHaveProperty("filePath");
+      expect(cache.files[sessionFile]).not.toHaveProperty("sessionId");
 
       const stale = await loadCostUsageSummaryFromCache({
         startMs: Date.UTC(2026, 1, 5),

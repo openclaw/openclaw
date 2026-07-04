@@ -102,7 +102,7 @@ describe("gateway server chat", () => {
 
   const withMainSessionStore = async <T>(
     run: (dir: string) => Promise<T>,
-    options?: { sessionId?: string },
+    options?: { archivedAt?: number; sessionId?: string },
   ): Promise<T> => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -114,6 +114,7 @@ describe("gateway server chat", () => {
             sessionId,
             sessionFile: path.join(dir, `${sessionId}.jsonl`),
             updatedAt: Date.now(),
+            ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
           },
         },
       });
@@ -179,6 +180,26 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("started");
     return res;
   };
+
+  test("chat.send rejects archived sessions before dispatch", async () => {
+    await withMainSessionStore(
+      async () => {
+        dispatchInboundMessageMock.mockClear();
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "blocked while archived",
+          idempotencyKey: "proof-chat-archived-session",
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: 'Session "agent:main:main" is archived. Restore it before starting new work.',
+        });
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      },
+      { archivedAt: Date.now() },
+    );
+  });
 
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {

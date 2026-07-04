@@ -5,6 +5,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { sleep } from "../utils/sleep.js";
 import type { StatusSummary } from "./status.types.js";
 
 type LocalTuiProcess = {
@@ -139,12 +140,6 @@ function isProcessAlive(controller: ProcessController, pid: number): boolean {
   } catch {
     return false;
   }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 /** Terminates local TUI processes with SIGTERM, then SIGKILL for remaining pids. */

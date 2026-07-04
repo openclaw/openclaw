@@ -631,8 +631,8 @@ export async function runPreparedReply(
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
-  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
-  const groupIntro = shouldInjectGroupIntro
+  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
+  const groupIntro = isGroupChat
     ? buildGroupIntro({
         sessionEntry,
         defaultActivation,

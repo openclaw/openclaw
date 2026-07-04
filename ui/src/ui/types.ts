@@ -477,6 +477,10 @@ export type GatewaySessionRow = {
   room?: string;
   space?: string;
   updatedAt: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -496,7 +500,6 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
-  archived?: boolean;
   hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;

@@ -73,6 +73,7 @@ import {
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
   resolveInboundMediaFileId,
+  TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type {
@@ -220,6 +221,10 @@ export const registerTelegramHandlers = ({
     token: opts.token,
     transport: telegramTransport,
   });
+  const mediaRuntimeWithAbort = {
+    ...mediaRuntimeOptions,
+    abortSignal: opts.fetchAbortSignal,
+  };
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
@@ -1038,7 +1043,7 @@ export const registerTelegramHandlers = ({
           media = await resolveMedia({
             ctx,
             maxBytes: mediaMaxBytes,
-            ...mediaRuntimeOptions,
+            ...mediaRuntimeWithAbort,
           });
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
@@ -1422,7 +1427,7 @@ export const registerTelegramHandlers = ({
               getFile: async () => await bot.api.getFile(replyFileId),
             },
             maxBytes: mediaMaxBytes,
-            ...mediaRuntimeOptions,
+            ...mediaRuntimeWithAbort,
           });
           mediaRef = media
             ? {
@@ -2310,12 +2315,15 @@ export const registerTelegramHandlers = ({
       media = await resolveMedia({
         ctx,
         maxBytes: mediaMaxBytes,
-        ...mediaRuntimeOptions,
+        ...mediaRuntimeWithAbort,
       });
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
-          const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
+          const limitMb =
+            mediaErr instanceof TelegramBotApiFileTooLargeError
+              ? Math.min(mediaErr.limitMb, Math.round(mediaMaxBytes / (1024 * 1024)))
+              : Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,

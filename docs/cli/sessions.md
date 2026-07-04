@@ -179,11 +179,11 @@ openclaw sessions compact "agent:main:main" --max-lines 200
 openclaw sessions compact "agent:work:main" --agent work --json
 ```
 
-- Without `--max-lines`, the gateway LLM-summarizes the transcript. This can be slow, so the default `--timeout` is `180000` ms.
+- Without `--max-lines`, the gateway LLM-summarizes the transcript. The CLI does not impose a client deadline by default; the gateway owns the configured compaction lifecycle.
 - With `--max-lines <n>`, it truncates to the last `n` transcript lines and archives the prior transcript as a `.bak` sidecar.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: gateway connection overrides.
-- `--timeout <ms>`: RPC timeout in milliseconds.
+- `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
 - `--json`: print the raw RPC payload.
 
 The command exits non-zero when the gateway reports a failed compaction or is unreachable, so crons and scripts never mistake a silent no-op for success.

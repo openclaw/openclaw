@@ -8,6 +8,7 @@ const {
   loadChatHistoryMock,
   createSessionAndRefreshMock,
   loadSessionsMock,
+  patchSessionMock,
   syncSelectedSessionMessageSubscriptionMock,
 } = vi.hoisted(() => ({
   refreshChatMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   loadChatHistoryMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
   loadSessionsMock: vi.fn(),
+  patchSessionMock: vi.fn(),
   syncSelectedSessionMessageSubscriptionMock: vi.fn(),
 }));
 
@@ -67,6 +69,7 @@ vi.mock("./controllers/chat.ts", () => ({
 vi.mock("./controllers/sessions.ts", () => ({
   createSessionAndRefresh: createSessionAndRefreshMock,
   loadSessions: loadSessionsMock,
+  patchSession: patchSessionMock,
   syncSelectedSessionMessageSubscription: syncSelectedSessionMessageSubscriptionMock,
 }));
 
@@ -75,8 +78,12 @@ import {
   dismissChatError,
   dismissRealtimeTalkError,
   handleChatManualRefresh,
+  isCurrentChatSessionArchived,
+  openCurrentSessionCheckpoints,
   isCronSessionKey,
+  isTerminalAvailable,
   parseSessionKey,
+  patchSessionFromSessionsView,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   resolveSessionOptionGroups,
@@ -97,6 +104,7 @@ beforeEach(() => {
   loadChatHistoryMock.mockReset();
   createSessionAndRefreshMock.mockReset();
   loadSessionsMock.mockReset();
+  patchSessionMock.mockReset();
   syncSelectedSessionMessageSubscriptionMock.mockReset();
 });
 
@@ -1054,6 +1062,112 @@ describe("createChatSession", () => {
 });
 
 describe("switchChatSession", () => {
+  it("finds an archived current session in the chat row cache", () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:ops:archived",
+      sessionsResult: null,
+      chatAgentSessionRowsByAgent: {
+        ops: [row({ key: "agent:ops:archived", archived: true })],
+      },
+    });
+
+    expect(isCurrentChatSessionArchived(state)).toBe(true);
+  });
+
+  it("uses selected chat history archive status after active caches evict the row", () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:ops:archived",
+      selectedChatSessionArchived: true,
+      sessionsResult: null,
+      chatAgentSessionRowsByAgent: {},
+    });
+
+    expect(isCurrentChatSessionArchived(state)).toBe(true);
+  });
+
+  it("loads checkpoints within the selected agent scope", async () => {
+    const setTab = vi.fn();
+    const state = createChatSessionState({
+      sessionKey: "global",
+      assistantAgentId: "ops",
+      selectedChatSessionArchived: true,
+      setTab,
+    });
+
+    openCurrentSessionCheckpoints(state);
+    await Promise.resolve();
+
+    expect(setTab).toHaveBeenCalledWith("sessions");
+    expect(state.sessionsExpandedCheckpointKey).toBe("global");
+    expect(state.sessionsShowArchived).toBe(true);
+    expect(loadSessionsMock).toHaveBeenCalledWith(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: true,
+      agentId: "ops",
+    });
+  });
+
+  it("switches chat and message subscription after archiving the selected session", async () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:ops:review",
+      tab: "sessions",
+      agentsList: { defaultId: "main", mainKey: "home", agents: [], scope: "global" },
+    });
+    patchSessionMock.mockResolvedValue(true);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+    syncSelectedSessionMessageSubscriptionMock.mockResolvedValue(undefined);
+
+    await patchSessionFromSessionsView(state, "agent:ops:review", { archived: true });
+    await Promise.resolve();
+
+    expect(patchSessionMock).toHaveBeenCalledWith(state, "agent:ops:review", {
+      archived: true,
+    });
+    expect(state.sessionKey).toBe("agent:ops:home");
+    expect(state.selectedChatSessionArchived).toBe(false);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(syncSelectedSessionMessageSubscriptionMock).toHaveBeenCalledWith(state);
+    expect(loadSessionsMock).toHaveBeenCalledWith(state, {
+      activeMinutes: 120,
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      showArchived: false,
+      agentId: "ops",
+    });
+  });
+
+  it("clears selected chat archive status when restoring the selected session", async () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:ops:review",
+      selectedChatSessionArchived: true,
+    });
+    patchSessionMock.mockResolvedValue(true);
+
+    await patchSessionFromSessionsView(state, "agent:ops:review", { archived: false });
+
+    expect(state.selectedChatSessionArchived).toBe(false);
+    expect(state.sessionKey).toBe("agent:ops:review");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("removes an archived row from the Sessions bulk selection", async () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:ops:home",
+      sessionsSelectedKeys: new Set(["agent:ops:review", "agent:ops:keep"]),
+    });
+    patchSessionMock.mockResolvedValue(true);
+
+    await patchSessionFromSessionsView(state, "agent:ops:review", { archived: true });
+
+    expect(state.sessionsSelectedKeys).toEqual(new Set(["agent:ops:keep"]));
+    expect(state.sessionKey).toBe("agent:ops:home");
+  });
+
   it("waits for the initial history and message subscription when requested", async () => {
     let resolveHistory!: () => void;
     let resolveSubscription!: () => void;
@@ -1126,6 +1240,23 @@ describe("switchChatSession", () => {
 
     expect(settled).toBe(true);
     expect(state.sessionKey).toBe("agent:main:review");
+  });
+
+  it("preserves known archive status when switching to an archived session", () => {
+    const state = createChatSessionState({
+      sessionKey: "agent:ops:home",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [row({ key: "agent:ops:archived", archived: true })],
+      },
+    });
+
+    switchChatSession(state, "agent:ops:archived");
+
+    expect(state.selectedChatSessionArchived).toBe(true);
   });
 
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
@@ -1599,5 +1730,53 @@ describe("dismissRealtimeTalkError", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkTranscript).toBeNull();
+  });
+});
+
+describe("isTerminalAvailable", () => {
+  function makeState(overrides?: {
+    connected?: boolean;
+    terminalEnabled?: boolean;
+    methods?: string[];
+    scopes?: string[] | undefined;
+  }): Pick<AppViewState, "connected" | "terminalEnabled" | "hello"> {
+    const methods = overrides?.methods ?? ["terminal.open", "terminal.input"];
+    const scopes = "scopes" in (overrides ?? {}) ? overrides?.scopes : ["operator.admin"];
+    return {
+      connected: overrides?.connected ?? true,
+      terminalEnabled: overrides?.terminalEnabled ?? true,
+      hello: {
+        features: { methods },
+        auth: scopes ? { role: "operator", scopes } : undefined,
+      },
+    } as unknown as Pick<AppViewState, "connected" | "terminalEnabled" | "hello">;
+  }
+
+  it("is available for a live admin connection that advertises terminal.open", () => {
+    expect(isTerminalAvailable(makeState())).toBe(true);
+  });
+
+  it("is unavailable while disconnected even if the stale hello still advertises it", () => {
+    // Auto-reconnect keeps the previous hello populated; the panel must go away
+    // so its teardown fires and it does not keep tabs on server-killed sessions.
+    expect(isTerminalAvailable(makeState({ connected: false }))).toBe(false);
+  });
+
+  it("is unavailable when the operator config disables it", () => {
+    expect(isTerminalAvailable(makeState({ terminalEnabled: false }))).toBe(false);
+  });
+
+  it("is unavailable when terminal.open is not advertised", () => {
+    expect(isTerminalAvailable(makeState({ methods: ["health", "status"] }))).toBe(false);
+  });
+
+  it("is unavailable for a non-admin operator even though the method is server-wide", () => {
+    expect(isTerminalAvailable(makeState({ scopes: ["operator.read", "operator.write"] }))).toBe(
+      false,
+    );
+  });
+
+  it("stays available when the gateway reports no scopes (tokenless/legacy admin)", () => {
+    expect(isTerminalAvailable(makeState({ scopes: undefined }))).toBe(true);
   });
 });

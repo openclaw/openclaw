@@ -57,6 +57,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     packageDir: "normalization-core",
     subpaths: [
       ["", "index.ts"],
+      ["boolean-coercion", "boolean-coercion.ts"],
       ["number-coercion", "number-coercion.ts"],
       ["record-coerce", "record-coerce.ts"],
       ["string-coerce", "string-coerce.ts"],
@@ -77,7 +78,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["media-source-url", "media-source-url.ts"],
       ["mime", "mime.ts"],
       ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
-      ["read-response-with-limit", "read-response-with-limit.ts"],
     ],
   },
   {

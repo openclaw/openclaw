@@ -4,6 +4,7 @@
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { spawn } from "node:child_process";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -32,12 +33,6 @@ type ExecDockerRawError = Error & {
   stdout: Buffer;
   stderr: Buffer;
 };
-
-function createAbortError(): Error {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  return err;
-}
 
 type DockerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -139,7 +134,7 @@ export function execDockerRaw(
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-        reject(createAbortError());
+      reject(createAbortError("Aborted"));
         return;
       }
       const exitCode = code ?? 0;
