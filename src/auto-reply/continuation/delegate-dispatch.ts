@@ -119,12 +119,15 @@ async function persistChainStateBeforeTerminalCommit(
   },
   delegate: PendingContinuationDelegate,
   chainState: ChainState,
+  options: { markPlannedChainState?: boolean } = {},
 ): Promise<PendingContinuationDelegate> {
   if (!params.persistBeforeTerminalCommit || !params.persistChainState) {
     return delegate;
   }
   try {
-    const plannedDelegate = markPendingDelegateChainStatePersistPlanned(delegate, chainState);
+    const plannedDelegate = options.markPlannedChainState
+      ? markPendingDelegateChainStatePersistPlanned(delegate, chainState)
+      : delegate;
     await params.persistChainState(chainState);
     return plannedDelegate;
   } catch (err) {
@@ -422,11 +425,13 @@ export async function dispatchToolDelegates(params: {
   const persistTerminalChainState = async (
     delegate: PendingContinuationDelegate,
     nextState: ChainState,
+    options: { markPlannedChainState?: boolean } = {},
   ): Promise<PendingContinuationDelegate> => {
     const updatedDelegate = await persistChainStateBeforeTerminalCommit(
       params,
       delegate,
       nextState,
+      options,
     );
     if (params.persistBeforeTerminalCommit && params.persistChainState) {
       chainStatePersistedBeforeTerminalCommit = true;
@@ -451,6 +456,15 @@ export async function dispatchToolDelegates(params: {
   }
 
   for (const delegate of delegatesWithinLimit) {
+    const spawnSessionKey = delegate.spawnRequesterSessionKey ?? sessionKey;
+    const childSessionKey = delegate.flowId
+      ? deriveContinuationDelegateChildSessionKeyFromParent(spawnSessionKey, delegate.flowId)
+      : undefined;
+    const acceptedChildAlreadyKnown = Boolean(
+      childSessionKey &&
+      (hasActiveSubagentRegistryRun(childSessionKey) ||
+        (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId))),
+    );
     if (
       crossSessionTargeting === "disabled" &&
       hasCrossSessionDelegateTargeting(delegate, sessionKey)
@@ -485,17 +499,18 @@ export async function dispatchToolDelegates(params: {
       continue;
     }
 
-    const budgetCheck = delegate.persistedChainState
-      ? undefined
-      : checkContinuationBudget({
-          chainState: {
-            currentChainCount,
-            chainStartedAt: chainState.chainStartedAt,
-            accumulatedChainTokens: currentAccumulatedTokens,
-          },
-          config,
-          sessionKey,
-        });
+    const budgetCheck =
+      delegate.persistedChainState && acceptedChildAlreadyKnown
+        ? undefined
+        : checkContinuationBudget({
+            chainState: {
+              currentChainCount,
+              chainStartedAt: chainState.chainStartedAt,
+              accumulatedChainTokens: currentAccumulatedTokens,
+            },
+            config,
+            sessionKey,
+          });
 
     if (budgetCheck) {
       const summary = `Tool delegate rejected: ${budgetCheck}.`;
@@ -548,7 +563,6 @@ export async function dispatchToolDelegates(params: {
     const delegateDelayMs = delegate.delayMs ?? 0;
     const delegateDelivery: "immediate" | "timer" = delegateDelayMs > 0 ? "timer" : "immediate";
 
-    const spawnSessionKey = delegate.spawnRequesterSessionKey ?? sessionKey;
     const spawnCtx: SpawnSubagentContext = {
       agentSessionKey: spawnSessionKey,
       agentChannel: delegate.spawnRequesterChannel ?? ctx.agentChannel,
@@ -581,17 +595,11 @@ export async function dispatchToolDelegates(params: {
         log: (message) => log.info(message),
       });
       const spawnTraceparent = dispatchSpan.traceparent?.() ?? outboundTraceparent;
-      const childSessionKey = delegate.flowId
-        ? deriveContinuationDelegateChildSessionKeyFromParent(spawnSessionKey, delegate.flowId)
-        : undefined;
-      if (
-        childSessionKey &&
-        (hasActiveSubagentRegistryRun(childSessionKey) ||
-          (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
-      ) {
+      if (childSessionKey && acceptedChildAlreadyKnown) {
         const acceptedDelegate = await persistTerminalChainState(
           delegate,
           plannedTerminalChainState,
+          { markPlannedChainState: true },
         );
         markPendingDelegateSpawnAccepted(acceptedDelegate, childSessionKey);
         dispatchSpan.setStatus("OK");
@@ -637,6 +645,7 @@ export async function dispatchToolDelegates(params: {
         const acceptedDelegate = await persistTerminalChainState(
           delegate,
           plannedTerminalChainState,
+          { markPlannedChainState: true },
         );
         if (acceptedChildSessionKey) {
           markPendingDelegateSpawnAccepted(acceptedDelegate, acceptedChildSessionKey);

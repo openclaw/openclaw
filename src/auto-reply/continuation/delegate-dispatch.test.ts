@@ -2158,6 +2158,51 @@ describe("recoverPendingContinuationDelegates", () => {
     });
   });
 
+  it("keeps budget checks for planned chain-state rows without an accepted child", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:planned-chain-state-over-budget";
+    enqueuePendingDelegate(sessionKey, { task: "planned but not accepted" });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.revision = 1;
+    flow!.stateJson = {
+      ...(flow!.stateJson as Record<string, unknown>),
+      persistedChainState: {
+        currentChainCount: 2,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 600_000,
+        chainId: "chain-planned-over-budget",
+      },
+    };
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 2,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 600_000,
+        continuationChainId: "chain-planned-over-budget",
+      },
+    });
+
+    const recovered = await recoverPendingContinuationDelegates({});
+
+    expect(recovered).toMatchObject({ sessions: 1, dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+  });
+
   it("clears persisted chain-token folds so later delayed hedges do not reapply them (#1158)", async () => {
     setRuntimeConfigSnapshot({
       agents: {
