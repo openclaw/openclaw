@@ -357,7 +357,46 @@ describe("skills-install fallback edge cases", () => {
       expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
       expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: false, reason: "uv" });
       // Brew recipes stay ready: installSkill swaps argv[0] to the resolved path.
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
       expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
+    });
+
+    it("skips brew-backed recipes when Homebrew install directories are not writable", async () => {
+      mockAvailableBinaries(["brew"]);
+      runCommandWithTimeoutMock.mockResolvedValue({
+        code: 1,
+        stdout: "",
+        stderr: "directories are not writable",
+      });
+
+      expect(await resolveInstallerKindReadiness("brew")).toEqual({
+        ready: false,
+        reason: "brew",
+      });
+      expect(await resolveInstallerKindReadiness("uv")).toEqual({
+        ready: false,
+        reason: "uv",
+      });
+      expect(commandCallAt(0)[0]).toEqual(["brew", "doctor", "check_access_directories"]);
+      expect(commandCallAt(1)[0]).toEqual(["brew", "doctor", "check_access_directories"]);
+    });
+
+    it("skips usable Go when its Homebrew install destination is not writable", async () => {
+      mockAvailableBinaries(["go", "brew"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "go version go1.24.12 linux/amd64\n",
+        stderr: "",
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "directories are not writable",
+      });
+
+      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+      expect(commandCallAt(0)[0]).toEqual(["go", "version"]);
+      expect(commandCallAt(1)[0]).toEqual(["brew", "doctor", "check_access_directories"]);
     });
 
     it("skips too-old Go even though the binary exists", async () => {
@@ -390,6 +429,7 @@ describe("skills-install fallback edge cases", () => {
 
       // On-PATH brew satisfies brew recipes and uv's brew bootstrap.
       mockAvailableBinaries(["brew"]);
+      runCommandWithTimeoutMock.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
       expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: true });
       expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
     });

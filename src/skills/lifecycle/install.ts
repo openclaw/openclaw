@@ -444,9 +444,11 @@ export type SkillInstallReadiness =
   | { ready: true }
   | { ready: false; reason: SkillInstallSkipReason };
 
-function resolvePreflightBrewExe(): string | undefined {
-  const deps = getSkillsInstallDeps();
-  return deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable();
+async function canUseBrewForAutoInstall(brewExe: string): Promise<boolean> {
+  const accessCheck = await runCommandSafely([brewExe, "doctor", "check_access_directories"], {
+    timeoutMs: 10_000,
+  });
+  return accessCheck.code === 0;
 }
 
 function parseGoVersion(output: string): { major: number; minor: number } | undefined {
@@ -514,28 +516,41 @@ async function canBootstrapGoViaApt(): Promise<boolean> {
  * setup so callers can skip doomed installs; keep in lockstep with those fallbacks.
  *
  * uv/go bootstraps count only on-PATH brew: the recipe still spawns bare `uv`/`go`,
- * so a tool bootstrapped through off-PATH Linuxbrew would not be executable. Brew
- * recipes accept any resolvable brew because installSkill swaps argv[0] to that path.
+ * so a tool bootstrapped through off-PATH Linuxbrew would not be executable. Any brew
+ * path used for installs must also pass Homebrew's focused directory access check.
  */
 export async function resolveInstallerKindReadiness(kind: string): Promise<SkillInstallReadiness> {
   const deps = getSkillsInstallDeps();
+  const brewOnPath = deps.hasBinary("brew");
+  const brewExe = brewOnPath ? "brew" : deps.resolveBrewExecutable();
   switch (kind) {
     case "brew":
-      return resolvePreflightBrewExe() ? { ready: true } : { ready: false, reason: "brew" };
-    case "uv":
-      return deps.hasBinary("uv") || deps.hasBinary("brew")
+      return brewExe && (await canUseBrewForAutoInstall(brewExe))
+        ? { ready: true }
+        : { ready: false, reason: "brew" };
+    case "uv": {
+      if (deps.hasBinary("uv")) {
+        return { ready: true };
+      }
+      return brewOnPath && brewExe && (await canUseBrewForAutoInstall(brewExe))
         ? { ready: true }
         : { ready: false, reason: "uv" };
+    }
     case "go": {
       if (deps.hasBinary("go")) {
-        return (await isGoUsableForAutoInstall())
+        if (!(await isGoUsableForAutoInstall())) {
+          return { ready: false, reason: "go" };
+        }
+        return !brewExe || (await canUseBrewForAutoInstall(brewExe))
           ? { ready: true }
           : { ready: false, reason: "go" };
       }
-      if (deps.hasBinary("brew")) {
-        return { ready: true };
+      if (brewOnPath && brewExe) {
+        return (await canUseBrewForAutoInstall(brewExe))
+          ? { ready: true }
+          : { ready: false, reason: "go" };
       }
-      if (deps.resolveBrewExecutable()) {
+      if (brewExe) {
         // ensureGoInstalled prefers any resolvable brew over apt, so the install
         // would bootstrap an off-PATH Go and then fail spawning bare `go`.
         return { ready: false, reason: "go" };
