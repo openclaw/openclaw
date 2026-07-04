@@ -124,4 +124,48 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     );
     expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
   });
+
+  // --- mention-only / short-body edge cases (#99725) ---
+
+  it("falls back to raw content when mention-only message has no body after mention stripping (#99725)", () => {
+    // User sends just "@Bot" with no other text → normalization strips bot mention to empty
+    // → fix preserves raw content so agent receives meaningful context.
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ),
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("@_bot_1");
+  });
+
+  it("strips bot mention leaving ≤ 5 char body when the message is mention + short text", () => {
+    // User sends "@Bot hi" in a group
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 hi",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ),
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("hi");
+    expect(ctx.content.length).toBeLessThanOrEqual(5);
+  });
+
+  it("strips bot mention preserving an exactly 5-char body (mention + short)", () => {
+    // User sends "@Bot hello" (5 chars after stripping mention)
+    const ctx = parseFeishuMessageEvent(
+      makeEvent(
+        "@_bot_1 hello",
+        [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }],
+        "group",
+      ),
+      BOT_OPEN_ID,
+    );
+    expect(ctx.content).toBe("hello");
+    expect(ctx.content.length).toBe(5);
+  });
 });

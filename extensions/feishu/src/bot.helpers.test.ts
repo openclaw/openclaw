@@ -64,6 +64,38 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain(`${"A".repeat(76)}...`);
     expect(body).not.toContain("\ud83d");
     expect(body).not.toContain("\ude00");
+  it("produces minimal body with only speaker metadata when content is empty (mention-only edge case #99725)", () => {
+    // After normalizeMentions strips bot mention away entirely,
+    // the agent body has no meaningful user content — only the speaker label.
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "",
+        senderName: "User Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-99",
+        hasAnyMention: true,
+      },
+      botOpenId: "ou_bot",
+    });
+
+    expect(body).toMatch(/^\[message_id: msg-99\]/);
+    expect(body).toContain("User Name: ");
+    // Content is empty after the colon — the agent receives a body
+    // with no actual user payload beyond "who sent it".
+    expect(body).toMatch(/User Name: \n/);
+  });
+
+  it("sends short body unchanged for mention + ≤5 char text (#99725)", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "hi",
+        senderName: "User Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-100",
+      },
+    });
+
+    expect(body).toContain("User Name: hi");
   });
 });
 

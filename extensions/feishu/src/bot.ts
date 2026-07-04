@@ -291,7 +291,9 @@ export function parseFeishuMessageEvent(
   // mentionedBot flag already captures whether the bot was addressed, so
   // keeping the mention tag in content only breaks command detection (#35994).
   // Non-bot mentions (e.g. mention-forward targets) are still normalized to <at> tags.
-  const content = normalizeMentions(rawContent, event.message.mentions, botOpenId);
+  // When stripping the bot mention leaves no content (mention-only message),
+  // preserve the raw text so the agent receives meaningful context (#99725).
+  const content = normalizeMentions(rawContent, event.message.mentions, botOpenId) || rawContent;
   const senderOpenId = event.sender.sender_id.open_id?.trim();
   const senderUserId = event.sender.sender_id.user_id?.trim();
   const senderFallbackId = senderOpenId || senderUserId || "";
