@@ -90,4 +90,34 @@ describe("github-copilot provider-policy-api", () => {
       }),
     ).toBeNull();
   });
+
+  it("preserves thinking levels for Claude models when catalog reasoning is false", () => {
+    // Copilot discovery marks Anthropic-backed models reasoning:false; the
+    // bundled policy must opt in to preserving its declared levels so the
+    // shared resolver does not collapse them to off-only. See #99240.
+    const profile = resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "claude-sonnet-4.6",
+      compat: { supportedReasoningEfforts: [] },
+    });
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBe(true);
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("does not preserve thinking levels for non-Claude Copilot models", () => {
+    // Non-Claude Copilot models without reasoning_effort stay off-only so we do
+    // not advertise reasoning to models that may not support it. See #99240.
+    const profile = resolveThinkingProfile({
+      provider: "github-copilot",
+      modelId: "gpt-5.4-mini",
+      compat: { supportedReasoningEfforts: [] },
+    });
+    expect(profile?.preserveWhenCatalogReasoningFalse).toBeUndefined();
+  });
 });
