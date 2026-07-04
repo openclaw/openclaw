@@ -33,6 +33,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
@@ -1354,6 +1355,7 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { runId: "slack-run-1" },
       replyResolver: async () => ({ text: "Slack command reply" }),
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
     expect(mocks.routeReply).not.toHaveBeenCalled();
@@ -1415,6 +1417,7 @@ describe("dispatchReplyFromConfig", () => {
         return { text: "✅ New session started." };
       },
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1447,6 +1450,7 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver: async () =>
         setReplyPayloadMetadata({ text: "Persisted runtime reply" }, metadata),
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
@@ -1572,6 +1576,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyResolver: async () => ({ text: "Secret Slack reply" }),
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1603,6 +1608,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyResolver: async () => ({ text: "Hidden Slack reply" }),
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
@@ -10543,6 +10549,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
       },
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
@@ -10607,6 +10614,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
       },
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
@@ -10622,6 +10630,84 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
     });
+  });
+
+  it("lets a queued same-session turn finish before mirroring delivered source replies", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      sessionKey: "agent:main",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const order: string[] = [];
+    let followupDispatch: Promise<unknown> | undefined;
+    const firstDispatcher = createReplyDispatcher({
+      deliver: async () => {
+        if (!followupDispatch) {
+          throw new Error("expected queued follow-up dispatch");
+        }
+        await followupDispatch;
+        order.push("first-delivery");
+      },
+    });
+    const firstReply = setReplyPayloadMetadata(
+      { text: "first reply" },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          agentId: "main",
+          text: "first reply",
+          idempotencyKey: "run-1:internal-source-reply:queued",
+        },
+      },
+    );
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(async () => {
+      order.push("mirror");
+      return { ok: true, sessionFile: "/tmp/session.jsonl", messageId: "message-1" };
+    });
+
+    const firstResult = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        MessageSid: "first-message",
+        Provider: "webchat",
+        Surface: "webchat",
+        SessionKey: "agent:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher: firstDispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+      replyResolver: async () => {
+        followupDispatch = dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Body: "follow up",
+            MessageSid: "followup-message",
+            Provider: "webchat",
+            Surface: "webchat",
+            SessionKey: "agent:main",
+          }),
+          cfg: emptyConfig,
+          dispatcher: createDispatcher(),
+          replyResolver: async () => {
+            order.push("followup");
+            return { text: "second reply" };
+          },
+        });
+        await Promise.resolve();
+        return firstReply;
+      },
+    });
+
+    expect(firstResult.queuedFinal).toBe(true);
+    await settleReplyDispatcher({ dispatcher: firstDispatcher });
+    await followupDispatch;
+
+    expect(order).toEqual(["followup", "first-delivery", "mirror"]);
+    const queuedMirrorCalls = transcriptMocks.appendAssistantMessageToSessionTranscript.mock.calls
+      .map(([params]) => params as { idempotencyKey?: string })
+      .filter((params) => params.idempotencyKey === "run-1:internal-source-reply:queued");
+    expect(queuedMirrorCalls).toHaveLength(1);
   });
 
   it("does not mirror internal source replies cancelled by dispatcher hooks", async () => {
@@ -10661,6 +10747,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
       },
     });
+    await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);

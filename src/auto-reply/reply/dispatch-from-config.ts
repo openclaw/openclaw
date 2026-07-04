@@ -115,6 +115,7 @@ import {
   normalizeCommandBody,
   resolveTextCommand,
 } from "../commands-registry.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { BlockReplyContext, GetReplyOptions } from "../get-reply-options.types.js";
 import {
   copyReplyPayloadMetadata,
@@ -897,13 +898,12 @@ function captureDeliveredTranscriptMirror(params: {
   return () => (observedFinal ? deliveredMetadata : metadata);
 }
 
-async function mirrorTranscriptAfterDispatcherDelivery(params: {
+async function mirrorTranscriptAfterDispatcherSettled(params: {
   dispatcher: ReplyDispatcher;
   before: { cancelled: number; failed: number };
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
 }): Promise<void> {
-  await params.dispatcher.waitForIdle();
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
   if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
     return;
@@ -2582,35 +2582,25 @@ export async function dispatchReplyFromConfig(
             )
           : undefined);
       markInboundDedupeReplayUnsafe();
-      const finalOutcomeBefore = getDispatcherFinalOutcomeCounts(dispatcher);
-      const deliveredTranscriptMirror = captureDeliveredTranscriptMirror({
-        dispatcher,
-        metadata: transcriptMirror,
-      });
+      const finalOutcomeBefore = transcriptMirror
+        ? getDispatcherFinalOutcomeCounts(dispatcher)
+        : undefined;
+      const deliveredTranscriptMirror = transcriptMirror
+        ? captureDeliveredTranscriptMirror({ dispatcher, metadata: transcriptMirror })
+        : undefined;
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
-      if (queuedFinal) {
-        // Fire-and-forget: the transcript mirror waits for the dispatcher to go
-        // idle, but awaiting it here blocks the reply operation's completion — and
-        // idle cannot arrive until this op clears when a follow-up is queued
-        // (queueDepth>=2). That is a completion<->dispatcher-idle deadlock: the op
-        // stays phase=running and surfaces as stalled_agent_run (recovery=none)
-        // until the stuck-session abort. Running the mirror in the background lets
-        // the op complete immediately — the queued follow-up proceeds, the
-        // dispatcher goes idle, and the (detached) mirror then records the
-        // transcript. Mirroring is post-delivery bookkeeping; it does not need to
-        // gate completion.
-        void mirrorTranscriptAfterDispatcherDelivery({
-          dispatcher,
-          before: finalOutcomeBefore,
-          metadata: deliveredTranscriptMirror,
-          cfg,
-        }).catch((error: unknown) => {
-          logVerbose(
-            `dispatch-from-config: background transcript mirror failed: ${formatErrorMessage(
-              error,
-            )}`,
-          );
-        });
+      if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
+        // The common settle owner runs this after successful delivery or
+        // cancellation. Keeping reconciliation out of the reply operation lets a
+        // newer foreground turn settle without creating an operation/idle cycle.
+        registerReplyDispatcherSettledTask(dispatcher, () =>
+          mirrorTranscriptAfterDispatcherSettled({
+            dispatcher,
+            before: finalOutcomeBefore,
+            metadata: deliveredTranscriptMirror,
+            cfg,
+          }),
+        );
       }
       return {
         queuedFinal,
