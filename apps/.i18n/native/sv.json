@@ -4324,6 +4324,16 @@
       "translated": "Redigera \\(skill.displayName)"
     },
     {
+      "id": "native.apple.de59fbc2807318fc",
+      "source": "Skill unavailable",
+      "translated": "Skill ej tillgänglig"
+    },
+    {
+      "id": "native.apple.2e0b19585f4fec18",
+      "source": "Return to the skills list and choose another skill.",
+      "translated": "Gå tillbaka till listan över Skills och välj en annan skill."
+    },
+    {
       "id": "native.apple.29d82bdb73f5a551",
       "source": "Skill",
       "translated": "Skill"
@@ -5049,11 +5059,6 @@
       "translated": "Standardagent"
     },
     {
-      "id": "native.apple.0c99715b98ca22a2",
-      "source": "Card",
-      "translated": "Kort"
-    },
-    {
       "id": "native.apple.77a417fa0f2aba1d",
       "source": "Title",
       "translated": "Titel"
@@ -5064,9 +5069,9 @@
       "translated": "Status"
     },
     {
-      "id": "native.apple.68a43a9e8939f395",
-      "source": "Actions",
-      "translated": "Åtgärder"
+      "id": "native.apple.0c99715b98ca22a2",
+      "source": "Card",
+      "translated": "Kort"
     },
     {
       "id": "native.apple.93eeaedb2ff61043",
@@ -5087,6 +5092,11 @@
       "id": "native.apple.dab3609e8a71ed48",
       "source": "Unarchive",
       "translated": "Ta bort från arkiv"
+    },
+    {
+      "id": "native.apple.68a43a9e8939f395",
+      "source": "Actions",
+      "translated": "Åtgärder"
     },
     {
       "id": "native.apple.07a313e2adf7227b",
@@ -5639,31 +5649,6 @@
       "translated": "Licenser"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.800b6502b5b49941",
-      "source": "Address",
-      "translated": "Adress"
-    },
-    {
-      "id": "native.apple.fde8b41db7ec49f3",
-      "source": "Server",
-      "translated": "Server"
-    },
-    {
-      "id": "native.apple.624f9dc99e8f9ff4",
-      "source": "Discovered",
-      "translated": "Upptäckt"
-    },
-    {
-      "id": "native.apple.8e3656d85f092897",
-      "source": "Agents",
-      "translated": "Agenter"
-    },
-    {
       "id": "native.apple.3c8f5bb5ce507cf9",
       "source": "Approvals",
       "translated": "Godkännanden"
@@ -5834,6 +5819,31 @@
       "translated": "OpenClaw uppskattar sina partner i open source-communityn."
     },
     {
+      "id": "native.apple.4b8dfe776225b172",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.800b6502b5b49941",
+      "source": "Address",
+      "translated": "Adress"
+    },
+    {
+      "id": "native.apple.fde8b41db7ec49f3",
+      "source": "Server",
+      "translated": "Server"
+    },
+    {
+      "id": "native.apple.624f9dc99e8f9ff4",
+      "source": "Discovered",
+      "translated": "Upptäckt"
+    },
+    {
+      "id": "native.apple.8e3656d85f092897",
+      "source": "Agents",
+      "translated": "Agenter"
+    },
+    {
       "id": "native.apple.0f4e7486619df175",
       "source": "Controls whether location can be shared with gateway tools.",
       "translated": "Styr om plats kan delas med gateway-verktyg."
@@ -5864,14 +5874,14 @@
       "translated": "Standardagent"
     },
     {
-      "id": "native.apple.bf6ddc5fa4832324",
-      "source": "Agent",
-      "translated": "Agent"
-    },
-    {
       "id": "native.apple.6ace5e6f09ec98c7",
       "source": "Default",
       "translated": "Standard"
+    },
+    {
+      "id": "native.apple.bf6ddc5fa4832324",
+      "source": "Agent",
+      "translated": "Agent"
     },
     {
       "id": "native.apple.3de045f17ea3c6d0",
@@ -6334,14 +6344,14 @@
       "translated": "Detaljer"
     },
     {
-      "id": "native.apple.677a41ec947a185b",
-      "source": "Technical details",
-      "translated": "Tekniska detaljer"
-    },
-    {
       "id": "native.apple.79b30b1d014a383d",
       "source": "Copy diagnostics",
       "translated": "Kopiera diagnostik"
+    },
+    {
+      "id": "native.apple.677a41ec947a185b",
+      "source": "Technical details",
+      "translated": "Tekniska detaljer"
     },
     {
       "id": "native.apple.e87c850114041ce8",
@@ -6499,19 +6509,14 @@
       "translated": "Kräver uppmärksamhet"
     },
     {
-      "id": "native.apple.fd04cd49334845a9",
-      "source": "Request",
-      "translated": "Begäran"
-    },
-    {
       "id": "native.apple.ae581f232bd0ecc0",
       "source": "Copy request ID",
       "translated": "Kopiera begärande-ID"
     },
     {
-      "id": "native.apple.50622ef698ba07f5",
-      "source": "Gateway command",
-      "translated": "Gateway-kommando"
+      "id": "native.apple.fd04cd49334845a9",
+      "source": "Request",
+      "translated": "Begäran"
     },
     {
       "id": "native.apple.98df0e8ba486e4d1",
@@ -6519,9 +6524,9 @@
       "translated": "Kopiera kommando"
     },
     {
-      "id": "native.apple.6b1a61d6c9510bdb",
-      "source": "Help",
-      "translated": "Hjälp"
+      "id": "native.apple.50622ef698ba07f5",
+      "source": "Gateway command",
+      "translated": "Gateway-kommando"
     },
     {
       "id": "native.apple.32ea6ea1f9aea920",
@@ -6529,12 +6534,17 @@
       "translated": "Öppna dokumentation"
     },
     {
+      "id": "native.apple.6b1a61d6c9510bdb",
+      "source": "Help",
+      "translated": "Hjälp"
+    },
+    {
       "id": "native.apple.7041ebbb775bfdd7",
       "source": "Technical details",
       "translated": "Teknisk information"
     },
     {
-      "id": "native.apple.d33a0c45a54fa8a3",
+      "id": "native.apple.f307f967ec2df705",
       "source": "Connection problem",
       "translated": "Anslutningsproblem"
     },
@@ -6574,7 +6584,7 @@
       "translated": "Inga gateways hittades än. Se till att din gateway körs och att Bonjour-upptäckt är aktiverad."
     },
     {
-      "id": "native.apple.476757fc54c63560",
+      "id": "native.apple.d2445a87f9cb6ff4",
       "source": "Quick Setup",
       "translated": "Snabbkonfiguration"
     },
@@ -6979,7 +6989,7 @@
       "translated": "OK"
     },
     {
-      "id": "native.apple.a5fe3de8fc43f3da",
+      "id": "native.apple.80a2693bba128a6c",
       "source": "Scan QR Code",
       "translated": "Skanna QR-kod"
     },
@@ -7059,11 +7069,6 @@
       "translated": "Tillbaka till lägesval"
     },
     {
-      "id": "native.apple.07ebd3b75969629f",
-      "source": "Discovered Gateways",
-      "translated": "Upptäckta Gateways"
-    },
-    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "Inga gateways hittades ännu."
@@ -7077,6 +7082,11 @@
       "id": "native.apple.94c9697fb748d05d",
       "source": "Restart Discovery",
       "translated": "Starta om identifiering"
+    },
+    {
+      "id": "native.apple.07ebd3b75969629f",
+      "source": "Discovered Gateways",
+      "translated": "Upptäckta Gateways"
     },
     {
       "id": "native.apple.1284354b0d0098ad",
@@ -7394,11 +7404,6 @@
       "translated": "Anslutning"
     },
     {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "Integritet och åtkomst"
-    },
-    {
       "id": "native.apple.4dac301c7e0c921c",
       "source": "Contacts",
       "translated": "Kontakter"
@@ -7442,6 +7447,11 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Lista, lägg till och slutför påminnelser."
+    },
+    {
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "Integritet och åtkomst"
     },
     {
       "id": "native.apple.651cc89381dd69c0",
