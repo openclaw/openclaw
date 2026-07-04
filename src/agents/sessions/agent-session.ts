@@ -2391,7 +2391,7 @@ export class AgentSession {
             this.extensionAbortHandler();
             return;
           }
-          void this.abort();
+          void this.abort().catch(() => {});
         },
         hasPendingMessages: () => this.pendingMessageCount > 0,
         shutdown: () => {
