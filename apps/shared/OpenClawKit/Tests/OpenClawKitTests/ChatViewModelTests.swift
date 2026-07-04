@@ -1273,10 +1273,21 @@ struct ChatViewModelTests {
     @Test func `does not duplicate user message when refresh returns canonical timestamp`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
-        let history1 = historyPayload(sessionId: sessionId)
+        let history1 = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "assistant",
+                    text: "earlier answer",
+                    timestamp: now + 1000),
+            ])
         let history2 = historyPayload(
             sessionId: sessionId,
             messages: [
+                chatTextMessage(
+                    role: "assistant",
+                    text: "earlier answer",
+                    timestamp: now + 1000),
                 chatTextMessage(
                     role: "user",
                     text: "hello from mac webchat",
@@ -1287,14 +1298,11 @@ struct ChatViewModelTests {
                     timestamp: now + 6000),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (_, vm) = await makeViewModel(historyResponses: [history1, history2])
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
-        try await sendMessageAndEmitFinal(
-            transport: transport,
-            vm: vm,
-            text: "hello from mac webchat")
+        await sendUserMessage(vm, text: "hello from mac webchat")
 
-        try await waitUntil("canonical refresh keeps one user message") {
+        try await waitUntil("send acknowledgement refresh keeps one user message") {
             await MainActor.run {
                 let userMessages = vm.messages.filter { message in
                     message.role == "user" &&

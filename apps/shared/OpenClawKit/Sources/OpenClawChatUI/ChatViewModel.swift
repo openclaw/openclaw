@@ -939,11 +939,23 @@ public final class OpenClawChatViewModel {
             previous[previous.index(after: index)...]
         } ?? []
 
+        // Pending send IDs own their canonical echo match. Exclude them from the
+        // trailing-row pass so one refresh cannot suppress and then re-add the same row.
         let pendingLocalUsers = previous.filter { message in
-            message.role.lowercased() == "user" && pendingLocalUserEchoIDs.contains(message.id)
+            guard message.role.lowercased() == "user", pendingLocalUserEchoIDs.contains(message.id) else {
+                return false
+            }
+            guard let userKey = Self.userRefreshIdentityKey(for: message) else { return true }
+            let remaining = remainingIncomingUserRefreshCounts[userKey] ?? 0
+            if remaining > 0 {
+                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
+                return false
+            }
+            return true
         }
         let trailingLocalUsers = trailingLocalCandidates.filter { message in
             guard message.role.lowercased() == "user" else { return false }
+            guard !pendingLocalUserEchoIDs.contains(message.id) else { return false }
             guard let identityKey = Self.messageIdentityKey(for: message) else { return true }
             guard !incomingIdentityKeys.contains(identityKey) else { return false }
             guard let userKey = Self.userRefreshIdentityKey(for: message) else { return true }

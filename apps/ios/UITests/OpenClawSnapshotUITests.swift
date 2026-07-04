@@ -293,6 +293,77 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-light")
     }
 
+    func testEmptyChatStarterPromptSendsMessage() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-empty-starters"),
+            additionalArguments: ["--openclaw-empty-chat-fixture"])
+
+        let starter = try XCTUnwrap(self.app?.buttons["chat-starter-summarize-status"])
+        XCTAssertTrue(starter.waitForExistence(timeout: 8))
+        XCTAssertTrue(self.app?.staticTexts["What would you like to work on?"].exists == true)
+        self.attachScreenshot(named: "chat-empty-starters")
+
+        starter.tap()
+        XCTAssertTrue(
+            self.app?.staticTexts["Summarize the current OpenClaw status and tell me what needs attention."]
+                .waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(
+            self.app?.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "I can help with"))
+                .firstMatch.waitForExistence(timeout: 5) == true)
+        self.attachScreenshot(named: "chat-starter-response")
+    }
+
+    func testOnboardingPairCommandAndCompletionOpenChat() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone onboarding proof only")
+        self.addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+
+        let app = XCUIApplication()
+        setupSnapshot(app)
+        app.launchArguments += [
+            "--openclaw-reset-onboarding",
+            "--openclaw-initial-tab",
+            "settings",
+            "--openclaw-initial-destination",
+            "settings",
+        ]
+        app.launch()
+        self.app = app
+
+        XCTAssertTrue(app.buttons["Continue"].waitForExistence(timeout: 8))
+        app.buttons["Continue"].tap()
+        app.tap()
+
+        let copyPairCommand = app.buttons["onboarding-copy-pair-command"]
+        XCTAssertTrue(copyPairCommand.waitForExistence(timeout: 8))
+        copyPairCommand.tap()
+        XCTAssertEqual(copyPairCommand.label, "Pair command copied")
+        self.attachScreenshot(named: "onboarding-copy-pair-command")
+
+        app.buttons["Set Up Manually"].tap()
+        let setupCode = app.textFields["Paste setup code"]
+        XCTAssertTrue(setupCode.waitForExistence(timeout: 5))
+        setupCode.tap()
+        setupCode.typeText("APPLE-REVIEW-DEMO")
+        app.buttons["Done"].tap()
+        app.buttons["Apply Setup Code"].tap()
+
+        XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Apple Review Demo Gateway"].exists)
+        XCTAssertFalse(app.staticTexts["Local demo mode"].exists)
+        self.attachScreenshot(named: "onboarding-connected-go-to-chat")
+
+        app.buttons["Go to Chat"].tap()
+        XCTAssertTrue(app.tabBars.buttons["Chat"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.tabBars.buttons["Chat"].isSelected)
+    }
+
     func testTalkUsesNativeControls() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Talk controls only")
         self.launchApp(for: ScreenshotTarget(
@@ -602,7 +673,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
     private func launchApp(
         for target: ScreenshotTarget,
         appearance: String? = "dark",
-        screenshotMode: Bool = true)
+        screenshotMode: Bool = true,
+        additionalArguments: [String] = [])
     {
         self.app?.terminate()
 
@@ -619,6 +691,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if screenshotMode {
             app.launchArguments.append("--openclaw-screenshot-mode")
         }
+        app.launchArguments += additionalArguments
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
@@ -684,7 +757,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         app.buttons["Apply Setup Code"].tap()
 
         XCTAssertTrue(app.staticTexts["Connected"].waitForExistence(timeout: 45))
-        app.buttons["Open OpenClaw"].tap()
+        app.buttons["Go to Chat"].tap()
         return app
     }
 

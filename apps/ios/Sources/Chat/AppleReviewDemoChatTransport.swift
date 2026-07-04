@@ -80,9 +80,9 @@ struct LocalChatFixture {
         modelID: "gpt-5.5",
         modelName: "GPT-5.5",
         responsePrefix: "OpenClaw is connected to your gateway.",
-        seedMessages: [
-            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
-        ],
+        seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
+            ? []
+            : ["Ready when you are. I can check a project, coordinate an agent, or prepare the next step."],
         agents: [
             AgentSummary(
                 id: "main",
