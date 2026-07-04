@@ -176,6 +176,7 @@ final class GatewayConnectionController {
     private var pendingTrustConnect: PendingTrustConnect?
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
+    private var autoConnectSuppressionGeneration: UInt64?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
@@ -281,6 +282,7 @@ final class GatewayConnectionController {
         forceReconnect: Bool = false) async -> String?
     {
         let connectGeneration = self.beginConnectAttempt()
+        defer { self.finishConnectAttempt(connectGeneration) }
         self.requestLocalNetworkAccess(reason: "connect_discovered_gateway", allowAutoReconnect: false)
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -382,6 +384,7 @@ final class GatewayConnectionController {
         forceReconnect: Bool = false) async
     {
         let connectGeneration = self.beginConnectAttempt()
+        defer { self.finishConnectAttempt(connectGeneration) }
         self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let token =
@@ -508,6 +511,7 @@ final class GatewayConnectionController {
 
     func cancelPendingConnectionAttempts() {
         self.connectAttemptGeneration &+= 1
+        self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
         self.clearPendingTrustPrompt()
     }
 
@@ -552,6 +556,7 @@ final class GatewayConnectionController {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password)
+        self.autoConnectSuppressionGeneration = nil
     }
 
     func declinePendingTrustPrompt() {
@@ -626,6 +631,7 @@ final class GatewayConnectionController {
     }
 
     private func maybeAutoConnect() {
+        guard self.autoConnectSuppressionGeneration == nil else { return }
         guard !self.didAutoConnect else { return }
         guard let appModel = self.appModel else { return }
         guard appModel.gatewayServerName == nil else { return }
@@ -926,7 +932,14 @@ final class GatewayConnectionController {
 
     private func beginConnectAttempt() -> UInt64 {
         self.connectAttemptGeneration &+= 1
+        self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
         return self.connectAttemptGeneration
+    }
+
+    private func finishConnectAttempt(_ generation: UInt64) {
+        guard self.connectAttemptGeneration == generation else { return }
+        guard self.pendingTrustPrompt == nil else { return }
+        self.autoConnectSuppressionGeneration = nil
     }
 
     private func tlsProbeFailureMessage(

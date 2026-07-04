@@ -229,6 +229,7 @@ extension SettingsProTab {
         guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.showQRScanner = false
         self.scannerResultHandoff.cancel()
+        self.gatewayController.cancelPendingConnectionAttempts()
         self.setupCode = ""
         self.setupStatusText = nil
         self.stagedGatewaySetupLink = link

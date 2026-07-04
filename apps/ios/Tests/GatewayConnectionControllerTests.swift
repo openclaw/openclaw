@@ -403,6 +403,87 @@ import UIKit
         #expect(appModel.activeGatewayConnectConfig?.stableID == currentConfig.stableID)
     }
 
+    @Test @MainActor func directGatewayApplyInvalidatesOlderQueuedConfig() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let staleGeneration = appModel.beginGatewayConnectAttempt()
+        let staleConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://stale.gateway.invalid")!,
+            stableID: "manual|stale.gateway.invalid|443")
+        let currentConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://current.gateway.invalid")!,
+            stableID: "manual|current.gateway.invalid|443")
+
+        appModel.applyGatewayConnectConfig(currentConfig)
+        appModel.applyGatewayConnectConfig(staleConfig, expectedGeneration: staleGeneration)
+
+        #expect(appModel.activeGatewayConnectConfig?.stableID == currentConfig.stableID)
+    }
+
+    @Test @MainActor func explicitConnectionSuppressesPersistedAutoConnectWhileSuspended() async {
+        let defaults = UserDefaults.standard
+        let updates: [String: Any?] = [
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": "persisted.gateway.invalid",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]
+        var snapshot: [String: Any?] = [:]
+        for key in updates.keys {
+            snapshot[key] = defaults.object(forKey: key)
+        }
+        for (key, value) in updates {
+            defaults.set(value, forKey: key)
+        }
+        defer {
+            for (key, value) in snapshot {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        let explicitHost = "explicit.gateway.invalid"
+        let explicitStableID = "manual|\(explicitHost)|443"
+        defer { GatewayTLSStore.clearFingerprint(stableID: explicitStableID) }
+        GatewayTLSStore.clearFingerprint(stableID: explicitStableID)
+        let probeStarted = AsyncStream<Void>.makeStream()
+        let probeResults = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in
+                probeStarted.continuation.yield()
+                for await result in probeResults.stream {
+                    return result
+                }
+                return .failure(.certificateUnavailable)
+            })
+        defaults.set(true, forKey: "gateway.autoconnect")
+        var startedIterator = probeStarted.stream.makeAsyncIterator()
+
+        let connectTask = Task {
+            await controller.connectManual(host: explicitHost, port: 443, useTLS: true)
+        }
+        _ = await startedIterator.next()
+        controller._test_triggerAutoConnect()
+
+        #expect(!controller._test_didAutoConnect())
+        #expect(appModel.activeGatewayConnectConfig == nil)
+
+        controller.cancelPendingConnectionAttempts()
+        probeResults.continuation.yield(.failure(.certificateUnavailable))
+        probeResults.continuation.finish()
+        await connectTask.value
+    }
+
     @Test @MainActor func clearingTrustPromptInvalidatesInFlightProbe() async {
         let probeStarted = AsyncStream<Void>.makeStream()
         let probeResults = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()

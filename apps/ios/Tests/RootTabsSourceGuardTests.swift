@@ -770,6 +770,7 @@ struct RootTabsSourceGuardTests {
         let trustSource = try String(contentsOf: Self.gatewayTrustPromptAlertSourceURL(), encoding: .utf8)
         let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
         let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+        let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let scannerSource = try String(contentsOf: Self.qrScannerSourceURL(), encoding: .utf8)
         let settingsScannerSheet = try Self.extract(
@@ -818,6 +819,10 @@ struct RootTabsSourceGuardTests {
         let stagedConsumption = try #require(stagedSetupConnect.range(of: "self.setupLinkStaging.take()"))
         let stagedReset = try #require(
             stagedSetupConnect.range(of: "await self.appModel.resetGatewaySessionsForTargetSwitch()"))
+        let backgroundReconnect = try Self.extract(
+            modelSource,
+            from: "private func performBackgroundAliveBeaconIfNeeded(",
+            to: "private func publishBackgroundAliveBeacon(")
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -883,6 +888,8 @@ struct RootTabsSourceGuardTests {
         #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
         #expect(settingsPendingSetupHandler.contains("self.showQRScanner = false"))
         #expect(settingsScannerCancel.lowerBound < settingsSetupStaging.lowerBound)
+        #expect(settingsPendingSetupHandler.contains(
+            "self.gatewayController.cancelPendingConnectionAttempts()"))
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource.contains("case let .gatewayLink(link):"))
         #expect(actionsSource.contains("case let .setupCode(code):"))
@@ -920,6 +927,12 @@ struct RootTabsSourceGuardTests {
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
         #expect(controllerSource.contains("allowAutoReconnect: false"))
         #expect(controllerSource.contains("guard allowAutoReconnect else { return }"))
+        #expect(controllerSource.contains("guard self.autoConnectSuppressionGeneration == nil else { return }"))
+        #expect(backgroundReconnect.contains("let generation = self.gatewayConnectGeneration"))
+        #expect(backgroundReconnect.contains("await self.resetGatewaySessionsForForcedReconnect()"))
+        #expect(backgroundReconnect.contains("expectedGeneration: generation"))
+        #expect(modelSource.contains("expectedGeneration: UInt64)"))
+        #expect(!modelSource.contains("expectedGeneration: UInt64?"))
     }
 
     @Test func `local network access is requested from visible gateway flows`() throws {

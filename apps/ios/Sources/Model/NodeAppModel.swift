@@ -2126,10 +2126,22 @@ extension NodeAppModel {
     /// Preferred entry-point: apply a single config object and start both sessions.
     func applyGatewayConnectConfig(
         _ cfg: GatewayConnectConfig,
-        forceReconnect: Bool = false,
-        expectedGeneration: UInt64? = nil)
+        forceReconnect: Bool = false)
     {
-        guard expectedGeneration == nil || expectedGeneration == self.gatewayConnectGeneration else { return }
+        let generation = self.beginGatewayConnectAttempt()
+        self.applyGatewayConnectConfig(
+            cfg,
+            forceReconnect: forceReconnect,
+            expectedGeneration: generation)
+    }
+
+    /// Applies queued work only while its originating gateway attempt is still current.
+    func applyGatewayConnectConfig(
+        _ cfg: GatewayConnectConfig,
+        forceReconnect: Bool = false,
+        expectedGeneration: UInt64)
+    {
+        guard expectedGeneration == self.gatewayConnectGeneration else { return }
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         self.connectToGateway(
@@ -2206,8 +2218,10 @@ extension NodeAppModel {
 
     private func restartGatewaySessionsAfterForegroundStaleConnection() async {
         guard self.gatewayAutoReconnectEnabled, let cfg = self.activeGatewayConnectConfig else { return }
+        let generation = self.gatewayConnectGeneration
         await self.resetGatewaySessionsForForcedReconnect()
-        guard self.gatewayAutoReconnectEnabled,
+        guard generation == self.gatewayConnectGeneration,
+              self.gatewayAutoReconnectEnabled,
               self.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true,
               self.nodeGatewayTask == nil,
               self.operatorGatewayTask == nil
@@ -2217,7 +2231,10 @@ extension NodeAppModel {
         self.gatewayConnected = false
         self.gatewayStatusText = "Reconnecting…"
         self.talkMode.updateGatewayConnected(false)
-        self.applyGatewayConnectConfig(cfg, forceReconnect: true)
+        self.applyGatewayConnectConfig(
+            cfg,
+            forceReconnect: true,
+            expectedGeneration: generation)
     }
 
     func disconnectGateway() {
@@ -4837,22 +4854,31 @@ extension NodeAppModel {
                 self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
                 return makeResult(false, false, "no_active_gateway_config")
             }
+            let generation = self.gatewayConnectGeneration
             self.pushWakeLogger.info(
                 "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
             self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
-            await self.operatorGateway.disconnect()
-            await self.nodeGateway.disconnect()
+            await self.resetGatewaySessionsForForcedReconnect()
+            guard generation == self.gatewayConnectGeneration,
+                  self.gatewayAutoReconnectEnabled,
+                  self.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
+            else {
+                return makeResult(false, false, "reconnect_superseded")
+            }
             self.setOperatorConnected(false)
             self.gatewayConnected = false
             self.gatewayStatusText = "Reconnecting…"
             self.talkMode.updateGatewayConnected(false)
-            self.applyGatewayConnectConfig(cfg)
+            self.applyGatewayConnectConfig(cfg, expectedGeneration: generation)
             appliedReconnect = true
             self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
 
             let connected = await self.waitForGatewayConnection(timeoutMs: 12000, pollMs: 250)
             guard connected else {
                 return makeResult(appliedReconnect, false, "connect_timeout")
+            }
+            guard generation == self.gatewayConnectGeneration else {
+                return makeResult(appliedReconnect, false, "reconnect_superseded")
             }
         } else if BackgroundAliveBeacon.shouldSkipRecentSuccess(
             isGatewayConnected: true,
