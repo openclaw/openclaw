@@ -98,11 +98,11 @@
     "providers": [
       {
         "id": "tencent-tokenhub",
-        "envVars": ["TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY"]
+        "envVars": ["TOKENHUB_API_KEY"]
       },
       {
         "id": "tencent-tokenplan",
-        "envVars": ["TENCENT_TOKENPLAN_API_KEY"]
+        "envVars": ["TOKENPLAN_API_KEY"]
       }
     ]
   },
@@ -121,29 +121,16 @@
       "cliDescription": "Tencent TokenHub API key"
     },
     {
-      "provider": "tencent-tokenhub",
-      "method": "api-key-tencent",
-      "choiceId": "tencent-tokenhub-api-key",
-      "choiceLabel": "Tencent TokenHub",
-      "groupId": "tencent",
-      "groupLabel": "Tencent Cloud",
-      "groupHint": "Tencent TokenHub",
-      "optionKey": "tencentTokenHubApiKey",
-      "cliFlag": "--tencent-tokenhub-api-key",
-      "cliOption": "--tencent-tokenhub-api-key <key>",
-      "cliDescription": "Tencent TokenHub API key"
-    },
-    {
       "provider": "tencent-tokenplan",
       "method": "api-key",
-      "choiceId": "tencent-tokenplan-api-key",
+      "choiceId": "tokenplan-api-key",
       "choiceLabel": "Tencent TokenPlan",
       "groupId": "tencent",
       "groupLabel": "Tencent Cloud",
       "groupHint": "Tencent TokenPlan",
-      "optionKey": "tencentTokenPlanApiKey",
-      "cliFlag": "--tencent-tokenplan-api-key",
-      "cliOption": "--tencent-tokenplan-api-key <key>",
+      "optionKey": "tokenplanApiKey",
+      "cliFlag": "--tokenplan-api-key",
+      "cliOption": "--tokenplan-api-key <key>",
       "cliDescription": "Tencent TokenPlan API key"
     }
   ],

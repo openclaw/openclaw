@@ -87,7 +87,7 @@ function captureTencentPayload(params: {
 }
 
 describe("tencent provider plugin", () => {
-  it("preserves Tencent TokenHub legacy api-key auth metadata", async () => {
+  it("registers Tencent TokenHub api-key auth metadata", async () => {
     const { providers } = await registerTencentPlugin();
     const provider = requireRegisteredProvider(providers, "tencent-tokenhub");
     const resolved = resolveProviderPluginChoice({
@@ -97,8 +97,8 @@ describe("tencent provider plugin", () => {
 
     expect(provider.id).toBe("tencent-tokenhub");
     expect(provider.label).toBe("Tencent TokenHub");
-    expect(provider.envVars).toEqual(["TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY"]);
-    expect(provider.auth).toHaveLength(2);
+    expect(provider.envVars).toEqual(["TOKENHUB_API_KEY"]);
+    expect(provider.auth).toHaveLength(1);
     if (!resolved) {
       throw new Error("expected Tencent TokenHub api-key auth choice");
     }
@@ -106,42 +106,23 @@ describe("tencent provider plugin", () => {
     expect(resolved.method.id).toBe("api-key");
   });
 
-  it("registers Tencent TokenHub prefixed api-key auth alias", async () => {
-    const { providers } = await registerTencentPlugin();
-    const resolved = resolveProviderPluginChoice({
-      providers,
-      choice: "tencent-tokenhub-api-key",
-    });
-
-    if (!resolved) {
-      throw new Error("expected Tencent TokenHub prefixed api-key auth choice");
-    }
-    expect(resolved.provider.id).toBe("tencent-tokenhub");
-    expect(resolved.method.id).toBe("api-key-tencent");
-  });
-
   it("registers Tencent TokenPlan api-key auth metadata", async () => {
     const { providers } = await registerTencentPlugin();
     const provider = requireRegisteredProvider(providers, "tencent-tokenplan");
     const resolved = resolveProviderPluginChoice({
       providers,
-      choice: "tencent-tokenplan-api-key",
+      choice: "tokenplan-api-key",
     });
 
     expect(provider.id).toBe("tencent-tokenplan");
     expect(provider.label).toBe("Tencent TokenPlan");
-    expect(provider.envVars).toEqual(["TENCENT_TOKENPLAN_API_KEY"]);
+    expect(provider.envVars).toEqual(["TOKENPLAN_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
     if (!resolved) {
       throw new Error("expected Tencent TokenPlan api-key auth choice");
     }
     expect(resolved.provider.id).toBe("tencent-tokenplan");
     expect(resolved.method.id).toBe("api-key");
-  });
-
-  it("does not resolve removed TokenPlan short-name auth choice", async () => {
-    const { providers } = await registerTencentPlugin();
-    expect(resolveProviderPluginChoice({ providers, choice: "tokenplan-api-key" })).toBeNull();
   });
 
   it("builds the static Tencent TokenHub model catalog with reasoning flags", async () => {

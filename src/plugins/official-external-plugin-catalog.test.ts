@@ -1823,8 +1823,7 @@ describe("official external plugin catalog", () => {
         STEPFUN_API_KEY: "stepfun-key",
         FIREWORKS_API_KEY: "fireworks-key",
         TOKENHUB_API_KEY: "tokenhub-key",
-        TENCENT_TOKENHUB_API_KEY: "tencent-tokenhub-key",
-        TENCENT_TOKENPLAN_API_KEY: "tencent-tokenplan-key",
+        TOKENPLAN_API_KEY: "tokenplan-key",
         VENICE_API_KEY: "venice-key",
         AI_GATEWAY_API_KEY: "gateway-key",
         ZAI_API_KEY: "zai-key",
@@ -1861,24 +1860,19 @@ describe("official external plugin catalog", () => {
       (provider) => provider.id === "tencent-tokenplan",
     );
 
-    expect(tokenHub?.envVars).toEqual(["TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY"]);
+    expect(tokenHub?.envVars).toEqual(["TOKENHUB_API_KEY"]);
     expect(tokenHub?.authChoices).toEqual([
       expect.objectContaining({
         choiceId: "tokenhub-api-key",
         optionKey: "tokenhubApiKey",
         cliFlag: "--tokenhub-api-key",
       }),
-      expect.objectContaining({
-        choiceId: "tencent-tokenhub-api-key",
-        optionKey: "tencentTokenHubApiKey",
-        cliFlag: "--tencent-tokenhub-api-key",
-      }),
     ]);
-    expect(tokenPlan?.envVars).toEqual(["TENCENT_TOKENPLAN_API_KEY"]);
+    expect(tokenPlan?.envVars).toEqual(["TOKENPLAN_API_KEY"]);
     expect(tokenPlan?.authChoices?.[0]).toMatchObject({
-      choiceId: "tencent-tokenplan-api-key",
-      optionKey: "tencentTokenPlanApiKey",
-      cliFlag: "--tencent-tokenplan-api-key",
+      choiceId: "tokenplan-api-key",
+      optionKey: "tokenplanApiKey",
+      cliFlag: "--tokenplan-api-key",
     });
   });
 

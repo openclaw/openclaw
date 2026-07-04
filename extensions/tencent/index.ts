@@ -28,46 +28,27 @@ function buildStaticCatalogEntries(providerId: string, catalog: typeof TOKENHUB_
   }));
 }
 
-function createTokenHubApiKeyAuthMethods() {
-  const shared = {
+function createTokenHubApiKeyAuthMethod() {
+  return createProviderApiKeyAuthMethod({
     providerId: TOKENHUB_PROVIDER_ID,
+    methodId: "api-key",
     label: "Tencent TokenHub",
     hint: "Hy via Tencent TokenHub Gateway",
+    optionKey: "tokenhubApiKey",
+    flagName: "--tokenhub-api-key",
+    envVar: "TOKENHUB_API_KEY",
     promptMessage: "Enter Tencent TokenHub API key",
     defaultModel: TOKENHUB_DEFAULT_MODEL_REF,
     expectedProviders: [TOKENHUB_PROVIDER_ID],
     applyConfig: applyTokenHubConfig,
-  };
-  return [
-    createProviderApiKeyAuthMethod({
-      ...shared,
-      methodId: "api-key",
-      optionKey: "tokenhubApiKey",
-      flagName: "--tokenhub-api-key",
-      envVar: "TOKENHUB_API_KEY",
-      wizard: {
-        choiceId: "tokenhub-api-key",
-        choiceLabel: "Tencent TokenHub",
-        groupId: "tencent",
-        groupLabel: "Tencent Cloud",
-        groupHint: "Tencent TokenHub",
-      },
-    }),
-    createProviderApiKeyAuthMethod({
-      ...shared,
-      methodId: "api-key-tencent",
-      optionKey: "tencentTokenHubApiKey",
-      flagName: "--tencent-tokenhub-api-key",
-      envVar: "TENCENT_TOKENHUB_API_KEY",
-      wizard: {
-        choiceId: "tencent-tokenhub-api-key",
-        choiceLabel: "Tencent TokenHub",
-        groupId: "tencent",
-        groupLabel: "Tencent Cloud",
-        groupHint: "Tencent TokenHub",
-      },
-    }),
-  ];
+    wizard: {
+      choiceId: "tokenhub-api-key",
+      choiceLabel: "Tencent TokenHub",
+      groupId: "tencent",
+      groupLabel: "Tencent Cloud",
+      groupHint: "Tencent TokenHub",
+    },
+  });
 }
 
 export default definePluginEntry({
@@ -79,8 +60,8 @@ export default definePluginEntry({
       id: TOKENHUB_PROVIDER_ID,
       label: "Tencent TokenHub",
       docsPath: "/providers/tencent",
-      envVars: ["TOKENHUB_API_KEY", "TENCENT_TOKENHUB_API_KEY"],
-      auth: createTokenHubApiKeyAuthMethods(),
+      envVars: ["TOKENHUB_API_KEY"],
+      auth: [createTokenHubApiKeyAuthMethod()],
       catalog: {
         order: "simple",
         run: (ctx) =>
@@ -99,22 +80,22 @@ export default definePluginEntry({
       id: TOKENPLAN_PROVIDER_ID,
       label: "Tencent TokenPlan",
       docsPath: "/providers/tencent",
-      envVars: ["TENCENT_TOKENPLAN_API_KEY"],
+      envVars: ["TOKENPLAN_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: TOKENPLAN_PROVIDER_ID,
           methodId: "api-key",
           label: "Tencent TokenPlan",
           hint: "Hy via Tencent TokenPlan Gateway",
-          optionKey: "tencentTokenPlanApiKey",
-          flagName: "--tencent-tokenplan-api-key",
-          envVar: "TENCENT_TOKENPLAN_API_KEY",
+          optionKey: "tokenplanApiKey",
+          flagName: "--tokenplan-api-key",
+          envVar: "TOKENPLAN_API_KEY",
           promptMessage: "Enter Tencent TokenPlan API key",
           defaultModel: TOKENPLAN_DEFAULT_MODEL_REF,
           expectedProviders: [TOKENPLAN_PROVIDER_ID],
-          applyConfig: (cfg) => applyTokenPlanConfig(cfg),
+          applyConfig: applyTokenPlanConfig,
           wizard: {
-            choiceId: "tencent-tokenplan-api-key",
+            choiceId: "tokenplan-api-key",
             choiceLabel: "Tencent TokenPlan",
             groupId: "tencent",
             groupLabel: "Tencent Cloud",

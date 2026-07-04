@@ -107,18 +107,6 @@ hy3 is Tencent Hunyuan's large MoE language model for reasoning, long-context in
   The model id is `hy3`. Do not confuse it with Tencent's `HY-3D-*` models, which are 3D generation APIs and are not the OpenClaw chat model configured by this provider.
 </Tip>
 
-## Tiered pricing
-
-The provider catalog ships tiered cost metadata that scales with input window length, so cost estimates are populated without manual overrides.
-
-| Input tokens range | Input rate | Output rate | Cache read |
-| ------------------ | ---------- | ----------- | ---------- |
-| 0 - 16,000         | 0.176      | 0.587       | 0.059      |
-| 16,000 - 32,000    | 0.235      | 0.939       | 0.088      |
-| 32,000+            | 0.293      | 1.173       | 0.117      |
-
-Rates are per million tokens in USD as advertised by Tencent. Override pricing under `models.providers.tencent-tokenhub` only when you need a different surface.
-
 ## Advanced configuration
 
 <AccordionGroup>
