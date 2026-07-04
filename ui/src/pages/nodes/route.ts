@@ -1,131 +1,39 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
-import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
-import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import type { RouteId } from "../../app-routes.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
-  currentConfigObject,
-  loadConfig,
-  removeConfigFormValue,
-  saveConfig,
-  updateConfigFormValue,
-} from "../../lib/config/index.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadNodes } from "./data.ts";
-import {
-  approveDevicePairing,
+  createInitialNodesState,
   loadDevices,
-  rejectDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
-} from "./devices.ts";
-import {
   loadExecApprovals,
-  removeExecApprovalsFormValue,
-  saveExecApprovals,
-  updateExecApprovalsFormValue,
-} from "./exec-approvals.ts";
-import { startNodesPolling, stopNodesPolling } from "./polling.ts";
+  loadNodes,
+} from "../../lib/nodes/index.ts";
+import type { NodesRouteData } from "./nodes-page.ts";
 
-type NodesLoadContext = { host: SettingsHost; app: SettingsAppHost };
-type NodesRenderContext = { state: AppViewState };
+async function loadNodesRouteData(context: ApplicationContext<RouteId>): Promise<NodesRouteData> {
+  const gateway = context.gateway.snapshot;
+  const nodes = createInitialNodesState(gateway);
+  if (!gateway.connected || !gateway.client) {
+    return { nodes };
+  }
+  await Promise.all([
+    loadNodes(nodes),
+    Promise.allSettled([
+      loadDevices(nodes),
+      context.runtimeConfig.refresh(),
+      loadExecApprovals(nodes),
+    ]),
+  ]);
+  return { nodes };
+}
 
 export const page = definePage({
   id: "nodes",
   path: "/nodes",
-  loader: ({ app }: NodesLoadContext) =>
-    Promise.all([
-      loadNodes(app),
-      Promise.allSettled([loadDevices(app), loadConfig(app), loadExecApprovals(app)]),
-    ]).then(() => undefined),
-  onEnter: ({ host }: NodesLoadContext) => {
-    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
-  },
-  onLeave: ({ host }: NodesLoadContext) =>
-    stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]),
+  loader: loadNodesRouteData,
   component: () =>
-    import("./view.ts").then((module) => ({
+    import("./nodes-page.ts").then(() => ({
       header: true,
-      render: ({ state }: NodesRenderContext) => html`
-        <section class="content-header">
-          <div>
-            <div class="page-title">${titleForRoute("nodes")}</div>
-            <div class="page-sub">${subtitleForRoute("nodes")}</div>
-          </div>
-        </section>
-        ${module.renderNodes({
-          loading: state.nodesLoading,
-          nodes: state.nodes,
-          devicesLoading: state.devicesLoading,
-          devicesError: state.devicesError,
-          devicesList: state.devicesList,
-          configForm: currentConfigObject(state),
-          configLoading: state.configLoading,
-          configSaving: state.configSaving,
-          configDirty: state.configFormDirty,
-          configFormMode: state.configFormMode,
-          execApprovalsLoading: state.execApprovalsLoading,
-          execApprovalsSaving: state.execApprovalsSaving,
-          execApprovalsDirty: state.execApprovalsDirty,
-          execApprovalsSnapshot: state.execApprovalsSnapshot,
-          execApprovalsForm: state.execApprovalsForm,
-          execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
-          execApprovalsTarget: state.execApprovalsTarget,
-          execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
-          onRefresh: () => void loadNodes(state),
-          onDevicesRefresh: () => void loadDevices(state),
-          onDeviceApprove: (requestId) => void approveDevicePairing(state, requestId),
-          onDeviceReject: (requestId) => void rejectDevicePairing(state, requestId),
-          onDeviceRotate: (deviceId, role, scopes) =>
-            void rotateDeviceToken(state, { deviceId, role, scopes }),
-          onDeviceRevoke: (deviceId, role) => void revokeDeviceToken(state, { deviceId, role }),
-          onLoadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
-          onLoadExecApprovals: () => {
-            const target =
-              state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
-                ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
-                : { kind: "gateway" as const };
-            void loadExecApprovals(state, target);
-          },
-          onBindDefault: (nodeId) => {
-            if (nodeId) {
-              updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
-            } else {
-              removeConfigFormValue(state, ["tools", "exec", "node"]);
-            }
-          },
-          onBindAgent: (agentIndex, nodeId) => {
-            if (nodeId) {
-              updateConfigFormValue(
-                state,
-                ["agents", "list", agentIndex, "tools", "exec", "node"],
-                nodeId,
-              );
-            } else {
-              removeConfigFormValue(state, ["agents", "list", agentIndex, "tools", "exec", "node"]);
-            }
-          },
-          onSaveBindings: () => void saveConfig(state),
-          onExecApprovalsTargetChange: (kind, nodeId) => {
-            state.execApprovalsTarget = kind;
-            state.execApprovalsTargetNodeId = nodeId;
-            state.execApprovalsSnapshot = null;
-            state.execApprovalsForm = null;
-            state.execApprovalsDirty = false;
-            state.execApprovalsSelectedAgent = null;
-          },
-          onExecApprovalsSelectAgent: (agentId) => {
-            state.execApprovalsSelectedAgent = agentId;
-          },
-          onExecApprovalsPatch: (path, value) => updateExecApprovalsFormValue(state, path, value),
-          onExecApprovalsRemove: (path) => removeExecApprovalsFormValue(state, path),
-          onSaveExecApprovals: () => {
-            const target =
-              state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
-                ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
-                : { kind: "gateway" as const };
-            void saveExecApprovals(state, target);
-          },
-        })}
-      `,
+      render: (data) => html`<openclaw-nodes-page .routeData=${data}></openclaw-nodes-page>`,
     })),
 });

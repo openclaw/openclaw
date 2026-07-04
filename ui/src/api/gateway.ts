@@ -21,13 +21,14 @@ import {
   PROTOCOL_VERSION,
 } from "../../../packages/gateway-protocol/src/version.js";
 import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
-import { generateUUID } from "../lib/uuid.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
   storeDeviceAuthToken,
-} from "../pages/nodes/device-auth.ts";
-import { loadOrCreateDeviceIdentity, signDevicePayload } from "../pages/nodes/device-identity.ts";
+  loadOrCreateDeviceIdentity,
+  signDevicePayload,
+} from "../lib/nodes/index.ts";
+import { generateUUID } from "../lib/uuid.ts";
 
 export type GatewayEventFrame = {
   type: "event";

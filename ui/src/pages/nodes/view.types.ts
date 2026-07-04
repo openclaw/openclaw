@@ -1,6 +1,9 @@
 // Nodes page view contracts.
-import type { DevicePairingList } from "./devices.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals.ts";
+import type {
+  DevicePairingList,
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "../../lib/nodes/index.ts";
 
 export type NodesProps = {
   loading: boolean;

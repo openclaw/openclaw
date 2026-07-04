@@ -163,8 +163,10 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadControlUiBootstrapConfigMock,
 }));
 
-vi.mock("../pages/nodes/devices.ts", () => ({
+vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/nodes/index.ts")>()),
   loadDevices: loadDevicesMock,
+  loadNodes: loadNodesMock,
 }));
 
 vi.mock("../app/exec-approval.ts", () => ({
@@ -187,10 +189,6 @@ vi.mock("../lib/model-auth.ts", async (importOriginal) => ({
   loadModelAuthStatusState: loadModelAuthStatusStateMock,
 }));
 
-vi.mock("../pages/nodes/data.ts", () => ({
-  loadNodes: loadNodesMock,
-}));
-
 afterAll(() => {
   vi.doUnmock("../app-routes.ts");
   vi.doUnmock("./gateway.ts");
@@ -203,11 +201,10 @@ afterAll(() => {
   vi.doUnmock("../lib/agents/index.ts");
   vi.doUnmock("./controllers/assistant-identity.ts");
   vi.doUnmock("./controllers/control-ui-bootstrap.ts");
-  vi.doUnmock("../pages/nodes/devices.ts");
+  vi.doUnmock("../lib/nodes/index.ts");
   vi.doUnmock("../app/exec-approval.ts");
   vi.doUnmock("./controllers/health.ts");
   vi.doUnmock("../lib/model-auth.ts");
-  vi.doUnmock("../pages/nodes/data.ts");
   vi.resetModules();
 });
 

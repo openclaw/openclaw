@@ -28,6 +28,7 @@ import { loadAgents, type AgentsState } from "../lib/agents/index.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { parseChatSideResult, type ChatSideResult } from "../lib/chat/side-result.ts";
 import { loadModelAuthStatusState, type ModelAuthStatusState } from "../lib/model-auth.ts";
+import { loadDevices, type DevicesState } from "../lib/nodes/index.ts";
 import { scopedAgentParamsForSession } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -67,7 +68,6 @@ import {
 } from "../pages/chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
-import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
 import { applySettings, syncUrlWithSessionKey } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { formatConnectError } from "./connect-error.ts";

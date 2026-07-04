@@ -55,6 +55,11 @@ import {
   loadCronStatus,
   type CronFormState,
 } from "../lib/cron/index.ts";
+import type {
+  DevicePairingList,
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "../lib/nodes/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import type {
   ClawHubSearchResult,
@@ -109,8 +114,6 @@ import {
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
-import type { DevicePairingList } from "../pages/nodes/devices.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";
 import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
 import {
@@ -688,7 +691,6 @@ export class OpenClawApp extends LitElement {
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;
-  nodesPollInterval: number | null = null;
   logsPollInterval: number | null = null;
   debugPollInterval: number | null = null;
   logsScrollFrame: number | null = null;

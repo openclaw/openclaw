@@ -7,8 +7,8 @@ import {
 } from "../../../../src/shared/device-pairing-access.js";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatList } from "../../lib/format.ts";
+import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "./devices.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
 export type { NodesProps } from "./view.types.ts";

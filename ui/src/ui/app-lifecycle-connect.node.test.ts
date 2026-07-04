@@ -49,10 +49,6 @@ vi.mock("./app-settings.ts", () => ({
   syncThemeWithSettings: vi.fn(),
 }));
 
-vi.mock("../pages/nodes/polling.ts", () => ({
-  stopNodesPolling: vi.fn(),
-}));
-
 vi.mock("../app/topbar.ts", () => ({
   observeTopbar: vi.fn(),
 }));

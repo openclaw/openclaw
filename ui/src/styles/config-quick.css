@@ -8,6 +8,10 @@
   width: 100%;
 }
 
+.settings-workspace__body > * + * {
+  margin-top: 20px;
+}
+
 /* Logs opt into a fill-height chain so the log stream, not the page, owns
    desktop scrolling. Other settings routes keep the default `.content` scroll. */
 .content:has(> .content--logs) {

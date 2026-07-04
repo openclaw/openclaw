@@ -8,7 +8,6 @@ import {
 } from "../pages/chat/composer-persistence.ts";
 import { stopDebugPolling } from "../pages/debug/polling.ts";
 import { stopLogsPolling } from "../pages/logs/polling.ts";
-import { stopNodesPolling } from "../pages/nodes/polling.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../pages/workboard/data.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
@@ -184,7 +183,6 @@ export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   appRouter.stop();
   flushPendingChatComposerPersistence(host);
-  stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   stopWorkboardPolling(host);
