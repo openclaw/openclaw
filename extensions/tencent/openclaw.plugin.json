@@ -106,6 +106,13 @@
       }
     ]
   },
+  "configContracts": {
+    "compatibilityMigrationPaths": [
+      "models.providers.tencent-tokenhub",
+      "agents.defaults.models.tencent-tokenhub/hy3",
+      "agents.defaults.models.tencent-tokenhub/hy3-preview"
+    ]
+  },
   "providerAuthChoices": [
     {
       "provider": "tencent-tokenhub",
