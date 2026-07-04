@@ -667,12 +667,16 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  countAsQueueDepth?: boolean;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
   const state = getDiagnosticSessionState(params);
-  state.queueDepth += 1;
+  const countAsQueueDepth = params.countAsQueueDepth ?? true;
+  if (countAsQueueDepth) {
+    state.queueDepth += 1;
+  }
   state.lastActivity = Date.now();
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
@@ -681,7 +685,9 @@ export function logMessageQueued(params: {
     diag.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
         state.sessionKey ?? "unknown"
-      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
+      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${
+        state.state
+      } countAsQueueDepth=${countAsQueueDepth}`,
     );
   }
   emitDiagnosticEvent({

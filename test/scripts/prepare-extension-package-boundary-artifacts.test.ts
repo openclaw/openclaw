@@ -55,6 +55,20 @@ async function waitForFile(filePath: string, timeoutMs: number) {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
+async function waitForPidFile(filePath: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) {
+      const pid = Number.parseInt(fs.readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    await delay(25);
+  }
+  throw new Error(`Timed out waiting for valid pid in ${filePath}`);
+}
+
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
@@ -235,8 +249,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         const expectedFailure = expect(command).rejects.toThrow(
           "delayed-fail failed with exit code 2",
         );
-        await waitForFile(descendantPidPath, 1_000);
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath, 1_000);
 
         await expectedFailure;
         await waitForDead(descendantPid, 2_000);
@@ -350,8 +363,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const expectedFailure = expect(command).rejects.toThrow(
         "hung-group-prep timed out after 750ms",
       );
-      await waitForFile(descendantPidPath, 500);
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+      descendantPid = await waitForPidFile(descendantPidPath, 500);
 
       await expectedFailure;
       await waitForDead(descendantPid, 2_000);
@@ -395,8 +407,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       runnerPid = runner.pid ?? 0;
 
       try {
-        await waitForFile(descendantPidPath, 2_000);
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath, 2_000);
         const runnerExit = waitForProcessExit(runner, 2_000);
         runner.kill("SIGTERM");
 
