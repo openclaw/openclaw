@@ -4048,6 +4048,27 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     return { onBlockReply };
   }
 
+  async function runEmptyInteractiveCase(
+    params: {
+      agentResult?: Record<string, unknown>;
+      queued?: FollowupRun;
+    } = {},
+  ) {
+    return await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        ...params.agentResult,
+      },
+      queued:
+        params.queued ??
+        ({
+          ...baseQueuedRun("discord"),
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+        } as FollowupRun),
+    });
+  }
+
   function makeTextReplyDedupeResult(overrides?: Record<string, unknown>) {
     return {
       payloads: [{ text: "hello world!" }],
@@ -4055,6 +4076,60 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ...overrides,
     };
   }
+
+  it("routes a visible fallback when an interactive followup completes empty", async () => {
+    const { onBlockReply } = await runEmptyInteractiveCase();
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+    const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "routed payload");
+    expect(payload.text).toContain("did not produce a visible reply");
+    expect(payload.isError).toBe(true);
+  });
+
+  it("keeps message-tool-only empty followup completions silent", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runEmptyInteractiveCase({
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps source-delivered empty followup completions silent", async () => {
+    const { onBlockReply } = await runEmptyInteractiveCase({
+      agentResult: {
+        didDeliverSourceReplyViaMessageTool: true,
+      },
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps cron and approval side-effect followups silent", async () => {
+    await runEmptyInteractiveCase({
+      agentResult: {
+        successfulCronAdds: 1,
+      },
+    });
+    await runEmptyInteractiveCase({
+      agentResult: {
+        didSendDeterministicApprovalPrompt: true,
+      },
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = "/tmp/openclaw-followup-usage.json";
@@ -4775,9 +4850,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     await runner(queued);
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenCalledTimes(3);
     const startRoute = requireMockCallArg(routeReplyMock, 0);
     const endRoute = requireMockCallArg(routeReplyMock, 1);
+    const finalRoute = requireMockCallArg(routeReplyMock, 2);
     expect(startRoute).toMatchObject({
       channel: "discord",
       to: "channel:C1",
@@ -4794,6 +4870,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
     expect(endRoute.replyKind).toBe("block");
     expect(endRoute.mirror).toBe(false);
+    expect(finalRoute.replyKind).toBe("final");
+    expect(requireRecord(finalRoute.payload, "final payload").text).toContain(
+      "did not produce a visible reply",
+    );
     expect(requireRecord(endRoute.payload, "end payload")).toMatchObject({
       text: "🧹 Compaction complete",
       replyToId: "current-msg-1",
@@ -4880,7 +4960,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(4);
+    expect(routeReplyMock).toHaveBeenCalledTimes(5);
     expect(
       requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "hook start"),
     ).toMatchObject({
@@ -4911,6 +4991,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToCurrent: true,
       isCompactionNotice: true,
     });
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 4).payload, "final payload").text,
+    ).toContain("did not produce a visible reply");
   });
 
   it("applies reply-to mode filtering to queued compaction notices", async () => {
@@ -4948,13 +5031,16 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
     const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload");
     expect(payload).toMatchObject({
       text: "🧹 Compacting context...",
       isCompactionNotice: true,
     });
     expect(payload.replyToId).toBeUndefined();
+    expect(
+      requireRecord(requireMockCallArg(routeReplyMock, 1).payload, "final payload").text,
+    ).toContain("did not produce a visible reply");
   });
 
   it("plans queued compaction notices with the active fallback candidate", async () => {
@@ -5005,7 +5091,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
   });
 
-  it("suppresses queued compaction completion notices while compaction will retry", async () => {
+  it("routes empty fallback after retrying compaction still completes empty", async () => {
     runEmbeddedAgentMock.mockImplementationOnce(
       async (args: {
         onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
@@ -5043,7 +5129,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "routed payload");
+    expect(payload.text).toContain("did not produce a visible reply");
+    expect(payload.isError).toBe(true);
   });
 });
 

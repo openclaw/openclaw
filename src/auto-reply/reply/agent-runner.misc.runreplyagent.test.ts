@@ -321,6 +321,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     storePath: string;
     sessionEntry: Record<string, unknown>;
     config?: Record<string, unknown>;
+    run?: Record<string, unknown>;
     sessionFile?: string;
     workspaceDir?: string;
   }) {
@@ -355,10 +356,102 @@ describe("runReplyAgent auto-compaction token update", () => {
         bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
         timeoutMs: 1_000,
         blockReplyBreak: "message_end",
+        ...params.run,
       },
     } as unknown as FollowupRun;
     return { typing, sessionCtx, resolvedQueue, followupRun };
   }
+
+  it("surfaces empty interactive completions as visible failures", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: { agentMeta: {} },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const reply = requireRecord(result, "empty interactive reply result");
+    expect(reply.text).toContain("did not produce a visible reply");
+    expect(reply.isError).toBe(true);
+  });
+
+  it("keeps resolved message-tool-only empty completions silent", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [],
+      meta: { agentMeta: {} },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+      run: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toBeUndefined();
+  });
 
   async function runBaseReplyWithAgentMeta(params: {
     agentMeta: Record<string, unknown>;

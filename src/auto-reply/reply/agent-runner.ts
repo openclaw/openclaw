@@ -94,6 +94,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { buildEmptyInteractiveReplyPayload } from "./empty-interactive-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -2017,6 +2018,25 @@ export async function runReplyAgent(params: {
       await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
+    const returnEmptyInteractiveReplyIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      const emptyInteractiveReplyPayload = buildEmptyInteractiveReplyPayload({
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+        sourceReplyDeliveryMode:
+          followupRun.run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+      });
+      if (!emptyInteractiveReplyPayload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error("interactive reply completed without a visible payload"),
+      );
+      await signalTypingIfNeeded([emptyInteractiveReplyPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(emptyInteractiveReplyPayload);
+    };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
     if (
@@ -2094,6 +2114,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2147,6 +2171,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }

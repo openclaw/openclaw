@@ -79,6 +79,7 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import { buildEmptyInteractiveReplyPayload } from "./empty-interactive-reply.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -109,6 +110,29 @@ function filterStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : undefined;
+}
+
+function hasNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
+function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const record = entry as { text?: unknown; mediaUrls?: unknown };
+    if ("text" in record || "mediaUrls" in record) {
+      return (
+        (typeof record.text === "string" && record.text.trim().length > 0) ||
+        hasNonEmptyStringArray(record.mediaUrls)
+      );
+    }
+    return true;
+  });
 }
 
 function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
@@ -1432,7 +1456,42 @@ export function createFollowupRunner(params: {
       }
 
       const payloadArray = runResult.payloads ?? [];
+      const buildEmptyInteractiveFollowupPayload = () =>
+        buildEmptyInteractiveReplyPayload({
+          isHeartbeat: opts?.isHeartbeat,
+          hasSuccessfulSideEffectDelivery:
+            runResult.didSendViaMessagingTool === true ||
+            runResult.didDeliverSourceReplyViaMessageTool === true ||
+            hasNonEmptyStringArray(runResult.messagingToolSentTexts) ||
+            hasNonEmptyStringArray(runResult.messagingToolSentMediaUrls) ||
+            hasCommittedMessagingTargetDeliveryEvidence(runResult.messagingToolSentTargets) ||
+            (runResult.successfulCronAdds ?? 0) > 0 ||
+            runResult.didSendDeterministicApprovalPrompt === true,
+          allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
+          silentExpected: run.silentExpected,
+          sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+        });
+      const routeEmptyInteractiveFollowupIfNeeded = async () => {
+        const emptyInteractiveReplyPayload = buildEmptyInteractiveFollowupPayload();
+        if (!emptyInteractiveReplyPayload) {
+          return;
+        }
+        replyOperation?.fail(
+          "run_failed",
+          new Error("interactive follow-up completed without a visible payload"),
+        );
+        await sendFollowupPayloads(
+          [emptyInteractiveReplyPayload],
+          effectiveQueued,
+          {
+            provider: providerUsed,
+            modelId: modelUsed,
+          },
+          { runId },
+        );
+      };
       if (payloadArray.length === 0) {
+        await routeEmptyInteractiveFollowupIfNeeded();
         return;
       }
       const finalPayloads = resolveFollowupDeliveryPayloads({
@@ -1451,6 +1510,7 @@ export function createFollowupRunner(params: {
       });
 
       if (finalPayloads.length === 0) {
+        await routeEmptyInteractiveFollowupIfNeeded();
         return;
       }
 
