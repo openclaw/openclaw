@@ -27,7 +27,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should include all common user bin directories
     expect(result).toContain("/home/testuser/.local/bin");
-    expect(result).toContain("/home/testuser/go/bin");
     expect(result).toContain("/home/testuser/.npm-global/bin");
     expect(result).toContain("/home/testuser/bin");
     expect(result).toContain("/home/testuser/.nvm/current/bin");
@@ -49,47 +48,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
 
     // Should only include system directories
     expect(result).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
-  });
-
-  it("places the default Go bin after system directories", () => {
-    const result = getMinimalServicePathParts({
-      platform: "linux",
-      home: "/home/testuser",
-      existsSync: allExist,
-    });
-
-    expect(result.indexOf("/home/testuser/go/bin")).toBeGreaterThan(result.indexOf("/usr/bin"));
-  });
-
-  it("uses configured GOBIN instead of GOPATH and the default Go bin", () => {
-    const result = getMinimalServicePathPartsFromEnv({
-      platform: "linux",
-      env: {
-        HOME: "/home/testuser",
-        GOBIN: "/opt/go-tools/bin",
-        GOPATH: "/opt/go-path:/unused/go-path",
-      },
-      existsSync: allExist,
-    });
-
-    expect(result).toContain("/opt/go-tools/bin");
-    expect(result).not.toContain("/opt/go-path/bin");
-    expect(result).not.toContain("/home/testuser/go/bin");
-  });
-
-  it("uses the first configured GOPATH bin when GOBIN is unset", () => {
-    const result = getMinimalServicePathPartsFromEnv({
-      platform: "linux",
-      env: {
-        HOME: "/home/testuser",
-        GOPATH: "/first/go:/second/go",
-      },
-      existsSync: allExist,
-    });
-
-    expect(result).toContain("/first/go/bin");
-    expect(result).not.toContain("/second/go/bin");
-    expect(result).not.toContain("/home/testuser/go/bin");
   });
 
   it("places user directories before system directories on Linux", () => {
@@ -149,7 +107,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
-  it("adds an existing default Go bin after canonical system directories on macOS", () => {
+  it("uses only canonical system directories on macOS by default", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
@@ -164,10 +122,9 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
       "/bin",
       "/usr/sbin",
       "/sbin",
-      "/Users/testuser/go/bin",
     ]);
     const userPathEntries = result.filter((entry) => entry.startsWith("/Users/testuser/"));
-    expect(userPathEntries).toStrictEqual(["/Users/testuser/go/bin"]);
+    expect(userPathEntries).toStrictEqual([]);
   });
 
   it("can include env-configured version manager dirs on macOS when requested", () => {
@@ -238,7 +195,7 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).not.toContain("/home/testuser/.local/share/pnpm");
   });
 
-  it("omits other user PATH fallbacks on macOS even when HOME is set", () => {
+  it("omits all user PATH fallbacks on macOS even when HOME is set", () => {
     const result = getMinimalServicePathParts({
       platform: "darwin",
       home: "/Users/testuser",
@@ -267,7 +224,6 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).not.toContain("/Users/testuser/.fnm/aliases/default/bin");
     expect(result).not.toContain("/Users/testuser/Library/pnpm");
     expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
-    expect(result).not.toContain("/Users/testuser/go/bin");
   });
 
   it("can omit missing stable user-bin defaults for service PATH audits", () => {
@@ -426,7 +382,6 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
       "/bin",
       "/usr/sbin",
       "/sbin",
-      "/Users/testuser/go/bin",
     ]);
   });
 
@@ -469,7 +424,6 @@ describe("getMinimalServicePathParts - Nix Home Manager", () => {
       "/bin",
       "/usr/sbin",
       "/sbin",
-      "/Users/testuser/go/bin",
     ]);
   });
 
@@ -630,20 +584,6 @@ describe("buildMinimalServicePath", () => {
 });
 
 describe("buildServiceEnvironment", () => {
-  it("persists GOBIN and includes it in the managed service PATH", () => {
-    const env = buildServiceEnvironment({
-      env: {
-        HOME: "/Users/user",
-        GOBIN: "/Users/user/custom-go/bin",
-      },
-      port: 18789,
-      platform: "darwin",
-    });
-
-    expect(env.GOBIN).toBe("/Users/user/custom-go/bin");
-    expect(env.PATH?.split(path.posix.delimiter)).toContain("/Users/user/custom-go/bin");
-  });
-
   it("sets minimal PATH and gateway vars", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },

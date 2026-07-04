@@ -200,39 +200,6 @@ function addCommonEnvConfiguredBinDirs(
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"), options);
 }
 
-function resolveGoServiceBinDirs(params: {
-  platform: NodeJS.Platform;
-  home: string | undefined;
-  env: Record<string, string | undefined> | undefined;
-  options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults">;
-  existsSync: (candidate: string) => boolean;
-}): string[] {
-  const dirs: string[] = [];
-  const pathOptions = { ...params.options, home: params.home };
-  const configuredGoBin = params.env?.GOBIN?.trim();
-  if (configuredGoBin) {
-    addEnvConfiguredBinDir(dirs, configuredGoBin, pathOptions);
-    return dirs;
-  }
-
-  const configuredGoPath = params.env?.GOPATH?.split(path.posix.delimiter)[0]?.trim();
-  if (configuredGoPath) {
-    addEnvConfiguredBinDir(dirs, appendSubdir(configuredGoPath, "bin"), pathOptions);
-    return dirs;
-  }
-
-  if (!params.home) {
-    return dirs;
-  }
-  const defaultGoBin = path.posix.join(params.home, "go", "bin");
-  const includeMissingDefault =
-    params.options.includeMissingUserBinDefaults ?? params.platform !== "darwin";
-  if (includeMissingDefault || params.existsSync(defaultGoBin)) {
-    addEnvConfiguredBinDir(dirs, defaultGoBin, pathOptions);
-  }
-  return dirs;
-}
-
 // Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
 // When NIX_PROFILES is absent, fall back to the default single-user profile.
 function addNixProfileBinDirs(
@@ -382,13 +349,6 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
 
   const existsSync = options.existsSync ?? fs.existsSync;
-  const goDirs = resolveGoServiceBinDirs({
-    platform,
-    home: options.home,
-    env: options.env,
-    options,
-    existsSync,
-  });
   const userDirs = includeUserDirs
     ? platform === "linux"
       ? resolveLinuxUserBinDirs(options.home, options.env, existsSync, options)
@@ -413,11 +373,6 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
     add(dir);
   }
   for (const dir of systemDirs) {
-    add(dir);
-  }
-  // Go's user-writable install destination stays after system directories so
-  // newly installed skill commands cannot shadow trusted system binaries.
-  for (const dir of goDirs) {
     add(dir);
   }
 
@@ -525,7 +480,6 @@ function buildCommonServiceEnvironment(
 ): Record<string, string | undefined> {
   const serviceEnv: Record<string, string | undefined> = {
     HOME: env.HOME,
-    GOBIN: env.GOBIN,
     TMPDIR: sharedEnv.tmpDir,
     NODE_EXTRA_CA_CERTS: sharedEnv.nodeCaCerts,
     NODE_USE_SYSTEM_CA: sharedEnv.nodeUseSystemCa,

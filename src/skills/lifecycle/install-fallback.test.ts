@@ -1,4 +1,5 @@
 // Install fallback tests cover alternate skill install paths when primary paths fail.
+import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -112,21 +113,6 @@ function mockLocalGoVersion(version = "go1.22.4"): void {
   });
 }
 
-function mockExistingGoInstallEnv(params?: { goBin?: string; goPath?: string }): void {
-  runCommandWithTimeoutMock.mockResolvedValueOnce({
-    code: 0,
-    stdout: `${params?.goBin ?? "/managed/go/bin"}\n${params?.goPath ?? "/managed/go"}\n`,
-    stderr: "",
-  });
-}
-
-function expectExistingGoInstallEnvCall(index: number): void {
-  const [argv, options] = commandCallAt(index);
-  expect(argv).toEqual(["go", "env", "GOBIN", "GOPATH"]);
-  expect(options.timeoutMs).toBe(5_000);
-  expect(options.env).toEqual({ GOTOOLCHAIN: "local" });
-}
-
 function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
   const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
   return fn().finally(() => spy.mockRestore());
@@ -154,7 +140,7 @@ describe("skills-install fallback edge cases", () => {
   });
 
   beforeEach(() => {
-    installEnvSnapshot = captureEnv(["PATH", "GOBIN"]);
+    installEnvSnapshot = captureEnv(["PATH", "GOBIN", "GOPATH"]);
     runCommandWithTimeoutMock.mockReset();
     hasBinaryMock.mockReset();
     skillsInstallTesting.setDepsForTest({
@@ -366,10 +352,11 @@ describe("skills-install fallback edge cases", () => {
     }
   });
 
-  it("preserves an existing Go installation's configured GOBIN", async () => {
+  it("routes existing Go installs to the restart-stable user bin without changing Go config", async () => {
     process.env.PATH = "/usr/bin";
+    process.env.GOBIN = "/operator/go/bin";
+    process.env.GOPATH = "/operator/go";
     mockAvailableBinaries(["go", "brew"]);
-    mockExistingGoInstallEnv();
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 0,
       stdout: "ok",
@@ -385,70 +372,17 @@ describe("skills-install fallback edge cases", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-    expectExistingGoInstallEnvCall(0);
-    const installCall = commandCallAt(1);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    const installCall = commandCallAt(0);
     expect(installCall[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+    const localBin = path.join(os.homedir(), ".local", "bin");
     expect(installCall[1].env).toMatchObject({
-      GOBIN: "/managed/go/bin",
-      PATH: ["/usr/bin", "/managed/go/bin"].join(path.delimiter),
+      GOBIN: localBin,
+      PATH: ["/usr/bin", localBin].join(path.delimiter),
     });
-    expect(process.env.PATH).toBe(["/usr/bin", "/managed/go/bin"].join(path.delimiter));
-    expect(process.env.GOBIN).toBe("/managed/go/bin");
-  });
-
-  it("uses the first GOPATH bin when an existing Go installation has no GOBIN", async () => {
-    process.env.PATH = "/usr/bin";
-    mockAvailableBinaries(["go"]);
-    mockExistingGoInstallEnv({
-      goBin: "",
-      goPath: ["/first/go", "/second/go"].join(path.delimiter),
-    });
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-    });
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(true);
-    const installCall = commandCallAt(1);
-    expect(installCall[1].env).toMatchObject({
-      GOBIN: "/first/go/bin",
-      PATH: ["/usr/bin", "/first/go/bin"].join(path.delimiter),
-    });
-    expect(process.env.GOBIN).toBe("/first/go/bin");
-  });
-
-  it("leaves an existing Go destination untouched when go env fails", async () => {
-    process.env.PATH = "/usr/bin";
-    mockAvailableBinaries(["go"]);
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 1,
-      stdout: "",
-      stderr: "go env failed",
-    });
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      code: 0,
-      stdout: "ok",
-      stderr: "",
-    });
-
-    const result = await installSkill({
-      workspaceDir,
-      skillName: "go-tool-single",
-      installId: "deps",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(commandCallAt(1)[1].env).toBeUndefined();
-    expect(process.env.PATH).toBe("/usr/bin");
-    expect(process.env.GOBIN).toBeUndefined();
+    expect(process.env.PATH).toBe(["/usr/bin", localBin].join(path.delimiter));
+    expect(process.env.GOBIN).toBe("/operator/go/bin");
+    expect(process.env.GOPATH).toBe("/operator/go");
   });
 
   describe("resolveInstallerKindReadiness", () => {
@@ -732,7 +666,6 @@ describe("skills-install fallback edge cases", () => {
     ["a missing PATH toolchain", 'go: cannot find "go1.24.0" in PATH'],
   ])("classifies %s as a deferred Go prerequisite", async (_label, stderr) => {
     mockAvailableBinaries(["go"]);
-    mockExistingGoInstallEnv();
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
       stdout: "",
@@ -747,14 +680,13 @@ describe("skills-install fallback edge cases", () => {
 
     expect(result.ok).toBe(false);
     expect(result.skipReason).toBe("go");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-    expect(commandCallAt(1)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(commandCallAt(0)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
   });
 
   it("keeps ordinary Go install failures as install failures", async () => {
     process.env.PATH = "/usr/bin";
     mockAvailableBinaries(["go"]);
-    mockExistingGoInstallEnv();
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
       stdout: "",
@@ -777,8 +709,9 @@ describe("skills-install fallback edge cases", () => {
     try {
       process.env.GOTOOLCHAIN = "local";
       process.env.PATH = "/usr/bin";
+      process.env.GOBIN = "/operator/go/bin";
+      process.env.GOPATH = "/operator/go";
       mockAvailableBinaries(["go"]);
-      mockExistingGoInstallEnv({ goBin: "/operator/go/bin" });
       runCommandWithTimeoutMock.mockResolvedValueOnce({
         code: 0,
         stdout: "installed",
@@ -792,15 +725,17 @@ describe("skills-install fallback edge cases", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-      expectExistingGoInstallEnvCall(0);
-      const [argv, options] = commandCallAt(1);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+      const [argv, options] = commandCallAt(0);
       expect(argv).toEqual(["go", "install", "example.com/tool@latest"]);
+      const localBin = path.join(os.homedir(), ".local", "bin");
       expect(options.env).toEqual({
-        GOBIN: "/operator/go/bin",
-        PATH: ["/usr/bin", "/operator/go/bin"].join(path.delimiter),
+        GOBIN: localBin,
+        PATH: ["/usr/bin", localBin].join(path.delimiter),
       });
       expect(options.env).not.toHaveProperty("GOTOOLCHAIN");
+      expect(process.env.GOBIN).toBe("/operator/go/bin");
+      expect(process.env.GOPATH).toBe("/operator/go");
     } finally {
       envSnapshot.restore();
     }
