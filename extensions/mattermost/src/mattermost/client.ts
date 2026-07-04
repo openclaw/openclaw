@@ -275,10 +275,21 @@ export type MattermostThread = {
 export async function fetchMattermostThread(
   client: MattermostClient,
   threadRootId: string,
+  timeoutMs = 5000,
 ): Promise<MattermostThread> {
-  return await client.request<MattermostThread>(
-    `/posts/${encodeURIComponent(threadRootId)}/thread`,
-  );
+  // Bound the recovery fetch so a slow/unresponsive server cannot stall the
+  // inbound reply: abort after `timeoutMs` and let the caller proceed without
+  // backfilled history.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), resolveTimerTimeoutMs(timeoutMs, 5000));
+  try {
+    return await client.request<MattermostThread>(
+      `/posts/${encodeURIComponent(threadRootId)}/thread`,
+      { signal: controller.signal },
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function sendMattermostTyping(

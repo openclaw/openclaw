@@ -566,6 +566,13 @@ export async function backfillMattermostThreadHistory(params: {
       params.backfilledSessionIds.set(params.historyKey, params.sessionId);
     }
   } catch (err) {
+    // One attempt per session: record the session even on failure (including a
+    // timeout abort) so a slow or erroring server is not re-fetched on every
+    // follow-up turn within the session's lifetime, which would repeatedly add
+    // an awaited REST call and delay replies.
+    if (params.sessionId) {
+      params.backfilledSessionIds.set(params.historyKey, params.sessionId);
+    }
     params.log?.(
       `mattermost: thread history backfill failed (thread=${params.threadRootId}): ${
         err instanceof Error ? err.message : String(err)

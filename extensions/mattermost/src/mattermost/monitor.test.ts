@@ -1076,7 +1076,10 @@ describe("backfillMattermostThreadHistory", () => {
       backfilledSessionIds: new Map(),
     });
 
-    expect(client.request).toHaveBeenCalledWith("/posts/root-1/thread");
+    expect(client.request).toHaveBeenCalledWith(
+      "/posts/root-1/thread",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
     expect(channelHistories.get("channel:chan-1")).toStrictEqual([
       { sender: "@user-u1", body: "first", timestamp: 100, messageId: "p1" },
       { sender: "@user-u2", body: "second", timestamp: 200, messageId: "p2" },
@@ -1154,6 +1157,36 @@ describe("backfillMattermostThreadHistory", () => {
     expect(String(log.mock.calls[0]?.[0])).toContain("boom");
   });
 
+  it("marks the session serviced on fetch failure so it is fetched at most once per session", async () => {
+    const channelHistories = new Map();
+    const client = createMattermostClientMock();
+    client.request = vi.fn(async () => {
+      throw new Error("timeout");
+    }) as MattermostClient["request"];
+    const backfilledSessionIds = new Map();
+
+    const call = () =>
+      backfillMattermostThreadHistory({
+        client,
+        threadRootId: "root-1",
+        historyKey: "channel:chan-1",
+        channelHistories,
+        historyLimit: 10,
+        resolveUserInfo,
+        sessionId: "session-1",
+        backfilledSessionIds,
+      });
+
+    await call();
+    // The failed attempt still records the session id...
+    expect(backfilledSessionIds.get("channel:chan-1")).toBe("session-1");
+    expect(client.request).toHaveBeenCalledTimes(1);
+
+    // ...so a same-session follow-up does not re-fetch the slow/erroring server.
+    await call();
+    expect(client.request).toHaveBeenCalledTimes(1);
+  });
+
   it("skips the server fetch when the thread session was already backfilled (active thread)", async () => {
     const channelHistories = new Map();
     const client = threadClientMock({ order: ["p1"], posts: { p1: { id: "p1", message: "x" } } });
@@ -1198,7 +1231,10 @@ describe("backfillMattermostThreadHistory", () => {
       backfilledSessionIds,
     });
 
-    expect(client.request).toHaveBeenCalledWith("/posts/root-1/thread");
+    expect(client.request).toHaveBeenCalledWith(
+      "/posts/root-1/thread",
+      expect.objectContaining({ signal: expect.anything() }),
+    );
     expect(channelHistories.get("channel:chan-1")).toHaveLength(2);
     expect(backfilledSessionIds.get("channel:chan-1")).toBe("session-2");
   });
