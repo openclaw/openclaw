@@ -313,6 +313,9 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
+    if (maxBytes !== undefined && text.length > maxBytes) {
+      return { text: text.slice(0, maxBytes), truncated: true, bytesRead: maxBytes };
+    }
     return { text, truncated: false, bytesRead: text.length };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };

@@ -146,4 +146,35 @@ describe("readResponseText", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
+
+  it("truncates text-only fallback responses when maxBytes is set", async () => {
+    // Foreign Response without a body stream (no getReader) — the .text()
+    // fallback path must still honor maxBytes.
+    const longText = "y".repeat(10_000);
+    const response = {
+      body: null as unknown,
+      headers: new Headers(),
+      async text() {
+        return longText;
+      },
+    } as unknown as Response;
+
+    // With maxBytes → truncated
+    const capped = await readResponseText(response, { maxBytes: 100 });
+    expect(capped.text).toBe("y".repeat(100));
+    expect(capped.truncated).toBe(true);
+    expect(capped.bytesRead).toBe(100);
+
+    // Without maxBytes → passes through (regression)
+    const noCapResponse = {
+      body: null as unknown,
+      headers: new Headers(),
+      async text() {
+        return longText;
+      },
+    } as unknown as Response;
+    const full = await readResponseText(noCapResponse);
+    expect(full.text).toBe(longText);
+    expect(full.truncated).toBe(false);
+  });
 });
