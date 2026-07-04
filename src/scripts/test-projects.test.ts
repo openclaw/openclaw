@@ -859,6 +859,8 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/command/attempt-execution.shared.test.ts",
+          "src/auto-reply/reply/session-entry-persistence.test.ts",
           "src/crestodian/operations.test.ts",
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
@@ -937,6 +939,7 @@ describe("test-projects args", () => {
           "src/gateway/hooks-mapping.test.ts",
           "src/gateway/server-methods/chat.abort-persistence.test.ts",
           "src/gateway/server.agent.gateway-server-agent-b.test.ts",
+          "src/gateway/server.chat.gateway-server-chat-b.test.ts",
           "src/gateway/server.sessions.permissions-hooks.test.ts",
         ],
         watchMode: false,
@@ -962,6 +965,16 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/commands/doctor-completion.test.ts",
           "src/commands/status.scan.shared.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",
+          "src/auto-reply/reply/reply-turn-admission.test.ts",
+          "src/auto-reply/reply/session-updates.test.ts",
         ],
         watchMode: false,
       },

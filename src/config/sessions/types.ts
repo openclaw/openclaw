@@ -249,6 +249,11 @@ export type SessionEntry = {
   updatedAt: number;
   /** Opaque owner revision used to reject stale lifecycle mutations. */
   lifecycleRevision?: string;
+  // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
+  // threads.archived_at: the boolean is always derived from the timestamp and
+  // stamped server-side). Codex serializes camelCase but in epoch SECONDS;
+  // these are epoch MS like every other session timestamp — convert at the
+  // codex plugin seam when exchanging thread metadata.
   /** Timestamp (ms) when the session was archived from active session lists. */
   archivedAt?: number;
   /** Timestamp (ms) when the session was pinned for quick access. */
