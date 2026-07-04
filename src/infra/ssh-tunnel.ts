@@ -172,10 +172,9 @@ export async function startSshPortForward(opts: {
   });
 
   const stop = async () => {
-    if (child.killed) {
+    if (child.killed || !child.kill("SIGTERM")) {
       return;
     }
-    child.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       const t = setTimeout(() => {
         try {
