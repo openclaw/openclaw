@@ -171,7 +171,11 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
     }
 
     if (reasoningEffort) {
+      payload.thinking = preserveThinking
+        ? { type: "enabled", clear_thinking: false }
+        : { type: "enabled" };
       payload.reasoning_effort = reasoningEffort;
+      return;
     }
 
     if (preserveThinking) {

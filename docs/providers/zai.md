@@ -197,7 +197,9 @@ known to your installed version.
     }
     ```
 
-    When enabled and thinking is on, OpenClaw sends
+    For GLM-5.2 with thinking enabled, OpenClaw sends
+    `thinking: { type: "enabled" }` plus the mapped `reasoning_effort`.
+    When preserved thinking is also enabled, OpenClaw sends
     `thinking: { type: "enabled", clear_thinking: false }` and replays prior
     `reasoning_content` for the same OpenAI-compatible transcript.
 

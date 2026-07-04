@@ -542,6 +542,74 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedStop).toEqual(["STOP"]);
   });
 
+  it("maps Z.AI reasoning to thinking object and reasoning effort", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      {
+        ...reasoningModel,
+        id: "glm-5.2",
+        name: "GLM 5.2",
+        provider: "zai",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        compat: {
+          thinkingFormat: "zai",
+          supportsReasoningEffort: true,
+        },
+        thinkingLevelMap: {
+          medium: "high",
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "medium",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.thinking).toEqual({ type: "enabled" });
+    expect(capturedPayload?.reasoning_effort).toBe("high");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
+  it("maps disabled Z.AI reasoning to thinking disabled", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      {
+        ...reasoningModel,
+        id: "glm-5.2",
+        name: "GLM 5.2",
+        provider: "zai",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        compat: {
+          thinkingFormat: "zai",
+          supportsReasoningEffort: true,
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.thinking).toEqual({ type: "disabled" });
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
   it("keeps prompt cache keys when long retention is disabled", async () => {
     let capturedCacheKey: unknown;
     let capturedRetention: unknown;

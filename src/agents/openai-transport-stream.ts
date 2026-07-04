@@ -3899,8 +3899,7 @@ function applyZaiOpenAICompletionsThinkingParams(params: {
   const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
   params.payload.thinking = { type: enabled ? "enabled" : "disabled" };
   if (enabled) {
-    const mapped =
-      params.reasoningEffortMap?.[params.requestedEffort] ?? params.requestedEffort;
+    const mapped = params.reasoningEffortMap?.[params.requestedEffort] ?? params.requestedEffort;
     params.payload.reasoning_effort = mapped;
   }
   return true;

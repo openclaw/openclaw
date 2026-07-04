@@ -377,7 +377,7 @@ describe("zai provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("thinking");
   });
 
-  it("maps GLM-5.2 thinking levels to Z.AI reasoning effort", async () => {
+  it("maps GLM-5.2 thinking levels to Z.AI thinking object and reasoning effort", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const baseStreamFn: StreamFn = (model, _context, options) => {
       const payload: Record<string, unknown> = {};
@@ -409,7 +409,7 @@ describe("zai provider plugin", () => {
       ) as unknown as { payload: Record<string, unknown> };
 
       expect(result.payload.reasoning_effort).toBe(expectedEffort);
-      expect(result.payload).not.toHaveProperty("thinking");
+      expect(result.payload.thinking).toEqual({ type: "enabled" });
       expect(result.payload.tool_stream).toBe(true);
     }
   });
