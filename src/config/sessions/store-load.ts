@@ -423,25 +423,29 @@ export function loadSessionStore(
       // stale content as current and make future cache hits return old data.
       break;
     } catch (err) {
-      // Only retry on transient read failures (empty reads, EAGAIN/EINTR, or
-      // the macOS "Unknown system error -11/-4" message form). Permanent
-      // failures such as ENOENT (missing store) or EACCES must return
-      // immediately so the heartbeat does not stall on every cycle.
+      // Only retry on transient read failures. Permanent filesystem failures
+      // such as ENOENT (missing store) or EACCES must return immediately so
+      // the heartbeat does not stall on every cycle. Transient unparseable
+      // JSON (SyntaxError) stays retryable: concurrent replacement on Windows
+      // can expose an empty or partially-written sessions.json, and the
+      // existing Windows context-loss mitigation relied on retrying these.
       // (#99994)
       const anyErr = err as { code?: string; errno?: number; message?: string };
-      const isTransient =
+      const isTransientFs =
         anyErr.code === "EAGAIN" ||
         anyErr.code === "EINTR" ||
         anyErr.errno === -11 ||
         anyErr.errno === -4 ||
         (anyErr.message !== undefined && /Unknown system error -11/i.test(anyErr.message)) ||
         (anyErr.message !== undefined && /system error -4\b/i.test(anyErr.message));
+      const isTransientParse = err instanceof SyntaxError;
+      const isTransient = isTransientFs || isTransientParse;
       if (attempt < maxReadAttempts - 1 && isTransient) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
       }
-      // Permanent failure (ENOENT, EACCES, JSON parse error, etc.) or
-      // retries exhausted: stop retrying and fall back to the empty store.
+      // Permanent failure (ENOENT, EACCES, etc.) or retries exhausted:
+      // stop retrying and fall back to the empty store.
       break;
     }
   }

@@ -175,4 +175,45 @@ describe("loadSessionStore EAGAIN retry", () => {
     expect(calls).toBe(1);
     expect(elapsed).toBeLessThan(40);
   });
+
+  // P1 fix (#99994, clawsweeper review): transient unparseable JSON must
+  // stay retryable. On Windows, concurrent replacement of sessions.json can
+  // expose an empty or partially-written file, and the existing context-loss
+  // mitigation relied on retrying SyntaxError within the bounded loop. This
+  // test proves invalid-then-valid JSON succeeds via retry.
+  it("retries on transient SyntaxError (invalid JSON) and loads the store once the read succeeds", () => {
+    writeSessionStoreForTest(storePath!, {
+      "agent:main:sess-f": makeEntry("sess-f"),
+    });
+
+    let calls = 0;
+    const realReadFileSync = fsSync.readFileSync;
+    vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
+      calls += 1;
+      if (calls < 2) {
+        // Partially-written file content — concurrent replacement mid-write.
+        return "{ broken json";
+      }
+      vi.mocked(fsSync.readFileSync).mockRestore();
+      return realReadFileSync(...args);
+    });
+
+    const store = loadSessionStore(storePath!, { skipCache: true });
+    expect(store["agent:main:sess-f"]?.sessionId).toBe("sess-f");
+    expect(calls).toBe(2);
+  });
+
+  // P1 fix (#99994): persistent SyntaxError (file permanently corrupted)
+  // must exhaust retries and fall back to empty store, not loop forever.
+  it("returns an empty store after exhausting retries on persistent SyntaxError", () => {
+    let calls = 0;
+    vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+      calls += 1;
+      return "{ permanently broken";
+    });
+
+    const store = loadSessionStore(storePath!, { skipCache: true });
+    expect(Object.keys(store)).toEqual([]);
+    expect(calls).toBe(3);
+  });
 });
