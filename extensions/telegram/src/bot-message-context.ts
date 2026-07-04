@@ -481,12 +481,12 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  // Direct chats are now reply-eligible; send the first typing cue before
-  // expensive context/session construction without showing typing for dropped turns.
-  if (!isGroup) {
+  // Send the first typing cue before expensive context/session construction,
+  // but only after intake has accepted the message as a non-room-event turn.
+  if (bodyResult.inboundEventKind !== "room_event") {
     initialTypingCueSent = true;
     void sendTyping().catch((err: unknown) => {
-      logVerbose(`telegram early direct typing cue failed for chat ${chatId}: ${String(err)}`);
+      logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
     });
   }
 
