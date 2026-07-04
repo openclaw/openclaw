@@ -381,7 +381,7 @@ extension OnboardingView {
             self.remoteProbeStatusView()
 
             if let issue = self.remoteAuthIssue {
-                self.remoteAuthPromptView(issue: issue)
+                RemoteGatewayAuthPromptView(issue: issue)
             }
         }
     }
@@ -442,31 +442,6 @@ extension OnboardingView {
         }
     }
 
-    private func remoteAuthPromptView(issue: RemoteGatewayAuthIssue) -> some View {
-        let promptStyle = Self.remoteAuthPromptStyle(for: issue)
-        return HStack(alignment: .top, spacing: 10) {
-            Image(systemName: promptStyle.systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(promptStyle.tint)
-                .frame(width: 16, alignment: .center)
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(issue.title)
-                    .font(.caption.weight(.semibold))
-                Text(.init(issue.body))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let footnote = issue.footnote {
-                    Text(.init(footnote))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-
     @MainActor
     private func probeRemoteConnection() async {
         let originalMode = self.state.connectionMode
@@ -499,26 +474,6 @@ extension OnboardingView {
     private func resetRemoteProbeFeedback() {
         self.remoteProbeState = .idle
         self.remoteAuthIssue = nil
-    }
-
-    static func remoteAuthPromptStyle(
-        for issue: RemoteGatewayAuthIssue)
-        -> (systemImage: String, tint: Color)
-    {
-        switch issue {
-        case .tokenRequired:
-            ("key.fill", .orange)
-        case .tokenMismatch:
-            ("exclamationmark.triangle.fill", .orange)
-        case .gatewayTokenNotConfigured:
-            ("wrench.and.screwdriver.fill", .orange)
-        case .setupCodeExpired:
-            ("qrcode.viewfinder", .orange)
-        case .passwordRequired:
-            ("lock.slash.fill", .orange)
-        case .pairingRequired:
-            ("link.badge.plus", .orange)
-        }
     }
 
     static func shouldShowRemoteTokenField(

@@ -198,6 +198,18 @@ struct GeneralSettings: View {
                 self.remoteCard
             }
         }
+        .onChange(of: self.state.connectionMode) { _, _ in
+            self.resetRemoteTestFeedback()
+        }
+        .onChange(of: self.state.remoteTransport) { _, _ in
+            self.resetRemoteTestFeedback()
+        }
+        .onChange(of: self.state.remoteTarget) { _, _ in
+            self.resetRemoteTestFeedback()
+        }
+        .onChange(of: self.state.remoteUrl) { _, _ in
+            self.resetRemoteTestFeedback()
+        }
     }
 
     private var activeBinding: Binding<Bool> {
@@ -601,11 +613,13 @@ struct GeneralSettings: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        case let .authIssue(issue):
+            RemoteGatewayAuthPromptView(issue: issue)
         case let .failed(message):
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -682,10 +696,11 @@ struct GeneralSettings: View {
     }
 }
 
-private enum RemoteStatus: Equatable {
+enum RemoteStatus: Equatable {
     case idle
     case checking
     case ok(RemoteGatewayProbeSuccess)
+    case authIssue(RemoteGatewayAuthIssue)
     case failed(String)
 }
 
@@ -725,14 +740,22 @@ extension GeneralSettings {
     @MainActor
     func testRemote() async {
         self.remoteStatus = .checking
-        switch await RemoteGatewayProbe.run() {
+        self.remoteStatus = Self.remoteStatus(for: await RemoteGatewayProbe.run())
+    }
+
+    static func remoteStatus(for result: RemoteGatewayProbeResult) -> RemoteStatus {
+        switch result {
         case let .ready(success):
-            self.remoteStatus = .ok(success)
+            .ok(success)
         case let .authIssue(issue):
-            self.remoteStatus = .failed(issue.statusMessage)
+            .authIssue(issue)
         case let .failed(message):
-            self.remoteStatus = .failed(message)
+            .failed(message)
         }
+    }
+
+    private func resetRemoteTestFeedback() {
+        self.remoteStatus = .idle
     }
 
     private func revealLogs() {
@@ -793,6 +816,8 @@ extension GeneralSettings {
             message: "Gateway ready")
         view.remoteStatus = .failed("SSH failed")
         view.showRemoteAdvanced = true
+        _ = view.body
+        view.remoteStatus = .authIssue(.tokenRequired)
         _ = view.body
 
         state.connectionMode = .unconfigured
