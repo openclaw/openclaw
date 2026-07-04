@@ -9817,6 +9817,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
+  - H2: Operator terminal
   - H2: Chat behavior
   - H2: PWA install and web push
   - H2: Hosted embeds
