@@ -412,10 +412,10 @@ async function postSlackMessageBestEffort(params: {
       identity,
     );
   } catch (err) {
-    if (!hasCustomIdentity(params.identity) || !isSlackCustomIdentityRejectedError(err)) {
+    const identity = params.identity;
+    if (!identity || !hasCustomIdentity(identity) || !isSlackCustomIdentityRejectedError(err)) {
       throw err;
     }
-    const identity = params.identity;
     if (
       !isSlackCustomizeScopeError(err) &&
       identity.username &&
