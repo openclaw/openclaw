@@ -67,7 +67,7 @@ describe("generateConversationLabel", () => {
     });
   });
 
-  it("passes the label prompt and bounded completion options", async () => {
+  it("passes the label prompt and a reasoning-safe bounded completion budget", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_710_000_000_000);
     const cfg = {};
@@ -93,11 +93,31 @@ describe("generateConversationLabel", () => {
         ],
       },
       options: {
-        maxTokens: 100,
+        maxTokens: 4_096,
         temperature: 0.3,
       },
     });
     expect(firstCompletionArgs().options.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("caps the completion budget at the model output limit", async () => {
+    prepareSimpleCompletionModelForAgent.mockResolvedValue({
+      selection: {
+        provider: "openai",
+        modelId: "gpt-test",
+        agentDir: "/tmp/openclaw-agent",
+      },
+      model: { provider: "openai", id: "gpt-test", maxTokens: 1_024 },
+      auth: { apiKey: "resolved-key", mode: "api-key" },
+    });
+
+    await generateConversationLabel({
+      userMessage: "test topic creation",
+      prompt: "Generate a label",
+      cfg: {},
+    });
+
+    expect(firstCompletionArgs().options.maxTokens).toBe(1_024);
   });
 
   it("omits temperature for Codex Responses simple completions", async () => {

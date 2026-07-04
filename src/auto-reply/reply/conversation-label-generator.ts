@@ -9,6 +9,10 @@ import { logVerbose } from "../../globals.js";
 import type { TextContent } from "../../llm/types.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
+// Reasoning models spend output tokens before emitting the short visible label.
+// A tiny cap can leave no text, so keep the bounded title budget large enough
+// for reasoning while respecting models with a lower output limit.
+const CONVERSATION_LABEL_MAX_TOKENS = 4_096;
 const TIMEOUT_MS = 15_000;
 
 /** Inputs for generating a short conversation label from the configured utility model. */
@@ -72,6 +76,7 @@ export async function generateConversationLabel(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    const maxTokens = Math.min(CONVERSATION_LABEL_MAX_TOKENS, Math.floor(prepared.model.maxTokens));
     // Label generation should never block normal reply handling for long.
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
@@ -88,7 +93,7 @@ export async function generateConversationLabel(
         ],
       },
       options: {
-        maxTokens: 100,
+        maxTokens,
         ...(isCodexSimpleCompletionModel(prepared.model) ? {} : { temperature: 0.3 }),
         signal: controller.signal,
       },
