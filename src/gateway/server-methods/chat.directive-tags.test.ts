@@ -175,6 +175,7 @@ vi.mock("../session-utils.js", async () => {
         store: { [canonicalKey]: entry },
         entry,
         canonicalKey,
+        storeKeys: rawKey && rawKey !== canonicalKey ? [canonicalKey, rawKey] : [canonicalKey],
       };
     },
   };
