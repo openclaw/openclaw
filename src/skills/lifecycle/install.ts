@@ -21,7 +21,7 @@ import { loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries } from ".
 import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
-import type { SkillInstallResult } from "./install-types.js";
+import type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -30,7 +30,7 @@ export type SkillInstallRequest = {
   timeoutMs?: number;
   config?: OpenClawConfig;
 };
-export type { SkillInstallResult } from "./install-types.js";
+export type { SkillInstallResult, SkillInstallSkipReason } from "./install-types.js";
 
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
@@ -258,6 +258,7 @@ function createInstallFailure(params: {
   stdout?: string;
   stderr?: string;
   code?: number | null;
+  skipReason?: SkillInstallSkipReason;
 }): SkillInstallResult {
   return {
     ok: false,
@@ -265,6 +266,7 @@ function createInstallFailure(params: {
     stdout: params.stdout?.trim() ?? "",
     stderr: params.stderr?.trim() ?? "",
     code: params.code ?? null,
+    ...(params.skipReason ? { skipReason: params.skipReason } : {}),
   };
 }
 
@@ -296,21 +298,6 @@ async function runCommandSafely(
       stderr: formatErrorMessage(err),
     };
   }
-}
-
-async function runBestEffortCommand(
-  argv: string[],
-  optionsOrTimeout: number | CommandOptions,
-): Promise<void> {
-  await runCommandSafely(argv, optionsOrTimeout);
-}
-
-const APT_GO_INSTALL_ARGV = ["apt-get", "install", "-y", "golang-go"];
-const APT_GO_UPDATE_ARGV = ["apt-get", "update", "-qq"];
-const SUDO_APT_GO_INSTALL_CHECK_ARGV = ["sudo", "-n", "-l", ...APT_GO_INSTALL_ARGV];
-
-async function checkSudoGoAptInstallPermission(): Promise<CommandResult> {
-  return runCommandSafely(SUDO_APT_GO_INSTALL_CHECK_ARGV, { timeoutMs: 5_000 });
 }
 
 function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
@@ -356,43 +343,141 @@ async function ensureUvInstalled(params: {
   });
 }
 
+// Auto-install requires Go 1.21+: older toolchains reject newer `go` module
+// directives mid-recipe, which reads as a skill failure instead of a
+// prerequisite gap. installSkill never re-bootstraps over an existing Go.
+const MIN_AUTO_GO_MAJOR = 1;
+const MIN_AUTO_GO_MINOR = 21;
+export const MIN_AUTO_GO_VERSION = `${MIN_AUTO_GO_MAJOR}.${MIN_AUTO_GO_MINOR}`;
+
+const APT_GO_PACKAGE = "golang-go";
+const APT_GO_POLICY_ARGV = ["apt-cache", "policy", APT_GO_PACKAGE];
+const APT_GO_UPDATE_ARGV = ["apt-get", "update", "-qq"];
+const APT_GO_INSTALL_ARGV = ["apt-get", "install", "-y", APT_GO_PACKAGE];
+const SUDO_APT_GO_INSTALL_CHECK_ARGV = ["sudo", "-n", "-l", ...APT_GO_INSTALL_ARGV];
+
+type GoVersion = { major: number; minor: number };
+
+type AptCommandAccess =
+  | { available: true; prefix: string[] }
+  | {
+      available: false;
+      reason: "sudo-missing" | "sudo-unusable";
+      failure?: CommandResult;
+    };
+
+type GoAptCandidateResult =
+  | { usable: true }
+  | {
+      usable: false;
+      kind: "error";
+      failure: CommandResult;
+    }
+  | {
+      usable: false;
+      kind: "unavailable";
+    };
+
+function isSupportedGoVersion(version: GoVersion): boolean {
+  return (
+    version.major > MIN_AUTO_GO_MAJOR ||
+    (version.major === MIN_AUTO_GO_MAJOR && version.minor >= MIN_AUTO_GO_MINOR)
+  );
+}
+
+function parseAptGoCandidate(output: string): GoVersion | undefined {
+  const match = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(output);
+  if (!match) {
+    return undefined;
+  }
+  return { major: Number(match[1]), minor: Number(match[2]) };
+}
+
+async function resolveAptCommandAccess(): Promise<AptCommandAccess> {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    return { available: true, prefix: [] };
+  }
+  if (!getSkillsInstallDeps().hasBinary("sudo")) {
+    return { available: false, reason: "sudo-missing" };
+  }
+  const sudoCheck = await runCommandSafely(SUDO_APT_GO_INSTALL_CHECK_ARGV, {
+    timeoutMs: 5_000,
+  });
+  if (sudoCheck.code !== 0) {
+    return { available: false, reason: "sudo-unusable", failure: sudoCheck };
+  }
+  return { available: true, prefix: ["sudo"] };
+}
+
+async function readGoAptCandidate(timeoutMs: number): Promise<{
+  candidate?: GoVersion;
+  failure?: CommandResult;
+}> {
+  const policy = await runCommandSafely(APT_GO_POLICY_ARGV, {
+    timeoutMs: Math.min(timeoutMs, 10_000),
+    env: { LC_ALL: "C" },
+  });
+  if (policy.code !== 0) {
+    return { failure: policy };
+  }
+  return { candidate: parseAptGoCandidate(policy.stdout) };
+}
+
+async function resolveGoAptInstallCandidate(params: {
+  prefix: string[];
+  timeoutMs: number;
+}): Promise<GoAptCandidateResult> {
+  const update = await runCommandSafely([...params.prefix, ...APT_GO_UPDATE_ARGV], {
+    timeoutMs: params.timeoutMs,
+  });
+  const policy = await readGoAptCandidate(params.timeoutMs);
+  if (policy.failure) {
+    return { usable: false, kind: "error", failure: policy.failure };
+  }
+  if (policy.candidate) {
+    return isSupportedGoVersion(policy.candidate)
+      ? { usable: true }
+      : { usable: false, kind: "unavailable" };
+  }
+  return update.code === 0
+    ? { usable: false, kind: "unavailable" }
+    : { usable: false, kind: "error", failure: update };
+}
+
 async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | undefined> {
   const aptFailureMessage =
     "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install";
-
-  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
-  if (isRoot) {
-    // Best effort: fresh containers often need package indexes populated.
-    await runBestEffortCommand(APT_GO_UPDATE_ARGV, { timeoutMs });
-    const aptResult = await runCommandSafely(APT_GO_INSTALL_ARGV, { timeoutMs });
-    if (aptResult.code === 0) {
-      return undefined;
-    }
-    return createInstallFailure({
-      message: aptFailureMessage,
-      ...aptResult,
-    });
-  }
-
-  if (!getSkillsInstallDeps().hasBinary("sudo")) {
+  const access = await resolveAptCommandAccess();
+  if (!access.available && access.reason === "sudo-missing") {
     return createInstallFailure({
       message:
         "go not installed — apt-get is available but sudo is not installed. Install manually: https://go.dev/doc/install",
     });
   }
-
-  const sudoCheck = await checkSudoGoAptInstallPermission();
-  if (sudoCheck.code !== 0) {
+  if (!access.available) {
     return createInstallFailure({
       message:
         "go not installed — apt-get is available but sudo is not usable (missing or requires a password). Install manually: https://go.dev/doc/install",
-      ...sudoCheck,
+      ...access.failure,
     });
   }
 
-  // Best effort: fresh containers often need package indexes populated.
-  await runBestEffortCommand(["sudo", ...APT_GO_UPDATE_ARGV], { timeoutMs });
-  const aptResult = await runCommandSafely(["sudo", ...APT_GO_INSTALL_ARGV], {
+  const candidate = await resolveGoAptInstallCandidate({
+    prefix: access.prefix,
+    timeoutMs,
+  });
+  if (!candidate.usable) {
+    return createInstallFailure({
+      message:
+        candidate.kind === "unavailable"
+          ? `go not installed — apt does not provide a usable Go ${MIN_AUTO_GO_VERSION}+ package. Install manually: https://go.dev/doc/install`
+          : aptFailureMessage,
+      ...(candidate.kind === "error" ? candidate.failure : {}),
+      ...(candidate.kind === "unavailable" ? { skipReason: "go" as const } : {}),
+    });
+  }
+
+  const aptResult = await runCommandSafely([...access.prefix, ...APT_GO_INSTALL_ARGV], {
     timeoutMs,
   });
   if (aptResult.code === 0) {
@@ -436,14 +521,6 @@ async function ensureGoInstalled(params: {
   });
 }
 
-// Auto-install requires Go 1.21+: older toolchains reject newer `go` module
-// directives mid-recipe, which reads as a skill failure instead of a
-// prerequisite gap. installSkill never re-bootstraps over an existing Go.
-const MIN_AUTO_GO_MAJOR = 1;
-const MIN_AUTO_GO_MINOR = 21;
-export const MIN_AUTO_GO_VERSION = `${MIN_AUTO_GO_MAJOR}.${MIN_AUTO_GO_MINOR}`;
-
-export type SkillInstallSkipReason = "brew" | "go" | "uv";
 export type SkillInstallReadiness =
   | { ready: true }
   | { ready: false; reason: SkillInstallSkipReason };
@@ -455,7 +532,7 @@ async function canUseBrewForAutoInstall(brewExe: string): Promise<boolean> {
   return accessCheck.code === 0;
 }
 
-function parseGoVersion(output: string): { major: number; minor: number } | undefined {
+function parseGoVersion(output: string): GoVersion | undefined {
   const match = /\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(output);
   if (!match) {
     return undefined;
@@ -469,49 +546,15 @@ async function isGoUsableForAutoInstall(): Promise<boolean> {
     return false;
   }
   const version = parseGoVersion(`${result.stdout}\n${result.stderr}`);
-  return (
-    version !== undefined &&
-    (version.major > MIN_AUTO_GO_MAJOR ||
-      (version.major === MIN_AUTO_GO_MAJOR && version.minor >= MIN_AUTO_GO_MINOR))
-  );
-}
-
-async function canRunAptGetAsPrivileged(): Promise<boolean> {
-  if (typeof process.getuid === "function" && process.getuid() === 0) {
-    return true;
-  }
-  if (!getSkillsInstallDeps().hasBinary("sudo")) {
-    return false;
-  }
-  const sudoCheck = await checkSudoGoAptInstallPermission();
-  return sudoCheck.code === 0;
+  return version !== undefined && isSupportedGoVersion(version);
 }
 
 async function canBootstrapGoViaApt(): Promise<boolean> {
   if (!getSkillsInstallDeps().hasBinary("apt-get")) {
     return false;
   }
-  if (!(await canRunAptGetAsPrivileged())) {
-    return false;
-  }
-  // installGoViaApt installs the distro's unversioned golang-go; a visible
-  // candidate older than 1.21 (Ubuntu 22.04 → 1.18, Debian 12 → 1.19) would
-  // still fail newer module directives, so veto it here. An absent or
-  // unreadable candidate stays the installer's call: installGoViaApt refreshes
-  // indexes first, which is how fresh containers with cleared lists succeed.
-  const policy = await runCommandSafely(["apt-cache", "policy", "golang-go"], {
-    timeoutMs: 10_000,
-  });
-  if (policy.code !== 0) {
-    return true;
-  }
-  const candidate = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(policy.stdout);
-  if (!candidate) {
-    return true;
-  }
-  const major = Number(candidate[1]);
-  const minor = Number(candidate[2]);
-  return major > MIN_AUTO_GO_MAJOR || (major === MIN_AUTO_GO_MAJOR && minor >= MIN_AUTO_GO_MINOR);
+  const access = await resolveAptCommandAccess();
+  return access.available;
 }
 
 /**

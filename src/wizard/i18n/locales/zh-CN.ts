@@ -327,6 +327,7 @@ export const zh_CN = {
       homebrewRecommendedTitle: "建议安装 Homebrew",
       installDeps: "安装缺失的技能依赖",
       installFailed: "安装失败：{name}{code}{detail}",
+      installSkipped: "已跳过：{name}（需要手动安装先决条件）",
       installed: "已安装 {name}",
       installedWithWarnings: "已安装 {name}（有警告）",
       installing: "正在安装 {name}...",

@@ -422,6 +422,36 @@ describe("setupSkills", () => {
     });
   });
 
+  it("groups Go prerequisite skips discovered after policy approval", async () => {
+    await withPlatform("linux", async () => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "blogwatcher",
+          description: "RSS helper",
+          bins: ["blogwatcher"],
+          installLabel: "Install blogwatcher (go)",
+          installKind: "go",
+        }),
+      ]);
+      mocks.installSkill.mockResolvedValueOnce({
+        ok: false,
+        message: "go not installed",
+        stdout: "",
+        stderr: "",
+        code: null,
+        skipReason: "go",
+      });
+
+      const { prompter, notes } = createPrompter({});
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+      const manualNote = notes.find((n) => n.title === "Manual skill prerequisites");
+      expect(manualNote?.message).toContain("Go 1.21+: blogwatcher");
+      expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Docs:"));
+    });
+  });
+
   it("displays a clear empty state note when all skill dependencies are ready", async () => {
     mockMissingBrewStatus([]);
 

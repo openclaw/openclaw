@@ -92,6 +92,17 @@ function commandCallAt(
   ];
 }
 
+function expectAptPolicyCall(index: number): void {
+  const [argv, options] = commandCallAt(index);
+  expect(argv).toEqual(["apt-cache", "policy", "golang-go"]);
+  expect(options.env).toEqual({ LC_ALL: "C" });
+}
+
+function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
+  const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
+  return fn().finally(() => spy.mockRestore());
+}
+
 const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-fallback-test-" });
 
 describe("skills-install fallback edge cases", () => {
@@ -312,11 +323,6 @@ describe("skills-install fallback edge cases", () => {
   });
 
   describe("resolveInstallerKindReadiness", () => {
-    function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
-      const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
-      return fn().finally(() => spy.mockRestore());
-    }
-
     const usableAptCandidate = {
       code: 0,
       stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
@@ -329,10 +335,26 @@ describe("skills-install fallback edge cases", () => {
         runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        // Preflight must not run installs; only read-only probes are allowed.
-        expect(commandCallAt(0)[0]).toEqual(["apt-cache", "policy", "golang-go"]);
+        // Existing usable metadata should not trigger an update or install.
+        expectAptPolicyCall(0);
         expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
       });
+    });
+
+    it("forces the C locale when parsing apt candidate output", async () => {
+      const envSnapshot = captureEnv(["LC_ALL"]);
+      try {
+        process.env.LC_ALL = "de_DE.UTF-8";
+        await withUid(0, async () => {
+          mockAvailableBinaries(["apt-get"]);
+          runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
+
+          expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+          expectAptPolicyCall(0);
+        });
+      } finally {
+        envSnapshot.restore();
+      }
     });
 
     it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
@@ -351,18 +373,18 @@ describe("skills-install fallback edge cases", () => {
           "-y",
           "golang-go",
         ]);
-        expect(commandCallAt(1)[0]).toEqual(["apt-cache", "policy", "golang-go"]);
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
       });
     });
 
-    it("keeps missing-Go recipes ready when a fresh container has no apt candidate yet", async () => {
+    it("defers empty apt metadata to the policy-approved installer", async () => {
       await withUid(0, async () => {
         mockAvailableBinaries(["apt-get"]);
-        // Cleared /var/lib/apt/lists: installGoViaApt refreshes indexes before
-        // installing, so the preflight must not veto on the empty cache.
         runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+        expectAptPolicyCall(0);
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
       });
     });
 
@@ -472,6 +494,116 @@ describe("skills-install fallback edge cases", () => {
       runCommandWithTimeoutMock.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
       expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: true });
       expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
+    });
+  });
+
+  it("refreshes apt metadata before installing an accepted Go candidate", async () => {
+    await withUid(0, async () => {
+      mockAvailableBinaries(["apt-get"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
+        stderr: "",
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(commandCallAt(0)[0]).toEqual(["apt-get", "update", "-qq"]);
+      expectAptPolicyCall(1);
+      expect(commandCallAt(2)[0]).toEqual(["apt-get", "install", "-y", "golang-go"]);
+      expect(commandCallAt(3)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+    });
+  });
+
+  it("uses the current supported apt candidate when metadata refresh fails", async () => {
+    await withUid(0, async () => {
+      mockAvailableBinaries(["apt-get"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "temporary repository failure",
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
+        stderr: "",
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(commandCallAt(0)[0]).toEqual(["apt-get", "update", "-qq"]);
+      expectAptPolicyCall(1);
+      expect(commandCallAt(2)[0]).toEqual(["apt-get", "install", "-y", "golang-go"]);
+      expect(commandCallAt(3)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+    });
+  });
+
+  it("rejects the current old apt candidate when metadata refresh fails", async () => {
+    await withUid(0, async () => {
+      mockAvailableBinaries(["apt-get"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "temporary repository failure",
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.19~1\n",
+        stderr: "",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.skipReason).toBe("go");
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+      expectAptPolicyCall(1);
+    });
+  });
+
+  it("does not install an old apt Go candidate after refreshing empty metadata", async () => {
+    await withUid(0, async () => {
+      mockAvailableBinaries(["apt-get"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.19~1\n",
+        stderr: "",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("usable Go 1.21+ package");
+      expect(result.skipReason).toBe("go");
+      expect(runCommandWithTimeoutMock.mock.calls.map((call) => call[0])).toEqual([
+        ["apt-get", "update", "-qq"],
+        ["apt-cache", "policy", "golang-go"],
+      ]);
+      expectAptPolicyCall(1);
     });
   });
 

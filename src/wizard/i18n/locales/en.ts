@@ -335,6 +335,7 @@ export const en = {
       homebrewRecommendedTitle: "Homebrew recommended",
       installDeps: "Install missing skill dependencies",
       installFailed: "Install failed: {name}{code}{detail}",
+      installSkipped: "Skipped: {name} (manual prerequisite required)",
       installed: "Installed {name}",
       installedWithWarnings: "Installed {name} (with warnings)",
       installing: "Installing {name}...",

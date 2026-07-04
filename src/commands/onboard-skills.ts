@@ -277,6 +277,10 @@ export async function setupSkills(
       };
     }
 
+    const deferredSkippedInstallable: Array<{
+      skill: OnboardInstallSkill;
+      reason: SkillInstallSkipReason;
+    }> = [];
     for (const target of selectedSkills) {
       if (target.install.length === 0) {
         continue;
@@ -306,6 +310,14 @@ export async function setupSkills(
         }
         continue;
       }
+      if (result.skipReason) {
+        spin.stop(t("wizard.skills.installSkipped", { name: target.name }));
+        deferredSkippedInstallable.push({ skill: target, reason: result.skipReason });
+        for (const warning of warnings) {
+          runtime.log(warning);
+        }
+        continue;
+      }
       const code = result.code == null ? "" : ` (exit ${result.code})`;
       const detail = summarizeInstallFailure(result.message);
       spin.stop(
@@ -327,6 +339,12 @@ export async function setupSkills(
         `Tip: run \`${formatCliCommand("openclaw doctor")}\` to review skills + requirements.`,
       );
       runtime.log(t("wizard.skills.docsLine"));
+    }
+    if (deferredSkippedInstallable.length > 0) {
+      await prompter.note(
+        formatSkippedInstallNote(deferredSkippedInstallable),
+        t("wizard.skills.manualPrereqsTitle"),
+      );
     }
   }
 
