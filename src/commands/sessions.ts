@@ -344,7 +344,8 @@ export async function sessionsCommand(
 
   const activeMinutes: number | undefined = opts.active;
 
-  const limit: number | undefined = opts.limit === "all" ? undefined : opts.limit;
+  const limit: number | undefined =
+    opts.limit === "all" ? undefined : (opts.limit ?? DEFAULT_SESSIONS_LIMIT);
 
   const allRows = targets.flatMap((target) => {
     return listSessionEntries({ agentId: target.agentId, storePath: target.storePath })

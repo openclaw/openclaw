@@ -393,6 +393,38 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
   });
 
+  it("bounds omitted --limit to the default of 100 rows", async () => {
+    const store = writeStore(
+      Object.fromEntries(
+        Array.from({ length: 5 }, (_, i) => [
+          `key-${i}`,
+          { sessionId: `s${i}`, updatedAt: Date.now() - i * 60_000, model: "test:opus" },
+        ]),
+      ),
+      "sessions-default-limit",
+    );
+
+    const payload = await runSessionsJson<{ limitApplied: number | null }>(sessionsCommand, store);
+    expect(payload.limitApplied).toBe(100);
+  });
+
+  it("leaves --limit all unbounded (null limitApplied)", async () => {
+    const store = writeStore(
+      Object.fromEntries(
+        Array.from({ length: 5 }, (_, i) => [
+          `key-${i}`,
+          { sessionId: `s${i}`, updatedAt: Date.now() - i * 60_000, model: "test:opus" },
+        ]),
+      ),
+      "sessions-limit-all-bounded",
+    );
+
+    const payload = await runSessionsJson<{ limitApplied: number | null }>(sessionsCommand, store, {
+      limit: "all",
+    });
+    expect(payload.limitApplied).toBeNull();
+  });
+
   it("accepts pre-parsed active and limit values from the CLI layer", async () => {
     const store = writeStore(
       {
