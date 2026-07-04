@@ -32,6 +32,11 @@ export default definePluginEntry({
     api.registerAgentHarness(
       createClaudeAppServerAgentHarness({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
-    api.registerCommand(createClaudeCommand({ pluginConfig: api.pluginConfig }));
+    api.registerCommand(
+      createClaudeCommand({
+        pluginConfig: api.pluginConfig,
+        resolvePluginConfig: resolveCurrentPluginConfig,
+      }),
+    );
   },
 });

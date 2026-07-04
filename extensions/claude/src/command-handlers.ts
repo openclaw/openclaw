@@ -228,7 +228,43 @@ export function formatConversationsList(
   return lines.join("\n");
 }
 
-export async function handleConversations(ctx: PluginCommandContext): Promise<PluginCommandResult> {
+/**
+ * Reads `conversations.excludePatterns` off a resolved plugin config object.
+ * Defensive against the config being absent/malformed — an unusable value
+ * just yields no exclusions rather than throwing.
+ */
+export function resolveConversationsExcludePatterns(pluginConfig: unknown): string[] {
+  const conversations = (
+    pluginConfig as { conversations?: { excludePatterns?: unknown } } | undefined
+  )?.conversations;
+  const raw = conversations?.excludePatterns;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter((p): p is string => typeof p === "string" && p.trim().length > 0);
+}
+
+/**
+ * Case-insensitive substring match against either the session's key or its
+ * display label — whichever the operator finds easier to target. A channel
+ * rename only affects the label; the session key (and any channel id baked
+ * into it) stays stable, so matching both sides covers either angle.
+ */
+export function isExcludedByCustomFilter(
+  row: Pick<ConversationRow, "sessionKey" | "label">,
+  excludePatterns: readonly string[],
+): boolean {
+  if (excludePatterns.length === 0) {
+    return false;
+  }
+  const haystack = `${row.sessionKey} ${row.label}`.toLowerCase();
+  return excludePatterns.some((pattern) => haystack.includes(pattern.trim().toLowerCase()));
+}
+
+export async function handleConversations(
+  ctx: PluginCommandContext,
+  options?: { pluginConfig?: unknown; resolvePluginConfig?: () => unknown },
+): Promise<PluginCommandResult> {
   if (!ctx.sessionKey) {
     return {
       text: "**Claude conversations**\n\nNo session key available for this invocation; run `/claude conversations` from an active agent session.",
@@ -244,7 +280,11 @@ export async function handleConversations(ctx: PluginCommandContext): Promise<Pl
       entry.sessionId ? resolveSessionFilePath(entry.sessionId, entry, { agentId }) : undefined,
     readBinding: safeReadBinding,
   });
-  return { text: formatConversationsList(rows, candidateCount) };
+  const excludePatterns = resolveConversationsExcludePatterns(
+    options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+  );
+  const visibleRows = rows.filter((row) => !isExcludedByCustomFilter(row, excludePatterns));
+  return { text: formatConversationsList(visibleRows, candidateCount) };
 }
 
 export async function handleResume(

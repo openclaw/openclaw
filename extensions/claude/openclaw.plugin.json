@@ -73,6 +73,18 @@
             "description": "OpenClaw dynamic tool names to omit when projecting into Claude turns."
           }
         }
+      },
+      "conversations": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excludePatterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": [],
+            "description": "Case-insensitive substring patterns matched against a session's key or display label; matching sessions are hidden from `/claude conversations`. Example: [\"cio-agent-heartbeats\"] hides every thread in a Slack channel by that name."
+          }
+        }
       }
     }
   },
@@ -88,6 +100,10 @@
     "dynamicTools.exclude": {
       "label": "Dynamic Tool Excludes",
       "advanced": true
+    },
+    "conversations.excludePatterns": {
+      "label": "Conversations Exclude Patterns",
+      "help": "Hide matching sessions from /claude conversations — handy for muting a heartbeat/status channel that isn't a real conversation."
     }
   }
 }
