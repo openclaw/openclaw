@@ -589,6 +589,10 @@
       "types": "./dist/plugin-sdk/secret-file-runtime.d.ts",
       "default": "./dist/plugin-sdk/secret-file-runtime.js"
     },
+    "./plugin-sdk/secret-display-runtime": {
+      "types": "./dist/plugin-sdk/secret-display-runtime.d.ts",
+      "default": "./dist/plugin-sdk/secret-display-runtime.js"
+    },
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"

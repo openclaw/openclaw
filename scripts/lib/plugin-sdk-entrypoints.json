@@ -102,6 +102,7 @@
   "secret-ref-runtime",
   "secret-provider-integration",
   "secret-file-runtime",
+  "secret-display-runtime",
   "security-runtime",
   "gateway-method-runtime",
   "gateway-runtime",

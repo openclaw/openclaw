@@ -1,0 +1,35 @@
+/** Masks credential-like values while preserving the existing UTF-16 prefix/suffix policy. */
+export function maskApiKey(value: string): string {
+  const trimmed = stripControlCharacters(value).trim();
+  if (!trimmed) {
+    return "missing";
+  }
+  if (trimmed.length <= 6) {
+    return `${trimmed.slice(0, 1)}...${trimmed.slice(-1)}`;
+  }
+  if (trimmed.length <= 16) {
+    return `${trimmed.slice(0, 2)}...${trimmed.slice(-2)}`;
+  }
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
+}
+
+function stripControlCharacters(value: string): string {
+  let result = "";
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    const isControl = (code >= 0x00 && code <= 0x1f) || (code >= 0x7f && code <= 0x9f);
+    if (!isControl) {
+      result += character;
+    }
+  }
+  return result;
+}
+
+/** Masks a trimmed secret with a visible UTF-16 prefix or a fixed short-value marker. */
+export function maskSecretPrefix(value: string, visiblePrefixLength = 6): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= visiblePrefixLength) {
+    return "***";
+  }
+  return `${trimmed.slice(0, visiblePrefixLength)}…`;
+}

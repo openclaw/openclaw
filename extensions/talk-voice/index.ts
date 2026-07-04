@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { maskSecretPrefix } from "openclaw/plugin-sdk/secret-display-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -9,14 +10,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
-
-function mask(s: string, keep = 6): string {
-  const trimmed = s.trim();
-  if (trimmed.length <= keep) {
-    return "***";
-  }
-  return `${trimmed.slice(0, keep)}…`;
-}
 
 function isLikelyVoiceId(value: string): boolean {
   const v = value.trim();
@@ -166,7 +159,7 @@ export default definePluginEntry({
               "Talk voice status:\n" +
               `- provider: ${providerId}\n` +
               `- talk.providers.${providerId}.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
-              `- ${providerId}.apiKey: ${apiKey ? mask(apiKey) : "(unset)"}`,
+              `- ${providerId}.apiKey: ${apiKey ? maskSecretPrefix(apiKey) : "(unset)"}`,
           };
         }
 
