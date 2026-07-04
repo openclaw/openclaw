@@ -11,6 +11,7 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../auto-reply/tokens.js";
+import { buildDurableFanInSnapshotForChild } from "../durable/fan-in-snapshot.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -295,7 +296,7 @@ function buildRequesterSiblingFanInFindings(params: {
     requesterSessionKey: params.requesterSessionKey,
     getLatestSubagentRunByChildSessionKey:
       params.registryRuntime.getLatestSubagentRunByChildSessionKey,
-  }) as DirectChildCompletionRow[];
+  });
   const latestChildren = dedupeLatestChildCompletionRows(
     directChildren,
   ) as DirectChildCompletionRow[];
@@ -741,27 +742,35 @@ export async function runSubagentAnnounceFlow(params: {
     const taskLabel = params.label || params.task || "task";
     const announceSessionId = childSessionId || "unknown";
     const baseFindings = childCompletionFindings || reply || "(no output)";
-    const siblingFanIn = buildRequesterSiblingFanInFindings({
-      registryRuntime: subagentRegistryRuntime,
-      requesterSessionKey: targetRequesterSessionKey,
-      currentChildSessionKey: params.childSessionKey,
-      currentChildRunId: params.childRunId,
-      task: params.task,
-      label: params.label,
-      startedAt: params.startedAt,
-      endedAt: params.endedAt,
+    const durableFanIn = buildDurableFanInSnapshotForChild({
+      childRunId: params.childRunId,
+      childSessionKey: params.childSessionKey,
       currentFindings: baseFindings,
-      outcome,
     });
+    const legacySiblingFanIn = durableFanIn
+      ? undefined
+      : buildRequesterSiblingFanInFindings({
+          registryRuntime: subagentRegistryRuntime,
+          requesterSessionKey: targetRequesterSessionKey,
+          currentChildSessionKey: params.childSessionKey,
+          currentChildRunId: params.childRunId,
+          task: params.task,
+          label: params.label,
+          startedAt: params.startedAt,
+          endedAt: params.endedAt,
+          currentFindings: baseFindings,
+          outcome,
+        });
+    const fanInSnapshot = durableFanIn ?? legacySiblingFanIn;
     if (
-      siblingFanIn?.allListedChildrenTerminal &&
-      !siblingFanIn.snapshotTruncated &&
-      !siblingFanIn.currentChildOwnsFinal
+      fanInSnapshot?.allListedChildrenTerminal &&
+      !fanInSnapshot.snapshotTruncated &&
+      !fanInSnapshot.currentChildOwnsFinal
     ) {
       return true;
     }
-    const siblingFanInFindings = siblingFanIn?.text;
-    const findings = siblingFanInFindings || baseFindings;
+    const fanInFindings = fanInSnapshot?.text;
+    const findings = fanInFindings || baseFindings;
     const terminalResult =
       expectsCompletionMessage && outcome.status === "ok"
         ? resolveRequiredCompletionTerminalResult(findings)
@@ -784,12 +793,15 @@ export async function runSubagentAnnounceFlow(params: {
       announceType,
       expectsCompletionMessage,
     });
-    const effectiveReplyInstruction = siblingFanInFindings
+    const fanInRulePrefix = durableFanIn
+      ? "Durable fan-in rule: Treat the durable fan-in snapshot above as authoritative for this parent fan-in group."
+      : "Sibling fan-in rule: Treat the sibling fan-in snapshot above as authoritative for this requester session.";
+    const effectiveReplyInstruction = fanInFindings
       ? [
           replyInstruction,
           [
-            "Sibling fan-in rule: Treat the sibling fan-in snapshot above as authoritative",
-            "for this requester session. If every expected child in the snapshot is terminal,",
+            fanInRulePrefix,
+            "If every expected child in the snapshot is terminal,",
             "and snapshot_truncated is false, synthesize the final parent answer now instead",
             "of saying a listed sibling is missing.",
             "If any child is still pending, report the partial state and the specific pending child.",

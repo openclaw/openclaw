@@ -33,6 +33,21 @@ export type DurableFanInResult = {
   ready: boolean;
 };
 
+export function buildDurableFanInGroupId(params: {
+  parentRuntimeRunId: string;
+  parentStepId: string;
+}): string {
+  return `fan-in:${params.parentRuntimeRunId}:${params.parentStepId}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function normalizeChildTerminalOutcome(
   value: unknown,
 ): DurableChildTerminalOutcomeStatus | undefined {
@@ -174,6 +189,17 @@ export function reconcileDurableFanIn(params: {
   const childLinks = params.store
     .listChildLinks(params.parentRuntimeRunId)
     .filter((link) => link.parentStepId === params.parentStepId);
+  const existingStep = params.store
+    .listSteps(params.parentRuntimeRunId)
+    .find((step) => step.stepId === params.parentStepId);
+  const existingMetadata = isRecord(existingStep?.metadata) ? existingStep.metadata : {};
+  const fanInGroupId =
+    optionalString(existingMetadata.fanInGroupId) ??
+    optionalString(childLinks.find((link) => isRecord(link.metadata))?.metadata?.fanInGroupId) ??
+    buildDurableFanInGroupId({
+      parentRuntimeRunId: params.parentRuntimeRunId,
+      parentStepId: params.parentStepId,
+    });
   const result = computeFanInResult({
     links: childLinks,
     policy: params.policy,
@@ -189,7 +215,9 @@ export function reconcileDurableFanIn(params: {
     recoveryState: result.status === "waiting" ? "waiting_child" : "terminal",
     completedAt: result.ready ? now : null,
     metadata: {
+      ...existingMetadata,
       policy: params.policy,
+      fanInGroupId,
       total: result.total,
       succeeded: result.succeeded,
       failed: result.failed,
@@ -214,6 +242,7 @@ export function reconcileDurableFanIn(params: {
       succeeded: result.succeeded,
       failed: result.failed,
       terminal: result.terminal,
+      fanInGroupId,
       outcomes,
     },
   });

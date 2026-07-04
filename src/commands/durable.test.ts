@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDurableRuntimeSqlitePath } from "../durable/config.js";
+import { buildDurableFanInGroupId } from "../durable/fan-in.js";
 import { openDurableRuntimeStore } from "../durable/store-factory.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { durableCommand } from "./durable.js";
@@ -66,44 +67,45 @@ describe("durableCommand", () => {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_DURABLE_RUNTIME: "1",
     };
-    const store = openDurableRuntimeStore({ env });
-    let runtimeRunId = "";
-    try {
-      const parent = store.createRun({
-        operationKind: "test.parent",
-        status: "waiting_child",
-        recoveryState: "waiting_child",
-        sourceRef: "agent:test:main",
-        now: 100,
-      });
-      runtimeRunId = parent.runtimeRunId;
-      store.createStep({
-        runtimeRunId: parent.runtimeRunId,
-        stepId: "children",
-        stepType: "fan_in",
-        status: "waiting",
-        recoveryState: "waiting_child",
-        now: 100,
-      });
-      const child = store.createRun({
-        operationKind: "test.child",
-        status: "running",
-        recoveryState: "running",
-        parentRuntimeRunId: parent.runtimeRunId,
-        parentStepId: "children",
-        now: 110,
-      });
-      store.createLink({
-        parentRuntimeRunId: parent.runtimeRunId,
-        parentStepId: "children",
-        childRuntimeRunId: child.runtimeRunId,
-        linkType: "subagent",
-        status: "running",
-        now: 110,
-      });
-    } finally {
-      store.close();
-    }
+    const runtimeRunId = (() => {
+      const store = openDurableRuntimeStore({ env });
+      try {
+        const parent = store.createRun({
+          operationKind: "test.parent",
+          status: "waiting_child",
+          recoveryState: "waiting_child",
+          sourceRef: "agent:test:main",
+          now: 100,
+        });
+        store.createStep({
+          runtimeRunId: parent.runtimeRunId,
+          stepId: "children",
+          stepType: "fan_in",
+          status: "waiting",
+          recoveryState: "waiting_child",
+          now: 100,
+        });
+        const child = store.createRun({
+          operationKind: "test.child",
+          status: "running",
+          recoveryState: "running",
+          parentRuntimeRunId: parent.runtimeRunId,
+          parentStepId: "children",
+          now: 110,
+        });
+        store.createLink({
+          parentRuntimeRunId: parent.runtimeRunId,
+          parentStepId: "children",
+          childRuntimeRunId: child.runtimeRunId,
+          linkType: "subagent",
+          status: "running",
+          now: 110,
+        });
+        return parent.runtimeRunId;
+      } finally {
+        store.close();
+      }
+    })();
 
     try {
       const { logs, runtime } = createRuntimeCapture();
@@ -119,36 +121,118 @@ describe("durableCommand", () => {
     }
   });
 
+  it("renders fan-in group and result mailbox diagnostics in show output", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-show-"));
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DURABLE_RUNTIME: "1",
+    };
+    const runtimeRunId = (() => {
+      const store = openDurableRuntimeStore({ env });
+      try {
+        const parent = store.createRun({
+          operationKind: "test.parent",
+          status: "waiting_child",
+          recoveryState: "waiting_child",
+          sourceRef: "agent:test:main",
+          now: 100,
+        });
+        const parentStepId = "children";
+        const fanInGroupId = buildDurableFanInGroupId({
+          parentRuntimeRunId: parent.runtimeRunId,
+          parentStepId,
+        });
+        store.createStep({
+          runtimeRunId: parent.runtimeRunId,
+          stepId: parentStepId,
+          stepType: "fan_in",
+          status: "waiting",
+          recoveryState: "waiting_child",
+          metadata: { fanInGroupId },
+          now: 100,
+        });
+        const child = store.createRun({
+          operationKind: "test.child",
+          status: "succeeded",
+          recoveryState: "terminal",
+          parentRuntimeRunId: parent.runtimeRunId,
+          parentStepId,
+          now: 110,
+        });
+        store.createLink({
+          parentRuntimeRunId: parent.runtimeRunId,
+          parentStepId,
+          childRuntimeRunId: child.runtimeRunId,
+          linkType: "subagent",
+          status: "succeeded",
+          metadata: { fanInGroupId, childSessionKey: "agent:test:subagent:child" },
+          now: 110,
+        });
+        store.createStep({
+          runtimeRunId: parent.runtimeRunId,
+          stepId: `result_mailbox:${child.runtimeRunId}`,
+          parentStepId,
+          stepType: "result_mailbox",
+          status: "queued",
+          recoveryState: "runnable",
+          metadata: {
+            outcome: { terminalOutcome: "succeeded" },
+            ack: { status: "pending" },
+            delivery: { status: "attempted" },
+          },
+          now: 120,
+        });
+        return parent.runtimeRunId;
+      } finally {
+        store.close();
+      }
+    })();
+
+    try {
+      const { logs, runtime } = createRuntimeCapture();
+
+      await durableCommand({ action: "show", runtimeRunId, env }, runtime);
+
+      expect(logs[0]).toContain("fan_in=");
+      expect(logs[0]).toContain("session=agent:test:subagent:child");
+      expect(logs[0]).toContain("outcome=succeeded");
+      expect(logs[0]).toContain("ack=pending");
+      expect(logs[0]).toContain("delivery=attempted");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces recovery diagnostics in the why command", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-cli-why-"));
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_DURABLE_RUNTIME: "1",
     };
-    const store = openDurableRuntimeStore({ env });
-    let runtimeRunId = "";
-    try {
-      const run = store.createRun({
-        operationKind: "test.agent_turn",
-        status: "lost",
-        recoveryState: "lost",
-        completedAt: 200,
-        metadata: {
-          recoveryDiagnostic: {
-            state: "lost",
-            severity: "error",
-            reason: "stale_heartbeat",
-            message: "Agent turn was marked lost during durable recovery.",
-            nextAction: "inspect_timeline_then_retry_or_resume",
-            safeRecoveryActions: ["inspect_timeline", "retry_request"],
+    const runtimeRunId = (() => {
+      const store = openDurableRuntimeStore({ env });
+      try {
+        return store.createRun({
+          operationKind: "test.agent_turn",
+          status: "lost",
+          recoveryState: "lost",
+          completedAt: 200,
+          metadata: {
+            recoveryDiagnostic: {
+              state: "lost",
+              severity: "error",
+              reason: "stale_heartbeat",
+              message: "Agent turn was marked lost during durable recovery.",
+              nextAction: "inspect_timeline_then_retry_or_resume",
+              safeRecoveryActions: ["inspect_timeline", "retry_request"],
+            },
           },
-        },
-        now: 200,
-      });
-      runtimeRunId = run.runtimeRunId;
-    } finally {
-      store.close();
-    }
+          now: 200,
+        }).runtimeRunId;
+      } finally {
+        store.close();
+      }
+    })();
 
     try {
       const { logs, runtime } = createRuntimeCapture();

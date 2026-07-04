@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { isDurableRuntimesEnabled } from "./config.js";
-import { reconcileDurableFanIn, type DurableFanInPolicy } from "./fan-in.js";
+import {
+  buildDurableFanInGroupId,
+  reconcileDurableFanIn,
+  type DurableFanInPolicy,
+} from "./fan-in.js";
 import {
   isDurableResultMailboxAcknowledged,
   recordDurableResultMailboxDeliveryAttempt,
@@ -275,6 +279,10 @@ export function recordDurableSubagentRegistered(params: {
         });
         return;
       }
+      const fanInGroupId = buildDurableFanInGroupId({
+        parentRuntimeRunId: parent.runtimeRunId,
+        parentStepId: SUBAGENT_PARENT_STEP_ID,
+      });
       store.createStep({
         runtimeRunId: parent.runtimeRunId,
         stepId: SUBAGENT_PARENT_STEP_ID,
@@ -282,7 +290,10 @@ export function recordDurableSubagentRegistered(params: {
         status: "waiting",
         recoveryState: "waiting_child",
         idempotencyKey: `${parent.runtimeRunId}:${SUBAGENT_PARENT_STEP_ID}`,
-        metadata: { policy: "continue_on_child_failure" satisfies DurableFanInPolicy },
+        metadata: {
+          policy: "continue_on_child_failure" satisfies DurableFanInPolicy,
+          fanInGroupId,
+        },
         now,
       });
       store.createLink({
@@ -291,7 +302,10 @@ export function recordDurableSubagentRegistered(params: {
         childRuntimeRunId: child.runtimeRunId,
         linkType: "subagent",
         status: "running",
-        metadata,
+        metadata: {
+          ...metadata,
+          fanInGroupId,
+        },
         now,
       });
       store.appendEvent({
@@ -303,6 +317,7 @@ export function recordDurableSubagentRegistered(params: {
         correlationId: params.childSessionKey,
         payload: {
           childRuntimeRunId: child.runtimeRunId,
+          fanInGroupId,
           ...metadata,
         },
       });
