@@ -1239,6 +1239,9 @@ function renderChatModelReasoningSelect(params: {
     await onThinkingSelect(stop.value);
   };
   const showReasoning = sliderStops.length > 0;
+  // A one-entry scale is not a slider, but the lone level must stay
+  // selectable from the inherited default (regression guard vs the old list).
+  const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
   const showReasoningPanel = showReasoning || fastMode.supported;
   return html`
     <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
@@ -1363,7 +1366,37 @@ function renderChatModelReasoningSelect(params: {
                               <span>Smarter</span>
                             </div>
                           `
-                        : ""}
+                        : onlyStop
+                          ? html`
+                              <button
+                                class="chat-controls__reasoning-option ${hasThinkingOverride
+                                  ? "chat-controls__reasoning-option--selected"
+                                  : ""}"
+                                data-chat-thinking-option=${onlyStop.value}
+                                type="button"
+                                aria-pressed=${hasThinkingOverride ? "true" : "false"}
+                                ?disabled=${thinkingDisabled}
+                                @click=${async (event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  if (thinkingDisabled || hasThinkingOverride) {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  await onThinkingSelect(onlyStop.value);
+                                }}
+                              >
+                                <span>${onlyStop.label}</span>
+                                ${hasThinkingOverride
+                                  ? html`<span
+                                      class="chat-controls__inline-select-check"
+                                      aria-hidden="true"
+                                    >
+                                      ${icons.check}
+                                    </span>`
+                                  : ""}
+                              </button>
+                            `
+                          : ""}
                       ${hasThinkingOverride
                         ? html`
                             <button

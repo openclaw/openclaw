@@ -4343,6 +4343,35 @@ describe("chat session controls", () => {
     expect(thinkingSelect.title).toContain("Adaptive");
   });
 
+  it("keeps a single available thinking level selectable without a slider", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        modelProvider: "openai",
+        model: "gpt-5",
+        thinkingLevels: [{ id: "adaptive", label: "adaptive" }],
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(getThinkingSlider(container)).toBeNull();
+    const only = container.querySelector<HTMLButtonElement>(
+      '[data-chat-thinking-option="adaptive"]',
+    );
+    expect(only).toBeInstanceOf(HTMLButtonElement);
+    expect(only?.getAttribute("aria-pressed")).toBe("false");
+    only?.click();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: "adaptive",
+    });
+  });
+
   it("disables thinking for known non-reasoning models without duplicate off options", () => {
     const { state } = createChatHeaderState({
       model: "mistral:v0.3",
