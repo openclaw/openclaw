@@ -10,6 +10,8 @@ import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
+  sanitizeThinkingForRecovery,
+  stripAllThinkingSignatures,
   stripInvalidThinkingSignatures,
   stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
@@ -1291,5 +1293,76 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
     // Same millisecond as compaction: treated as post-compaction; signature preserved
     expect(result).toBe(messages);
+  });
+});
+
+describe("stripAllThinkingSignatures", () => {
+  const signedThinkingMsg = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "thinking text", signature: "sig_abc" },
+      { type: "text", text: "visible text" },
+    ],
+  } as unknown as AgentMessage;
+
+  const signedThinkingMsg2 = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "more thought", thinkingSignature: "sig_def" },
+      { type: "tool_use", name: "exec", input: {} },
+    ],
+  } as unknown as AgentMessage;
+
+  const userMsg = { role: "user", content: "hello" } as unknown as AgentMessage;
+
+  it("strips signature and thinkingSignature from all assistant messages", () => {
+    const messages = [userMsg, signedThinkingMsg, signedThinkingMsg2];
+    const result = stripAllThinkingSignatures(messages);
+    expect(result).not.toBe(messages);
+    const joined = JSON.stringify(result);
+    expect(joined).not.toContain("sig_abc");
+    expect(joined).not.toContain("sig_def");
+    expect(joined).not.toContain("signature");
+    expect(joined).not.toContain("thinkingSignature");
+  });
+
+  it("preserves latest assistant when preserveLatestAssistant is true", () => {
+    const messages = [userMsg, signedThinkingMsg, signedThinkingMsg2];
+    const result = stripAllThinkingSignatures(messages, { preserveLatestAssistant: true });
+    expect(result).not.toBe(messages);
+    const lastContent = (result[2] as { content: unknown[] }).content;
+    const lastContentStr = JSON.stringify(lastContent);
+    expect(lastContentStr).toContain("sig_def");
+    expect(lastContentStr).toContain("thinkingSignature");
+    const firstContent = (result[1] as { content: unknown[] }).content;
+    expect(JSON.stringify(firstContent)).not.toContain("sig_abc");
+  });
+
+  it("preserves non-thinking content", () => {
+    const messages = [userMsg, signedThinkingMsg, signedThinkingMsg2];
+    const result = stripAllThinkingSignatures(messages);
+    const joined = JSON.stringify(result);
+    expect(joined).toContain("visible text");
+    expect(joined).toContain("tool_use");
+    expect(joined).toContain("hello");
+  });
+
+  it("returns the original reference when no thinking blocks are present", () => {
+    const messages = [
+      userMsg,
+      { role: "assistant", content: [{ type: "text", text: "plain" }] } as unknown as AgentMessage,
+    ];
+    expect(stripAllThinkingSignatures(messages)).toBe(messages);
+  });
+
+  it("returns the original reference when thinking blocks have no signatures", () => {
+    const messages = [
+      userMsg,
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "unsigned" }],
+      } as unknown as AgentMessage,
+    ];
+    expect(stripAllThinkingSignatures(messages)).toBe(messages);
   });
 });
