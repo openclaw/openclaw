@@ -212,7 +212,7 @@ img.chat-avatar {
 .chat-bubble {
   position: relative;
   display: block;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   background: var(--card);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
@@ -225,13 +225,11 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+/* Width-only shell: bubble chrome (border/background/padding) comes from
+   .chat-bubble above. */
 .chat-bubble--tool-shell {
   align-self: stretch;
   width: min(100%, 760px);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
 }
 
 .chat-bubble--tool-shell:hover {
@@ -377,11 +375,11 @@ img.chat-avatar {
 /* Light mode: restore borders */
 :root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
+  background: var(--bg);
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell {
-  border-color: transparent;
   box-shadow: none;
 }
 
@@ -406,22 +404,6 @@ img.chat-avatar {
 
 .chat-group.user .chat-bubble:hover {
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
-}
-
-/* Streaming animation */
-.chat-bubble.streaming {
-  animation: pulsing-border 1.5s ease-out infinite;
-}
-
-@keyframes pulsing-border {
-  0%,
-  100% {
-    border-color: var(--border);
-  }
-
-  50% {
-    border-color: var(--accent);
-  }
 }
 
 /* Fade-in animation for new messages */
