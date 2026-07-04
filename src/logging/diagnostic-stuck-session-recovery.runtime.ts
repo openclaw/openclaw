@@ -237,6 +237,46 @@ export async function recoverStuckDiagnosticSession(
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
+        // When there is no active embedded run handle but the lane still has
+        // active tasks, the task is likely orphaned (its promise will never
+        // settle because the owning run was already cleaned up or abandoned).
+        // After the stale threshold, force-reset the lane to release queued work.
+        //
+        // We use params.ageMs directly rather than isActiveRunProgressStale()
+        // because that function has an early return when queueDepth === 0.
+        // The orphaned task scenario typically has no queued work, so the
+        // queueDepth gate would prevent stale detection. Using ageMs directly
+        // is the correct behavior here: the session has been stuck long enough
+        // that the lane task is definitely orphaned, regardless of queue depth.
+        //
+        // ageMs is the duration the session has been classified as "stuck"
+        // by the diagnostic heartbeat, not the lane task's execution age.
+        // In the orphaned task scenario, the session becomes "stuck" precisely
+        // when the task stops making progress (its run handle was cleaned up),
+        // so ageMs is an adequate proxy for how long the task has been orphaned.
+        const shouldForceReset =
+          params.allowActiveAbort === true || params.ageMs >= staleActiveProgressAbortMs;
+
+        if (shouldForceReset) {
+          const released = resetCommandLane(sessionLane);
+          const outcome: StuckSessionRecoveryOutcome = {
+            status: "released",
+            action: "release_lane",
+            reason: "stale_lane_task",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            lane: sessionLane,
+            released,
+            activeCount: laneSnapshot.activeCount,
+            queuedCount: laneSnapshot.queuedCount,
+          };
+          diag.warn(
+            `stuck session recovery force-reset stale lane: ${formatRecoveryOutcome(outcome)}` +
+              ` ageMs=${params.ageMs} threshold=${staleActiveProgressAbortMs}`,
+          );
+          return outcome;
+        }
+
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "keep_lane",
