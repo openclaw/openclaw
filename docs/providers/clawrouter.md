@@ -37,11 +37,13 @@ issued ClawRouter credential.
     ```bash
     export CLAWROUTER_API_KEY="..."
     openclaw onboard --auth-choice clawrouter-api-key
+    openclaw plugins enable clawrouter
     ```
 
-    The plugin is included with OpenClaw and enabled by default. For a custom
-    deployment, set `models.providers.clawrouter.baseUrl` to the ClawRouter
-    origin; the default is `https://clawrouter.openclaw.ai`.
+    The plugin is bundled with OpenClaw. If your configuration sets
+    `plugins.allow`, add `clawrouter` to that list before enabling it. For a
+    custom deployment, set `models.providers.clawrouter.baseUrl` to the
+    ClawRouter origin; the default is `https://clawrouter.openclaw.ai`.
 
   </Step>
   <Step title="List granted models">
@@ -51,7 +53,8 @@ issued ClawRouter credential.
 
     Use the returned model refs exactly as shown. They retain the upstream
     namespace, such as `clawrouter/openai/...`, `clawrouter/anthropic/...`, or
-    `clawrouter/google/...`.
+    `clawrouter/google/...`. If `agents.defaults.models` is an allowlist in your
+    configuration, add each selected ClawRouter ref to it.
 
   </Step>
   <Step title="Select a model">
@@ -121,13 +124,14 @@ the same ClawRouter policy can change the remaining percentage.
 
 ## Troubleshooting
 
-| Symptom                                  | Check                                                                                                                                                 |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No ClawRouter models                     | Confirm the credential is active, its policy grants at least one ready model provider, and `CLAWROUTER_API_KEY` is available to the OpenClaw process. |
-| A configured ClawRouter model is missing | Inspect its `/v1/catalog` capability and route format. Unsupported transport contracts are intentionally filtered.                                    |
-| `401` or `403` from catalog or usage     | Reissue or re-scope the ClawRouter credential; OpenClaw does not fall back to upstream provider keys.                                                 |
-| Model call fails after discovery         | Check the provider connection and upstream health in ClawRouter, then retry after its readiness state recovers.                                       |
-| Usage has totals but no percentage       | The policy is unmetered; add a monthly budget in ClawRouter to expose a percentage window.                                                            |
+| Symptom                                  | Check                                                                                                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| No ClawRouter models                     | Confirm the plugin is enabled and allowed by `plugins.allow`, then check that the credential is active and grants at least one ready provider. |
+| A configured ClawRouter model is missing | Inspect its `/v1/catalog` capability and route format. Unsupported transport contracts are intentionally filtered.                             |
+| `Unknown model: clawrouter/...`          | Add the exact catalog ref to `agents.defaults.models` when that configuration map is being used as an allowlist.                               |
+| `401` or `403` from catalog or usage     | Reissue or re-scope the ClawRouter credential; OpenClaw does not fall back to upstream provider keys.                                          |
+| Model call fails after discovery         | Check the provider connection and upstream health in ClawRouter, then retry after its readiness state recovers.                                |
+| Usage has totals but no percentage       | The policy is unmetered; add a monthly budget in ClawRouter to expose a percentage window.                                                     |
 
 ## Security behavior
 

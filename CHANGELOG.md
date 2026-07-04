@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **ClawRouter auth profiles:** resolve credential-scoped catalog models during agent runs when the proxy key is stored in an auth profile, and document plugin and model allowlists.
 - **Telegram durability:** recover stalled ingress claims, retry restart-dropped media, survive transient polling errors, dead-letter poison updates, preserve forwarded rich text, route plugin callbacks correctly, and fall back safely when rich final replies are rejected. (#97118, #98102, #98735, #98775, #98776, #97174, #98786) Thanks @vincentkoc, @luoyanglang, @DaveArcher18, @obviyus, and @goldmar.
 - **Agent and context reliability:** preserve runtime overrides and steered subagent tasks, improve harness-aware context estimation and compaction prechecks, time out silent local streams, recover mid-stream failures, and cap Gateway run-cache growth. (#92237, #77539, #97928, #97861, #98525, #95430, #77973) Thanks @sercada, @amittell, @liuhao1024, @yetval, @osolmaz, @lzyyzznl, @vincentkoc, @alexelgier, and @fede-kamel.
 - **Provider and network safety:** bound oversized or malformed responses across Moonshot, MiniMax, Anthropic OAuth, Discord, Matrix, SMS, browser, update, embeddings, Tlön, and Inworld paths. (#96502, #96322, #96644, #97693, #97662, #97999, #98455, #98508, #98554, #98496, #98660) Thanks @hugenshen, @cursoragent, @lsr911, @solodmd, @Alix-007, @wings1029, @lzyyzznl, @sunlit-deng, @vincentkoc, and @Pandah97.
