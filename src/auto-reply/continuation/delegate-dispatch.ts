@@ -141,6 +141,7 @@ function armHedgeTimer(
     applyDelegateChainTokensFold?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
     persistBeforeTerminalCommit?: boolean;
+    recoverRunningDelegates?: boolean;
     inheritedSilent?: boolean;
     inheritedWake?: boolean;
   },
@@ -182,6 +183,12 @@ function armHedgeTimer(
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
       ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
+      ...(params.recoverRunningDelegates
+        ? {
+            recoverRunningDelegates: true,
+            includeRunningUpdatedAtOrBefore: Date.now(),
+          }
+        : {}),
       // Inherited silent/wake policy must survive the hedge: a delayed delegate
       // armed by a silent/wake parent chain must still spawn internal when the
       // hedge finally dispatches it, not announce to the channel (#1158).
@@ -365,6 +372,7 @@ export async function dispatchToolDelegates(params: {
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
       ...(params.persistBeforeTerminalCommit ? { persistBeforeTerminalCommit: true } : {}),
+      ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
       ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
       ...(params.inheritedWake ? { inheritedWake: true } : {}),
     });

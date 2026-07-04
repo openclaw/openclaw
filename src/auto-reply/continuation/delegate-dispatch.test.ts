@@ -2014,6 +2014,50 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(persisted?.continuationChainTokens).toBe(150_000);
   });
 
+  it("recovers a hedge-claimed row after recovered chain-state persist fails", async () => {
+    const sessionKey = "agent:main:subagent:hedge-persist-fail-retry";
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop with transient persist failure",
+      delayMs: 60_000,
+      chainTokensFold: 50_000,
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 100_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "running" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toBeUndefined();
+
+    const digest = crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    updateSessionStoreForRecoveryShouldThrow = false;
+    spawnSubagentDirectMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 2,
+      continuationChainTokens: 150_000,
+    });
+  });
+
   it("clears persisted chain-token folds so later delayed hedges do not reapply them (#1158)", async () => {
     setRuntimeConfigSnapshot({
       agents: {
