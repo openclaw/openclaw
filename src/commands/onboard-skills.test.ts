@@ -7,10 +7,10 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
   installSkill: vi.fn(),
+  resolveInstallerKindReadiness: vi.fn(),
   detectBinary: vi.fn(),
   isContainerEnvironment: vi.fn(),
   resolveBrewExecutable: vi.fn(),
-  runCommandWithTimeout: vi.fn(),
   resolveNodeManagerOptions: vi.fn(() => [
     { value: "npm", label: "npm" },
     { value: "pnpm", label: "pnpm" },
@@ -24,15 +24,14 @@ vi.mock("../skills/discovery/status.js", () => ({
 }));
 vi.mock("../skills/lifecycle/install.js", () => ({
   installSkill: mocks.installSkill,
+  resolveInstallerKindReadiness: mocks.resolveInstallerKindReadiness,
+  MIN_AUTO_GO_VERSION: "1.21",
 }));
 vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 vi.mock("../infra/brew.js", () => ({
   resolveBrewExecutable: mocks.resolveBrewExecutable,
-}));
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
@@ -198,7 +197,8 @@ describe("setupSkills", () => {
     vi.clearAllMocks();
     mocks.isContainerEnvironment.mockReset();
     mocks.resolveBrewExecutable.mockReset();
-    mocks.runCommandWithTimeout.mockReset();
+    mocks.resolveInstallerKindReadiness.mockReset();
+    mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: true });
   });
 
   it("hides brew-only installs in Linux containers when brew is missing", async () => {
@@ -331,6 +331,7 @@ describe("setupSkills", () => {
         installLabel: "Install ffmpeg (brew)",
       }),
     ]);
+    mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: false, reason: "brew" });
 
     const { prompter, notes } = createPrompter({ multiselect: ["__skip__"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
@@ -367,6 +368,7 @@ describe("setupSkills", () => {
         installLabel: "Install ffmpeg (brew)",
       }),
     ]);
+    mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: false, reason: "brew" });
 
     const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
@@ -403,12 +405,9 @@ describe("setupSkills", () => {
           installKind: "node",
         }),
       ]);
-      mocks.detectBinary.mockImplementation(async (bin: string) => bin === "go");
-      mocks.runCommandWithTimeout.mockResolvedValue({
-        code: 0,
-        stdout: "go version go1.18.1 linux/amd64\n",
-        stderr: "",
-      });
+      mocks.resolveInstallerKindReadiness.mockImplementation(async (kind: string) =>
+        kind === "go" || kind === "uv" ? { ready: false, reason: kind } : { ready: true },
+      );
 
       const { prompter, notes } = createPrompter({});
       await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);

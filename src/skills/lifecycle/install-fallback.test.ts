@@ -23,10 +23,15 @@ vi.mock("../loading/workspace.js", () => ({
 }));
 
 let installSkill: typeof import("./install.js").installSkill;
+let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;
 let skillsInstallTesting: typeof import("./install.js").testing;
 
 async function loadSkillsInstallModulesForTest() {
-  ({ installSkill, testing: skillsInstallTesting } = await import("./install.js"));
+  ({
+    installSkill,
+    resolveInstallerKindReadiness,
+    testing: skillsInstallTesting,
+  } = await import("./install.js"));
 }
 
 function makeSkillEntry(
@@ -267,6 +272,79 @@ describe("skills-install fallback edge cases", () => {
     } finally {
       envSnapshot.restore();
     }
+  });
+
+  describe("resolveInstallerKindReadiness", () => {
+    function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
+      const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
+      return fn().finally(() => spy.mockRestore());
+    }
+
+    it("keeps missing-Go recipes ready when apt-get can bootstrap as root", async () => {
+      await withUid(0, async () => {
+        mockAvailableBinaries(["apt-get"]);
+
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+        // Preflight must not run installs; the sudo probe is the only allowed command.
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      });
+    });
+
+    it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
+      await withUid(1000, async () => {
+        mockAvailableBinaries(["apt-get", "sudo"]);
+        runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+        expect(commandCallAt(0)[0]).toEqual(["sudo", "-n", "true"]);
+      });
+    });
+
+    it("skips missing-Go recipes when neither brew nor a usable apt path exists", async () => {
+      await withUid(1000, async () => {
+        mockAvailableBinaries(["apt-get"]);
+
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+      });
+    });
+
+    it("skips too-old Go even though the binary exists", async () => {
+      mockAvailableBinaries(["go", "brew"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "go version go1.18.1 linux/amd64\n",
+        stderr: "",
+      });
+
+      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+    });
+
+    it("keeps usable Go ready without consulting brew or apt", async () => {
+      mockAvailableBinaries(["go"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "go version go1.22.4 linux/amd64\n",
+        stderr: "",
+      });
+
+      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+    });
+
+    it("mirrors uv and brew fallbacks and passes unknown kinds through", async () => {
+      mockAvailableBinaries([]);
+      expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: false, reason: "uv" });
+      expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: false, reason: "brew" });
+      expect(await resolveInstallerKindReadiness("node")).toEqual({ ready: true });
+
+      // Off-PATH Linuxbrew satisfies both brew recipes and uv's brew bootstrap.
+      skillsInstallTesting.setDepsForTest({
+        hasBinary: (bin: string) => hasBinaryMock(bin),
+        resolveBrewExecutable: () => "/home/linuxbrew/.linuxbrew/bin/brew",
+        isContainerEnvironment: () => false,
+      });
+      expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: true });
+      expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
+    });
   });
 
   it("preserves system uv/python env vars when running uv installs", async () => {

@@ -8,18 +8,21 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
-import { installSkill } from "../skills/lifecycle/install.js";
+import {
+  installSkill,
+  MIN_AUTO_GO_VERSION,
+  resolveInstallerKindReadiness,
+  type SkillInstallReadiness,
+  type SkillInstallSkipReason,
+} from "../skills/lifecycle/install.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { NodeManagerChoice } from "./onboard-types.js";
 
 const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
-const MIN_AUTO_GO_MAJOR = 1;
-const MIN_AUTO_GO_MINOR = 21;
 const SKIPPED_INSTALL_NAME_LIMIT = 8;
 
 type OnboardInstallSkill = {
@@ -28,48 +31,8 @@ type OnboardInstallSkill = {
   install: Array<{ kind: string; label: string }>;
 };
 
-type GoToolchainStatus = "missing" | "too-old" | "usable";
-type SkippedInstallReason = "brew" | "go" | "uv";
-type InstallerReadiness = { ready: true } | { ready: false; reason: SkippedInstallReason };
-
 function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
   return HOMEBREW_PROMPT_PLATFORMS.has(platform);
-}
-
-function parseGoVersion(output: string): { major: number; minor: number } | undefined {
-  const match = /\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(output);
-  if (!match) {
-    return undefined;
-  }
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-  };
-}
-
-function isGoVersionUsableForAutoInstall(version: { major: number; minor: number }): boolean {
-  return (
-    version.major > MIN_AUTO_GO_MAJOR ||
-    (version.major === MIN_AUTO_GO_MAJOR && version.minor >= MIN_AUTO_GO_MINOR)
-  );
-}
-
-async function detectGoToolchainStatus(): Promise<GoToolchainStatus> {
-  if (!(await detectBinary("go"))) {
-    return "missing";
-  }
-  try {
-    const result = await runCommandWithTimeout(["go", "version"], {
-      timeoutMs: 5_000,
-    });
-    if (result.code !== 0) {
-      return "too-old";
-    }
-    const version = parseGoVersion(`${result.stdout}\n${result.stderr}`);
-    return version && isGoVersionUsableForAutoInstall(version) ? "usable" : "too-old";
-  } catch {
-    return "too-old";
-  }
 }
 
 function summarizeInstallFailure(message: string): string | undefined {
@@ -95,17 +58,11 @@ function formatSkillHint(skill: {
   return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
 }
 
-function formatSkippedInstallReason(reason: SkippedInstallReason): string {
-  switch (reason) {
-    case "brew":
-      return "Homebrew";
-    case "go":
-      return `Go ${MIN_AUTO_GO_MAJOR}.${MIN_AUTO_GO_MINOR}+`;
-    case "uv":
-      return "uv";
-  }
-  return reason;
-}
+const SKIP_REASON_LABELS = {
+  brew: "Homebrew",
+  go: `Go ${MIN_AUTO_GO_VERSION}+`,
+  uv: "uv",
+} satisfies Record<SkillInstallSkipReason, string>;
 
 function formatSkillNames(names: string[]): string {
   const visible = names.slice(0, SKIPPED_INSTALL_NAME_LIMIT);
@@ -114,9 +71,9 @@ function formatSkillNames(names: string[]): string {
 }
 
 function formatSkippedInstallNote(
-  skipped: Array<{ skill: OnboardInstallSkill; reason: SkippedInstallReason }>,
+  skipped: Array<{ skill: OnboardInstallSkill; reason: SkillInstallSkipReason }>,
 ): string {
-  const byReason = new Map<SkippedInstallReason, string[]>();
+  const byReason = new Map<SkillInstallSkipReason, string[]>();
   for (const item of skipped) {
     const names = byReason.get(item.reason) ?? [];
     names.push(item.skill.name);
@@ -128,7 +85,7 @@ function formatSkippedInstallNote(
     if (!names || names.length === 0) {
       continue;
     }
-    lines.push(`${formatSkippedInstallReason(reason)}: ${formatSkillNames(names)}`);
+    lines.push(`${SKIP_REASON_LABELS[reason]}: ${formatSkillNames(names)}`);
   }
   lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
   return lines.join("\n");
@@ -153,46 +110,6 @@ function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string
 
 function isNodeManagerChoice(value: unknown): value is NodeManagerChoice {
   return value === "npm" || value === "pnpm" || value === "bun";
-}
-
-async function resolveInstallerReadiness(
-  kind: string,
-  checks: {
-    detectBrewOnce: () => Promise<boolean>;
-    detectGoOnce: () => Promise<GoToolchainStatus>;
-    detectUvOnce: () => Promise<boolean>;
-  },
-): Promise<InstallerReadiness> {
-  switch (kind) {
-    case "brew":
-      if (!supportsHomebrewPrompt(process.platform)) {
-        return { ready: false, reason: "brew" };
-      }
-      return (await checks.detectBrewOnce()) ? { ready: true } : { ready: false, reason: "brew" };
-    case "go": {
-      const status = await checks.detectGoOnce();
-      if (status === "usable") {
-        return { ready: true };
-      }
-      if (
-        status === "missing" &&
-        supportsHomebrewPrompt(process.platform) &&
-        (await checks.detectBrewOnce())
-      ) {
-        return { ready: true };
-      }
-      return { ready: false, reason: "go" };
-    }
-    case "uv":
-      if (await checks.detectUvOnce()) {
-        return { ready: true };
-      }
-      return supportsHomebrewPrompt(process.platform) && (await checks.detectBrewOnce())
-        ? { ready: true }
-        : { ready: false, reason: "uv" };
-    default:
-      return { ready: true };
-  }
 }
 
 function resolveDefaultNodeManager(
@@ -253,15 +170,17 @@ export async function setupSkills(
     brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
     return brewAvailable;
   };
-  let uvAvailable: boolean | undefined;
-  const detectUvOnce = async () => {
-    uvAvailable ??= await detectBinary("uv");
-    return uvAvailable;
-  };
-  let goToolchainStatus: GoToolchainStatus | undefined;
-  const detectGoOnce = async () => {
-    goToolchainStatus ??= await detectGoToolchainStatus();
-    return goToolchainStatus;
+  const readinessByKind = new Map<string, SkillInstallReadiness>();
+  const resolveKindReadinessOnce = async (kind: string) => {
+    // The lifecycle preflight can shell out (go version, sudo probe); resolve
+    // each recipe kind once per onboarding run.
+    const cached = readinessByKind.get(kind);
+    if (cached) {
+      return cached;
+    }
+    const readiness = await resolveInstallerKindReadiness(kind);
+    readinessByKind.set(kind, readiness);
+    return readiness;
   };
   const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
   let installable = baseInstallable;
@@ -285,18 +204,14 @@ export async function setupSkills(
   const readyInstallable: typeof installable = [];
   const skippedInstallable: Array<{
     skill: OnboardInstallSkill;
-    reason: SkippedInstallReason;
+    reason: SkillInstallSkipReason;
   }> = [];
   for (const skill of candidateInstallable) {
     const primaryInstall = skill.install[0];
     if (!primaryInstall) {
       continue;
     }
-    const readiness = await resolveInstallerReadiness(primaryInstall.kind, {
-      detectBrewOnce,
-      detectGoOnce,
-      detectUvOnce,
-    });
+    const readiness = await resolveKindReadinessOnce(primaryInstall.kind);
     if (readiness.ready) {
       readyInstallable.push(skill);
     } else {

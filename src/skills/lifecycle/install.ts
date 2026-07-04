@@ -432,6 +432,89 @@ async function ensureGoInstalled(params: {
   });
 }
 
+// Auto-install requires Go 1.21+: older toolchains reject newer `go` module
+// directives mid-recipe, which reads as a skill failure instead of a
+// prerequisite gap. installSkill never re-bootstraps over an existing Go.
+const MIN_AUTO_GO_MAJOR = 1;
+const MIN_AUTO_GO_MINOR = 21;
+export const MIN_AUTO_GO_VERSION = `${MIN_AUTO_GO_MAJOR}.${MIN_AUTO_GO_MINOR}`;
+
+export type SkillInstallSkipReason = "brew" | "go" | "uv";
+export type SkillInstallReadiness =
+  | { ready: true }
+  | { ready: false; reason: SkillInstallSkipReason };
+
+function resolvePreflightBrewExe(): string | undefined {
+  const deps = getSkillsInstallDeps();
+  return deps.hasBinary("brew") ? "brew" : deps.resolveBrewExecutable();
+}
+
+function parseGoVersion(output: string): { major: number; minor: number } | undefined {
+  const match = /\bgo(\d+)\.(\d+)(?:[.\w-]*)?\b/.exec(output);
+  if (!match) {
+    return undefined;
+  }
+  return { major: Number(match[1]), minor: Number(match[2]) };
+}
+
+async function isGoUsableForAutoInstall(): Promise<boolean> {
+  const result = await runCommandSafely(["go", "version"], { timeoutMs: 5_000 });
+  if (result.code !== 0) {
+    return false;
+  }
+  const version = parseGoVersion(`${result.stdout}\n${result.stderr}`);
+  return (
+    version !== undefined &&
+    (version.major > MIN_AUTO_GO_MAJOR ||
+      (version.major === MIN_AUTO_GO_MAJOR && version.minor >= MIN_AUTO_GO_MINOR))
+  );
+}
+
+async function canBootstrapGoViaApt(): Promise<boolean> {
+  const deps = getSkillsInstallDeps();
+  if (!deps.hasBinary("apt-get")) {
+    return false;
+  }
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    return true;
+  }
+  if (!deps.hasBinary("sudo")) {
+    return false;
+  }
+  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], { timeoutMs: 5_000 });
+  return sudoCheck.code === 0;
+}
+
+/**
+ * Preflight twin of installSkill's prerequisite fallbacks (brew exe, ensureUvInstalled,
+ * ensureGoInstalled/installGoViaApt). Says whether a recipe kind can run without manual
+ * setup so callers can skip doomed installs; keep in lockstep with those fallbacks.
+ */
+export async function resolveInstallerKindReadiness(kind: string): Promise<SkillInstallReadiness> {
+  const deps = getSkillsInstallDeps();
+  switch (kind) {
+    case "brew":
+      return resolvePreflightBrewExe() ? { ready: true } : { ready: false, reason: "brew" };
+    case "uv":
+      return deps.hasBinary("uv") || resolvePreflightBrewExe()
+        ? { ready: true }
+        : { ready: false, reason: "uv" };
+    case "go": {
+      if (deps.hasBinary("go")) {
+        return (await isGoUsableForAutoInstall())
+          ? { ready: true }
+          : { ready: false, reason: "go" };
+      }
+      if (resolvePreflightBrewExe() || (await canBootstrapGoViaApt())) {
+        return { ready: true };
+      }
+      return { ready: false, reason: "go" };
+    }
+    default:
+      return { ready: true };
+  }
+}
+
 async function executeInstallCommand(params: {
   argv: string[] | null;
   timeoutMs: number;
