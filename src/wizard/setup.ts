@@ -759,12 +759,12 @@ async function runSetupWizardOnce(
 
   // Assisted reruns recover the configured default entry; fresh and full setup
   // keep using global defaults unless the caller explicitly selects an agent.
-  const setupAgentId =
+  let setupAgentId =
     opts.agentId ??
     (useAgentAssistedSetup && baseConfig.agents?.list?.length
       ? resolveDefaultAgentId(baseConfig)
       : undefined);
-  const setupOpts = setupAgentId ? { ...opts, agentId: setupAgentId } : opts;
+  const buildSetupOpts = () => (setupAgentId ? { ...opts, agentId: setupAgentId } : opts);
   const workspaceInput =
     opts.workspace ??
     (flow === "quickstart"
@@ -895,6 +895,9 @@ async function runSetupWizardOnce(
         }
         baseConfig = migratedSnapshot.sourceConfig ?? migratedSnapshot.config;
         pendingPluginInstallMigrationBaseConfig = baseConfig;
+        if (!opts.agentId && baseConfig.agents?.list?.length) {
+          setupAgentId = resolveDefaultAgentId(baseConfig);
+        }
         nextConfig = buildLocalSetupConfig(baseConfig);
         hasRunnableAgent = await hasRunnableSetupAgent(nextConfig);
       }
@@ -1017,7 +1020,7 @@ async function runSetupWizardOnce(
       preserveExistingDefaultModel: true,
       ...(setupAgentId ? { agentId: setupAgentId } : {}),
       opts: {
-        ...setupOpts,
+        ...buildSetupOpts(),
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
       },
     });
@@ -1137,7 +1140,7 @@ async function runSetupWizardOnce(
     await finishAgentAssistedSetup({
       config: nextConfig,
       settings: gateway.settings,
-      opts: setupOpts,
+      opts: buildSetupOpts(),
       prompter,
     });
     return;

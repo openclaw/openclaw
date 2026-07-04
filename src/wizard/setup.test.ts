@@ -1328,6 +1328,96 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("recovers the default agent introduced by a selected migration", async () => {
+    const migratedConfig = {
+      agents: {
+        defaults: {
+          model: "openai/main-model",
+          workspace: "/tmp/main-workspace",
+        },
+        list: [
+          { id: "main" },
+          {
+            id: "ops",
+            default: true,
+            workspace: "/tmp/ops-workspace",
+            model: {
+              primary: "anthropic/old-model",
+              fallbacks: ["openai/ops-fallback"],
+            },
+          },
+        ],
+      },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: false,
+        raw: null,
+        parsed: {},
+        resolved: {},
+        valid: true,
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      })
+      .mockResolvedValueOnce({
+        path: "/tmp/.openclaw/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        resolved: {},
+        valid: true,
+        config: migratedConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      });
+    listSetupMigrationOptions.mockResolvedValueOnce([
+      {
+        providerId: "claude",
+        label: "Claude",
+        hint: "/tmp/claude-home",
+      },
+    ]);
+    hasRunnableLocalAgent
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-api-key");
+    applyAuthChoice.mockResolvedValueOnce({
+      config: migratedConfig,
+      agentModelOverride: "anthropic/ops-model",
+    });
+
+    const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
+      message === "How do you want to set up this agent?" ? "claude" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({ select }));
+
+    expect(hasRunnableLocalAgent).toHaveBeenNthCalledWith(2, expect.any(Object), {
+      agentId: "ops",
+    });
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        setDefaultModel: false,
+      }),
+    );
+    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/openclaw-workspace",
+      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
+    );
+    expect(finishAgentAssistedSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: { acceptRisk: true, agentId: "ops" },
+      }),
+    );
+  });
+
   it("skips migration choices when the target already contains OpenClaw state", async () => {
     hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     isSetupMigrationTargetFresh.mockResolvedValueOnce(false);
