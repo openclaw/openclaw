@@ -2808,7 +2808,28 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text"]);
   });
 
-  it("suggests checking auth when a bundled provider model is missing", async () => {
+  it("suggests checking auth for canonical bundled provider (openai-codex)", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: openai-codex/gpt-5.4. Found agents.defaults.models["openai-codex/gpt-5.4"], but the bundled provider "openai-codex" has no registered model "gpt-5.4". This usually means the provider has no authenticated profile — run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
+  it("keeps config suggestion for non-bundled legacy alias provider", async () => {
     const cfg = {
       agents: {
         defaults: {
