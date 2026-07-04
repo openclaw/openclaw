@@ -145,29 +145,6 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   }));
 }
 
-export async function recordFailedDeliveryDiagnostic(
-  entry: QueuedDelivery,
-  error: string,
-  stateDir?: string,
-): Promise<void> {
-  const now = Date.now();
-  const failedEntry: QueuedDelivery = {
-    ...entry,
-    retryCount: entry.retryCount + 1,
-    lastAttemptAt: now,
-    lastError: error,
-    platformSendStartedAt: entry.platformSendStartedAt ?? now,
-    recoveryState: "unknown_after_send",
-  };
-  upsertDeliveryQueueEntry({
-    queueName: QUEUE_NAME,
-    entry: failedEntry,
-    metadata: queuedDeliveryMetadata(failedEntry),
-    status: "failed",
-    stateDir,
-  });
-}
-
 function updateQueuedDelivery(
   id: string,
   stateDir: string | undefined,

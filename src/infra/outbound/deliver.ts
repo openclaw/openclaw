@@ -593,9 +593,14 @@ const isDeliveryAbortError = (err: unknown): boolean =>
 async function markQueuedPlatformSendAttemptStarted(params: {
   queueId: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
+  stateDir?: string;
 }): Promise<boolean> {
   try {
-    await markDeliveryPlatformSendAttemptStarted(params.queueId);
+    if (params.stateDir === undefined) {
+      await markDeliveryPlatformSendAttemptStarted(params.queueId);
+    } else {
+      await markDeliveryPlatformSendAttemptStarted(params.queueId, params.stateDir);
+    }
     return true;
   } catch (err: unknown) {
     if (params.queuePolicy === "required") {
@@ -666,6 +671,10 @@ type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParam
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
+  /** @internal Existing recovery queue entry to mark when the platform send begins. */
+  deliveryQueueId?: string;
+  /** @internal State directory that owns the existing recovery queue entry. */
+  deliveryQueueStateDir?: string;
   /** @internal Let recovery run commit hooks after it has acked the recovered queue entry. */
   deferCommitHooks?: boolean;
   queuePolicy?: OutboundDeliveryQueuePolicy;
@@ -1334,21 +1343,27 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     },
   };
   const queuePolicy = params.queuePolicy ?? "best_effort";
+  const platformQueueId = queueId ?? params.deliveryQueueId;
+  const platformQueuePolicy = queueId ? queuePolicy : "required";
+  const platformQueueStateDir = queueId ? undefined : params.deliveryQueueStateDir;
   let platformResultsReturned = false;
   let platformSendStarted = false;
 
   try {
     const results = await deliverOutboundPayloadsCore({
       ...wrappedParams,
-      ...(queueId
+      ...(platformQueueId
         ? {
             onPlatformSendStart: async () => {
               if (platformSendStarted) {
                 return;
               }
+              // Recovery reuses its existing row. Mark it before crossing the
+              // platform boundary so later persistence failures cannot replay it.
               platformSendStarted = await markQueuedPlatformSendAttemptStarted({
-                queueId,
-                queuePolicy,
+                queueId: platformQueueId,
+                queuePolicy: platformQueuePolicy,
+                stateDir: platformQueueStateDir,
               });
             },
           }

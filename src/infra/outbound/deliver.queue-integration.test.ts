@@ -7,7 +7,12 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { drainPendingDeliveries, type DeliverFn, loadPendingDeliveries } from "./delivery-queue.js";
+import {
+  drainPendingDeliveries,
+  type DeliverFn,
+  enqueueDelivery,
+  loadPendingDeliveries,
+} from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
@@ -120,6 +125,33 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(entry.retryCount).toBe(0);
     expect(entry.lastError).toBeUndefined();
     expect(sendMatrix).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks an existing recovery entry before crossing the platform send boundary", async () => {
+    const id = await enqueueDelivery(
+      { channel: "matrix", to: "!room:example", payloads: [{ text: "recovered" }] },
+      tmpDir,
+    );
+    let stateAtSend: string | undefined;
+    const sendMatrix = vi.fn(async () => {
+      stateAtSend = (await loadPendingDeliveries(tmpDir))[0]?.recoveryState;
+      return { messageId: "m1" };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {} as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "recovered" }],
+      deps: { matrix: sendMatrix },
+      skipQueue: true,
+      deferCommitHooks: true,
+      deliveryQueueId: id,
+      deliveryQueueStateDir: tmpDir,
+    });
+
+    expect(stateAtSend).toBe("send_attempt_started");
+    expect((await loadPendingDeliveries(tmpDir))[0]?.recoveryState).toBe("send_attempt_started");
   });
 
   it("drain does not replay an unknown_after_send entry when no adapter reconciliation is available", async () => {

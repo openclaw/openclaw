@@ -21,7 +21,6 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import {
   isOutboundDeliveryResultArray,
   runOutboundDeliveryCommitHooks,
-  type OutboundDeliveryCommitHookFailure,
 } from "./delivery-commit-hooks.js";
 import {
   ackDelivery,
@@ -30,7 +29,6 @@ import {
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   moveToFailed,
-  recordFailedDeliveryDiagnostic,
   type QueuedDelivery,
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
@@ -341,17 +339,6 @@ export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
 
-function formatCommitHookFailureMessage(
-  failures: readonly OutboundDeliveryCommitHookFailure[],
-): string {
-  if (failures.length === 1) {
-    return `post-send commit hook failed: ${failures[0]?.error ?? "unknown error"}`;
-  }
-  return `post-send commit hooks failed (${failures.length}): ${failures
-    .map((failure) => `${failure.channel}/${failure.messageId}: ${failure.error}`)
-    .join("; ")}`;
-}
-
 async function drainQueuedEntry(opts: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
@@ -444,37 +431,13 @@ async function drainQueuedEntry(opts: {
     const result = await opts.deliver(buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir));
     const results = isOutboundDeliveryResultArray(result) ? result : [];
     if (results.length > 0) {
-      try {
-        await markDeliveryPlatformOutcomeUnknown(entry.id, opts.stateDir);
-      } catch (markErr) {
-        const errMsg = `failed to mark recovered delivery post-send state: ${formatErrorMessage(markErr)}`;
-        opts.onFailed?.(entry, errMsg);
-        try {
-          await recordFailedDeliveryDiagnostic(entry, errMsg, opts.stateDir);
-        } catch (recordErr) {
-          if (getErrnoCode(recordErr) === "ENOENT") {
-            return "already-gone";
-          }
-          opts.log.warn(
-            `Delivery entry ${entry.id} failed to record post-send diagnostic: ${formatErrorMessage(recordErr)}`,
-          );
-        }
-        return "failed";
-      }
+      // Recovery bypasses the live queue hooks. Persist post-send ambiguity
+      // before ack so an interrupted ack cannot replay an already sent batch.
+      await markDeliveryPlatformOutcomeUnknown(entry.id, opts.stateDir);
     }
     await ackDelivery(entry.id, opts.stateDir);
-    const commitHookFailures =
-      results.length > 0 ? await runOutboundDeliveryCommitHooks(results) : [];
-    if (commitHookFailures.length > 0) {
-      const errMsg = formatCommitHookFailureMessage(commitHookFailures);
-      try {
-        await recordFailedDeliveryDiagnostic(entry, errMsg, opts.stateDir);
-        opts.log.warn(`Delivery entry ${entry.id} ${errMsg}; recorded failed diagnostic`);
-      } catch (recordErr) {
-        opts.log.warn(
-          `Delivery entry ${entry.id} ${errMsg}; failed to record diagnostic: ${formatErrorMessage(recordErr)}`,
-        );
-      }
+    if (results.length > 0) {
+      await runOutboundDeliveryCommitHooks(results);
     }
     opts.onRecovered?.(entry);
     return "recovered";
