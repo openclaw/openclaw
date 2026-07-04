@@ -239,6 +239,14 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("accepts case-insensitive --limit all in the Commander parser", async () => {
+    await runCli(["sessions", "--limit", "ALL"]);
+
+    expectCommandOptions(sessionsCommand, {
+      limit: "all",
+    });
+  });
+
   it("runs sessions command with --agent forwarding", async () => {
     await runCli(["sessions", "--agent", "work"]);
 
@@ -435,6 +443,16 @@ describe("registerStatusHealthSessionsCommands", () => {
       follow: true,
       tail: 5,
     });
+  });
+
+  it("rejects explicit empty --tail values instead of silently defaulting", async () => {
+    await runCli(["sessions", "tail", "--tail", ""]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--tail requires a non-negative integer value, for example --tail 25.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsTailCommand).not.toHaveBeenCalled();
   });
 
   it("runs sessions export-trajectory with owner-routable export options", async () => {

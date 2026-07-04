@@ -68,8 +68,11 @@ function parseSessionsActive(value: unknown): number | undefined {
 }
 
 function parseSessionsLimit(value: unknown): number | "all" | undefined {
-  if (value === undefined || value === "all") {
-    return value;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string" && value.trim().toLowerCase() === "all") {
+    return "all";
   }
   if (typeof value === "number") {
     const parsed = parsePositiveIntOrUndefined(value);
@@ -90,7 +93,12 @@ function parseSessionsLimit(value: unknown): number | "all" | undefined {
 }
 
 function parseSessionsTail(value: unknown): number | undefined {
-  if (value === undefined || value === null || value === "") {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "") {
+    defaultRuntime.error("--tail requires a non-negative integer value, for example --tail 25.");
+    defaultRuntime.exit(1);
     return undefined;
   }
   if (
@@ -104,6 +112,8 @@ function parseSessionsTail(value: unknown): number | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) {
+      defaultRuntime.error("--tail requires a non-negative integer value, for example --tail 25.");
+      defaultRuntime.exit(1);
       return undefined;
     }
     if (/^\d+$/.test(trimmed)) {
