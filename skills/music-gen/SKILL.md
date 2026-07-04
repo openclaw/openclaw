@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🎵",
-        "requires": { "bins": ["curl", "jq"], "env": ["OPENROUTER_API_KEY"] },
+        "requires": { "bins": ["python3"], "env": ["OPENROUTER_API_KEY"] },
         "primaryEnv": "OPENROUTER_API_KEY",
       },
   }
@@ -25,11 +25,11 @@ use the built-in TTS instead — this is for generated music/audio, not narratio
 ## Run
 
 ```bash
-bash {baseDir}/scripts/generate.sh "20 second calm lofi loop, no vocals"
+python3 {baseDir}/scripts/generate.py "20 second calm lofi loop, no vocals"
 # → prints the path to the generated .mp3
 
 # optional explicit output path:
-bash {baseDir}/scripts/generate.sh "upbeat 8-bit chiptune victory theme" /tmp/victory.mp3
+python3 {baseDir}/scripts/generate.py "upbeat 8-bit chiptune victory theme" /tmp/victory.mp3
 ```
 
 Then **send the printed file** on the current channel (the same file-send you use
