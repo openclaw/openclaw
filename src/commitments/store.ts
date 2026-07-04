@@ -555,20 +555,20 @@ export async function markCommitmentsStatus(params: {
   ids: string[];
   status: Extract<CommitmentStatus, "sent" | "dismissed" | "expired">;
   nowMs?: number;
-}): Promise<void> {
+}): Promise<string[]> {
   if (params.ids.length === 0) {
-    return;
+    return [];
   }
   const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  await runExclusiveCommitmentsStoreWrite(resolveCommitmentStorePath(), async () => {
+  return await runExclusiveCommitmentsStoreWrite(resolveCommitmentStorePath(), async () => {
     const store = await loadCommitmentStore();
-    let changed = false;
+    const changedIds: string[] = [];
     store.commitments = store.commitments.map((commitment) => {
       if (!idSet.has(commitment.id) || !isActiveStatus(commitment.status)) {
         return commitment;
       }
-      changed = true;
+      changedIds.push(commitment.id);
       return {
         ...commitment,
         status: params.status,
@@ -578,9 +578,10 @@ export async function markCommitmentsStatus(params: {
         ...(params.status === "expired" ? { expiredAtMs: nowMs } : {}),
       };
     });
-    if (changed) {
+    if (changedIds.length > 0) {
       await saveCommitmentStore(undefined, store);
     }
+    return changedIds;
   });
 }
 

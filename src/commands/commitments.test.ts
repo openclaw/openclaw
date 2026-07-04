@@ -73,6 +73,7 @@ describe("commitments command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listCommitments.mockResolvedValue([commitment()]);
+    mocks.markCommitmentsStatus.mockResolvedValue(["cm_escape"]);
   });
 
   it("sanitizes untrusted commitment fields in table output", async () => {
@@ -130,12 +131,22 @@ describe("commitments command", () => {
     await commitmentsDismissCommand({ ids: ["cm_escape"], json: true }, runtime);
 
     expect(logs).toEqual([]);
-    expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"] }, null, 2)]);
+    expect(stdout).toEqual([JSON.stringify({ dismissed: ["cm_escape"], missing: [] }, null, 2)]);
     expect(mocks.markCommitmentsStatus).toHaveBeenCalledWith({
       cfg: { commitments: { enabled: true } },
       ids: ["cm_escape"],
       status: "dismissed",
       nowMs: expect.any(Number),
     });
+  });
+
+  it("reports missing dismiss ids without claiming success", async () => {
+    mocks.markCommitmentsStatus.mockResolvedValue([]);
+    const { runtime, stdout } = createRuntime();
+
+    await commitmentsDismissCommand({ ids: ["cm_missing"], json: true }, runtime);
+
+    expect(stdout).toEqual([JSON.stringify({ dismissed: [], missing: ["cm_missing"] }, null, 2)]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

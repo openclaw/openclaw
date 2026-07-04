@@ -148,15 +148,25 @@ export async function commitmentsDismissCommand(
     return;
   }
   const cfg = getRuntimeConfig();
-  await markCommitmentsStatus({
+  const dismissed = await markCommitmentsStatus({
     cfg,
     ids,
     status: "dismissed",
     nowMs: Date.now(),
   });
+  const missing = ids.filter((id) => !dismissed.includes(id));
   if (opts.json) {
-    writeRuntimeJson(runtime, { dismissed: ids });
+    writeRuntimeJson(runtime, { dismissed, missing });
+    if (missing.length > 0) {
+      runtime.exit(1);
+    }
     return;
   }
-  runtime.log(info(`Dismissed commitments: ${ids.join(", ")}`));
+  if (dismissed.length > 0) {
+    runtime.log(info(`Dismissed commitments: ${dismissed.join(", ")}`));
+  }
+  if (missing.length > 0) {
+    runtime.error(`Commitments not found or already inactive: ${missing.join(", ")}`);
+    runtime.exit(1);
+  }
 }
