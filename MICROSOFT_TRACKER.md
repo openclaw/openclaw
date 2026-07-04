@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-07-03 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-07-04 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 11     | 45     | 56      | 0      | 56        |
+| MS Teams (channel plugin) | 12     | 49     | 61      | 0      | 61        |
 | Windows platform          | 54     | 40     | 94      | 0      | 94        |
 | WSL                       | 9      | 0      | 9       | 0      | 9         |
 | Azure                     | 9      | 4      | 13      | 0      | 13        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **83** | **89** | **172** | **0**  | **172**   |
+| **Total**                 | **84** | **93** | **177** | **0**  | **177**   |
 
 ---
 
@@ -43,11 +43,12 @@
 
 ### Feature Requests
 
-| Resolved? | Priority | #      | Title                                                                                      | Labels                                                                                                                                                                           | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| [ ]       | P2       | #93288 | feat(msteams): per-call topLevel override on send action for proactive new channel threads | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster`                                |          |
-| [ ]       | P2       | #91856 | msteams: support Copilot-only streaming without enabling Teams DM streaming                | `P3` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit` +1 |          |
-| [ ]       | P2       | #81084 | [Feature]: MSTeams channel-bound agents need opt-out from per-thread sessions              | `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +2                                |          |
+| Resolved? | Priority | #      | Title                                                                                         | Labels                                                                                                                                                                           | Assignee |
+| --------- | -------- | ------ | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| [ ]       | P2       | #99939 | [Feature]: MSTeams - Support raw Adaptive Card JSON in message tool for richer approval cards | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +2          |          |
+| [ ]       | P2       | #93288 | feat(msteams): per-call topLevel override on send action for proactive new channel threads    | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:message-loss` `issue-rating: 🦞 diamond lobster`                                |          |
+| [ ]       | P2       | #91856 | msteams: support Copilot-only streaming without enabling Teams DM streaming                   | `P3` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit` +1 |          |
+| [ ]       | P2       | #81084 | [Feature]: MSTeams channel-bound agents need opt-out from per-thread sessions                 | `stale` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` +3                             |          |
 
 ---
 
@@ -55,7 +56,8 @@
 
 | Resolved? | Priority | #      | Title                                                                                                                 | Size | Assignee    |
 | --------- | -------- | ------ | --------------------------------------------------------------------------------------------------------------------- | ---- | ----------- |
-| [ ]       | P0       | #98972 | fix: block channel reads outside allowlists [AI]                                                                      | XL   |             |
+| [ ]       | P0       | #98972 | fix: block channel reads outside allowlists [AI]                                                                      | XL   | @joshavant  |
+| [ ]       | P0       | #98510 | feat: add session thread management                                                                                   | XL   |             |
 | [ ]       | P0       | #97922 | fix(subagents): escalate expected completions on delivery give-up instead of dropping them                            | XL   | @steipete   |
 | [ ]       | P0       | #95764 | fix(msteams): allow groupAllowFrom to match conversation IDs                                                          | S    |             |
 | [ ]       | P0       | #94978 | feat(msteams): Microsoft Teams voice (CVI) + video + chat + governance                                                | XL   |             |
@@ -68,6 +70,7 @@
 | [ ]       | P0       | #77784 | Add Teams delegated auth for plugin tools                                                                             | XL   |             |
 | [ ]       | P0       | #55828 | feat(msteams): add native plugin interactivity parity                                                                 | XL   |             |
 | [ ]       | P0       | #46303 | fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload                                          | XL   |             |
+| [ ]       | P1       | #99691 | refactor: consolidate exact keyed async queues                                                                        | L    |             |
 | [ ]       | P1       | #97340 | Spinen/msteams multi account                                                                                          | XL   |             |
 | [ ]       | P1       | #95867 | fix(msteams): sanitize internal tool-trace lines from outbound text (#90684)                                          | XS   |             |
 | [ ]       | P1       | #94300 | fix(gateway): deliver OAuth authorization URLs to non-terminal clients                                                | L    |             |
@@ -80,6 +83,8 @@
 | [ ]       | P1       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                                              | XS   |             |
 | [ ]       | P1       | #75043 | Add provider-aware automatic TTS emotion mapping                                                                      | XL   |             |
 | [ ]       | P1       | #59986 | refactor(plugins): add lane-oriented channel interface                                                                | XL   |             |
+| [ ]       | P2       | #99905 | fix(channels): honor configured read target policies                                                                  | XL   |             |
+| [ ]       | P2       | #99763 | improve(ui): flatten chat tool-call rows into a scannable list                                                        | XL   |             |
 | [ ]       | P2       | #99125 | fix(msteams): bound Bot Framework attachmentInfo JSON response reads                                                  | S    |             |
 | [ ]       | P2       | #98884 | fix(msteams): page channel thread replies                                                                             | S    |             |
 | [ ]       | P2       | #98862 | fix(msteams): proactive sends fail after conversation migration                                                       | S    |             |
@@ -256,7 +261,7 @@ _No currently open items found._
 | [ ]       | P1       | #95894 | Plugin installs crash Express 4.x routes: core npm-shrinkwrap pins path-to-regexp@8.x but no central override covers plugins         | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `impact:crash-loop` +1                     |          |
 | [ ]       | P1       | #93781 | azure-openai-responses probe/agent route uses OpenAI auth profile instead of Azure credentials                                       | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `impact:auth-provider` `issue-rating: 🦞 diamond lobster`                                |          |
 | [ ]       | P1       | #80926 | Azure OpenAI Responses stalls before first event when memory tools are exposed                                                       | `maintainer` `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` +3                        |          |
-| [ ]       | P2       | #98416 | [Bug] v2026.6.11 published dist missing reentrancy guard - reply session initialization conflicted                                   | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:source-repro` `impact:session-state` `impact:message-loss` +2                                 |          |
+| [ ]       | P2       | #98416 | [Bug] v2026.6.11 published dist missing reentrancy guard - reply session initialization conflicted                                   | `P1` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:source-repro` `impact:session-state` +3                         |          |
 | [ ]       | P2       | #48788 | feat: centralized filename encoding utility for multi-encoding Content-Disposition handling                                          | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `impact:data-loss` +1                      |          |
 
 ### Feature Requests
@@ -304,6 +309,7 @@ _No currently open items found._
 | ------------------------- | ----- | -------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MS Teams (channel plugin) | issue | P0       | #92452 | msteams: ClawHub install can never pass the 6.x keyed-store trust gate (official catalog is npmSpec-only) — channel crash-loops with no actionable error |
 | MS Teams (channel plugin) | pr    | P0       | #98972 | fix: block channel reads outside allowlists [AI]                                                                                                         |
+| MS Teams (channel plugin) | pr    | P0       | #98510 | feat: add session thread management                                                                                                                      |
 | MS Teams (channel plugin) | pr    | P0       | #97922 | fix(subagents): escalate expected completions on delivery give-up instead of dropping them                                                               |
 | MS Teams (channel plugin) | pr    | P0       | #95764 | fix(msteams): allow groupAllowFrom to match conversation IDs                                                                                             |
 | MS Teams (channel plugin) | pr    | P0       | #94978 | feat(msteams): Microsoft Teams voice (CVI) + video + chat + governance                                                                                   |
@@ -343,6 +349,7 @@ _No currently open items found._
 | Category                  | Type  | Priority | #      | Title                                                                                                                                                                                   |
 | ------------------------- | ----- | -------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MS Teams (channel plugin) | issue | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                                                         |
+| MS Teams (channel plugin) | pr    | P1       | #99691 | refactor: consolidate exact keyed async queues                                                                                                                                          |
 | MS Teams (channel plugin) | pr    | P1       | #97340 | Spinen/msteams multi account                                                                                                                                                            |
 | MS Teams (channel plugin) | pr    | P1       | #95867 | fix(msteams): sanitize internal tool-trace lines from outbound text (#90684)                                                                                                            |
 | MS Teams (channel plugin) | pr    | P1       | #94300 | fix(gateway): deliver OAuth authorization URLs to non-terminal clients                                                                                                                  |
