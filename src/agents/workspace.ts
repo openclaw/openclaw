@@ -245,19 +245,42 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
   }
 }
 
-async function fileContentDiffersFromTemplate(
+/** @internal Exported for EAGAIN retry tests (#99994). */
+export async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
 ): Promise<boolean> {
-  try {
-    return (await fs.readFile(filePath, "utf-8")) !== template;
-  } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
+  // Retry on transient EAGAIN/EINTR errors that can surface when the kernel
+  // races with an atomic write-rename of the same file (macOS/Linux).
+  // (#99994)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return (await fs.readFile(filePath, "utf-8")) !== template;
+    } catch (err) {
+      const anyErr = err as { code?: string; errno?: number; message?: string };
+      if (anyErr.code === "ENOENT") {
+        return false;
+      }
+      const isTransient =
+        anyErr.code === "EAGAIN" ||
+        anyErr.code === "EINTR" ||
+        anyErr.errno === -11 ||
+        anyErr.errno === -4 ||
+        /Unknown system error -11/i.test(anyErr.message ?? "") ||
+        /system error -4\b/i.test(anyErr.message ?? "");
+      if (attempt < 2 && isTransient) {
+        await new Promise((r) => {
+          setTimeout(r, 50);
+        });
+        continue;
+      }
+      if (isTransient) {
+        return false;
+      }
       throw err;
     }
-    return false;
   }
+  return false;
 }
 
 async function hasWorkspaceUserContentEvidence(
