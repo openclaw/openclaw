@@ -23,7 +23,18 @@ export type CrestodianToolOptions = {
    * alone must never authorize a mutation (prompt injection, model error).
    */
   approvalArmed?: boolean;
+  /**
+   * Approval is scoped to one exact operation: a denied mutating call records
+   * its canonical hash here (host-owned, survives turns), and an armed turn
+   * may execute only a call matching that hash. Cleared after use.
+   */
+  proposalRef?: { current?: string };
 };
+
+/** Canonical operation fingerprint used to bind "yes" to one exact mutation. */
+export function hashCrestodianOperation(operation: CrestodianOperation): string {
+  return JSON.stringify(operation, Object.keys(operation).toSorted());
+}
 
 const CRESTODIAN_TOOL_ACTIONS = [
   "status",
@@ -204,14 +215,31 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
       const params = (args ?? {}) as Record<string, unknown>;
       const operation = operationForAction(params);
       const persistent = isPersistentCrestodianOperation(operation);
-      if (persistent && (params.approved !== true || options.approvalArmed !== true)) {
-        // Both gates must hold: the model asserts consent AND the host saw an
-        // explicit user approval in the current turn. A model-only `approved`
-        // flag is not consent (prompt injection, model error).
-        return textResult(
-          "needs-approval: this action changes state. Describe the exact change and ask the user to reply yes; their next approving message unlocks the action (then retry with approved=true).",
-          { needsApproval: true },
-        );
+      if (persistent) {
+        const operationHash = hashCrestodianOperation(operation);
+        const armedForThisOperation =
+          params.approved === true &&
+          options.approvalArmed === true &&
+          options.proposalRef?.current === operationHash;
+        if (!armedForThisOperation) {
+          // Three gates must hold: the model asserts consent, the host saw an
+          // explicit user approval in the current turn, and the approved call
+          // matches the exact operation that was previously proposed. A
+          // generic "yes" must never authorize a different mutation.
+          if (options.proposalRef) {
+            options.proposalRef.current = operationHash;
+          }
+          return textResult(
+            options.approvalArmed === true
+              ? "proposal registered — the user already approved in this turn. Retry the identical call with approved=true NOW to apply it."
+              : "needs-approval: this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).",
+            { needsApproval: true },
+          );
+        }
+        if (options.proposalRef) {
+          // One approval, one mutation: re-proposals need a fresh yes.
+          options.proposalRef.current = undefined;
+        }
       }
       const capture = createCaptureRuntime();
       let applied = false;

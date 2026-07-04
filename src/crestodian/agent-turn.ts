@@ -31,10 +31,12 @@ export type CrestodianAgentTurnRunner = (params: {
 
 export type CrestodianAgentSession = {
   sessionId: string;
+  /** Host-owned pending-proposal fingerprint; see crestodian-tool.ts. */
+  proposalRef: { current?: string };
 };
 
 export function createCrestodianAgentSession(): CrestodianAgentSession {
-  return { sessionId: `crestodian-${randomUUID()}` };
+  return { sessionId: `crestodian-${randomUUID()}`, proposalRef: {} };
 }
 
 type EmbeddedRunResult = {
@@ -116,7 +118,11 @@ export const runCrestodianAgentTurn: CrestodianAgentTurnRunner = async (params) 
       prompt: params.input,
       extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
       toolsAllow: ["crestodian"],
-      crestodianTool: { surface: params.surface, approvalArmed: params.approvalArmed },
+      crestodianTool: {
+        surface: params.surface,
+        approvalArmed: params.approvalArmed,
+        proposalRef: params.session.proposalRef,
+      },
       disableMessageTool: true,
       timeoutMs: AGENT_TURN_TIMEOUT_MS,
       runId: `crestodian-turn-${randomUUID()}`,

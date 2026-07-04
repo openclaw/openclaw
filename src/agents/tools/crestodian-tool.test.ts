@@ -59,7 +59,8 @@ describe("crestodian tool", () => {
       path: "gateway.port",
       value: "18789",
     });
-    expect(toolText(result)).toContain("needs-approval");
+    // Denied (approved missing) but registered; armed message says retry now.
+    expect(toolText(result)).toContain("proposal registered");
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
@@ -77,15 +78,32 @@ describe("crestodian tool", () => {
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
-  it("executes approved mutations through the typed operation with audit provenance", async () => {
+  it("executes an approved mutation only through the full proposal handshake", async () => {
     mocks.executeCrestodianOperation.mockImplementationOnce(
       async (_op: unknown, runtime: { log: (m: string) => void }) => {
         runtime.log("op-output");
         return { applied: true };
       },
     );
-    const tool = createCrestodianTool({ surface: "gateway", approvalArmed: true });
-    const result = await tool.execute("t3", {
+    const proposalRef: { current?: string } = {};
+    // Phase 1: unarmed proposal is denied and records the exact operation.
+    const proposingTool = createCrestodianTool({ surface: "gateway", proposalRef });
+    const denied = await proposingTool.execute("t3a", {
+      action: "set_default_model",
+      model: "openai/gpt-5.5",
+      approved: true,
+    });
+    expect(toolText(denied)).toContain("needs-approval");
+    expect(proposalRef.current).toBeDefined();
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+
+    // Phase 2: the user's yes arms the turn; the identical call executes.
+    const armedTool = createCrestodianTool({
+      surface: "gateway",
+      approvalArmed: true,
+      proposalRef,
+    });
+    const result = await armedTool.execute("t3b", {
       action: "set_default_model",
       model: "openai/gpt-5.5",
       approved: true,
@@ -100,6 +118,28 @@ describe("crestodian tool", () => {
         auditDetails: { via: "crestodian-agent-tool" },
       }),
     );
+    // One approval, one mutation.
+    expect(proposalRef.current).toBeUndefined();
+  });
+
+  it("refuses an armed call that differs from the proposed operation", async () => {
+    const proposalRef: { current?: string } = {};
+    const proposingTool = createCrestodianTool({ surface: "cli", proposalRef });
+    await proposingTool.execute("t3c", {
+      action: "set_default_model",
+      model: "openai/gpt-5.5",
+      approved: true,
+    });
+    const armedTool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
+    const result = await armedTool.execute("t3d", {
+      action: "config_set",
+      path: "gateway.port",
+      value: "1",
+      approved: true,
+    });
+    // A different operation than the approved one never executes.
+    expect(toolText(result)).toContain("proposal registered");
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
   it("feeds config validation failures back into the tool result", async () => {
@@ -118,7 +158,14 @@ describe("crestodian tool", () => {
       sourceConfig: {},
       issues: [{ path: "gateway.port", message: "Expected number" }],
     } as never);
-    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true });
+    const proposalRef: { current?: string } = {};
+    await createCrestodianTool({ surface: "cli", proposalRef }).execute("t4a", {
+      action: "config_set",
+      path: "gateway.port",
+      value: "banana",
+      approved: true,
+    });
+    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     const result = await tool.execute("t4", {
       action: "config_set",
       path: "gateway.port",
@@ -137,7 +184,14 @@ describe("crestodian tool", () => {
         return { applied: true };
       },
     );
-    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true });
+    const proposalRef: { current?: string } = {};
+    await createCrestodianTool({ surface: "cli", proposalRef }).execute("t6a", {
+      action: "create_agent",
+      agentId: "work",
+      workspace: "/tmp/work",
+      approved: true,
+    });
+    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     await tool.execute("t6", {
       action: "create_agent",
       agentId: "work",

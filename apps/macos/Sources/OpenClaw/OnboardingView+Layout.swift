@@ -87,6 +87,7 @@ extension OnboardingView {
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
+        let crestodianLockIndex = pageOrder.firstIndex(of: crestodianPageIndex)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -118,6 +119,14 @@ extension OnboardingView {
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
+                    // Dots must honor the same setup gate as Next: no jumping
+                    // past the Crestodian page before setup authored the config.
+                    let isCrestodianLocked = crestodianLockIndex != nil &&
+                        self.state.connectionMode == .local &&
+                        !self.crestodianSetupComplete &&
+                        index > (crestodianLockIndex ?? 0)
+                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
+                        isCrestodianLocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -126,8 +135,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isInstallLocked || isConnectionLocked || isCLILocked)
-                    .opacity(isInstallLocked || isConnectionLocked || isCLILocked ? 0.3 : 1)
+                    .disabled(isLocked)
+                    .opacity(isLocked ? 0.3 : 1)
                 }
             }
 
