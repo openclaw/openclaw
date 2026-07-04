@@ -5,6 +5,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioRecord
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
@@ -655,9 +656,26 @@ internal class MicCaptureManager(
           audioInput.startRecording()
           while (coroutineContext.isActive && _micEnabled.value && transcriptionSessionId == sessionId) {
             val read = audioInput.read(buffer, 0, buffer.size)
-            if (read <= 0) continue
-            _inputLevel.value = pcm16Level(buffer, read)
-            audioFrames.trySend(buffer.copyOf(read))
+            when {
+              read < 0 -> {
+                // AudioRecord.read never throws; it returns negative error codes such as
+                // ERROR_DEAD_OBJECT (-6) when audioserver dies or a Bluetooth/USB input is
+                // hot-unplugged. Repeated calls keep returning the same negative value, so a
+                // naive `continue` would hot-spin the dispatcher and burn a CPU core while the
+                // session stays stuck in "Listening". Surface every negative read as a fatal
+                // capture failure so failTranscription closes the recorder and exits the loop.
+                failTranscription(
+                  sessionId,
+                  "microphone read failed: ${audioRecordErrorName(read)}",
+                )
+                return@launch
+              }
+              read == 0 -> continue
+              else -> {
+                _inputLevel.value = pcm16Level(buffer, read)
+                audioFrames.trySend(buffer.copyOf(read))
+              }
+            }
           }
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
@@ -757,6 +775,15 @@ internal class MicCaptureManager(
     }
     if (count == 0) return 0f
     return ((total / count).toFloat() / Short.MAX_VALUE).coerceIn(0f, 1f)
+  }
+
+  /** Maps [AudioRecord.read]'s negative error codes back to a stable label for diagnostics. */
+  private fun audioRecordErrorName(code: Int): String = when (code) {
+    AudioRecord.ERROR -> "ERROR"
+    AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+    AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION"
+    AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT"
+    else -> "code=$code"
   }
 
   private fun pcm16ToPcmu(pcm16: ByteArray): ByteArray {
