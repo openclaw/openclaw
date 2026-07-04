@@ -97,6 +97,20 @@ describe("/claude threads + resume against a real binding sidecar", () => {
     expect(result.text).toContain("claude-sonnet-4-6");
   });
 
+  it("threads: renders 'Updated' as a current-era date, not 1970 (C1 seconds-vs-ms)", async () => {
+    await writeClaudeAppServerBinding(sessionFile, {
+      threadId: "thr_ts",
+      cwd: dir,
+      model: "claude-sonnet-4-6",
+    });
+    const result = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
+    const match = result.text.match(/Updated: (\S+)/);
+    expect(match).not.toBeNull();
+    const year = new Date(match?.[1] ?? "").getUTCFullYear();
+    // Seconds-as-ms rendered 1970; ms renders the real year.
+    expect(year).toBeGreaterThanOrEqual(2026);
+  });
+
   it("resume: writes a fresh binding when none exists", async () => {
     const result = await handleClaudeCommand(makeCtx({ args: "resume thr_new_xyz", sessionFile }));
     expect(result.text).toContain("Rebound session to thread `thr_new_xyz`");

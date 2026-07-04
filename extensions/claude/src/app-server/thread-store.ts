@@ -50,7 +50,9 @@ export type ClaudeAppServerBinding = {
    * its context-engine binding fingerprint.
    */
   developerInstructionsFingerprint?: string;
+  /** Epoch milliseconds (Date.now()). Rendered by `/claude threads`. */
   createdAt: number;
+  /** Epoch milliseconds (Date.now()). Rendered by `/claude threads`. */
   updatedAt: number;
 };
 
@@ -128,7 +130,13 @@ export async function writeClaudeAppServerBinding(
   },
 ): Promise<void> {
   await withClaudeAppServerBindingLock(sessionFile, async () => {
-    const now = Math.floor(Date.now() / 1000);
+    // Epoch milliseconds — the unit `formatBinding` renders via
+    // `new Date(b.updatedAt).toISOString()` and the unit `handleResume`
+    // already writes (`Date.now()`). Storing seconds here made `/claude
+    // threads` render "Updated" as a 1970 date and split the same field into
+    // two units depending on whether the binding was last touched by a normal
+    // turn (seconds) or by `/claude resume` (ms) — openclaw-0ld C1.
+    const now = Date.now();
     const data: ClaudeAppServerBinding = {
       schemaVersion: SCHEMA_VERSION,
       createdAt: binding.createdAt ?? now,

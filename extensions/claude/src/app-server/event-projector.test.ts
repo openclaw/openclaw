@@ -129,10 +129,26 @@ describe("processNotification (terminal)", () => {
     );
     expect(outcome).not.toBeNull();
     expect(outcome?.kind).toBe("completed");
+    // C3: a normally-completed turn maps to a "stop" stop reason.
+    expect(acc.stopReason).toBe("stop");
+  });
+
+  it("captures an 'aborted' stop reason on turn/completed with status=interrupted (C3)", () => {
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
+    const outcome = projector.processNotification(
+      notif("turn/completed", {
+        turnId: TURN_ID,
+        turn: { id: TURN_ID, status: "interrupted", items: [] },
+      }),
+    );
+    expect(outcome?.kind).toBe("completed");
+    expect(acc.stopReason).toBe("aborted");
   });
 
   it("emits a failed outcome on turn/completed with status=failed", () => {
-    const projector = makeProjector(emptyAcc());
+    const acc = emptyAcc();
+    const projector = makeProjector(acc);
     const outcome = projector.processNotification(
       notif("turn/completed", {
         turnId: TURN_ID,
@@ -143,6 +159,8 @@ describe("processNotification (terminal)", () => {
     if (outcome?.kind === "failed") {
       expect(outcome.error.message).toContain("boom");
     }
+    // C3: a failed turn maps to an "error" stop reason.
+    expect(acc.stopReason).toBe("error");
   });
 
   it("emits a failed outcome on turn/error", () => {
