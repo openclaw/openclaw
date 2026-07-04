@@ -97,7 +97,7 @@ describe("compileSlackInteractiveReplies", () => {
 
   it("keeps time-style colons in Slack button labels", () => {
     const result = compileSlackInteractiveReplies({
-      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045, Today 11:30:ticket:123]]",
+      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045, Today 11:30:ticket:123, Mon 14:30-16:00:slot_range]]",
     });
 
     expect(result.interactive).toEqual({
@@ -108,6 +108,7 @@ describe("compileSlackInteractiveReplies", () => {
             { label: "Fr 10.07. 9:00", value: "slot_fr_0900" },
             { label: "Mo 13.07. 10:45", value: "slot_mo_1045" },
             { label: "Today 11:30", value: "ticket:123" },
+            { label: "Mon 14:30-16:00", value: "slot_range" },
           ],
         },
       ],
@@ -134,7 +135,7 @@ describe("compileSlackInteractiveReplies", () => {
 
   it("preserves colon-containing Slack callback values", () => {
     const result = compileSlackInteractiveReplies({
-      text: "[[slack_buttons: Open:ticket:123, Timed:ticket:9:00:id, Allow:pluginbind:approval-123:o, Deny:/approve plugin:approval-123 deny]]",
+      text: "[[slack_buttons: Model v2:01:open, Step 2:30-day:open, Timed:ticket:9:00:id, Today 11:30:12:34:id, Deny:/approve plugin:approval-123 deny]]",
     });
 
     expect(result.interactive).toEqual({
@@ -142,9 +143,10 @@ describe("compileSlackInteractiveReplies", () => {
         {
           type: "buttons",
           buttons: [
-            { label: "Open", value: "ticket:123" },
+            { label: "Model v2", value: "01:open" },
+            { label: "Step 2", value: "30-day:open" },
             { label: "Timed", value: "ticket:9:00:id" },
-            { label: "Allow", value: "pluginbind:approval-123:o" },
+            { label: "Today 11:30", value: "12:34:id" },
             { label: "Deny", value: "/approve plugin:approval-123 deny" },
           ],
         },

@@ -28,13 +28,21 @@ function resolveChoiceDelimiter(value: string): number {
   }
   const prefix = value.slice(0, firstDelimiter);
   const suffix = value.slice(firstDelimiter + 1);
-  if (/\b\d{1,2}$/.test(prefix) && /^\d{2}:/.test(suffix)) {
-    return firstDelimiter + 3;
+  const startsWithClockLabel = /\b(?:[01]?\d|2[0-3])$/.test(prefix) && /^[0-5]\d/.test(suffix);
+  if (!startsWithClockLabel) {
+    return firstDelimiter;
   }
-  if (/\b\d{1,2}$/.test(prefix) && /^\d{2}$/.test(suffix)) {
-    return -1;
+
+  // Legacy syntax makes label and callback colons ambiguous. Recognize only a
+  // complete clock or dash-separated range followed by the real separator/end.
+  const clockEnd = firstDelimiter + 3;
+  const labelSuffix =
+    value.slice(clockEnd).match(/^(?:\s*[-–—]\s*(?:[01]?\d|2[0-3]):[0-5]\d)*\s*/)?.[0] ?? "";
+  const delimiter = clockEnd + labelSuffix.length;
+  if (value[delimiter] === ":") {
+    return delimiter;
   }
-  return firstDelimiter;
+  return delimiter === value.length ? -1 : firstDelimiter;
 }
 
 function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoice | null {
@@ -42,39 +50,36 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   if (!trimmed) {
     return null;
   }
-  let working = trimmed;
+  const delimiter = resolveChoiceDelimiter(trimmed);
+  if (delimiter === -1) {
+    return {
+      label: trimmed,
+      value: trimmed,
+    };
+  }
+  const label = trimmed.slice(0, delimiter).trim();
+  let value = trimmed.slice(delimiter + 1).trim();
+  if (!label || !value) {
+    return null;
+  }
   let style: SlackChoice["style"];
   if (options?.allowStyle) {
-    const styleDelimiter = working.lastIndexOf(":");
+    const styleDelimiter = value.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = normalizeLowercaseStringOrEmpty(working.slice(styleDelimiter + 1));
+      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
         maybeStyle === "success" ||
         maybeStyle === "danger"
       ) {
-        const withoutStyle = working.slice(0, styleDelimiter).trim();
-        const delimiterBeforeStyle = resolveChoiceDelimiter(withoutStyle);
-        if (
-          delimiterBeforeStyle !== -1 &&
-          withoutStyle.slice(0, delimiterBeforeStyle).trim() &&
-          withoutStyle.slice(delimiterBeforeStyle + 1).trim()
-        ) {
-          working = withoutStyle;
+        const unstyledValue = value.slice(0, styleDelimiter).trim();
+        if (unstyledValue) {
+          value = unstyledValue;
           style = maybeStyle;
         }
       }
     }
-  }
-  const delimiter = resolveChoiceDelimiter(working);
-  if (delimiter === -1) {
-    return style ? { label: working, value: working, style } : { label: working, value: working };
-  }
-  const label = working.slice(0, delimiter).trim();
-  const value = working.slice(delimiter + 1).trim();
-  if (!label || !value) {
-    return null;
   }
   return style ? { label, value, style } : { label, value };
 }
