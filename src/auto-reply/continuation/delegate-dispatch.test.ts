@@ -645,29 +645,41 @@ describe("hedge timer ref/handle cleanup", () => {
     );
   });
 
-  it("does not spawn live tool delegates when required chain-state persist fails first", async () => {
-    const sessionKey = "session-live-persist-before-spawn";
-    enqueuePendingDelegate(sessionKey, { task: "must not spawn before persist" });
+  it("finalizes hedge-fired accepted rows before a chain-state persist failure can rearm them", async () => {
+    const sessionKey = "session-hedge-finalize-before-persist-fail";
+    enqueuePendingDelegate(sessionKey, {
+      task: "spawn once despite persist failure",
+      delayMs: 30_000,
+    });
     const flowId = [...mockFlows.values()].find((flow) => flow.ownerKey === sessionKey)?.flowId;
     expect(flowId).toBeDefined();
     const persistChainState = vi.fn(async () => {
       throw new Error("session store write failed");
     });
 
-    const result = await dispatchToolDelegates({
+    await dispatchToolDelegates({
       sessionKey,
       chainState: { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 0 },
       ctx: { sessionKey },
       maxChainLength: 10,
+      loadFreshChainState: () => ({
+        currentChainCount: 0,
+        chainStartedAt: 123,
+        accumulatedChainTokens: 0,
+      }),
       persistChainState,
     });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
 
-    expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(persistChainState).toHaveBeenCalledWith(
       expect.objectContaining({ currentChainCount: 1, chainStartedAt: 123 }),
     );
-    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "running" });
+    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "succeeded" });
   });
 
   it("advances + persists chain state across sequential hedge fires for multiple delayed delegates (#1158)", async () => {

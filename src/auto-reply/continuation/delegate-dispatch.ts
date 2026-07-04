@@ -466,12 +466,6 @@ export async function dispatchToolDelegates(params: {
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
     const dispatchChainId = currentChainId ?? generateChainId();
-    const nextChainState = {
-      currentChainCount: nextHop,
-      chainStartedAt: chainState.chainStartedAt,
-      accumulatedChainTokens: accumulatedTokens,
-      ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
-    };
     try {
       if (delegateDelivery === "timer") {
         emitContinuationDelegateFireSpan({
@@ -503,19 +497,6 @@ export async function dispatchToolDelegates(params: {
         (hasActiveSubagentRegistryRun(childSessionKey) ||
           (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
       ) {
-        if (params.persistChainState) {
-          try {
-            await params.persistChainState(nextChainState);
-          } catch (err) {
-            const errorMessage = formatErrorMessage(err);
-            log.warn(
-              `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
-            );
-            dispatchSpan.setStatus("ERROR", errorMessage);
-            rejected++;
-            continue;
-          }
-        }
         try {
           markPendingDelegateSpawnAccepted(
             delegate,
@@ -536,23 +517,6 @@ export async function dispatchToolDelegates(params: {
         currentChainCount = nextHop;
         currentChainId = dispatchChainId;
         continue;
-      }
-      let chainStatePersistedBeforeSpawn = false;
-      if (params.persistChainState) {
-        try {
-          await params.persistChainState(nextChainState);
-          chainStatePersistedBeforeSpawn = true;
-          currentChainCount = nextHop;
-          currentChainId = dispatchChainId;
-        } catch (err) {
-          const errorMessage = formatErrorMessage(err);
-          log.warn(
-            `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable before spawn: ${errorMessage}`,
-          );
-          dispatchSpan.setStatus("ERROR", errorMessage);
-          rejected++;
-          continue;
-        }
       }
       const result = await spawnSubagentDirect(
         {
@@ -609,10 +573,8 @@ export async function dispatchToolDelegates(params: {
         }
         dispatchSpan.setStatus("OK");
         dispatched++;
-        if (!chainStatePersistedBeforeSpawn) {
-          currentChainCount = nextHop;
-          currentChainId = dispatchChainId;
-        }
+        currentChainCount = nextHop;
+        currentChainId = dispatchChainId;
       } else {
         const reasonText = result.error ?? "delegation was not accepted.";
         const summary = `DELEGATE spawn ${result.status}: ${reasonText}`;
