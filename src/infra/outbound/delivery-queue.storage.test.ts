@@ -8,6 +8,7 @@ import {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
+  failDeliveryAfterPlatformSend,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
@@ -195,6 +196,22 @@ describe("delivery-queue storage", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("adapter missing");
+    });
+
+    it("keeps post-send failure evidence while recording the retry failure", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      });
+
+      await failDeliveryAfterPlatformSend(id, "state update failed", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("state update failed");
+      expect(entry.recoveryState).toBe("unknown_after_send");
+      expect(typeof entry.platformSendStartedAt).toBe("number");
     });
   });
 

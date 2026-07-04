@@ -1784,18 +1784,37 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
-      healthChecks: {
-        id: "core/doctor/channel-plugin-blockers",
-        description: "Configured channels must have loadable backing channel plugins.",
-        defaultEnabled: false,
-        async detect(ctx) {
-          const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
-            await import("../commands/doctor/shared/channel-plugin-blockers.js");
-          return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
-            channelPluginBlockerHitToHealthFinding,
-          );
+      healthCheckIds: [
+        "core/doctor/channel-plugin-blockers",
+        "core/doctor/channel-preview-warnings",
+      ],
+      healthChecks: [
+        {
+          id: "core/doctor/channel-plugin-blockers",
+          description: "Configured channels must have loadable backing channel plugins.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
+              await import("../commands/doctor/shared/channel-plugin-blockers.js");
+            return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+              channelPluginBlockerHitToHealthFinding,
+            );
+          },
         },
-      },
+        {
+          id: "core/doctor/channel-preview-warnings",
+          description: "Channel doctor preview warnings are captured as structured findings.",
+          defaultEnabled: false,
+          async detect(ctx) {
+            const { collectChannelPreviewWarningHealthFindings } =
+              await import("./doctor-startup-channel-maintenance.js");
+            return collectChannelPreviewWarningHealthFindings({
+              cfg: ctx.cfg,
+              allowExec: ctx.allowExecSecretRefs === true,
+            });
+          },
+        },
+      ],
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({

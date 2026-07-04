@@ -44,7 +44,12 @@ import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+  sleep as delay,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -139,12 +144,6 @@ function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult)
     (failedCounts?.block ?? 0) > 0 ||
     (failedCounts?.final ?? 0) > 0
   );
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function resolveSignalStatusReactionEmojis(

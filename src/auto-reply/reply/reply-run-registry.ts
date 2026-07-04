@@ -1,5 +1,6 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
@@ -70,6 +71,8 @@ export type ReplyOperation = {
   readonly terminalRecovery: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
+  /** True when this operation has owned the supplied session ID. */
+  hasOwnedSessionId(sessionId: string): boolean;
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
@@ -170,9 +173,7 @@ export class ReplyRunFollowupAdmissionBlockedError extends Error {
 }
 
 function createUserAbortError(): Error {
-  const err = new Error("Reply operation aborted by user");
-  err.name = "AbortError";
-  return err;
+  return createAbortError("Reply operation aborted by user");
 }
 
 function registerWaitSessionId(sessionKey: string, sessionId: string): void {
@@ -235,6 +236,7 @@ function isReplyRunCompacting(operation: ReplyOperation): boolean {
 const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
 const abortFrozenOperations = new WeakSet<ReplyOperation>();
 const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
+const retainStateUntilCompleteOperations = new WeakSet<ReplyOperation>();
 const afterClearCallbacksByOperation = new WeakMap<
   ReplyOperation,
   Set<(sessionId: string) => void>
@@ -262,6 +264,11 @@ function isReplyOperationAbortable(operation: ReplyOperation): boolean {
 export function isReplyRunAbortableForSignal(signal: AbortSignal): boolean {
   const operation = operationsByUpstreamAbortSignal.get(signal);
   return operation ? isReplyOperationAbortable(operation) : true;
+}
+
+/** Keep terminal state registered until the operation owner exits via complete(). */
+export function retainReplyOperationUntilComplete(operation: ReplyOperation): void {
+  retainStateUntilCompleteOperations.add(operation);
 }
 
 function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
@@ -298,16 +305,12 @@ function flushReplyOperationAfterClear(operation: ReplyOperation, sessionId: str
   }
 }
 
-function registerFollowupAdmissionBarrier(
-  sessionKey: string,
-  sessionId: string,
+export function waitForReplyBarrierSettlement(
   barrier: PromiseLike<unknown>,
   timeout: number | ReplyFollowupAdmissionBarrierTimeoutPolicy = REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-): ReplyRunFollowupAdmissionBarrier {
-  const barriersByKey = replyRunState.followupAdmissionBarriersByKey;
-  const previous = barriersByKey.get(sessionKey)?.settled;
+): Promise<void> {
   // Owners may extend this for bounded retry envelopes; all barriers retain a failsafe.
-  const current = new Promise<void>((resolve) => {
+  return new Promise<void>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout>;
     const finish = () => {
@@ -353,6 +356,17 @@ function registerFollowupAdmissionBarrier(
     }
     void Promise.resolve(barrier).then(finish, finish);
   });
+}
+
+function registerFollowupAdmissionBarrier(
+  sessionKey: string,
+  sessionId: string,
+  barrier: PromiseLike<unknown>,
+  timeout: number | ReplyFollowupAdmissionBarrierTimeoutPolicy = REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+): ReplyRunFollowupAdmissionBarrier {
+  const barriersByKey = replyRunState.followupAdmissionBarriersByKey;
+  const previous = barriersByKey.get(sessionKey)?.settled;
+  const current = waitForReplyBarrierSettlement(barrier, timeout);
   const settled = previous ? Promise.all([previous, current]).then(() => undefined) : current;
   const entry = { settled, sessionId };
   barriersByKey.set(sessionKey, entry);
@@ -447,6 +461,7 @@ export function createReplyOperation(params: {
     upstreamAbortSignal?.removeEventListener("abort", upstreamAbortHandler);
     upstreamAbortHandler = undefined;
   };
+  const ownedSessionIds = new Set([sessionId]);
 
   const clearState = (
     afterClearBarrier?: PromiseLike<unknown>,
@@ -525,6 +540,10 @@ export function createReplyOperation(params: {
     get result() {
       return result;
     },
+    hasOwnedSessionId(candidateSessionId) {
+      const normalizedSessionId = normalizeOptionalString(candidateSessionId);
+      return normalizedSessionId ? ownedSessionIds.has(normalizedSessionId) : false;
+    },
     setPhase(next) {
       if (result) {
         return;
@@ -553,6 +572,7 @@ export function createReplyOperation(params: {
       replyRunState.activeKeysBySessionId.delete(currentSessionId);
       registerWaitSessionId(sessionKey, currentSessionId);
       currentSessionId = normalizedNextSessionId;
+      ownedSessionIds.add(currentSessionId);
       updateFollowupAdmissionSessionId(sessionKey, currentSessionId);
       replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
@@ -612,7 +632,7 @@ export function createReplyOperation(params: {
         result = { kind: "failed", code, cause };
         phase = "failed";
       }
-      if (!retainFailureUntilComplete) {
+      if (!retainFailureUntilComplete && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
       }
     },
@@ -624,7 +644,7 @@ export function createReplyOperation(params: {
       abortWithReason("user_abort", createUserAbortError(), {
         abortedCode: "aborted_by_user",
       });
-      if (phaseBeforeAbort === "queued") {
+      if (phaseBeforeAbort === "queued" && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
       }
       return true;
@@ -637,7 +657,7 @@ export function createReplyOperation(params: {
       abortWithReason("restart", createAgentRunRestartAbortError(), {
         abortedCode: "aborted_for_restart",
       });
-      if (phaseBeforeAbort === "queued") {
+      if (phaseBeforeAbort === "queued" && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
       }
       return true;
@@ -660,7 +680,7 @@ export function createReplyOperation(params: {
       abortWithReason(restart ? "restart" : "user_abort", upstreamAbortSignal.reason, {
         abortedCode: restart ? "aborted_for_restart" : "aborted_by_user",
       });
-      if (phaseBeforeAbort === "queued") {
+      if (phaseBeforeAbort === "queued" && !retainStateUntilCompleteOperations.has(operation)) {
         clearState();
       }
     };

@@ -163,7 +163,8 @@ actor GatewayConnection {
     func request(
         method: String,
         params: [String: AnyCodable]?,
-        timeoutMs: Double? = nil) async throws -> Data
+        timeoutMs: Double? = nil,
+        retryTransportFailures: Bool = true) async throws -> Data
     {
         let cfg = try await self.configProvider()
         await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
@@ -174,7 +175,7 @@ actor GatewayConnection {
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
-            if error is GatewayResponseError || error is GatewayDecodingError {
+            if !retryTransportFailures || error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
             }
 

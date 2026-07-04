@@ -133,6 +133,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 }));
 
 vi.mock("./controllers/devices.ts", () => ({
+  closeDevicePairSetup: vi.fn(),
   loadDevices: loadDevicesMock,
 }));
 

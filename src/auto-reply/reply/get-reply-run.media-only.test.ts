@@ -143,6 +143,7 @@ let drainFormattedSystemEvents: typeof import("./session-system-events.js").drai
 let applySessionHints: typeof import("./body.js").applySessionHints;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
+let buildGroupIntro: typeof import("./groups.js").buildGroupIntro;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
@@ -292,7 +293,8 @@ describe("runPreparedReply media-only handling", () => {
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ applySessionHints } = await import("./body.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
-    ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
+    ({ buildDirectChatContext, buildGroupIntro, buildGroupChatContext } =
+      await import("./groups.js"));
     ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
       await import("./inbound-meta.js"));
     ({ testing: replyRunTesting, getActiveReplyRunCount } =
@@ -305,6 +307,7 @@ describe("runPreparedReply media-only handling", () => {
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
     vi.mocked(buildDirectChatContext).mockReturnValue("");
+    vi.mocked(buildGroupIntro).mockReturnValue("");
     vi.mocked(buildGroupChatContext).mockReturnValue("");
     vi.mocked(buildInboundUserContextPrefix).mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
@@ -2789,6 +2792,134 @@ describe("runPreparedReply media-only handling", () => {
       extraSystemPromptStatic: "group:telegram:group:automatic",
       sourceReplyDeliveryMode: "automatic",
     });
+    expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
+  });
+
+  it("keeps explicit mention state in user context and out of CLI binding facts", async () => {
+    vi.mocked(buildGroupChatContext).mockReturnValue("group:telegram:group:automatic");
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "automatic",
+          sessionPromptSourceReplyDeliveryMode: "automatic",
+        },
+        isNewSession: false,
+        systemSent: true,
+        ctx: {
+          Body: "@SirPinchALotBot check this",
+          RawBody: "@SirPinchALotBot check this",
+          CommandBody: "@SirPinchALotBot check this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          BotUsername: "SirPinchALotBot",
+          ExplicitlyMentionedBot: true,
+        },
+        sessionCtx: {
+          Body: "@SirPinchALotBot check this",
+          BodyStripped: "@SirPinchALotBot check this",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          BotUsername: "SirPinchALotBot",
+          ExplicitlyMentionedBot: true,
+        },
+      }),
+    );
+
+    const run = requireRunReplyAgentCall(0).followupRun.run;
+    const inboundCtx = requireMockCallArg(
+      vi.mocked(buildInboundUserContextPrefix),
+      "inbound user context",
+    ) as { ExplicitlyMentionedBot?: boolean; BotUsername?: string };
+    expect(inboundCtx.ExplicitlyMentionedBot).toBe(true);
+    expect(inboundCtx.BotUsername).toBe("SirPinchALotBot");
+    expect(run.extraSystemPromptStatic).toBe("group:telegram:group:automatic");
+    expect(run.cliSessionBindingFacts).toEqual({
+      extraSystemPromptStatic: "group:telegram:group:automatic",
+      sourceReplyDeliveryMode: "automatic",
+    });
+  });
+
+  it("keeps group intro in the session-stable CLI prompt after turn one", async () => {
+    vi.mocked(buildGroupChatContext).mockReturnValue("group:telegram:group:automatic");
+    vi.mocked(buildGroupIntro).mockReturnValue("intro:mention");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-telegram-group",
+      updatedAt: 1,
+      systemSent: true,
+      chatType: "group",
+      channel: "telegram",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      origin: {
+        provider: "telegram",
+        surface: "telegram",
+        chatType: "group",
+        to: "-100123",
+      },
+    };
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "automatic",
+          sessionPromptSourceReplyDeliveryMode: "automatic",
+        },
+        isNewSession: true,
+        systemSent: false,
+        sessionEntry,
+        ctx: {
+          Body: "@bot first",
+          RawBody: "@bot first",
+          CommandBody: "@bot first",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "@bot first",
+          BodyStripped: "@bot first",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+      }),
+    );
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "automatic",
+          sessionPromptSourceReplyDeliveryMode: "automatic",
+        },
+        isNewSession: false,
+        systemSent: true,
+        sessionEntry,
+        ctx: {
+          Body: "second",
+          RawBody: "second",
+          CommandBody: "second",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "second",
+          BodyStripped: "second",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+      }),
+    );
+
+    const firstRun = requireRunReplyAgentCall(0).followupRun.run;
+    const secondRun = requireRunReplyAgentCall(1).followupRun.run;
+    expect(firstRun.extraSystemPromptStatic).toBe(
+      "group:telegram:group:automatic\n\nintro:mention",
+    );
+    expect(secondRun.extraSystemPromptStatic).toBe(firstRun.extraSystemPromptStatic);
     expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
   });
 

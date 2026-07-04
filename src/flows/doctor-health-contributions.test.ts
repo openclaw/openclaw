@@ -98,6 +98,8 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
+  shouldSuggestMemorySystem: vi.fn(async () => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
@@ -122,6 +124,9 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   collectStalePluginRuntimeSymlinkHealthFindings: vi.fn(async () => [] as unknown[]),
+  collectChannelPreviewWarningHealthFindings: vi.fn(
+    async (): Promise<readonly HealthFinding[]> => [],
+  ),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -336,6 +341,16 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
+vi.mock("../commands/doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
+  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("../commands/doctor-workspace.js", () => ({
+  MEMORY_SYSTEM_PROMPT: "Enable memory system for better recall.",
+  shouldSuggestMemorySystem: mocks.shouldSuggestMemorySystem,
+}));
+
 vi.mock("../commands/doctor-disk-space.js", () => ({
   noteDiskSpace: vi.fn(),
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
@@ -367,6 +382,14 @@ vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
 }));
+
+vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>();
+  return {
+    ...actual,
+    collectChannelPreviewWarningHealthFindings: mocks.collectChannelPreviewWarningHealthFindings,
+  };
+});
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
@@ -583,6 +606,8 @@ describe("doctor health contributions", () => {
     mocks.channelPluginBlockerHitToHealthFinding.mockClear();
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset();
     mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
+    mocks.collectChannelPreviewWarningHealthFindings.mockReset();
+    mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1399,6 +1424,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
+    expect(contributionIds).toContain("core/doctor/channel-preview-warnings");
     expect(contributionIds).toContain("core/doctor/tool-result-cap");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
@@ -1688,6 +1714,46 @@ describe("doctor health contributions", () => {
     expect(findings).toEqual([]);
   });
 
+  it("keeps workspace suggestions opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const workspaceSuggestionsCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/workspace-suggestions",
+    );
+    expect(workspaceSuggestionsCheck).toMatchObject({ defaultEnabled: false });
+    expect(workspaceSuggestionsCheck).toBeDefined();
+    mocks.collectWorkspaceBackupTip.mockReturnValueOnce(
+      "Back up your workspace before major repair work.",
+    );
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [workspaceSuggestionsCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectWorkspaceBackupTip).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/workspace-suggestions"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/workspace-suggestions",
+          severity: "info",
+          message: "Back up your workspace before major repair work.",
+        }),
+      ],
+    });
+    expect(mocks.collectWorkspaceBackupTip).toHaveBeenCalledWith("/tmp/openclaw-workspace");
+  });
+
   it("keeps disk space opt-in for default lint selection", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const diskSpaceCheck = contributionChecks.find(
@@ -1964,6 +2030,78 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.scanConfiguredChannelPluginBlockers).toHaveBeenCalledWith(ctx.cfg, process.env);
+  });
+
+  it("keeps channel preview warnings opt-in for default lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    expect(contribution.healthCheckIds).toEqual([
+      "core/doctor/channel-plugin-blockers",
+      "core/doctor/channel-preview-warnings",
+    ]);
+    const previewWarningsCheck = contribution.healthChecks.find(
+      (check) => check.id === "core/doctor/channel-preview-warnings",
+    ) as HealthCheck | undefined;
+    expect(previewWarningsCheck).toMatchObject({ defaultEnabled: false });
+    expect(previewWarningsCheck).toBeDefined();
+    mocks.collectChannelPreviewWarningHealthFindings.mockResolvedValue([
+      {
+        checkId: "core/doctor/channel-preview-warnings",
+        severity: "warning",
+        message: "channels.matrix has a preview warning",
+        path: "channels.matrix",
+      },
+    ]);
+
+    const ctx = {
+      cfg: { channels: { matrix: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [previewWarningsCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectChannelPreviewWarningHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/channel-preview-warnings"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/channel-preview-warnings",
+          path: "channels.matrix",
+        }),
+      ],
+    });
+    expect(mocks.collectChannelPreviewWarningHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      allowExec: false,
+    });
+  });
+
+  it("forwards allow-exec secret refs into channel preview warnings", async () => {
+    const contribution = requireDoctorContribution("doctor:startup-channel-maintenance");
+    const previewWarningsCheck = contribution.healthChecks.find(
+      (check) => check.id === "core/doctor/channel-preview-warnings",
+    ) as HealthCheck | undefined;
+    expect(previewWarningsCheck).toBeDefined();
+    const ctx = {
+      cfg: { channels: { matrix: { enabled: true } } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      allowExecSecretRefs: true,
+    } as const;
+
+    await previewWarningsCheck!.detect(ctx);
+
+    expect(mocks.collectChannelPreviewWarningHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      allowExec: true,
+    });
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {

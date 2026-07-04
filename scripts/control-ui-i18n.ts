@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const { formatGeneratedModule } = (await import(
@@ -632,12 +633,6 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
     "",
     JSON.stringify(payload, null, 2),
   ].join("\n");
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function formatDuration(ms: number): string {
@@ -1559,6 +1554,14 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
+export function shouldReuseExistingTranslation(options: {
+  allowTranslate: boolean;
+  force: boolean;
+  isFallback: boolean;
+}): boolean {
+  return !options.isFallback || (!options.allowTranslate && !options.force);
+}
+
 async function syncLocale(
   entry: LocaleEntry,
   options: { checkOnly: boolean; force: boolean; write: boolean },
@@ -1592,8 +1595,13 @@ async function syncLocale(
     const cachedByText = tmByTextHash.get(textHash);
     const existing = existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
+    const shouldReuse = shouldReuseExistingTranslation({
+      allowTranslate,
+      force: options.force,
+      isFallback: shouldRefreshFallback,
+    });
 
-    if (cached && !(allowTranslate && shouldRefreshFallback)) {
+    if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
@@ -1612,7 +1620,7 @@ async function syncLocale(
       continue;
     }
 
-    if (existing !== undefined && !(allowTranslate && shouldRefreshFallback)) {
+    if (existing !== undefined && shouldReuse) {
       nextFlat.set(key, existing);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);

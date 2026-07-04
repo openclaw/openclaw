@@ -4,6 +4,7 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { CliBackendConfig } from "../../config/types.agent-defaults.js";
 import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
@@ -109,6 +110,56 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasOrphanedToolUse,
   resolveApiKeyForProfile,
 };
+
+function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
+  return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
+    ? reusableCliSession.sessionId
+    : undefined;
+}
+
+function resolveCliSessionInvalidatedReason(
+  reusableCliSession: CliReusableSession,
+): Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"] | undefined {
+  return reusableCliSession.mode === "invalidate"
+    ? reusableCliSession.invalidatedReason
+    : undefined;
+}
+
+function canApplySystemPromptOnResume(backend: CliBackendConfig): boolean {
+  return (
+    backend.systemPromptWhen !== "never" &&
+    Boolean(
+      backend.systemPromptArg || backend.systemPromptFileArg || backend.systemPromptFileConfigKey,
+    )
+  );
+}
+
+function buildCliSessionDriftUserContext(
+  reusableCliSession: CliReusableSession,
+): string | undefined {
+  if (reusableCliSession.mode !== "reuse-with-drift") {
+    return undefined;
+  }
+  return `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+}
+
+function prependCliSessionDriftUserContext(
+  context: RunCliAgentParams["currentInboundContext"],
+  reusableCliSession: CliReusableSession,
+): RunCliAgentParams["currentInboundContext"] {
+  const note = buildCliSessionDriftUserContext(reusableCliSession);
+  if (!note) {
+    return context;
+  }
+  if (!context) {
+    return { text: note };
+  }
+  return {
+    ...context,
+    text: [note, context.text].join("\n\n"),
+    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
+  };
+}
 
 async function resolveCliSkillsPrompt(params: {
   agentId: string;
@@ -618,7 +669,7 @@ export async function prepareCliRunContext(
         ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
         : undefined;
     const reusableCliSessionCandidate: CliReusableSession = isSideQuestion
-      ? {}
+      ? { mode: "none" }
       : params.cliSessionBinding
         ? resolveCliSessionReuse({
             binding: params.cliSessionBinding,
@@ -633,9 +684,15 @@ export async function prepareCliRunContext(
             mcpResumeHash: preparedBackendFinal.mcpResumeHash,
           })
         : params.cliSessionId
-          ? { sessionId: params.cliSessionId }
-          : {};
-    const candidateClaudeCliSessionId = reusableCliSessionCandidate.sessionId?.trim() || undefined;
+          ? { mode: "reuse", sessionId: params.cliSessionId }
+          : { mode: "none" };
+    const backendReusableCliSession: CliReusableSession =
+      reusableCliSessionCandidate.mode === "reuse-with-drift" &&
+      !canApplySystemPromptOnResume(preparedBackendFinal.backend)
+        ? { mode: "invalidate", invalidatedReason: "system-prompt" }
+        : reusableCliSessionCandidate;
+    const candidateClaudeCliSessionId =
+      resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
     const hasClaudeCliCandidate =
       candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
     const claudeCliTranscriptMissing =
@@ -651,18 +708,20 @@ export async function prepareCliRunContext(
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
-    const claudeCliInvalidatedReason: CliReusableSession["invalidatedReason"] | undefined =
+    const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
       claudeCliTranscriptMissing
         ? "missing-transcript"
         : claudeCliTranscriptOrphanedToolUse
           ? "orphaned-tool-use"
           : undefined;
     const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
-      ? { invalidatedReason: claudeCliInvalidatedReason }
-      : reusableCliSessionCandidate;
-    if (reusableCliSession.invalidatedReason) {
+      ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
+      : backendReusableCliSession;
+    const reusableCliSessionId = resolveReusableCliSessionId(reusableCliSession);
+    const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
+    if (invalidatedReason) {
       cliBackendLog.info(
-        `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+        `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
     let openClawHistoryMessages: unknown[] | undefined;
@@ -804,15 +863,19 @@ export async function prepareCliRunContext(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!isSideQuestion) {
+      const currentInboundContext = prependCliSessionDriftUserContext(
+        params.currentInboundContext,
+        reusableCliSession,
+      );
       const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
-        context: params.currentInboundContext,
+        context: currentInboundContext,
         prompt: preparedPrompt,
       });
       const runCurrentInboundPrompt = buildCurrentInboundPrompt({
-        context: params.currentInboundContext,
+        context: currentInboundContext,
         prompt: preparedPrompt,
         preferResumableText:
-          params.currentInboundEventKind === "room_event" && Boolean(reusableCliSession.sessionId),
+          params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId),
       });
       historyPromptCurrentTurn = annotateInterSessionPromptText(
         fullCurrentInboundPrompt,
@@ -825,11 +888,9 @@ export async function prepareCliRunContext(
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const rawTranscriptReseedReason = reusableCliSession.sessionId
-      ? "session-expired"
-      : reusableCliSession.invalidatedReason;
+    const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
     const shouldPrepareOpenClawHistoryPrompt =
-      !isSideQuestion && (!reusableCliSession.sessionId || allowRawTranscriptReseed);
+      !isSideQuestion && (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({

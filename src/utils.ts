@@ -9,8 +9,8 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
-import { resolveTimerTimeoutMs } from "./shared/number-coercion.js";
 export { escapeRegExp } from "./shared/regexp.js";
+export { sleep } from "./utils/sleep.js";
 
 /** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
@@ -60,13 +60,6 @@ export function normalizeE164(number: string): string {
     return `+${digits.slice(1)}`;
   }
   return `+${digits}`;
-}
-
-/** Promise-based sleep that clamps timer inputs through the shared timeout resolver. */
-export function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
-  });
 }
 
 // Surrogate-safe slicing helpers live in a node-free leaf module so browser/UI

@@ -24,6 +24,7 @@ import {
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { closeDevicePairSetup } from "./controllers/devices.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./controllers/workboard.ts";
 import type { Tab } from "./navigation.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
@@ -222,6 +223,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.realtimeTalkTranscript = null;
   host.resetRealtimeTalkConversation?.();
   host.client?.stop();
+  closeDevicePairSetup(host as unknown as Parameters<typeof closeDevicePairSetup>[0]);
   host.client = null;
   host.connected = false;
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);

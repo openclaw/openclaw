@@ -131,17 +131,26 @@ gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_andro
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
+The monthly npm-only extended-stable path is the exception: dispatch both `OpenClaw NPM
+Release` preflight and `Full Release Validation` from the exact
+`extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
+direct npm publish run. See [Monthly npm-only extended-stable
+publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
+the commands, exact identity requirements, registry readback, and selector
+repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
+Release, private dist-tag, or other platform publication.
+
 ## Runners
 
-| Runner                          | Jobs                                                                                                                                                                                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL JavaScript/actions quality scans, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                       |
-| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                |
-| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                               |
-| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                     |
-| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                   |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                  |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL JavaScript/actions quality scans, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                                          |
+| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                                   |
+| `blacksmith-16vcpu-ubuntu-2404` | QA Smoke CI, `build-artifacts` in CI and Testbox, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                   |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                        |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                      |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                     |
 
 ## Runner registration budget
 

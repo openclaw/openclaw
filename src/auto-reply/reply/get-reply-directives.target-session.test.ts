@@ -1,6 +1,7 @@
 /** Tests directive handling for target-session command turns. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -156,20 +157,26 @@ async function resolveHelloWithModelDefaults(params: {
   model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
+  modelError?: unknown;
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
   mocks.listAgentEntries.mockReturnValue(params.agentEntries ?? []);
-  mocks.createModelSelectionState.mockResolvedValueOnce({
-    provider: params.selectedProvider ?? "openai",
-    model: params.selectedModel ?? "gpt-4o-mini",
-    allowedModelKeys: new Set<string>(),
-    allowedModelCatalog: [],
-    resetModelOverride: false,
-    resolveDefaultThinkingLevel,
-    hasConfiguredThinkingDefault: params.hasConfiguredThinkingDefault,
-    resolveDefaultReasoningLevel,
-  });
+  if (params.modelError) {
+    mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
+  } else {
+    mocks.createModelSelectionState.mockResolvedValueOnce({
+      provider: params.selectedProvider ?? "openai",
+      model: params.selectedModel ?? "gpt-4o-mini",
+      allowedModelKeys: new Set<string>(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      resolveDefaultThinkingLevel,
+      hasConfiguredThinkingDefault: params.hasConfiguredThinkingDefault,
+      resolveDefaultReasoningLevel,
+    });
+  }
+  const typing = makeTypingController();
 
   const result = await resolveReplyDirectives({
     ctx: buildTestCtx({
@@ -206,12 +213,12 @@ async function resolveHelloWithModelDefaults(params: {
     model: params.model ?? "gpt-4o-mini",
     hasOneTurnModelOverride: params.hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride: false,
-    typing: makeTypingController(),
+    typing,
     opts: params.opts,
     skillFilter: undefined,
   });
 
-  return { result, resolveDefaultReasoningLevel };
+  return { result, resolveDefaultReasoningLevel, typing };
 }
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -345,6 +352,21 @@ describe("resolveReplyDirectives", () => {
     expect(modelSelectionInput.provider).toBe("openai");
     expect(modelSelectionInput.model).toBe("gpt-4o-mini");
     expect(modelSelectionInput.hasOneTurnModelOverride).toBe(true);
+  });
+
+  it("returns a terminal retry when model preparation sees a rotated session", async () => {
+    const error = new SessionWorkStartInvalidatedError(
+      'Session "agent:main:whatsapp:+2000" changed while starting work. Retry.',
+    );
+    const { result, typing } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      modelError: error,
+    });
+
+    expect(result).toEqual({ kind: "reply", reply: { text: error.message } });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+    expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
   });
 
   it("keeps one-turn fast mode with the resolved fast mode", async () => {
