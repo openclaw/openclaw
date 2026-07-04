@@ -2661,7 +2661,7 @@
   }
 
   .agent-chat__input {
-    margin: 0 8px calc(14px + var(--safe-area-bottom));
+    margin: 0 8px calc(14px + max(var(--safe-area-bottom), var(--keyboard-inset-bottom)));
   }
 
   .agent-chat__suggestions {
@@ -2675,7 +2675,9 @@
 
 @media (display-mode: standalone) and (max-width: 768px) {
   .agent-chat__input {
-    margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));
+    margin-bottom: calc(
+      14px + max(var(--safe-area-bottom), var(--keyboard-inset-bottom), 34px)
+    );
   }
 }
 
