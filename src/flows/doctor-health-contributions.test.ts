@@ -658,6 +658,7 @@ describe("doctor health contributions", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -2701,6 +2702,113 @@ describe("doctor health contributions", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  describe("write-config lint findings", () => {
+    const writeConfigContribution = requireDoctorContribution("doctor:write-config");
+    const check = writeConfigContribution.healthChecks[0] as HealthCheck & {
+      defaultEnabled?: boolean;
+    };
+
+    it("keeps write-config lint opt-in for structured findings", async () => {
+      expect(writeConfigContribution.healthCheckIds).toEqual(["core/doctor/write-config"]);
+      expect(check.defaultEnabled).toBe(false);
+
+      const ctx = {
+        cfg: {},
+        mode: "lint" as const,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        configPath: "/tmp/fake-openclaw.json",
+      };
+
+      await expect(runDoctorLintChecks(ctx, { checks: [check] })).resolves.toMatchObject({
+        checksRun: 0,
+        checksSkipped: 1,
+        findings: [],
+      });
+    });
+
+    it("reports Nix immutable config mode when selected", async () => {
+      vi.stubEnv("OPENCLAW_NIX_MODE", "1");
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/fake-openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/fake-openclaw.json",
+            requirement: "mutable-config-write-path",
+          }),
+        ],
+      });
+    });
+
+    it("reports an unwritable existing config when selected", async () => {
+      vi.spyOn(fs, "existsSync").mockReturnValue(true);
+      vi.spyOn(fs, "accessSync").mockImplementation((_path, mode) => {
+        if (mode === fs.constants.W_OK) {
+          throw new Error("EACCES");
+        }
+      });
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/fake-openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/fake-openclaw.json",
+            requirement: "writable-config-file",
+          }),
+        ],
+      });
+    });
+
+    it("reports an unwritable config directory when the config file is missing", async () => {
+      vi.spyOn(fs, "existsSync").mockReturnValue(false);
+      vi.spyOn(fs, "accessSync").mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      await expect(
+        runDoctorLintChecks(
+          {
+            cfg: {},
+            mode: "lint" as const,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            configPath: "/tmp/openclaw-home/openclaw.json",
+          },
+          { checks: [check], onlyIds: ["core/doctor/write-config"] },
+        ),
+      ).resolves.toMatchObject({
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/write-config",
+            path: "/tmp/openclaw-home",
+            requirement: "writable-config-directory",
+          }),
+        ],
+      });
+    });
   });
 
   describe("config size drops during update", () => {

@@ -1,11 +1,13 @@
 // Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
+import nodePath from "node:path";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
@@ -1308,6 +1310,67 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
+async function collectWriteConfigHealthFindings(
+  ctx: Parameters<HealthCheck["detect"]>[0],
+): Promise<readonly HealthFinding[]> {
+  const findings: HealthFinding[] = [];
+  const configPath = ctx.configPath;
+  if (resolveIsNixMode(process.env)) {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor config writes are disabled because OpenClaw is running in Nix mode.",
+      ...(configPath ? { path: configPath } : {}),
+      requirement: "mutable-config-write-path",
+      fixHint:
+        "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file.",
+    });
+  }
+  if (!configPath) {
+    return findings;
+  }
+  if (fs.existsSync(configPath)) {
+    try {
+      fs.accessSync(configPath, fs.constants.R_OK);
+    } catch {
+      findings.push({
+        checkId: "core/doctor/write-config",
+        severity: "warning",
+        message: "Doctor cannot safely write config because the current config file is unreadable.",
+        path: configPath,
+        requirement: "readable-config-before-write",
+        fixHint: "Restore read access to the config file before running doctor --fix.",
+      });
+    }
+    try {
+      fs.accessSync(configPath, fs.constants.W_OK);
+    } catch {
+      findings.push({
+        checkId: "core/doctor/write-config",
+        severity: "warning",
+        message: "Doctor cannot write the current config file.",
+        path: configPath,
+        requirement: "writable-config-file",
+        fixHint: "Restore write access to the config file before running doctor --fix.",
+      });
+    }
+    return findings;
+  }
+  try {
+    fs.accessSync(nodePath.dirname(configPath), fs.constants.W_OK);
+  } catch {
+    findings.push({
+      checkId: "core/doctor/write-config",
+      severity: "warning",
+      message: "Doctor cannot create the config file because its parent directory is not writable.",
+      path: nodePath.dirname(configPath),
+      requirement: "writable-config-directory",
+      fixHint: "Create or make the config directory writable before running doctor --fix.",
+    });
+  }
+  return findings;
+}
+
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (ctx.options.workspaceSuggestions === false) {
     return;
@@ -2042,6 +2105,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:write-config",
       label: "Write config",
+      healthChecks: {
+        id: "core/doctor/write-config",
+        description: "Config write blockers are findings before doctor repair writes.",
+        defaultEnabled: false,
+        detect: collectWriteConfigHealthFindings,
+      },
       run: runWriteConfigHealth,
     }),
     createDoctorHealthContribution({
