@@ -350,6 +350,43 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
   });
 
+  it("awaits tool start progress callbacks before completing start handling", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    let releaseProgress: (() => void) | undefined;
+    onAgentEvent.mockImplementation((event: CapturedAgentEvent) => {
+      if (event.stream !== "tool" || event.data?.phase !== "start") {
+        return undefined;
+      }
+      return new Promise<void>((resolve) => {
+        releaseProgress = resolve;
+      });
+    });
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-await-progress",
+      args: { command: "echo hi" },
+    };
+
+    let settled = false;
+    const pending = Promise.resolve(handleToolExecutionStart(ctx, evt)).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(releaseProgress).toBeTypeOf("function");
+    });
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    releaseProgress?.();
+    await pending;
+
+    expect(settled).toBe(true);
+    expect(ctx.state.toolMetaById.has("tool-await-progress")).toBe(true);
+  });
+
   it("keeps processing tool start when progress callbacks throw", async () => {
     const { ctx, warn, onExecutionPhase, onAgentEvent } = createTestContext();
     onExecutionPhase.mockImplementation(() => {

@@ -61,7 +61,9 @@ export function createChannelProgressDraftCompositor(params: {
   const previewToolProgressEnabled =
     params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
   const commentaryProgressEnabled =
-    params.active && resolveChannelStreamingProgressCommentary(params.entry);
+    params.active &&
+    (resolveChannelStreamingProgressCommentary(params.entry) ||
+      (params.mode !== "progress" && previewToolProgressEnabled));
   const thinkingProgressEnabled =
     params.active && (params.reasoningGate ?? previewToolProgressEnabled);
   const suppressDefaultToolProgressMessages =
@@ -95,7 +97,7 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
-    if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
+    if (!params.active || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
     const text = formatDraftText();
@@ -318,7 +320,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
-      if (!params.active || params.mode !== "progress" || !commentaryProgressEnabled) {
+      if (!params.active || progressSuppressed || !commentaryProgressEnabled) {
         return false;
       }
       if (finalReplyStarted || finalReplyDelivered) {

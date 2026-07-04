@@ -4274,6 +4274,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("renders Telegram commentary in partial preview tool progress", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking current config",
+      });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true },
+          progress: { label: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "💬 Checking current config\n🛠️ Exec",
+        "💬 Checking current config\n<b>🛠️ Exec</b>",
+      ),
+    );
+  });
+
   it("suppresses Telegram preamble progress when commentary is disabled", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -4797,11 +4831,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
       replyOptions?: {
         allowToolLifecycleWhenProgressHidden?: boolean;
+        commentaryProgressEnabled?: boolean;
         suppressDefaultToolProgressMessages?: boolean;
       };
     };
     expect(dispatchParams.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
     expect(dispatchParams.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
+    expect(dispatchParams.replyOptions?.commentaryProgressEnabled).toBe(true);
   });
 
   it("opts shared dispatch into durable reasoning payload delivery when reasoning streams", async () => {

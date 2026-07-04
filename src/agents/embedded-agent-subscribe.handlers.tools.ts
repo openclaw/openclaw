@@ -325,12 +325,17 @@ function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
 ): void {
+  void emitAgentEventCallback(ctx, event);
+}
+
+async function emitAgentEventCallback(
+  ctx: ToolHandlerContext,
+  event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
+): Promise<void> {
   try {
     const result = ctx.params.onAgentEvent?.(event);
     if (isPromiseLike<void>(result)) {
-      void Promise.resolve(result).catch((error: unknown) => {
-        warnBestEffortEventFailure(ctx, "tool agent event", error);
-      });
+      await result;
     }
   } catch (error) {
     warnBestEffortEventFailure(ctx, "tool agent event", error);
@@ -793,15 +798,12 @@ export function handleToolExecutionStart(
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(() => {
-        continueToolExecutionStart();
-      });
+      return onBlockReplyFlushResult.then(() => continueToolExecutionStart());
     }
-    continueToolExecutionStart();
-    return undefined;
+    return continueToolExecutionStart();
   };
 
-  const continueToolExecutionStart = () => {
+  const continueToolExecutionStart = async () => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
     const toolCallId = evt.toolCallId;
@@ -925,8 +927,9 @@ export function handleToolExecutionStart(
       startedAt,
     };
     emitTrackedItemEvent(ctx, itemData);
-    // Best-effort typing signal; do not block tool summaries on slow emitters.
-    emitAgentEventCallbackBestEffort(ctx, {
+    // Tool-start callbacks open channel preview windows. Await this boundary so
+    // fast embedded turns cannot finalize before the preview sees the tool.
+    await emitAgentEventCallback(ctx, {
       stream: "tool",
       data: {
         phase: "start",

@@ -21,6 +21,95 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
   });
 
+  it("renders commentary in non-progress previews when preview tool progress is enabled", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true },
+          progress: { label: false },
+        },
+      },
+      mode: "partial",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      commentaryItalics: false,
+      update,
+    });
+
+    expect(progress.commentaryProgressEnabled).toBe(true);
+
+    await progress.pushCommentaryProgress("Checking the current config.", {
+      itemId: "commentary-1",
+    });
+
+    expect(update).toHaveBeenCalledWith("💬 Checking the current config.", {
+      flush: true,
+      lines: [
+        {
+          id: "commentary:commentary-1",
+          kind: "item",
+          label: "Commentary",
+          prefix: false,
+          text: "💬 Checking the current config.",
+        },
+      ],
+    });
+  });
+
+  it("clears retracted commentary from non-progress previews", async () => {
+    const update = vi.fn();
+    const deleteCurrent = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true },
+          progress: { label: false },
+        },
+      },
+      mode: "partial",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      commentaryItalics: false,
+      update,
+      deleteCurrent,
+    });
+
+    await progress.pushCommentaryProgress("Checking the current config.", {
+      itemId: "commentary-1",
+    });
+    await progress.pushCommentaryProgress("", { itemId: "commentary-1" });
+
+    expect(deleteCurrent).toHaveBeenCalledOnce();
+  });
+
+  it("does not render non-progress commentary after suppression", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true },
+          progress: { label: false },
+        },
+      },
+      mode: "partial",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    progress.suppress();
+    await progress.pushCommentaryProgress("Late preamble", { itemId: "commentary-1" });
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("gates window thinking on its own flag, independent of tool progress", async () => {
     // thinking: false hides thoughts even though toolProgress stays on…
     const hiddenUpdate = vi.fn();

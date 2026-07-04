@@ -1109,6 +1109,11 @@ export const dispatchTelegramMessage = async ({
       }
     },
   });
+  const streamCommentaryProgressEnabled = answerLane.stream
+    ? streamMode === "progress"
+      ? progressDraft.commentaryProgressEnabled
+      : streamToolProgressEnabled
+    : undefined;
   let finalAnswerDeliveryStarted = false;
   let finalAnswerDelivered = false;
   // While the durable verbose lane is active it owns EVERY progress surface
@@ -2674,8 +2679,7 @@ export const dispatchTelegramMessage = async ({
                   onVerboseProgressVisibility: (isActive) => {
                     verboseProgressActive = isActive;
                   },
-                  commentaryProgressEnabled:
-                    streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  commentaryProgressEnabled: streamCommentaryProgressEnabled,
                   reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
