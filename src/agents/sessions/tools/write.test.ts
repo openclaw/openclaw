@@ -197,6 +197,32 @@ describe("write tool", () => {
     });
   });
 
+  it("recovers duplicate-content append after timeout-like backend errors", async () => {
+    const filePath = await createTempPath("append-duplicate-timeout.txt");
+    await fs.writeFile(filePath, "duplicate\n", "utf-8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(
+        (absolutePath, content) => fs.writeFile(absolutePath, content, "utf-8"),
+        async (absolutePath, content) => {
+          await fs.appendFile(absolutePath, content, "utf-8");
+          throw new Error("node invoke timed out");
+        },
+      ),
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, content: "duplicate\n", append: true },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("duplicate\nduplicate\n");
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: `Successfully appended ${"duplicate\n".length} bytes to ${filePath}`,
+    });
+  });
+
   it("reports success when append completes before an abort is observed", async () => {
     const filePath = await createTempPath("append-abort.txt");
     await fs.writeFile(filePath, "alpha\n", "utf-8");

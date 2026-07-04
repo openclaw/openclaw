@@ -371,11 +371,7 @@ async function recoverSuccessfulWrite(params: {
   }
   const readback = await params.ops.readFile(params.absolutePath).catch(() => undefined);
   const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
-  const changed =
-    params.precheck.state === "different" ||
-    (params.precheck.state === "unknown" &&
-      (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (!changed || typeof currentContent !== "string") {
+  if (typeof currentContent !== "string") {
     return null;
   }
   if (params.append) {
@@ -391,6 +387,13 @@ async function recoverSuccessfulWrite(params: {
       ],
       details: undefined,
     };
+  }
+  const changed =
+    params.precheck.state === "different" ||
+    (params.precheck.state === "unknown" &&
+      (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
+  if (!changed) {
+    return null;
   }
   if (currentContent !== params.content) {
     return null;
