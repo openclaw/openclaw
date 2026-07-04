@@ -36,6 +36,7 @@ export type GatewayRequestContextParams = {
   clients: Set<GatewayRequestContextClient>;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
@@ -177,6 +178,7 @@ export function createGatewayRequestContext(
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
     nodeRegistry: params.nodeRegistry,
+    terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
     chatAbortedRuns: params.chatAbortedRuns,

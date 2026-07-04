@@ -1,4 +1,5 @@
 // Tests follow-up runner delivery, transcript persistence, and no-reply contracts.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -53,6 +54,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
   }
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
+const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -143,7 +145,10 @@ function registerFollowupTestSessionStore(
   storePath: string,
   sessionStore: Record<string, SessionEntry>,
 ): void {
+  fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
+  fsSync.writeFileSync(storePath, JSON.stringify(sessionStore));
   FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+  FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 }
 
 async function incrementRunCompactionCountForFollowupTest(
@@ -381,8 +386,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
       run.queuedLifecycle?.onComplete?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
-    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal">) =>
-      run.abortSignal?.aborted === true,
+    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
+      run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
   }));
   vi.doMock("./session-run-accounting.js", () => ({
@@ -579,6 +584,10 @@ afterEach(() => {
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
   FOLLOWUP_TEST_SESSION_STORES.clear();
+  for (const storePath of FOLLOWUP_TEST_SESSION_STORE_PATHS) {
+    fsSync.rmSync(storePath, { force: true });
+  }
+  FOLLOWUP_TEST_SESSION_STORE_PATHS.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
   clearSessionStoreCacheForTest();
@@ -4115,6 +4124,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     persistSpy.mockImplementationOnce(async (params) => {
       const nextEntry: SessionEntry = {
@@ -4172,6 +4182,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
 
     const cfg = {
       messages: {
@@ -4354,6 +4365,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -4419,7 +4431,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       totalTokensFresh: true,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "internal announce complete" }],

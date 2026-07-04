@@ -9,10 +9,10 @@ import {
   hasAbortableSessionRun,
   refreshChat,
   refreshChatCommands,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
+import "./terminal/terminal-panel.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
@@ -24,6 +24,10 @@ import {
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
+  isCurrentChatSessionArchived,
+  isTerminalAvailable,
+  openCurrentSessionCheckpoints,
+  patchSessionFromSessionsView,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
@@ -130,6 +134,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  compareSessionRowsByUpdatedAt,
   createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
@@ -182,19 +187,22 @@ import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.t
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canArchiveSessionRow,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-import "./components/dashboard-header.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
+import "./components/dashboard-header.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
+import { resolveTheme } from "./theme.ts";
 import type {
   ArtifactDownloadResult,
   GatewaySessionRow,
@@ -555,7 +563,7 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         !isActiveSidebarSessionRow(state, row.key) &&
         (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .toSorted(compareSessionRowsByUpdatedAt)
     .slice(0, 9);
 }
 
@@ -571,21 +579,23 @@ function isActiveSidebarSessionRow(state: AppViewState, rowKey: string): boolean
 // open chat from every tab.
 function renderSidebarChatFallbackRow(state: AppViewState) {
   return html`
-    <a
-      href=${pathForTab("chat", state.basePath)}
+    <div
       class="sidebar-recent-session ${state.tab === "chat" ? "sidebar-recent-session--active" : ""}"
-      @click=${(event: MouseEvent) => {
-        if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
-          return;
-        }
-        event.preventDefault();
-        state.setTab("chat" as import("./navigation.ts").Tab);
-      }}
     >
-      <span class="sidebar-recent-session__body">
+      <a
+        href=${pathForTab("chat", state.basePath)}
+        class="sidebar-recent-session__link"
+        @click=${(event: MouseEvent) => {
+          if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
+            return;
+          }
+          event.preventDefault();
+          state.setTab("chat" as import("./navigation.ts").Tab);
+        }}
+      >
         <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
-      </span>
-    </a>
+      </a>
+    </div>
   `;
 }
 
@@ -735,34 +745,75 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "";
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
+  const pinned = row.pinned === true;
+  const running = row.hasActiveRun === true;
+  const controlsDisabled = !state.connected || !state.client;
+  const archiveAllowed = canArchiveSessionRow(row, resolveUiConfiguredMainKey(state));
+  const rowClass = [
+    "sidebar-recent-session",
+    "session-row-host",
+    active ? "sidebar-recent-session--active" : "",
+    pinned ? "session-row-host--pinned" : "",
+    running ? "session-row-host--running" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`
-    <a
-      href=${href}
-      class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
-      data-session-key=${row.key}
-      title=${`${label} · ${row.key}`}
-      @click=${(event: MouseEvent) => {
-        if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
-          return;
-        }
-        event.preventDefault();
-        if (!isActiveSidebarSessionRow(state, row.key)) {
-          switchChatSession(state, row.key);
-        }
-        state.setTab("chat" as import("./navigation.ts").Tab);
-      }}
-    >
-      <span class="sidebar-recent-session__body">
+    <div class=${rowClass} data-session-key=${row.key}>
+      <a
+        href=${href}
+        class="sidebar-recent-session__link"
+        title=${`${label} · ${row.key}`}
+        @click=${(event: MouseEvent) => {
+          if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
+            return;
+          }
+          event.preventDefault();
+          if (!isActiveSidebarSessionRow(state, row.key)) {
+            switchChatSession(state, row.key);
+          }
+          state.setTab("chat" as import("./navigation.ts").Tab);
+        }}
+      >
         <span class="sidebar-recent-session__name">${label}</span>
-        ${meta ? html`<span class="sidebar-recent-session__meta">${meta}</span>` : nothing}
+      </a>
+      <span class="sidebar-recent-session__aside session-row-aside">
+        <span class="session-row-trail">
+          ${running
+            ? html`<span
+                class="session-run-spinner"
+                role="img"
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
+              ></span>`
+            : meta}
+        </span>
+        <span class="session-row-actions">
+          <button
+            class="session-action"
+            data-sidebar-session-archive="true"
+            type="button"
+            title=${t("sessionsView.archiveSession")}
+            aria-label=${t("sessionsView.archiveSession")}
+            ?disabled=${controlsDisabled || !archiveAllowed}
+            @click=${() => void patchSessionFromSessionsView(state, row.key, { archived: true })}
+          >
+            ${icons.archive}
+          </button>
+          <button
+            class="session-action session-action--pin"
+            data-sidebar-session-pin="true"
+            type="button"
+            title=${pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+            aria-label=${pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+            ?disabled=${controlsDisabled}
+            @click=${() => void patchSessionFromSessionsView(state, row.key, { pinned: !pinned })}
+          >
+            ${icons.pin}
+          </button>
+        </span>
       </span>
-      ${row.hasActiveRun
-        ? html`<span
-            class="sidebar-recent-session__live"
-            aria-label=${t("sessions.sessionDetails.activeRun")}
-          ></span>`
-        : nothing}
-    </a>
+    </div>
   `;
 }
 
@@ -1493,7 +1544,12 @@ export function renderApp(state: AppViewState) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
+  const chatSessionArchived = isCurrentChatSessionArchived(state);
+  const chatDisabledReason = !state.connected
+    ? t("chat.disconnected")
+    : chatSessionArchived
+      ? t("chat.archivedSessionDisabled")
+      : null;
   const isChat = state.tab === "chat";
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatViewError = state.lastError;
@@ -2623,6 +2679,35 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
+            ${isTerminalAvailable(state)
+              ? html`<button
+                  class="topbar-icon-btn"
+                  @click=${() => window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
+                  title=${t("terminal.toggle")}
+                  aria-label=${t("terminal.toggle")}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <rect
+                      x="3"
+                      y="4"
+                      width="18"
+                      height="16"
+                      rx="2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                    />
+                    <path
+                      d="M7 9l3 3-3 3M12.5 15h4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>`
+              : nothing}
             <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
           </div>
         </div>
@@ -2962,6 +3047,7 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 showArchived: state.sessionsShowArchived,
+                mainKey: state.agentsList?.mainKey ?? "main",
                 filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
@@ -3006,7 +3092,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = "";
                   state.sessionsIncludeGlobal = true;
                   state.sessionsIncludeUnknown = true;
-                  state.sessionsShowArchived = true;
+                  state.sessionsShowArchived = false;
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
@@ -3015,7 +3101,7 @@ export function renderApp(state: AppViewState) {
                     limit: 0,
                     includeGlobal: true,
                     includeUnknown: true,
-                    showArchived: true,
+                    showArchived: false,
                   });
                 },
                 onSearchChange: (q) => {
@@ -3035,7 +3121,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionsPage = 0;
                 },
                 onRefresh: () => void loadSessions(state),
-                onPatch: (key, patch) => void patchSession(state, key, patch),
+                onPatch: (key, patch) => void patchSessionFromSessionsView(state, key, patch),
                 onToggleSelect: (key) => {
                   const next = new Set(state.sessionsSelectedKeys);
                   if (next.has(key)) {
@@ -3899,7 +3985,7 @@ export function renderApp(state: AppViewState) {
                   realtimeTalkOptions: state.realtimeTalkOptions,
                   realtimeTalkCatalogProviders: state.realtimeTalkCatalogProviders,
                   connected: state.connected,
-                  canSend: state.connected,
+                  canSend: state.connected && !chatSessionArchived,
                   disabledReason: chatDisabledReason,
                   error: chatViewError,
                   runStatus: state.chatRunStatus,
@@ -3941,14 +4027,7 @@ export function renderApp(state: AppViewState) {
                   onAttachmentsChange: (next) => (state.chatAttachments = next),
                   onSend: () => void state.handleSendChat(),
                   onCompact: () => void state.handleSendChat("/compact", { restoreDraft: true }),
-                  onOpenSessionCheckpoints: () => {
-                    state.sessionsExpandedCheckpointKey = state.sessionKey;
-                    state.setTab("sessions" as import("./navigation.ts").Tab);
-                    void loadSessions(state, {
-                      ...createChatSessionsLoadOverrides(state),
-                      ...scopedAgentListParamsForSession(state, state.sessionKey),
-                    });
-                  },
+                  onOpenSessionCheckpoints: () => openCurrentSessionCheckpoints(state),
                   onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
                   onToggleRealtimeTalkOptions: () => {
                     state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
@@ -4188,6 +4267,17 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
+      ${(() => {
+        const terminalAvailable = isTerminalAvailable(state);
+        const terminalMode = resolveTheme(state.theme, state.themeMode).includes("light")
+          ? "light"
+          : "dark";
+        return html`<openclaw-terminal-panel
+          .client=${state.client}
+          .available=${terminalAvailable}
+          .themeMode=${terminalMode}
+        ></openclaw-terminal-panel>`;
+      })()}
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)}
       ${renderDreamingRestartConfirmation({
         open: state.dreamingRestartConfirmOpen,

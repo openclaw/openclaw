@@ -1968,16 +1968,40 @@
   overflow-y: auto;
 }
 
+/* Rows are single-line and minimal: label + trailing time/spinner. The
+   whole row (option button + aside) shares one hover surface so the
+   session-row hover-reveal actions feel like part of the row. */
+.chat-session-picker__option-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-right: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.chat-session-picker__option-row:hover,
+.chat-session-picker__option-row:focus-within {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.chat-session-picker__option-row--selected {
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
 .chat-session-picker__option {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  width: 100%;
-  min-height: 44px;
-  padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px 6px 10px;
+  border: none;
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -1985,55 +2009,31 @@
   cursor: pointer;
 }
 
-.chat-session-picker__option:hover,
-.chat-session-picker__option:focus-visible {
-  background: var(--bg-hover);
-  border-color: color-mix(in srgb, var(--border) 78%, transparent);
-}
-
-.chat-session-picker__option--selected {
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
-.chat-session-picker__option-main {
-  display: grid;
-  gap: 3px;
+.chat-session-picker__option-label {
   min-width: 0;
-}
-
-.chat-session-picker__option-label,
-.chat-session-picker__option-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.chat-session-picker__option-label {
   color: var(--text-strong);
   font-size: 13px;
+  font-weight: 500;
+}
+
+.chat-session-picker__option-row--selected .chat-session-picker__option-label {
   font-weight: 600;
 }
 
-.chat-session-picker__option-meta {
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-}
+/* Touch has no hover: the picker is a deliberate management surface, so
+   keep the actions visible there instead of unreachable. */
+@media (hover: none) {
+  .chat-session-picker .session-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
 
-.chat-session-picker__option-check {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  color: var(--accent);
-  flex: 0 0 auto;
-}
-
-.chat-session-picker__option-check svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
+  .chat-session-picker .session-row-trail {
+    opacity: 0;
+  }
 }
 
 .chat-session-picker__status {

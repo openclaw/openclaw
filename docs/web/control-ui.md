@@ -141,7 +141,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and partial snapshots are labeled when a probe or audit exceeds its UI budget.
     - Instances: presence list + refresh (`system-presence`).
-    - Sessions: list configured-agent sessions by default, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
+    - Sessions: list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts.
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
 
   </Accordion>
@@ -222,6 +222,7 @@ Activity entries keep only sanitized summaries and redacted, truncated output pr
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The sidebar lists recent sessions with a New Session action, an All Sessions link, and a session search button that opens the full session picker (scoped by the selected agent, with search and pagination). Switching agents shows only sessions tied to that agent and falls back to that agent's main session when it has no saved dashboard sessions yet.
+    - Each session-picker row can rename, pin, or archive the session. An active run and an agent's main session cannot be archived. Archiving the currently selected session switches Chat back to that agent's main session.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.

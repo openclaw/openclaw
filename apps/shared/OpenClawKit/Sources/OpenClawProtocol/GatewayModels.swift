@@ -1640,6 +1640,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
+    public let archived: Bool?
 
     public init(
         limit: Int?,
@@ -1653,7 +1654,8 @@ public struct SessionsListParams: Codable, Sendable {
         label: String?,
         spawnedby: String?,
         agentid: String? = nil,
-        search: String?)
+        search: String?,
+        archived: Bool? = nil)
     {
         self.limit = limit
         self.offset = offset
@@ -1667,6 +1669,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.spawnedby = spawnedby
         self.agentid = agentid
         self.search = search
+        self.archived = archived
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1682,6 +1685,7 @@ public struct SessionsListParams: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case search
+        case archived
     }
 }
 
@@ -2433,6 +2437,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let label: AnyCodable?
+    public let archived: Bool?
+    public let pinned: Bool?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
@@ -2460,6 +2466,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         agentid: String? = nil,
         label: AnyCodable?,
+        archived: Bool? = nil,
+        pinned: Bool? = nil,
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
@@ -2486,6 +2494,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
+        self.archived = archived
+        self.pinned = pinned
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.verboselevel = verboselevel
@@ -2514,6 +2524,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
+        case archived
+        case pinned
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
@@ -2617,17 +2629,26 @@ public struct SessionsDeleteParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let deletetranscript: Bool?
+    public let expectedsessionid: String?
+    public let expectedlifecyclerevision: String?
+    public let expectedsessionupdatedat: Double?
     public let emitlifecyclehooks: Bool?
 
     public init(
         key: String,
         agentid: String? = nil,
         deletetranscript: Bool?,
+        expectedsessionid: String? = nil,
+        expectedlifecyclerevision: String? = nil,
+        expectedsessionupdatedat: Double? = nil,
         emitlifecyclehooks: Bool?)
     {
         self.key = key
         self.agentid = agentid
         self.deletetranscript = deletetranscript
+        self.expectedsessionid = expectedsessionid
+        self.expectedlifecyclerevision = expectedlifecyclerevision
+        self.expectedsessionupdatedat = expectedsessionupdatedat
         self.emitlifecyclehooks = emitlifecyclehooks
     }
 
@@ -2635,6 +2656,9 @@ public struct SessionsDeleteParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case deletetranscript = "deleteTranscript"
+        case expectedsessionid = "expectedSessionId"
+        case expectedlifecyclerevision = "expectedLifecycleRevision"
+        case expectedsessionupdatedat = "expectedSessionUpdatedAt"
         case emitlifecyclehooks = "emitLifecycleHooks"
     }
 }
@@ -6472,6 +6496,178 @@ public struct LogsTailResult: Codable, Sendable {
         case lines
         case truncated
         case reset
+    }
+}
+
+public struct TerminalOpenParams: Codable, Sendable {
+    public let agentid: String?
+    public let cols: Int
+    public let rows: Int
+
+    public init(
+        agentid: String? = nil,
+        cols: Int,
+        rows: Int)
+    {
+        self.agentid = agentid
+        self.cols = cols
+        self.rows = rows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case cols
+        case rows
+    }
+}
+
+public struct TerminalOpenResult: Codable, Sendable {
+    public let sessionid: String
+    public let agentid: String
+    public let shell: String
+    public let cwd: String
+    public let confined: Bool
+
+    public init(
+        sessionid: String,
+        agentid: String,
+        shell: String,
+        cwd: String,
+        confined: Bool)
+    {
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.shell = shell
+        self.cwd = cwd
+        self.confined = confined
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case shell
+        case cwd
+        case confined
+    }
+}
+
+public struct TerminalInputParams: Codable, Sendable {
+    public let sessionid: String
+    public let data: String
+
+    public init(
+        sessionid: String,
+        data: String)
+    {
+        self.sessionid = sessionid
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case data
+    }
+}
+
+public struct TerminalResizeParams: Codable, Sendable {
+    public let sessionid: String
+    public let cols: Int
+    public let rows: Int
+
+    public init(
+        sessionid: String,
+        cols: Int,
+        rows: Int)
+    {
+        self.sessionid = sessionid
+        self.cols = cols
+        self.rows = rows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case cols
+        case rows
+    }
+}
+
+public struct TerminalCloseParams: Codable, Sendable {
+    public let sessionid: String
+
+    public init(
+        sessionid: String)
+    {
+        self.sessionid = sessionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+    }
+}
+
+public struct TerminalAckResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
+public struct TerminalDataEvent: Codable, Sendable {
+    public let sessionid: String
+    public let seq: Int
+    public let data: String
+
+    public init(
+        sessionid: String,
+        seq: Int,
+        data: String)
+    {
+        self.sessionid = sessionid
+        self.seq = seq
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case seq
+        case data
+    }
+}
+
+public struct TerminalExitEvent: Codable, Sendable {
+    public let sessionid: String
+    public let exitcode: AnyCodable?
+    public let signal: AnyCodable?
+    public let reason: AnyCodable?
+    public let error: String?
+
+    public init(
+        sessionid: String,
+        exitcode: AnyCodable?,
+        signal: AnyCodable?,
+        reason: AnyCodable?,
+        error: String?)
+    {
+        self.sessionid = sessionid
+        self.exitcode = exitcode
+        self.signal = signal
+        self.reason = reason
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case exitcode = "exitCode"
+        case signal
+        case reason
+        case error
     }
 }
 

@@ -11,6 +11,7 @@ import {
 } from "./types.js";
 
 export type FollowupQueueState = {
+  abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
   lastEnqueuedAt: number;
@@ -75,6 +76,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
   }
 
   const created: FollowupQueueState = {
+    abortController: new AbortController(),
     items: [],
     draining: false,
     lastEnqueuedAt: 0,
@@ -108,6 +110,7 @@ export function clearFollowupQueue(key: string): number {
   if (!queue) {
     return 0;
   }
+  queue.abortController.abort();
   const cleared = queue.items.length + queue.droppedCount;
   for (const item of queue.items) {
     completeFollowupRunLifecycle(item);

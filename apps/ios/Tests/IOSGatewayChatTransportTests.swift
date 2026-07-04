@@ -27,6 +27,10 @@ import Testing
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 30000) == 35)
     }
 
+    @Test func compactionLeavesTerminalTimeoutToGateway() {
+        #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
+    }
+
     @Test func agentWaitCompletionDecodesFallbackRunId() throws {
         let data = Data(#"{"status":"completed"}"#.utf8)
         let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")

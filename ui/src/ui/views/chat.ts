@@ -1711,7 +1711,9 @@ function selectSlashCommand(
   if (cmd.executeLocal && !cmd.args) {
     commitComposerDraft(props, `/${cmd.name}`);
     requestUpdate();
-    props.onSend();
+    if (props.connected && props.canSend) {
+      props.onSend();
+    }
   } else {
     commitComposerDraft(props, `/${cmd.name} `);
     requestUpdate();
@@ -1753,7 +1755,7 @@ function selectSlashArg(
   resetSlashMenuState();
   commitComposerDraft(props, `/${cmdName} ${arg}`);
   requestUpdate();
-  if (execute) {
+  if (execute && props.connected && props.canSend) {
     props.onSend();
   }
 }
@@ -2141,7 +2143,7 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
 }
 
 export function renderChat(props: ChatProps) {
-  const canCompose = props.connected;
+  const canCompose = props.connected && props.canSend;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
@@ -2171,11 +2173,13 @@ export function renderChat(props: ChatProps) {
   const tokens = tokenEstimate(visibleDraft);
   const composerControls = props.composerControls;
 
-  const placeholder = props.connected
-    ? hasAttachments
-      ? t("chat.composer.placeholderWithAttachments")
-      : t("chat.composer.placeholder", { name: props.assistantName || "agent" })
-    : t("chat.composer.placeholderDisconnected");
+  const placeholder = !props.connected
+    ? t("chat.composer.placeholderDisconnected")
+    : !canCompose && props.disabledReason
+      ? props.disabledReason
+      : hasAttachments
+        ? t("chat.composer.placeholderWithAttachments")
+        : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -2633,16 +2637,14 @@ export function renderChat(props: ChatProps) {
 
     // Send on Enter (without shift)
     if (e.key === "Enter" && !e.shiftKey) {
-      if (!props.connected) {
+      if (!canCompose) {
         return;
       }
       e.preventDefault();
-      if (canCompose) {
-        const target = e.target as HTMLTextAreaElement;
-        commitComposerDraft(props, target.value);
-        props.onSend();
-        syncComposerDraftAfterSend(target);
-      }
+      const target = e.target as HTMLTextAreaElement;
+      commitComposerDraft(props, target.value);
+      props.onSend();
+      syncComposerDraftAfterSend(target);
     }
   };
 
@@ -2694,19 +2696,22 @@ export function renderChat(props: ChatProps) {
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
+    if (!canCompose) {
+      return;
+    }
     commitComposerDraft(props, draftMirror.value);
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
   };
-  const slashMenuVisible = isSlashMenuVisible();
+  const slashMenuVisible = canCompose && isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
   const chatColumnFooter = html`
     ${renderChatQueue({
       queue: props.queue,
       canAbort: showAbortableUi,
-      onQueueRetry: props.onQueueRetry,
-      onQueueSteer: props.onQueueSteer,
+      onQueueRetry: canCompose ? props.onQueueRetry : undefined,
+      onQueueSteer: canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
     ${renderSideResult(props.sideResult, props.onDismissSideResult)}
@@ -2721,9 +2726,10 @@ export function renderChat(props: ChatProps) {
     <!-- Input bar -->
     <div
       class="agent-chat__input"
-      @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
+      @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
     >
-      ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
+      ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
+      ${renderAttachmentPreview(props)}
       ${props.replyTarget
         ? html`
             <div class="chat-reply-preview">
@@ -2758,7 +2764,12 @@ export function renderChat(props: ChatProps) {
         accept=${CHAT_ATTACHMENT_ACCEPT}
         multiple
         class="agent-chat__file-input"
-        @change=${(e: Event) => handleFileSelect(e, props)}
+        ?disabled=${!canCompose}
+        @change=${(e: Event) => {
+          if (canCompose) {
+            handleFileSelect(e, props);
+          }
+        }}
       />
 
       ${renderRealtimeTalkOptions(props)}
@@ -2806,7 +2817,7 @@ export function renderChat(props: ChatProps) {
           })}
           .value=${visibleDraft}
           dir=${detectTextDirection(visibleDraft)}
-          ?disabled=${!props.connected}
+          ?disabled=${!canCompose}
           aria-autocomplete="list"
           aria-controls=${ifDefined(slashMenuVisible ? SLASH_MENU_LISTBOX_ID : undefined)}
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
@@ -2819,7 +2830,11 @@ export function renderChat(props: ChatProps) {
           }}
           @compositionend=${handleCompositionEnd}
           @blur=${handleBlur}
-          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+          @paste=${(e: ClipboardEvent) => {
+            if (canCompose) {
+              handlePaste(e, props);
+            }
+          }}
           placeholder=${placeholder}
           rows="1"
         ></textarea>
@@ -2841,7 +2856,7 @@ export function renderChat(props: ChatProps) {
             @click=${clickComposerFileInput}
             title=${t("chat.composer.attachFile")}
             aria-label=${t("chat.composer.attachFile")}
-            ?disabled=${!props.connected}
+            ?disabled=${!canCompose}
           >
             ${icons.paperclip}
             <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
@@ -2860,7 +2875,7 @@ export function renderChat(props: ChatProps) {
                   aria-label=${props.realtimeTalkActive
                     ? t("chat.composer.stopTalk")
                     : t("chat.composer.startTalk")}
-                  ?disabled=${!props.connected}
+                  ?disabled=${!canCompose && !props.realtimeTalkActive}
                 >
                   ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   <span class="agent-chat__control-label"
@@ -2881,7 +2896,7 @@ export function renderChat(props: ChatProps) {
                   title="Talk settings"
                   aria-label="Talk settings"
                   aria-expanded=${props.realtimeTalkOptionsOpen ? "true" : "false"}
-                  ?disabled=${!props.connected || props.realtimeTalkActive}
+                  ?disabled=${!canCompose || props.realtimeTalkActive}
                 >
                   ${icons.settings}
                   <span class="agent-chat__control-label">Talk settings</span>
@@ -2897,12 +2912,12 @@ export function renderChat(props: ChatProps) {
           : nothing}
         ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
           compactBusy,
-          compactDisabled: !props.connected || isBusy || showAbortableUi,
+          compactDisabled: !canCompose || isBusy || showAbortableUi,
           onCompact: props.onCompact,
         })}
         ${renderChatRunControls({
           canAbort: showAbortableUi,
-          connected: props.connected,
+          connected: canCompose,
           draft: visibleDraft,
           hasMessages: props.messages.length > 0,
           isBusy,
@@ -2921,7 +2936,12 @@ export function renderChat(props: ChatProps) {
   return html`
     <section
       class="card chat"
-      @drop=${(e: DragEvent) => handleDrop(e, props)}
+      @drop=${(e: DragEvent) => {
+        e.preventDefault();
+        if (canCompose) {
+          handleDrop(e, props);
+        }
+      }}
       @dragover=${(e: DragEvent) => e.preventDefault()}
       @keydown=${(e: KeyboardEvent) => {
         if (e.key === "Escape" && props.replyTarget && !e.defaultPrevented) {

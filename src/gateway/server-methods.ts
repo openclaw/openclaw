@@ -134,6 +134,10 @@ const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
 );
+const loadTerminalHandlers = lazyHandlerModule(
+  () => import("./server-methods/terminal.js"),
+  (module) => module.terminalHandlers,
+);
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
@@ -286,6 +290,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["terminal.open", "terminal.input", "terminal.resize", "terminal.close"],
+    loadHandlers: loadTerminalHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],

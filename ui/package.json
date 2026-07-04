@@ -14,6 +14,7 @@
     "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
     "dompurify": "3.4.11",
+    "ghostty-web": "0.4.0",
     "highlight.js": "11.11.1",
     "json5": "2.2.3",
     "lit": "3.3.3",
