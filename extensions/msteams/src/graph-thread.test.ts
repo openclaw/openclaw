@@ -197,6 +197,19 @@ describe("fetchThreadReplies", () => {
     expect(result.at(-1)?.id).toBe("reply-60");
   });
 
+  it("selects the newest replies by createdDateTime regardless of page order", async () => {
+    const items = [
+      { id: "c", createdDateTime: "2026-01-03T00:00:00Z" },
+      { id: "a", createdDateTime: "2026-01-01T00:00:00Z" },
+      { id: "b", createdDateTime: "2026-01-02T00:00:00Z" },
+    ];
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items, truncated: false } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 2);
+
+    expect(result.map((r) => r.id)).toStrictEqual(["b", "c"]);
+  });
+
   it("clamps per-page $top to 50 maximum", async () => {
     vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
 
