@@ -372,17 +372,6 @@ img.chat-avatar {
   height: 14px;
 }
 
-/* Light mode: restore borders */
-:root[data-theme-mode="light"] .chat-bubble {
-  border-color: var(--border);
-  background: var(--bg);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-}
-
-:root[data-theme-mode="light"] .chat-bubble--tool-shell {
-  box-shadow: none;
-}
-
 .chat-bubble:hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
@@ -404,6 +393,19 @@ img.chat-avatar {
 
 .chat-group.user .chat-bubble:hover {
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+/* Light mode: restore borders. Order contract: stays below the role variants
+   above; it ties with .chat-group.user .chat-bubble on specificity and the
+   light skin must win (user bubbles render on var(--bg) in light mode). */
+:root[data-theme-mode="light"] .chat-bubble {
+  border-color: var(--border);
+  background: var(--bg);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
+:root[data-theme-mode="light"] .chat-bubble--tool-shell {
+  box-shadow: none;
 }
 
 /* Fade-in animation for new messages */
