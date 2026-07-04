@@ -133,11 +133,44 @@ describe("CrestodianChatEngine", () => {
     expect(reply.handoff?.kind).toBe("open-tui");
   });
 
+  it("prefers the real agent loop for fuzzy messages", async () => {
+    const runAgentTurn = vi.fn(async () => ({
+      text: "*click* I checked your shell — all good. Want channels next?",
+      modelLabel: "openai/gpt-5.5",
+    }));
+    const planner = vi.fn(async () => null);
+    const engine = new CrestodianChatEngine({
+      runAgentTurn,
+      planWithAssistant: planner,
+      surface: "gateway",
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("how is my setup looking?");
+
+    expect(reply.text).toContain("I checked your shell");
+    expect(planner).not.toHaveBeenCalled();
+    const call = runAgentTurn.mock.calls[0]?.[0] as {
+      input: string;
+      surface: string;
+      session: { sessionId: string };
+    };
+    expect(call.input).toContain("setup looking");
+    expect(call.surface).toBe("gateway");
+    expect(call.session.sessionId).toMatch(/^crestodian-/);
+    // The same session flows into every turn for real multi-turn memory.
+    await engine.handle("and the gateway?");
+    expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({
+      session: { sessionId: call.session.sessionId },
+    });
+  });
+
   it("answers fuzzy messages through the AI custodian with conversation history", async () => {
     const planner = vi.fn(async () => ({
       reply: "I'm your setup custodian. Nothing changes without your yes.",
     }));
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
       planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -162,6 +195,7 @@ describe("CrestodianChatEngine", () => {
       modelLabel: "claude-cli",
     }));
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
       planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -179,6 +213,7 @@ describe("CrestodianChatEngine", () => {
       reply: "A workspace is where your agent keeps its files.",
     }));
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
       planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });
@@ -218,6 +253,7 @@ describe("CrestodianChatEngine", () => {
       } as never);
     });
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
       planWithAssistant: planner as never,
       deps: { runConfigSet: runInvalidConfigSet, loadOverview: fakeOverviewLoader() },
     });
@@ -239,6 +275,7 @@ describe("CrestodianChatEngine", () => {
     const runConfigSet = vi.fn(async () => {});
     const planner = vi.fn(async () => null);
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
       planWithAssistant: planner as never,
       deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
     });
@@ -253,6 +290,7 @@ describe("CrestodianChatEngine", () => {
   it("falls back to deterministic guidance when no model is usable", async () => {
     const planner = vi.fn(async () => null);
     const engine = new CrestodianChatEngine({
+      runAgentTurn: async () => null,
       planWithAssistant: planner,
       deps: { loadOverview: fakeOverviewLoader() },
     });

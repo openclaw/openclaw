@@ -126,6 +126,29 @@ export async function applyCrestodianSetup(
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
+  // The user's explicit setup approval (with the security note shown up
+  // front) is the consent for Crestodian's own agent loop to run local model
+  // harnesses (Codex app-server needs exec). Scope the grant to the
+  // crestodian agent only; regular agents keep the interactive approval flow.
+  try {
+    const { loadExecApprovals, saveExecApprovals } = await import("../infra/exec-approvals.js");
+    const approvals = loadExecApprovals();
+    const existing = approvals.agents?.crestodian;
+    if (!existing) {
+      saveExecApprovals({
+        ...approvals,
+        agents: {
+          ...approvals.agents,
+          crestodian: { security: "full", ask: "off" },
+        },
+      });
+    }
+  } catch (error) {
+    runtime.log(
+      `Could not record Crestodian exec approval (${error instanceof Error ? error.message : String(error)}); local model harnesses may ask again.`,
+    );
+  }
+
   const lines: string[] = [
     `Workspace: ${shortenHomePath(workspace)}`,
     model ? `Default model: ${model}` : undefined,

@@ -1,6 +1,12 @@
 // Crestodian chat engine: transport-agnostic conversation over typed operations.
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
+import {
+  createCrestodianAgentSession,
+  runCrestodianAgentTurn,
+  type CrestodianAgentSession,
+  type CrestodianAgentTurnRunner,
+} from "./agent-turn.js";
 import type { CrestodianAssistantPlanner, CrestodianAssistantTurn } from "./assistant.js";
 import { approvalQuestion, isYes } from "./dialogue.js";
 import {
@@ -30,6 +36,8 @@ export type CrestodianChatEngineOptions = {
   yes?: boolean;
   deps?: CrestodianCommandDeps;
   planWithAssistant?: CrestodianAssistantPlanner;
+  /** Test seam for the embedded agent-loop turn runner. */
+  runAgentTurn?: CrestodianAgentTurnRunner;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
@@ -201,11 +209,13 @@ function formatOperationError(error: unknown): string {
  * freeze the conversation — after this we answer deterministically.
  */
 const ASSISTANT_TURN_DEADLINE_MS = 60_000;
+// Agent-loop turns include tool calls (config writes, doctor); allow longer.
+const AGENT_TURN_DEADLINE_MS = 180_000;
 
-async function withDeadline<T>(work: Promise<T>, fallback: T): Promise<T> {
+async function withDeadline<T>(work: Promise<T>, fallback: T, deadlineMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(fallback), ASSISTANT_TURN_DEADLINE_MS);
+    timer = setTimeout(() => resolve(fallback), deadlineMs);
     timer.unref?.();
   });
   try {
@@ -219,6 +229,7 @@ export class CrestodianChatEngine {
   private pending: CrestodianOperation | null = null;
   private wizardBridge: ActiveWizardBridge | null = null;
   private readonly history: CrestodianAssistantTurn[] = [];
+  private readonly agentSession: CrestodianAgentSession = createCrestodianAgentSession();
 
   constructor(private readonly opts: CrestodianChatEngineOptions = {}) {}
 
@@ -311,6 +322,29 @@ export class CrestodianChatEngine {
    */
   private async resolveAssistantTurn(text: string): Promise<CrestodianChatReply> {
     const overview = await this.loadOverview();
+
+    // Preferred path: the real agent loop (embedded runtime, ring-zero tool,
+    // persistent session). It acts through audited tool calls, so its reply is
+    // final — no engine-side command extraction or approval bookkeeping.
+    const agentTurn = this.opts.runAgentTurn ?? runCrestodianAgentTurn;
+    try {
+      const loopReply = await withDeadline(
+        agentTurn({
+          input: text,
+          overview,
+          surface: this.opts.surface ?? "cli",
+          session: this.agentSession,
+        }).catch(() => null),
+        null,
+        AGENT_TURN_DEADLINE_MS,
+      );
+      if (loopReply?.text) {
+        return { text: loopReply.text, action: "none" };
+      }
+    } catch {
+      // Fall through to the single-turn planner.
+    }
+
     const planner =
       this.opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
     let plan: Awaited<ReturnType<CrestodianAssistantPlanner>> = null;
@@ -325,6 +359,7 @@ export class CrestodianChatEngine {
             : {}),
         }).catch(() => null),
         null,
+        ASSISTANT_TURN_DEADLINE_MS,
       );
     } catch {
       plan = null;
