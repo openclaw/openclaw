@@ -6,6 +6,26 @@ import type { ProviderUsageSnapshot, UsageSummary } from "../infra/provider-usag
 export const CODEX_SYNTHETIC_USAGE_PROVIDER = "openai";
 export const CODEX_SYNTHETIC_USAGE_HOOK_PROVIDER = "codex";
 
+/** Maps a provider auth label onto the usage credential type buckets. */
+export function resolveUsageCredentialType(
+  authLabel?: string,
+): "oauth" | "token" | "api_key" | undefined {
+  const auth = normalizeOptionalLowercaseString(authLabel);
+  if (!auth) {
+    return undefined;
+  }
+  if (auth.startsWith("oauth")) {
+    return "oauth";
+  }
+  if (auth.startsWith("token")) {
+    return "token";
+  }
+  if (auth.startsWith("api-key") || auth.startsWith("api key")) {
+    return "api_key";
+  }
+  return undefined;
+}
+
 export function buildCodexSyntheticUsageAuth(
   params: {
     authProfileId?: string;

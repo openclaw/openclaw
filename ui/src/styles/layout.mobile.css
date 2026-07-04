@@ -694,17 +694,6 @@
     border-radius: var(--radius-md);
   }
 
-  .chat-compose {
-    gap: 8px;
-  }
-
-  .chat-compose__field textarea {
-    min-height: 60px;
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
-  }
-
   .agent-chat__input {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
@@ -857,12 +846,6 @@
 
   .chat-bubble {
     padding: 8px 10px;
-  }
-
-  .chat-compose__field textarea {
-    min-height: 52px;
-    padding: 8px 10px;
-    font-size: 13px;
   }
 
   .btn {

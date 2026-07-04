@@ -98,6 +98,8 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
+  shouldSuggestMemorySystem: vi.fn(async () => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
@@ -337,6 +339,16 @@ vi.mock("../cli/daemon-cli/status.gather.js", () => ({
 vi.mock("../commands/doctor-workspace-status.js", () => ({
   noteWorkspaceStatus: mocks.noteWorkspaceStatus,
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
+}));
+
+vi.mock("../commands/doctor-state-integrity.js", () => ({
+  collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
+  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("../commands/doctor-workspace.js", () => ({
+  MEMORY_SYSTEM_PROMPT: "Enable memory system for better recall.",
+  shouldSuggestMemorySystem: mocks.shouldSuggestMemorySystem,
 }));
 
 vi.mock("../commands/doctor-disk-space.js", () => ({
@@ -1700,6 +1712,46 @@ describe("doctor health contributions", () => {
     });
 
     expect(findings).toEqual([]);
+  });
+
+  it("keeps workspace suggestions opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const workspaceSuggestionsCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/workspace-suggestions",
+    );
+    expect(workspaceSuggestionsCheck).toMatchObject({ defaultEnabled: false });
+    expect(workspaceSuggestionsCheck).toBeDefined();
+    mocks.collectWorkspaceBackupTip.mockReturnValueOnce(
+      "Back up your workspace before major repair work.",
+    );
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [workspaceSuggestionsCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectWorkspaceBackupTip).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/workspace-suggestions"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/workspace-suggestions",
+          severity: "info",
+          message: "Back up your workspace before major repair work.",
+        }),
+      ],
+    });
+    expect(mocks.collectWorkspaceBackupTip).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
   it("keeps disk space opt-in for default lint selection", async () => {

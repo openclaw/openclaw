@@ -40,6 +40,13 @@ import {
   usesClaudeFable5MessagesContract,
 } from "../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+import {
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  applyAnthropicFallbackBoundary,
+  buildAnthropicServerSideFallbacks,
+  readAnthropicFallbackBoundary,
+} from "../shared/anthropic-server-fallback.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
 import { notifyLlmRequestActivity } from "../shared/llm-request-activity.js";
@@ -277,6 +284,15 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
 
 function isKimiAnthropicProvider(provider: string | undefined): boolean {
   return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
+}
+
+/**
+ * Server-side refusal fallback is a first-party Claude API beta: proxies and
+ * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
+ * identity) requests are excluded until the beta is verified there.
+ */
+function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
+  return usesClaudeFable5MessagesContract(model) && isDirectAnthropicModel(model);
 }
 
 function supportsReasoningContentReplay(
@@ -902,6 +918,9 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  if (useAnthropicServerSideFallback(model)) {
+    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
   const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
     client: createAnthropicMessagesClient({
@@ -960,6 +979,12 @@ function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
+  // Fable safety classifiers can decline benign-adjacent work; server-side
+  // fallback re-serves the same call on claude-opus-4-8 instead of failing
+  // the turn. Requires the matching beta header from the transport client.
+  if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
+    params.fallbacks = buildAnthropicServerSideFallbacks();
+  }
   if (isOAuthToken) {
     params.system = [
       {
@@ -1125,6 +1150,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           )
         : undefined;
       const eventSink = refusalBuffer ?? stream;
+      // Fallback-served turns bill at the serving model's rates; a boundary
+      // swaps this to the fallback model's cost table.
+      let costModel = model;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1295,7 +1323,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            calculateCost(costModel, output.usage);
             // Defer start until after message_start so that pre-stream SSE errors
             // (e.g. invalid thinking signatures) arrive before any non-error event
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
@@ -1310,6 +1338,56 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_start") {
             const contentBlock = event.content_block as Record<string, unknown> | undefined;
             const index = typeof event.index === "number" ? event.index : -1;
+            const fallbackBoundary = refusalBuffer
+              ? readAnthropicFallbackBoundary(contentBlock)
+              : null;
+            if (fallbackBoundary) {
+              // Server-side fallback boundary: pre-boundary thinking/tool
+              // blocks must not replay or execute, and the buffered preview
+              // events reference them, so rebuild the deferred timeline from
+              // the surviving text prefix the fallback model continued from.
+              refusalBuffer?.discard();
+              pendingTextEnds.length = 0;
+              blockIndexes.clear();
+              applyAnthropicFallbackBoundary({
+                output,
+                boundary: fallbackBoundary,
+                provider: model.provider,
+              });
+              // Cost intentionally mirrors top-level usage (serving attempt at
+              // serving-model rates). A mid-stream decline's billed partial is
+              // only in usage.iterations and is not folded in here.
+              costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+              calculateCost(costModel, output.usage);
+              eventSink.push({ type: "start", partial: output as never });
+              for (let i = 0; i < output.content.length; i += 1) {
+                const block = output.content[i];
+                if (block.type !== "text") {
+                  continue;
+                }
+                delete block.index;
+                eventSink.push({
+                  type: "text_start",
+                  contentIndex: i,
+                  partial: output as never,
+                });
+                if (block.text) {
+                  eventSink.push({
+                    type: "text_delta",
+                    contentIndex: i,
+                    delta: block.text,
+                    partial: output as never,
+                  });
+                }
+                pendingTextEnds.push({
+                  type: "text_end",
+                  contentIndex: i,
+                  content: block.text,
+                  partial: output as never,
+                });
+              }
+              continue;
+            }
             if (contentBlock?.type === "text") {
               const text =
                 typeof contentBlock.text === "string"
@@ -1595,7 +1673,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            calculateCost(costModel, output.usage);
             // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
             // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
             // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
