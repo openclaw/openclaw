@@ -244,6 +244,37 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("re-enters an in-process-held session lock without self-deadlock when allowReentrant is set (#97747)", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      // The overflow-recovery compaction path already holds the session write
+      // lock when it re-acquires it in-process. Without allowReentrant the
+      // nested acquire waits out the full timeout then throws (the self-deadlock
+      // in #97747). With allowReentrant it must resolve promptly, well inside a
+      // short timeout, and releasing the nested holder must leave the outer
+      // holder's lock in place.
+      const outer = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 30_000,
+        allowReentrant: true,
+      });
+      const nested = await acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: 200,
+        allowReentrant: true,
+      });
+
+      // Releasing the nested holder only decrements the reentrant count; the
+      // outer holder still owns the lock, so a default re-acquire keeps failing
+      // fast instead of the lock being dropped prematurely.
+      await nested.release();
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 5, staleMs: 60_000 }),
+      ).rejects.toThrow(/session file locked/);
+
+      await outer.release();
+    });
+  });
+
   it("does not reenter locks by default through symlinked session paths", async () => {
     await withSymlinkedSessionPaths(async ({ sessionReal, sessionLink }) => {
       const lock = await acquireSessionWriteLock({ sessionFile: sessionReal, timeoutMs: 500 });

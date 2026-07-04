@@ -1224,6 +1224,12 @@ async function compactEmbeddedAgentSessionDirectOnce(
           timeoutMs: compactionTimeoutMs,
         }),
       }),
+      // The overflow-recovery path already holds this session's write lock when
+      // it invokes compaction in-process. Acquire re-entrantly so the nested
+      // acquire does not self-deadlock until the acquire timeout elapses. The
+      // matching release below only decrements the count; the outer holder
+      // keeps the lock. See #97747.
+      allowReentrant: true,
     });
     try {
       await repairSessionFileIfNeeded({
