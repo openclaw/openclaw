@@ -4,6 +4,8 @@ import type {
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 
+type DiagnosticSessionRecoveryReleaseReason = "stale_lane_task";
+
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
@@ -61,6 +63,9 @@ export type StuckSessionRecoveryOutcome =
       status: "released";
       action: "release_lane";
       released: number;
+      reason?: DiagnosticSessionRecoveryReleaseReason;
+      activeCount?: number;
+      queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";
@@ -143,7 +148,10 @@ export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): str
   if ("activeCount" in outcome && outcome.activeCount !== undefined) {
     fields.push(`laneActive=${outcome.activeCount}`);
   }
-  if (outcome.status === "skipped" && outcome.queuedCount !== undefined) {
+  if (
+    (outcome.status === "skipped" || outcome.status === "released") &&
+    outcome.queuedCount !== undefined
+  ) {
     fields.push(`laneQueued=${outcome.queuedCount}`);
   }
   if ("error" in outcome) {
