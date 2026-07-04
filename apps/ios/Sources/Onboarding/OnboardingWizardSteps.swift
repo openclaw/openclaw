@@ -11,58 +11,63 @@ struct OnboardingIntroStep: View {
                 .padding(.bottom, 18)
 
             Text("Welcome to OpenClaw")
-                .font(.largeTitle.weight(.bold))
+                .font(OpenClawType.title1)
+                .foregroundStyle(OpenClawBrand.textPrimary)
                 .multilineTextAlignment(.center)
                 .padding(.bottom, 10)
 
             Text("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.")
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, OpenClawSpacing.space8)
                 .padding(.bottom, 24)
 
             VStack(alignment: .leading, spacing: 14) {
                 Label("Connect to your gateway", systemImage: "link")
+                    .font(OpenClawType.subheadSemiBold)
                 Label("Choose device permissions", systemImage: "hand.raised")
+                    .font(OpenClawType.subheadSemiBold)
                 Label("Use OpenClaw from your phone", systemImage: "message.fill")
+                    .font(OpenClawType.subheadSemiBold)
             }
-            .font(.subheadline.weight(.semibold))
+            .font(OpenClawType.subheadSemiBold)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
             .background {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
+                RoundedRectangle(cornerRadius: OpenClawRadius.xl, style: .continuous)
+                    .fill(OpenClawBrand.slate)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 16)
 
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title3.weight(.semibold))
+                    .font(OpenClawType.title3)
                     .foregroundStyle(OpenClawBrand.warn)
                     .frame(width: 24)
                     .padding(.top, 2)
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Security notice")
-                        .font(.headline)
+                        .font(OpenClawType.headline)
+                        .foregroundStyle(OpenClawBrand.textPrimary)
                     Text(
                         "The connected OpenClaw agent can use device capabilities you enable, "
                             + "such as camera, microphone, photos, contacts, calendar, and location. "
                             + "Continue only if you trust the gateway and agent you connect to.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(OpenClawType.footnote)
+                        .foregroundStyle(OpenClawBrand.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18)
             .background {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
+                RoundedRectangle(cornerRadius: OpenClawRadius.xl, style: .continuous)
+                    .fill(OpenClawBrand.slate)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, OpenClawSpacing.space6)
 
             Spacer()
 
@@ -70,11 +75,11 @@ struct OnboardingIntroStep: View {
                 self.onContinue()
             } label: {
                 Text("Continue")
-                    .frame(maxWidth: .infinity)
+                    .font(OpenClawType.headline)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 24)
+            .font(OpenClawType.headline)
+            .openClawPrimaryButton()
+            .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 48)
         }
     }
@@ -95,34 +100,35 @@ struct OnboardingWelcomeStep: View {
                 .padding(.bottom, 20)
 
             Text("Connect Gateway")
-                .font(.largeTitle.weight(.bold))
+                .font(OpenClawType.title1)
+                .foregroundStyle(OpenClawBrand.textPrimary)
                 .padding(.bottom, 8)
 
             Text("Scan a QR code from your OpenClaw gateway or continue with manual setup.")
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, OpenClawSpacing.space8)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("How to pair")
-                    .font(.headline)
+                    .font(OpenClawType.headline)
                 Text("In your OpenClaw chat, run")
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
                 Text("/pair qr")
-                    .font(.system(.footnote, design: .monospaced).weight(.semibold))
+                    .font(OpenClawType.monoFootnote)
                 Text("Then scan the QR code here to connect this device.")
-                    .font(.footnote)
+                    .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            .padding(OpenClawSpacing.space4)
             .background {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color(uiColor: .secondarySystemBackground))
+                RoundedRectangle(cornerRadius: OpenClawRadius.xl, style: .continuous)
+                    .fill(OpenClawBrand.slate)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.top, 20)
 
             Spacer()
@@ -132,28 +138,28 @@ struct OnboardingWelcomeStep: View {
                     self.onScanQRCode()
                 } label: {
                     Label("Scan QR Code", systemImage: "qrcode")
-                        .frame(maxWidth: .infinity)
+                        .font(OpenClawType.headline)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .font(OpenClawType.headline)
+                .openClawPrimaryButton()
 
                 Button {
                     self.onManualSetup()
                 } label: {
                     Text("Set Up Manually")
-                        .frame(maxWidth: .infinity)
+                        .font(OpenClawType.headline)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+                .font(OpenClawType.headline)
+                .openClawSecondaryButton()
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, OpenClawSpacing.space6)
             .padding(.bottom, 12)
 
             Text(self.statusLine)
-                .font(.footnote)
+                .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, OpenClawSpacing.space6)
                 .padding(.bottom, 48)
         }
     }
@@ -170,9 +176,9 @@ struct OnboardingModeRow: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.title)
-                        .font(.body.weight(.semibold))
+                        .font(OpenClawType.headline)
                     Text(self.subtitle)
-                        .font(.footnote)
+                        .font(OpenClawType.footnote)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -181,6 +187,7 @@ struct OnboardingModeRow: View {
             }
             .contentShape(Rectangle())
         }
+        .font(OpenClawType.subhead)
         .buttonStyle(.plain)
     }
 }

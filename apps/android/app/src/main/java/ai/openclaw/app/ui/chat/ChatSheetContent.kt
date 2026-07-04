@@ -98,6 +98,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
@@ -106,6 +107,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     if (loadSessionKey != null) {
       viewModel.loadChat(loadSessionKey)
     }
+    viewModel.refreshChatCommands()
   }
 
   LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
@@ -188,6 +190,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
+        commands = chatCommands,
         attachments = attachments,
         onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
@@ -196,6 +199,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         onRefresh = {
           viewModel.refreshChat()
           viewModel.refreshChatSessions(limit = 200)
+          viewModel.refreshChatCommands()
         },
         onAbort = { viewModel.abortChat() },
         onSend = { text ->

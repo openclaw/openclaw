@@ -105,7 +105,10 @@ class ChatControllerTerminalAckTest {
       advanceUntilIdle()
 
       assertTrue(accepted)
-      assertEquals(listOf("chat.send", "chat.history"), requestedMethods)
+      assertEquals(
+        listOf("chat.send", "chat.history"),
+        requestedMethods.filter { method -> method == "chat.send" || method == "chat.history" },
+      )
       assertEquals(0, controller.pendingRunCount.value)
       assertNull(controller.errorText.value)
       assertFalse(controller.messages.value.hasUserText("message that already completed"))

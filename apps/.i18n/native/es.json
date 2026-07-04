@@ -764,6 +764,21 @@
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
+      "id": "native.android.d5230e4551045851",
+      "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "El código de configuración usa un ID de zona IPv6. Usa una dirección IPv6 sin ámbito o un nombre de host de LAN."
+    },
+    {
+      "id": "native.android.ca9fc2ce10f4028a",
+      "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "El código QR usa un ID de zona IPv6. Usa una dirección IPv6 sin ámbito o un nombre de host de LAN."
+    },
+    {
+      "id": "native.android.141236601fece71e",
+      "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
+      "translated": "No se admiten los ID de zona IPv6. Usa una dirección IPv6 sin ámbito o un nombre de host de LAN."
+    },
+    {
       "id": "native.android.47e3c19d55f0150b",
       "source": "Setup code has invalid gateway URL.",
       "translated": "El código de configuración tiene una URL de Gateway no válida."
@@ -3139,6 +3154,11 @@
       "translated": "Enviar"
     },
     {
+      "id": "native.android.ff4e568bce360d5f",
+      "source": "No commands found",
+      "translated": "No se encontraron comandos"
+    },
+    {
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "Imagen no disponible"
@@ -3214,6 +3234,11 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "Nuevo chat"
+    },
+    {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "Actualizar chat"
@@ -3274,6 +3299,11 @@
       "translated": "Detener"
     },
     {
+      "id": "native.android.5953c956ff208e6e",
+      "source": "No commands found",
+      "translated": "No se encontraron comandos"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway sin conexión"
@@ -3297,11 +3327,6 @@
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "Eliminar adjunto"
-    },
-    {
-      "id": "native.android.326caa6b92aa9bdf",
-      "source": "New chat",
-      "translated": "Nuevo chat"
     },
     {
       "id": "native.android.5fa853a957713a56",
@@ -4299,6 +4324,16 @@
       "translated": "Editar \\(skill.displayName)"
     },
     {
+      "id": "native.apple.de59fbc2807318fc",
+      "source": "Skill unavailable",
+      "translated": "Skill no disponible"
+    },
+    {
+      "id": "native.apple.2e0b19585f4fec18",
+      "source": "Return to the skills list and choose another skill.",
+      "translated": "Vuelve a la lista de Skills y elige otra Skill."
+    },
+    {
       "id": "native.apple.29d82bdb73f5a551",
       "source": "Skill",
       "translated": "Skill"
@@ -5024,11 +5059,6 @@
       "translated": "Agente predeterminado"
     },
     {
-      "id": "native.apple.0c99715b98ca22a2",
-      "source": "Card",
-      "translated": "Tarjeta"
-    },
-    {
       "id": "native.apple.77a417fa0f2aba1d",
       "source": "Title",
       "translated": "Título"
@@ -5039,9 +5069,9 @@
       "translated": "Estado"
     },
     {
-      "id": "native.apple.68a43a9e8939f395",
-      "source": "Actions",
-      "translated": "Acciones"
+      "id": "native.apple.0c99715b98ca22a2",
+      "source": "Card",
+      "translated": "Tarjeta"
     },
     {
       "id": "native.apple.93eeaedb2ff61043",
@@ -5062,6 +5092,11 @@
       "id": "native.apple.dab3609e8a71ed48",
       "source": "Unarchive",
       "translated": "Desarchivar"
+    },
+    {
+      "id": "native.apple.68a43a9e8939f395",
+      "source": "Actions",
+      "translated": "Acciones"
     },
     {
       "id": "native.apple.07a313e2adf7227b",
@@ -5499,29 +5534,39 @@
       "translated": "\\(diagnosticsIssueCount)"
     },
     {
-      "id": "native.apple.f93745d2550799de",
-      "source": "Location \\(self.locationLabel)",
-      "translated": "Ubicación \\(self.locationLabel)"
-    },
-    {
       "id": "native.apple.acbedcae9f022c29",
       "source": "Location off",
       "translated": "Ubicación desactivada"
     },
     {
-      "id": "native.apple.539d9f2b9cde9cb3",
-      "source": "Off",
-      "translated": "Desactivado"
+      "id": "native.apple.7d31e35d20b78c2d",
+      "source": "Location While Using",
+      "translated": "Ubicación al usar"
     },
     {
-      "id": "native.apple.86a934ca21b05d9c",
-      "source": "While Using",
-      "translated": "Al usar la app"
+      "id": "native.apple.b94b8d4e935c81fb",
+      "source": "Location While Using, effective Off",
+      "translated": "Ubicación al usar, efectivamente desactivada"
     },
     {
-      "id": "native.apple.7774b67d295ea77d",
-      "source": "Always",
-      "translated": "Siempre"
+      "id": "native.apple.6533895b2a1f2b2d",
+      "source": "Location While Using, effective Always",
+      "translated": "Ubicación al usar, efectivamente siempre"
+    },
+    {
+      "id": "native.apple.c3c9d2baa0607380",
+      "source": "Location Always",
+      "translated": "Ubicación siempre"
+    },
+    {
+      "id": "native.apple.10fe695bb1cd3c62",
+      "source": "Location Always, effective While Using",
+      "translated": "Ubicación siempre, efectivamente al usar"
+    },
+    {
+      "id": "native.apple.306454b6d067e1ee",
+      "source": "Location Always, effective Off",
+      "translated": "Ubicación siempre, efectivamente desactivada"
     },
     {
       "id": "native.apple.2829150c12160b55",
@@ -5602,31 +5647,6 @@
       "id": "native.apple.529c06f7f7f6e428",
       "source": "Licenses",
       "translated": "Licencias"
-    },
-    {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.800b6502b5b49941",
-      "source": "Address",
-      "translated": "Dirección"
-    },
-    {
-      "id": "native.apple.fde8b41db7ec49f3",
-      "source": "Server",
-      "translated": "Servidor"
-    },
-    {
-      "id": "native.apple.624f9dc99e8f9ff4",
-      "source": "Discovered",
-      "translated": "Descubierto"
-    },
-    {
-      "id": "native.apple.8e3656d85f092897",
-      "source": "Agents",
-      "translated": "Agentes"
     },
     {
       "id": "native.apple.3c8f5bb5ce507cf9",
@@ -5799,6 +5819,31 @@
       "translated": "OpenClaw agradece a sus socios de la comunidad de código abierto."
     },
     {
+      "id": "native.apple.4b8dfe776225b172",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.800b6502b5b49941",
+      "source": "Address",
+      "translated": "Dirección"
+    },
+    {
+      "id": "native.apple.fde8b41db7ec49f3",
+      "source": "Server",
+      "translated": "Servidor"
+    },
+    {
+      "id": "native.apple.624f9dc99e8f9ff4",
+      "source": "Discovered",
+      "translated": "Descubierto"
+    },
+    {
+      "id": "native.apple.8e3656d85f092897",
+      "source": "Agents",
+      "translated": "Agentes"
+    },
+    {
       "id": "native.apple.0f4e7486619df175",
       "source": "Controls whether location can be shared with gateway tools.",
       "translated": "Controla si la ubicación se puede compartir con las herramientas del Gateway."
@@ -5829,14 +5874,14 @@
       "translated": "Agente predeterminado"
     },
     {
-      "id": "native.apple.bf6ddc5fa4832324",
-      "source": "Agent",
-      "translated": "Agente"
-    },
-    {
       "id": "native.apple.6ace5e6f09ec98c7",
       "source": "Default",
       "translated": "Predeterminado"
+    },
+    {
+      "id": "native.apple.bf6ddc5fa4832324",
+      "source": "Agent",
+      "translated": "Agente"
     },
     {
       "id": "native.apple.3de045f17ea3c6d0",
@@ -6299,14 +6344,14 @@
       "translated": "Detalles"
     },
     {
-      "id": "native.apple.677a41ec947a185b",
-      "source": "Technical details",
-      "translated": "Detalles técnicos"
-    },
-    {
       "id": "native.apple.79b30b1d014a383d",
       "source": "Copy diagnostics",
       "translated": "Copiar diagnóstico"
+    },
+    {
+      "id": "native.apple.677a41ec947a185b",
+      "source": "Technical details",
+      "translated": "Detalles técnicos"
     },
     {
       "id": "native.apple.e87c850114041ce8",
@@ -6464,19 +6509,14 @@
       "translated": "Requiere atención"
     },
     {
-      "id": "native.apple.fd04cd49334845a9",
-      "source": "Request",
-      "translated": "Solicitud"
-    },
-    {
       "id": "native.apple.ae581f232bd0ecc0",
       "source": "Copy request ID",
       "translated": "Copiar ID de solicitud"
     },
     {
-      "id": "native.apple.50622ef698ba07f5",
-      "source": "Gateway command",
-      "translated": "Comando de Gateway"
+      "id": "native.apple.fd04cd49334845a9",
+      "source": "Request",
+      "translated": "Solicitud"
     },
     {
       "id": "native.apple.98df0e8ba486e4d1",
@@ -6484,9 +6524,9 @@
       "translated": "Copiar comando"
     },
     {
-      "id": "native.apple.6b1a61d6c9510bdb",
-      "source": "Help",
-      "translated": "Ayuda"
+      "id": "native.apple.50622ef698ba07f5",
+      "source": "Gateway command",
+      "translated": "Comando de Gateway"
     },
     {
       "id": "native.apple.32ea6ea1f9aea920",
@@ -6494,12 +6534,17 @@
       "translated": "Abrir documentación"
     },
     {
+      "id": "native.apple.6b1a61d6c9510bdb",
+      "source": "Help",
+      "translated": "Ayuda"
+    },
+    {
       "id": "native.apple.7041ebbb775bfdd7",
       "source": "Technical details",
       "translated": "Detalles técnicos"
     },
     {
-      "id": "native.apple.d33a0c45a54fa8a3",
+      "id": "native.apple.f307f967ec2df705",
       "source": "Connection problem",
       "translated": "Problema de conexión"
     },
@@ -6539,7 +6584,7 @@
       "translated": "Aún no se encontraron gateways. Asegúrate de que tu gateway esté en ejecución y de que el descubrimiento Bonjour esté activado."
     },
     {
-      "id": "native.apple.476757fc54c63560",
+      "id": "native.apple.d2445a87f9cb6ff4",
       "source": "Quick Setup",
       "translated": "Configuración rápida"
     },
@@ -6647,6 +6692,111 @@
       "id": "native.apple.2275552c26460945",
       "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
       "translated": "OpenClaw usa el reconocimiento de voz en el dispositivo para el modo de conversación y la activación por voz."
+    },
+    {
+      "id": "native.apple.cf0450b542893fb5",
+      "source": "Off",
+      "translated": "Desactivada"
+    },
+    {
+      "id": "native.apple.c470d02f26ac51f6",
+      "source": "While Using",
+      "translated": "Al usar"
+    },
+    {
+      "id": "native.apple.663b3e453bb47c07",
+      "source": "Always",
+      "translated": "Siempre"
+    },
+    {
+      "id": "native.apple.2dc593065171c201",
+      "source": "Location sharing is disabled in OpenClaw. Location Services are off in iOS Settings.",
+      "translated": "El uso compartido de la ubicación está desactivado en OpenClaw. Los servicios de ubicación están desactivados en los ajustes de iOS."
+    },
+    {
+      "id": "native.apple.1dc990a9cc0500c5",
+      "source": "Location sharing is disabled in OpenClaw. iOS currently allows Always.",
+      "translated": "El uso compartido de la ubicación está desactivado en OpenClaw. iOS permite actualmente Siempre."
+    },
+    {
+      "id": "native.apple.9a4e858d2b218d41",
+      "source": "Location sharing is disabled in OpenClaw. iOS currently allows While Using.",
+      "translated": "El uso compartido de la ubicación está desactivado en OpenClaw. iOS permite actualmente Al usar."
+    },
+    {
+      "id": "native.apple.ab481eb11214797f",
+      "source": "Location sharing is disabled.",
+      "translated": "El uso compartido de la ubicación está desactivado."
+    },
+    {
+      "id": "native.apple.34699b6a26b51110",
+      "source": "Location Services are off in iOS Settings.",
+      "translated": "Los servicios de ubicación están desactivados en los ajustes de iOS."
+    },
+    {
+      "id": "native.apple.3b96b639e7442ee3",
+      "source": "Foreground location requests are allowed. Precise Location is on.",
+      "translated": "Se permiten las solicitudes de ubicación en primer plano. La ubicación precisa está activada."
+    },
+    {
+      "id": "native.apple.9e537e22f834f4d5",
+      "source": "Foreground location requests are allowed. Precise Location is off.",
+      "translated": "Se permiten las solicitudes de ubicación en primer plano. La ubicación precisa está desactivada."
+    },
+    {
+      "id": "native.apple.3241d6de1ab6b340",
+      "source": "Foreground location requests are allowed.",
+      "translated": "Se permiten las solicitudes de ubicación en primer plano."
+    },
+    {
+      "id": "native.apple.7b16935cf96c6ee3",
+      "source": "Background location requests and significant-change updates are allowed. Precise Location is on.",
+      "translated": "Se permiten las solicitudes de ubicación en segundo plano y las actualizaciones de cambios significativos. La ubicación precisa está activada."
+    },
+    {
+      "id": "native.apple.b1503179f7e1058d",
+      "source": "Background location requests and significant-change updates are allowed. Precise Location is off.",
+      "translated": "Se permiten las solicitudes de ubicación en segundo plano y las actualizaciones de cambios significativos. La ubicación precisa está desactivada."
+    },
+    {
+      "id": "native.apple.6f63c4f93b7a9ab5",
+      "source": "Background location requests and significant-change updates are allowed.",
+      "translated": "Se permiten las solicitudes de ubicación en segundo plano y las actualizaciones de cambios significativos."
+    },
+    {
+      "id": "native.apple.95a6772115ad8b63",
+      "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is on.",
+      "translated": "Siempre está seleccionado, pero actualmente iOS permite la ubicación solo mientras se usa la app. Ubicación precisa está activada."
+    },
+    {
+      "id": "native.apple.8ab7fd180dc593f6",
+      "source": "Always is selected, but iOS currently allows location only while using the app. Precise Location is off.",
+      "translated": "Siempre está seleccionado, pero actualmente iOS permite la ubicación solo mientras se usa la app. Ubicación precisa está desactivada."
+    },
+    {
+      "id": "native.apple.15bc589594491413",
+      "source": "Always is selected, but iOS currently allows location only while using the app.",
+      "translated": "Siempre está seleccionado, pero actualmente iOS permite la ubicación solo mientras se usa la app."
+    },
+    {
+      "id": "native.apple.30ce7ced43a0a752",
+      "source": "Location permission is denied in iOS Settings.",
+      "translated": "El permiso de ubicación está denegado en Ajustes de iOS."
+    },
+    {
+      "id": "native.apple.0de03d90e4280432",
+      "source": "Location permission is restricted on this device.",
+      "translated": "El permiso de ubicación está restringido en este dispositivo."
+    },
+    {
+      "id": "native.apple.0d0506a7417e7d92",
+      "source": "Choose a location mode to request iOS permission.",
+      "translated": "Elige un modo de ubicación para solicitar el permiso de iOS."
+    },
+    {
+      "id": "native.apple.633f011b81108a8c",
+      "source": "OpenClaw cannot determine the current iOS location permission.",
+      "translated": "OpenClaw no puede determinar el permiso de ubicación actual de iOS."
     },
     {
       "id": "native.apple.0d030e96f7738497",
@@ -6839,7 +6989,7 @@
       "translated": "Aceptar"
     },
     {
-      "id": "native.apple.a5fe3de8fc43f3da",
+      "id": "native.apple.80a2693bba128a6c",
       "source": "Scan QR Code",
       "translated": "Escanear código QR"
     },
@@ -6919,11 +7069,6 @@
       "translated": "Volver a la selección de modo"
     },
     {
-      "id": "native.apple.07ebd3b75969629f",
-      "source": "Discovered Gateways",
-      "translated": "Gateways descubiertos"
-    },
-    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "Aún no se encontraron gateways."
@@ -6937,6 +7082,11 @@
       "id": "native.apple.94c9697fb748d05d",
       "source": "Restart Discovery",
       "translated": "Reiniciar detección"
+    },
+    {
+      "id": "native.apple.07ebd3b75969629f",
+      "source": "Discovered Gateways",
+      "translated": "Gateways descubiertos"
     },
     {
       "id": "native.apple.1284354b0d0098ad",
@@ -7254,11 +7404,6 @@
       "translated": "Conexión"
     },
     {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "Privacidad y acceso"
-    },
-    {
       "id": "native.apple.4dac301c7e0c921c",
       "source": "Contacts",
       "translated": "Contactos"
@@ -7302,6 +7447,11 @@
       "id": "native.apple.d6fd5e9f85b0e298",
       "source": "List, add, and complete reminders.",
       "translated": "Enumera, añade y completa recordatorios."
+    },
+    {
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "Privacidad y acceso"
     },
     {
       "id": "native.apple.651cc89381dd69c0",

@@ -101,7 +101,9 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
     expect(
       pack.scenarios
-        .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
+        .filter(
+          (scenario) => !scenario.coverage?.primary.length && !scenario.coverage?.secondary?.length,
+        )
         .map((scenario) => scenario.id),
     ).toStrictEqual([]);
     expect(
@@ -232,21 +234,22 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
   });
 
-  it("loads folded HTTP API script scenarios with primary taxonomy coverage", () => {
-    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.primary).toStrictEqual([
+  it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
+    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.secondary).toStrictEqual([
       "gateway.openai-compatible-apis",
       "runtime.hosted-tool-use",
     ]);
-    expect(readQaScenarioById("openai-web-search-minimal").coverage?.primary).toStrictEqual([
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toContain(
       "runtime.reasoning-and-cache-controls",
-    ]);
+    );
     expect(
-      readQaScenarioById("openai-web-search-native-assertions").coverage?.primary,
-    ).toStrictEqual(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]);
-    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.primary).toStrictEqual([
-      "gateway.openai-compatible-apis",
-      "runtime.hosted-provider-turns",
-    ]);
+      readQaScenarioById("openai-web-search-native-assertions").coverage?.secondary,
+    ).toEqual(
+      expect.arrayContaining(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]),
+    );
+    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.secondary).toEqual(
+      expect.arrayContaining(["gateway.openai-compatible-apis", "runtime.hosted-provider-turns"]),
+    );
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {

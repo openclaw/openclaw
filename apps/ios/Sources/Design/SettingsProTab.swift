@@ -51,6 +51,12 @@ struct SettingsProTab: View {
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var locationPermissionSummary = LocationPermissionSummary(
+        desiredMode: .off,
+        locationServicesEnabled: true,
+        authorizationStatus: .notDetermined,
+        accuracyAuthorization: .fullAccuracy)
+    @State var locationPermissionRefreshID = 0
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
     @State var notificationStatus: SettingsNotificationStatus = .checking
     @State var isRequestingNotificationAuthorization = false
@@ -113,6 +119,7 @@ struct SettingsProTab: View {
             self.gatewaySection
             self.settingsListSection
         }
+        .font(OpenClawType.body)
         .listStyle(.insetGrouped)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.large)
@@ -210,9 +217,16 @@ struct SettingsProTab: View {
                         .ignoresSafeArea()
                         .navigationTitle("Scan QR Code")
                         .navigationBarTitleDisplayMode(.inline)
+                        .font(OpenClawType.body)
                         .toolbar {
                             ToolbarItem(placement: .topBarLeading) {
-                                Button("Cancel") { self.showQRScanner = false }
+                                Button {
+                                    self.showQRScanner = false
+                                } label: {
+                                    Text("Cancel")
+                                        .font(OpenClawType.subheadSemiBold)
+                                }
+                                .font(OpenClawType.subheadSemiBold)
                             }
                         }
                 }
@@ -223,12 +237,19 @@ struct SettingsProTab: View {
                     onContinue: self.requestNotificationAuthorizationFromSettings)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
-                Button("Reset", role: .destructive) {
+                Button(role: .destructive) {
                     self.resetOnboarding()
+                } label: {
+                    Text("Reset")
+                        .font(OpenClawType.subheadSemiBold)
                 }
-                Button("Cancel", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("Cancel")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text("This disconnects, clears saved gateway credentials, and reopens onboarding.")
+                    .font(OpenClawType.subhead)
             }
             .alert(
                 "QR Scanner Unavailable",
@@ -236,9 +257,13 @@ struct SettingsProTab: View {
                     get: { self.scannerError != nil },
                     set: { if !$0 { self.scannerError = nil } }))
             {
-                Button("OK", role: .cancel) {}
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.subheadSemiBold)
+                }
             } message: {
                 Text(self.scannerError ?? "")
+                    .font(OpenClawType.subhead)
             }
     }
 
@@ -279,26 +304,32 @@ struct HostedPushRelayDisclosureSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "network")
-                        .font(.title2.weight(.semibold))
+                        .font(OpenClawType.title2SemiBold)
                         .foregroundStyle(OpenClawBrand.accentForeground)
                     Text("Enable OpenClaw Hosted Push Relay?")
-                        .font(.title3.weight(.semibold))
+                        .font(OpenClawType.title3SemiBold)
                     Text(self.message)
-                        .font(.body)
+                        .font(OpenClawType.body)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .font(OpenClawType.body)
             }
             VStack(spacing: 10) {
                 Button {
                     self.dismiss()
                     self.onContinue()
                 } label: {
-                    Text("Continue").frame(maxWidth: .infinity)
+                    Text("Continue")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Not Now", role: .cancel) {
+                Button(role: .cancel) {
                     self.dismiss()
+                } label: {
+                    Text("Not Now")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .buttonStyle(.bordered)
                 .frame(maxWidth: .infinity)

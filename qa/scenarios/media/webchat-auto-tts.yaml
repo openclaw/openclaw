@@ -5,7 +5,7 @@ scenario:
   surface: media-understanding-and-media-generation
   category: media-understanding-and-media-generation.text-to-speech-delivery
   coverage:
-    primary:
+    secondary:
       - media.tts
       - media.outbound-voice-audio-delivery
   objective: Verify WebChat auto-TTS synthesizes only the final reply tail and exposes trusted local audio blocks for browser delivery.

@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectNativeI18nEntries,
+  isConditionalBranchIdentifier,
   NATIVE_I18N_LOCALES,
   parseNativeI18nCommand,
   syncNativeLocale,
@@ -11,6 +12,14 @@ import {
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 describe("native app i18n inventory", () => {
+  it("detects conditional branch identifiers without regex backtracking", () => {
+    expect(isConditionalBranchIdentifier("isEnabled")).toBe(true);
+    expect(isConditionalBranchIdentifier("hasFA2Enabled")).toBe(true);
+    expect(isConditionalBranchIdentifier("abc123A")).toBe(false);
+    expect(isConditionalBranchIdentifier("already_lowercase")).toBe(false);
+    expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));

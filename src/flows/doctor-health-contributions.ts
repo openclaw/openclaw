@@ -980,7 +980,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function hasActiveGatewayExecCredential(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "cfg">,
   mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
 ): Promise<boolean> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
@@ -1444,6 +1444,40 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-dependencies",
+      label: "Legacy plugin dependencies",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-dependencies",
+        description: "Legacy plugin dependency state roots are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const {
+            detectLegacyPluginDependencyStateIssues,
+            legacyPluginDependencyStateIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
+          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
+            legacyPluginDependencyStateIssueToHealthFinding,
+          );
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:stale-plugin-runtime-symlinks",
+      label: "Stale plugin runtime symlinks",
+      healthChecks: {
+        id: "core/doctor/stale-plugin-runtime-symlinks",
+        description: "Stale plugin-runtime symlinks are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { collectStalePluginRuntimeSymlinkHealthFindings } =
+            await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+          return await collectStalePluginRuntimeSymlinkHealthFindings();
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
       healthChecks: {
@@ -1699,7 +1733,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
       label: "Legacy cron",
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab"],
+      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution({
@@ -1881,6 +1915,33 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      healthChecks: {
+        id: "core/doctor/whatsapp-responsiveness",
+        description:
+          "WhatsApp responsiveness pressure from degraded Gateway and local TUI clients.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectWhatsappResponsivenessHealthFindings } =
+            await import("../commands/doctor-whatsapp-responsiveness.js");
+          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          if (
+            !(
+              (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
+              ctx.allowExecSecretRefs !== true
+            )
+          ) {
+            const { callGateway } = await import("../gateway/call.js");
+            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+              method: "status",
+              params: { includeChannelSummary: false },
+              timeoutMs: 3000,
+              config: ctx.cfg,
+              deviceIdentity: null,
+            }).catch(() => undefined);
+          }
+          return collectWhatsappResponsivenessHealthFindings({ cfg: ctx.cfg, status });
+        },
+      },
       run: runWhatsappResponsivenessHealth,
     }),
     createDoctorHealthContribution({

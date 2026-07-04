@@ -2466,6 +2466,7 @@ async function runAgentTurnWithFallbackInternal(
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                    cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,

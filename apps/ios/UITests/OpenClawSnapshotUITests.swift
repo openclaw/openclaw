@@ -54,6 +54,65 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
+    func testLocationAlwaysWaitsForSlowSystemPermissionResponse() throws {
+        XCUIApplication().resetAuthorizationStatus(for: .location)
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "location-always-slow-prompt"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let offMode = try XCTUnwrap(self.app?.buttons["Off"])
+        if !offMode.isSelected {
+            offMode.tap()
+            XCTAssertTrue(offMode.isSelected)
+        }
+        let alwaysMode = try XCTUnwrap(self.app?.buttons["Always"])
+        XCTAssertTrue(alwaysMode.waitForExistence(timeout: 5))
+        alwaysMode.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let prompt = springboard.alerts.firstMatch
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(prompt.exists)
+        XCTAssertTrue(alwaysMode.isSelected)
+        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+        self.attachFullScreenScreenshot(named: "location-always-first-prompt-after-3s")
+
+        let firstAllow = prompt.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'While Using'")).firstMatch
+        XCTAssertTrue(firstAllow.exists)
+        firstAllow.tap()
+
+        if prompt.waitForExistence(timeout: 5) {
+            Thread.sleep(forTimeInterval: 3)
+            XCTAssertTrue(prompt.exists)
+            XCTAssertTrue(alwaysMode.isSelected)
+            XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+            self.attachFullScreenScreenshot(named: "location-always-upgrade-prompt-after-3s")
+
+            let changeToAlways = prompt.buttons.matching(
+                NSPredicate(format: "label CONTAINS[c] 'Change to Always'")).firstMatch
+            XCTAssertTrue(changeToAlways.exists)
+            changeToAlways.tap()
+        }
+
+        self.app?.activate()
+        XCTAssertTrue(alwaysMode.waitForExistence(timeout: 5))
+        XCTAssertTrue(alwaysMode.isSelected)
+        XCTAssertFalse(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+        let backgroundAllowed = try XCTUnwrap(self.app?.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Background location requests")).firstMatch)
+        XCTAssertTrue(backgroundAllowed.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        self.attachScreenshot(named: "location-always-granted-after-slow-prompt")
+    }
+
     func testSettingsBackReturnsToOriginatingPhoneTab() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone settings navigation only")
 
@@ -628,6 +687,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
     private func attachScreenshot(named name: String) {
         guard let app else { return }
         let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private func attachFullScreenScreenshot(named name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)

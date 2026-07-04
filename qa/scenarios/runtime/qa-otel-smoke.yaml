@@ -4,9 +4,8 @@ scenario:
   id: qa-otel-smoke
   surface: telemetry
   coverage:
-    primary:
-      - telemetry.otel
     secondary:
+      - telemetry.otel
       - harness.qa-lab
       - telemetry.plugin-sdk-runtime-exports
   objective: Exercise bounded local OTLP capture and OpenTelemetry smoke assertions through QA Lab evidence.

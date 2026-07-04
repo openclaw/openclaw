@@ -5,7 +5,7 @@ scenario:
   surface: automation-cron-hooks-tasks-polling
   category: automation-cron-hooks-tasks-polling.heartbeat
   coverage:
-    primary:
+    secondary:
       - automation.active-hours
       - automation.heartbeat-scheduling
   objective: Link active-hours heartbeat scheduler e2e coverage to automation maturity accounting.

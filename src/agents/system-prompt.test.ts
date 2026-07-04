@@ -174,6 +174,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain('reply with exactly "NO_REPLY"');
   });
 
+  it("keeps source delivery guidance mode-neutral when silent replies are suppressed", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      silentReplyPromptMode: "none",
+      runtimeInfo: {
+        channel: "telegram",
+      },
+    });
+
+    expect(prompt).toContain("final text normally routes to the source channel");
+    expect(prompt).toContain("Follow current-turn delivery context");
+    expect(prompt).not.toContain(
+      "Do not use `message(action=send)` to deliver the current source-channel reply",
+    );
+  });
+
   it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
     // Isolated cron sessions use promptMode="minimal" but still need skills.
     const skillsPrompt =
@@ -1050,7 +1067,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(plainTelegramPrompt).toContain("enable Telegram rich messages for this channel/account");
   });
 
-  it("describes Telegram rich text for automatic final replies without the message tool", () => {
+  it("describes Telegram rich text for source replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
@@ -1059,7 +1076,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Reply in current session → automatically routes");
+    expect(prompt).toContain("final text normally routes to the source channel");
+    expect(prompt).toContain("if current-turn context says final text stays private");
     expect(prompt).toContain("Telegram rich text is available");
     expect(prompt).toContain("headings, tables");
     expect(prompt).not.toContain("### message tool");
