@@ -875,6 +875,9 @@ struct RootTabsSourceGuardTests {
         #expect(trustSource.contains("let isEnabled: Bool"))
         #expect(rootSource.contains(".gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)"))
         #expect(onboardingSource.contains(".gatewayTrustPromptAlert()"))
+        #expect(onboardingSource.contains("self.applyPendingGatewaySetupLinkIfNeeded()"))
+        #expect(onboardingSource.contains(".onChange(of: self.appModel.gatewaySetupRequestID)"))
+        #expect(onboardingSource.contains("self.appModel.consumePendingGatewaySetupLink()"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
     }

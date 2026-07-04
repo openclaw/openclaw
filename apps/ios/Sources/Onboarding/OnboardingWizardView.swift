@@ -219,6 +219,7 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
+                self.applyPendingGatewaySetupLinkIfNeeded()
                 self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
             }
             .onDisappear {
@@ -258,6 +259,9 @@ struct OnboardingWizardView: View {
             }
             .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
                 self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
+            }
+            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+                self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 guard newValue != nil else { return }
@@ -852,6 +856,15 @@ extension OnboardingWizardView {
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
         Task { await self.connectManual() }
+    }
+
+    private func applyPendingGatewaySetupLinkIfNeeded() {
+        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
+        self.showQRScanner = false
+        self.pendingScannerResult = nil
+        self.pendingScannerResultTask?.cancel()
+        self.pendingScannerResultTask = nil
+        self.handleScannedLink(link)
     }
 
     private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
