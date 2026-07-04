@@ -92,6 +92,11 @@ export type StateIntegrityHealthIssue =
       storage: string;
     }
   | {
+      kind: "windows-cloud-state-dir";
+      path: string;
+      storage: string;
+    }
+  | {
       kind: "linux-sd-state-dir";
       path: string;
       mountPoint: string;
@@ -459,6 +464,20 @@ function isPathUnderRootWithPathOps(
   );
 }
 
+function isWindowsPathUnderRoot(targetPath: string, rootPath: string): boolean {
+  const winPath = path.win32;
+  const normalizedTarget = winPath.resolve(targetPath).toLowerCase();
+  const normalizedRoot = winPath.resolve(rootPath).toLowerCase();
+  const rootToken = winPath.parse(normalizedRoot).root;
+  if (normalizedRoot === rootToken) {
+    return normalizedTarget.startsWith(rootToken);
+  }
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}${winPath.sep}`)
+  );
+}
+
 function findLinuxMountInfoEntryForPath(
   targetPath: string,
   entries: LinuxMountInfoEntry[],
@@ -633,6 +652,75 @@ export function formatLinuxVolatileStateDirWarning(
   ].join("\n");
 }
 
+type WindowsCloudSyncedStorage = "OneDrive" | "Dropbox" | "Google Drive" | "iCloud Drive";
+
+function windowsCloudStorageFromHomeChild(name: string): WindowsCloudSyncedStorage | null {
+  const normalized = name.trim().toLowerCase();
+  if (normalized === "onedrive" || normalized.startsWith("onedrive - ")) {
+    return "OneDrive";
+  }
+  if (normalized === "dropbox" || normalized.startsWith("dropbox ")) {
+    return "Dropbox";
+  }
+  if (normalized === "google drive" || normalized === "my drive") {
+    return "Google Drive";
+  }
+  if (normalized === "iclouddrive" || normalized === "icloud drive") {
+    return "iCloud Drive";
+  }
+  return null;
+}
+
+/** Detects Windows state directories under common cloud-synced storage roots. */
+export function detectWindowsCloudSyncedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    homedir?: string;
+    env?: NodeJS.ProcessEnv;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): {
+  path: string;
+  storage: WindowsCloudSyncedStorage;
+} | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "win32") {
+    return null;
+  }
+
+  const winPath = path.win32;
+  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
+  // Prefer the resolved target when available so a synced symlink/reparse-point
+  // prefix does not misclassify local state dirs as cloud-synced.
+  const candidate = winPath.resolve(realPath ?? stateDir);
+  const env = deps?.env ?? process.env;
+  const oneDriveRoots = [
+    env.OneDrive,
+    env.OneDriveConsumer,
+    env.OneDriveCommercial,
+    env.ONEDRIVE,
+  ].flatMap((value) => {
+    const trimmed = value?.trim();
+    return trimmed ? [trimmed] : [];
+  });
+  for (const root of oneDriveRoots) {
+    if (isWindowsPathUnderRoot(candidate, root)) {
+      return { path: candidate, storage: "OneDrive" };
+    }
+  }
+
+  const homedir = deps?.homedir ?? os.homedir();
+  const homeRoot = winPath.resolve(homedir);
+  const relativeToHome = winPath.relative(homeRoot, candidate);
+  if (!relativeToHome || relativeToHome.startsWith("..") || winPath.isAbsolute(relativeToHome)) {
+    return null;
+  }
+  const [firstSegment] = relativeToHome.split(/[\\/]+/);
+  const storage = firstSegment ? windowsCloudStorageFromHomeChild(firstSegment) : null;
+  return storage ? { path: candidate, storage } : null;
+}
+
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
 export function detectMacCloudSyncedStateDir(
   stateDir: string,
@@ -785,6 +873,15 @@ export function detectStateIntegrityHealthIssues(
     });
   }
 
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
+  if (windowsCloudSyncedStateDir) {
+    issues.push({
+      kind: "windows-cloud-state-dir",
+      path: windowsCloudSyncedStateDir.path,
+      storage: windowsCloudSyncedStateDir.storage,
+    });
+  }
+
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   if (linuxSdBackedStateDir) {
     issues.push({
@@ -888,6 +985,15 @@ export function stateIntegrityIssueToHealthFinding(
         path: issue.path,
         fixHint: "Move OPENCLAW_STATE_DIR to local non-synced storage such as ~/.openclaw.",
       };
+    case "windows-cloud-state-dir":
+      return {
+        checkId: STATE_INTEGRITY_CHECK_ID,
+        severity: "warning",
+        message: `State directory is under Windows cloud-synced storage (${issue.storage}), which can cause slow I/O and sync races.`,
+        path: issue.path,
+        fixHint:
+          "Move OPENCLAW_STATE_DIR to a local non-synced path such as %USERPROFILE%\\.openclaw.",
+      };
     case "linux-sd-state-dir":
       return {
         checkId: STATE_INTEGRITY_CHECK_ID,
@@ -968,6 +1074,7 @@ export function stateIntegrityIssueToRepairEffect(
 ): HealthRepairEffect {
   switch (issue.kind) {
     case "mac-cloud-state-dir":
+    case "windows-cloud-state-dir":
     case "linux-sd-state-dir":
     case "linux-volatile-state-dir":
       return {
@@ -1048,6 +1155,7 @@ export async function noteStateIntegrity(
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
   const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
@@ -1059,6 +1167,16 @@ export async function noteStateIntegrity(
         "- This can cause slow I/O and sync/lock races for sessions and credentials.",
         "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
         `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
+      ].join("\n"),
+    );
+  }
+  if (windowsCloudSyncedStateDir) {
+    warnings.push(
+      [
+        `- State directory is under Windows cloud-synced storage (${displayStateDir}; ${windowsCloudSyncedStateDir.storage}).`,
+        "- This can cause slow I/O and sync/lock races for sessions and credentials.",
+        "- Prefer a local non-synced state dir (for example: %USERPROFILE%\\.openclaw).",
+        `  Set locally: $env:OPENCLAW_STATE_DIR="$env:USERPROFILE\\.openclaw"; ${formatCliCommand("openclaw doctor")}`,
       ].join("\n"),
     );
   }

@@ -14,6 +14,7 @@ const commandsLightEntries = [
     source: "src/commands/doctor-gateway-auth-token.ts",
     test: "src/commands/doctor-gateway-auth-token.test.ts",
   },
+  { test: "src/commands/doctor-state-integrity.cloud-storage.test.ts" },
   {
     source: "src/commands/doctor/shared/channel-plugin-blockers.ts",
     test: "src/commands/doctor/shared/channel-plugin-blockers.test.ts",
