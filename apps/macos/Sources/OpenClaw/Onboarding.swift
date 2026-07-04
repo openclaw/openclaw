@@ -171,10 +171,10 @@ struct OnboardingView: View {
         self.activePageIndex == self.cliPageIndex && !self.cliInstalled
     }
 
-    // Local onboarding must not finish with nothing configured: the Crestodian
-    // page blocks Next until setup authored the config (the conversation's
-    // "yes"), mirroring the old wizard-completion gate. "Configure later" on
-    // the connection page remains the explicit skip path.
+    /// Local onboarding must not finish with nothing configured: the Crestodian
+    /// page blocks Next until setup authored the config (the conversation's
+    /// "yes"), mirroring the old wizard-completion gate. "Configure later" on
+    /// the connection page remains the explicit skip path.
     var isCrestodianBlocking: Bool {
         self.activePageIndex == self.crestodianPageIndex &&
             self.state.connectionMode == .local &&

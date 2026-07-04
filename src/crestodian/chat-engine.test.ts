@@ -157,7 +157,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("I checked your shell");
     expect(planner).not.toHaveBeenCalled();
-    const call = runAgentTurn.mock.calls[0]![0];
+    const call = runAgentTurn.mock.calls[0][0];
     expect(call.input).toContain("setup looking");
     expect(call.surface).toBe("gateway");
     // A question is not consent: mutations stay locked for this turn.
@@ -187,7 +187,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("setup custodian");
     expect(reply.action).toBe("none");
-    const call = planner.mock.calls[0]![0];
+    const call = planner.mock.calls[0][0];
     expect(call.input).toContain("machine");
     expect(call.history?.[0]).toEqual({ role: "assistant", text: "welcome text" });
   });
@@ -227,7 +227,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("agent keeps its files");
     expect(engine.hasPendingProposal()).toBe(true);
-    const call = planner.mock.calls[0]![0];
+    const call = planner.mock.calls[0][0];
     expect(call.pendingOperation).toContain("gateway.port");
   });
 

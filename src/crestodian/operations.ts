@@ -467,7 +467,7 @@ function readConfigValueAtPath(config: unknown, path: string): { found: boolean;
   let current: unknown = config;
   for (const rawSegment of path.split(".")) {
     // Support foo[0] style array segments alongside dotted keys.
-    const parts = rawSegment.split(/[\[\]]/).filter(Boolean);
+    const parts = rawSegment.split(/[[\]]/).filter(Boolean);
     for (const part of parts) {
       if (current === null || typeof current !== "object") {
         return { found: false };

@@ -353,23 +353,18 @@ export class CrestodianChatEngine {
 
     const planner =
       this.opts.planWithAssistant ?? (await import("./assistant.js")).planCrestodianCommand;
-    let plan: Awaited<ReturnType<CrestodianAssistantPlanner>> = null;
-    try {
-      plan = await withDeadline(
-        planner({
-          input: text,
-          overview,
-          history: this.history,
-          ...(this.pending
-            ? { pendingOperation: describeCrestodianPersistentOperation(this.pending) }
-            : {}),
-        }).catch(() => null),
-        null,
-        ASSISTANT_TURN_DEADLINE_MS,
-      );
-    } catch {
-      plan = null;
-    }
+    const plan: Awaited<ReturnType<CrestodianAssistantPlanner>> = await withDeadline(
+      planner({
+        input: text,
+        overview,
+        history: this.history,
+        ...(this.pending
+          ? { pendingOperation: describeCrestodianPersistentOperation(this.pending) }
+          : {}),
+      }).catch(() => null),
+      null,
+      ASSISTANT_TURN_DEADLINE_MS,
+    ).catch(() => null);
     if (!plan) {
       return {
         text: [
@@ -462,7 +457,7 @@ export class CrestodianChatEngine {
    * caught and fixed in the same chat instead of surfacing at gateway start.
    */
   private async verifyConfigAfterWrite(): Promise<string | null> {
-    let issuesText: string | null = null;
+    let issuesText: string;
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
