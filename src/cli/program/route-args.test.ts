@@ -177,14 +177,17 @@ describe("route-args", () => {
       parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit=all"])
         ?.limit,
     ).toBe("all");
-    // route-first invalid values => undefined
+    // route-first invalid values => null (defer to Commander for error message)
     expect(
-      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--active", "abc"])
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--active", "abc"]),
+    ).toBeNull();
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit", "0"]),
+    ).toBeNull();
+    // route-first active value is unset (flag not present) => undefined
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit=all"])
         ?.active,
-    ).toBeUndefined();
-    expect(
-      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit", "0"])
-        ?.limit,
     ).toBeUndefined();
     expect(
       parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),

@@ -156,18 +156,30 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!limit.ok) {
     return null;
   }
-  const parsedActive =
-    active.value !== undefined ? parseStrictPositiveIntOrUndefined(active.value) : undefined;
-  const parsedLimit = ((): number | "all" | undefined => {
-    if (limit.value === undefined) {
-      return undefined;
+  // Bail out when a flag value is present but unparseable so Commander
+  // takes over and emits a proper error message instead of silently
+  // treating a bad value as an omitted filter.
+  let parsedActive: number | undefined;
+  if (active.value !== undefined) {
+    const parsed = parseStrictPositiveIntOrUndefined(active.value);
+    if (parsed === undefined) {
+      return null;
     }
+    parsedActive = parsed;
+  }
+  let parsedLimit: number | "all" | undefined;
+  if (limit.value !== undefined) {
     const trimmed = limit.value.trim();
     if (trimmed.toLowerCase() === "all") {
-      return "all";
+      parsedLimit = "all";
+    } else {
+      const parsed = parseStrictPositiveIntOrUndefined(trimmed);
+      if (parsed === undefined) {
+        return null;
+      }
+      parsedLimit = parsed;
     }
-    return parseStrictPositiveIntOrUndefined(trimmed) ?? undefined;
-  })();
+  }
   return {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
