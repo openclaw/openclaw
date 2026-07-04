@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   recordClaudeThreadTurnSummary,
+  THREAD_STACK_MAX,
   writeClaudeAppServerBinding,
 } from "./app-server/thread-store.js";
 import { createClaudeCommand, handleClaudeCommand } from "./commands.js";
@@ -151,5 +152,75 @@ describe("/claude threads + resume against a real binding sidecar", () => {
     expect(after.text).toContain("`thr_new`");
     expect(after.text).toContain("claude-sonnet-4-6");
     expect(after.text).toContain("on-request");
+  });
+
+  it("resume: pushes the thread being switched away from onto the back-stack", async () => {
+    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_a", cwd: dir });
+    const result = await handleClaudeCommand(makeCtx({ args: "resume thr_b", sessionFile }));
+    expect(result.text).toContain("`thr_a` pushed onto the back-stack");
+    const after = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
+    expect(after.text).toContain("Back-stack: 1 thread(s)");
+  });
+
+  it("resume: does not push when resuming to the thread already bound (no-op switch)", async () => {
+    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_a", cwd: dir });
+    const result = await handleClaudeCommand(makeCtx({ args: "resume thr_a", sessionFile }));
+    expect(result.text).not.toContain("pushed onto the back-stack");
+    const after = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
+    expect(after.text).not.toContain("Back-stack");
+  });
+
+  it("thread-pop: reports nothing to pop when the stack is empty", async () => {
+    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_a", cwd: dir });
+    const result = await handleClaudeCommand(makeCtx({ args: "thread-pop", sessionFile }));
+    expect(result.text).toContain("No previous thread on the back-stack");
+  });
+
+  it("thread-pop: reports missing session when no sessionFile is bound", async () => {
+    const result = await handleClaudeCommand(makeCtx({ args: "thread-pop" }));
+    expect(result.text).toContain("No session file is bound");
+  });
+
+  it("thread-pop: rotates back to the previous thread, LIFO across multiple switches", async () => {
+    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_a", cwd: dir });
+    await handleClaudeCommand(makeCtx({ args: "resume thr_b", sessionFile })); // stack: [a]
+    await handleClaudeCommand(makeCtx({ args: "resume thr_c", sessionFile })); // stack: [a, b]
+
+    const pop1 = await handleClaudeCommand(makeCtx({ args: "thread-pop", sessionFile }));
+    expect(pop1.text).toContain("Popped back to thread `thr_b`");
+    expect(pop1.text).toContain("(1 more on the back-stack.)");
+
+    const pop2 = await handleClaudeCommand(makeCtx({ args: "thread-pop", sessionFile }));
+    expect(pop2.text).toContain("Popped back to thread `thr_a`");
+    expect(pop2.text).toContain("(0 more on the back-stack.)");
+
+    const pop3 = await handleClaudeCommand(makeCtx({ args: "thread-pop", sessionFile }));
+    expect(pop3.text).toContain("No previous thread on the back-stack");
+  });
+
+  it("resume: caps the back-stack at THREAD_STACK_MAX, dropping the oldest entries", async () => {
+    await writeClaudeAppServerBinding(sessionFile, { threadId: "thr_0", cwd: dir });
+    for (let i = 1; i <= THREAD_STACK_MAX + 2; i += 1) {
+      await handleClaudeCommand(makeCtx({ args: `resume thr_${i}`, sessionFile }));
+    }
+    const after = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
+    expect(after.text).toContain(`Back-stack: ${THREAD_STACK_MAX} thread(s)`);
+    // Popping now should bring back the most recent pre-cap switch (thr_{THREAD_STACK_MAX+1}),
+    // not thr_0, which was dropped for being the oldest.
+    const pop = await handleClaudeCommand(makeCtx({ args: "thread-pop", sessionFile }));
+    expect(pop.text).toContain(`Popped back to thread \`thr_${THREAD_STACK_MAX + 1}\``);
+  });
+
+  it("thread-pop: preserves other binding fields when rotating back", async () => {
+    await writeClaudeAppServerBinding(sessionFile, {
+      threadId: "thr_a",
+      cwd: dir,
+      model: "claude-sonnet-4-6",
+    });
+    await handleClaudeCommand(makeCtx({ args: "resume thr_b", sessionFile }));
+    await handleClaudeCommand(makeCtx({ args: "thread-pop", sessionFile }));
+    const after = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
+    expect(after.text).toContain("`thr_a`");
+    expect(after.text).toContain("claude-sonnet-4-6");
   });
 });

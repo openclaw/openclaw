@@ -11,6 +11,7 @@ import { peekSharedClaudeAppServerClient } from "./app-server/client.js";
 import { resolveManagedClaudeBridgeVersion } from "./app-server/managed-binary.js";
 import {
   readClaudeAppServerBinding,
+  THREAD_STACK_MAX,
   writeClaudeAppServerBinding,
   type ClaudeAppServerBinding,
 } from "./app-server/thread-store.js";
@@ -29,6 +30,7 @@ export function handleHelp(): PluginCommandResult {
       "  `threads`            list the active session's claude thread binding",
       "  `conversations`      list this agent's other real conversations with a bound Claude/GLM thread",
       "  `resume <thread_id>` rotate the active session's binding to a specific thread",
+      "  `thread-pop`         rotate back to the thread you last switched away from via resume",
       "",
       "Example: `/claude status`",
     ].join("\n"),
@@ -265,8 +267,17 @@ export async function handleResume(
   }
   const existing = await safeReadBinding(sessionFile);
   const now = Date.now();
+  // Push the thread we're switching AWAY from onto the back-stack, so
+  // `/claude thread-pop` can bring the user back without needing to already
+  // know the id. Only push a real switch (skip if resuming to the same
+  // thread, or if there was no prior thread to leave behind).
+  const pushedFrom =
+    existing?.threadId && existing.threadId !== targetThreadId ? existing.threadId : undefined;
+  const threadStack = pushedFrom
+    ? [...(existing?.threadStack ?? []), pushedFrom].slice(-THREAD_STACK_MAX)
+    : existing?.threadStack;
   const next: ClaudeAppServerBinding = existing
-    ? { ...existing, threadId: targetThreadId, updatedAt: now }
+    ? { ...existing, threadId: targetThreadId, threadStack, updatedAt: now }
     : {
         schemaVersion: 1,
         threadId: targetThreadId,
@@ -276,7 +287,36 @@ export async function handleResume(
       };
   await writeClaudeAppServerBinding(sessionFile, next);
   return {
-    text: `**/claude resume**\n\nRebound session to thread \`${targetThreadId}\`. Next turn will issue \`thread/resume\` instead of \`thread/start\`.`,
+    text: `**/claude resume**\n\nRebound session to thread \`${targetThreadId}\`. Next turn will issue \`thread/resume\` instead of \`thread/start\`.${pushedFrom ? ` (\`${pushedFrom}\` pushed onto the back-stack — \`/claude thread-pop\` returns to it.)` : ""}`,
+  };
+}
+
+export async function handleThreadPop(ctx: PluginCommandContext): Promise<PluginCommandResult> {
+  const sessionFile = ctx.sessionFile;
+  if (!sessionFile) {
+    return {
+      text: "**/claude thread-pop**\n\nNo session file is bound to this invocation; run from an active agent session.",
+    };
+  }
+  const existing = await safeReadBinding(sessionFile);
+  const stack = existing?.threadStack ?? [];
+  if (stack.length === 0) {
+    return {
+      text: "**/claude thread-pop**\n\nNo previous thread on the back-stack — nothing to pop back to. The stack only grows when you switch away from a thread with `/claude resume`.",
+    };
+  }
+  const poppedThreadId = stack[stack.length - 1];
+  const remainingStack = stack.slice(0, -1);
+  const now = Date.now();
+  const next: ClaudeAppServerBinding = {
+    ...(existing as ClaudeAppServerBinding),
+    threadId: poppedThreadId as string,
+    threadStack: remainingStack,
+    updatedAt: now,
+  };
+  await writeClaudeAppServerBinding(sessionFile, next);
+  return {
+    text: `**/claude thread-pop**\n\nPopped back to thread \`${poppedThreadId}\`. Next turn will issue \`thread/resume\` instead of \`thread/start\`. (${remainingStack.length} more on the back-stack.)`,
   };
 }
 
@@ -320,6 +360,11 @@ function formatBinding(sessionFile: string, b: ClaudeAppServerBinding): string {
   }
   if (b.lastAssistantPreview) {
     lines.push(`- Last reply: ${b.lastAssistantPreview}`);
+  }
+  if (b.threadStack && b.threadStack.length > 0) {
+    lines.push(
+      `- Back-stack: ${b.threadStack.length} thread(s) (\`/claude thread-pop\` to return)`,
+    );
   }
   lines.push(`- Updated: ${new Date(b.updatedAt).toISOString()}`);
   return lines.join("\n");
