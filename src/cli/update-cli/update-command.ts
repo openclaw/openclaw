@@ -3584,6 +3584,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   let packageInstallEnv: NodeJS.ProcessEnv | undefined;
   let packageInstallCwd: string | undefined;
   let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
+  let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
   // Resolved independently of the root redirect so it covers the common case
@@ -3641,6 +3642,7 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     packageInstallEnv = await createGlobalInstallEnv();
     packageInstallCwd = tryResolveInvocationCwd();
     if (updateInstallKind === "package") {
+      installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({
         root,
         installKind,
@@ -3653,18 +3655,17 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
         pkgRoot: root,
         honorPackageRoot:
           managedServiceRootRedirect !== null || managedServiceNodeRunner !== undefined,
+        packageName: installedPackageName,
       });
     }
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
     if (channel === "extended-stable") {
-      const packageName =
-        (await readPackageName(packageInstallTarget?.packageRoot ?? root)) ?? DEFAULT_PACKAGE_NAME;
       const extendedStable = await resolveExtendedStablePackage({
         installKind: updateInstallKind,
         timeoutMs,
-        packageName,
+        packageName: installedPackageName,
       });
       if (extendedStable.status === "failed") {
         await reportPreMutationUpdateFailure({

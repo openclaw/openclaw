@@ -1681,13 +1681,14 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         durationMs: Date.now() - startedAt,
       };
     }
+    const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     const installTarget = await resolveGlobalInstallTarget({
       manager: globalManager,
       runCommand,
       timeoutMs,
       pkgRoot,
+      packageName,
     });
-    const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
       packageName,
