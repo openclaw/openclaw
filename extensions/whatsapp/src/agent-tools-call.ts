@@ -1,6 +1,5 @@
 // WhatsApp plugin tool places requester-bound calls through the MeowCaller companion CLI.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
@@ -13,6 +12,7 @@ import type {
 import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { Type } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
@@ -280,7 +280,9 @@ function createWhatsAppCallToolWithDependencies(
         }
         const pcm = normalizeTelephonyPcm(speech.audioBuffer, speech.outputFormat);
         const callWindowMs = resolveCallWindowMs(pcm.length, speech.sampleRate);
-        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-call-"));
+        const tempDir = await fs.mkdtemp(
+          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-call-"),
+        );
         const audioPath = path.join(tempDir, "message.wav");
         try {
           await fs.writeFile(audioPath, wrapPcm16MonoInWav(pcm, speech.sampleRate), {

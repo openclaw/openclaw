@@ -1005,6 +1005,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Install (on demand)
   - H2: Quick setup
+  - H2: Call the current requester with MeowCaller (experimental)
   - H2: Deployment patterns
   - H2: Runtime model
   - H2: Approval prompts
