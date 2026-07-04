@@ -116,9 +116,12 @@ export function nodeVersionSatisfiesEngine(
   }
 
   const rangeMatch = engine?.match(DISJUNCTIVE_ENGINE_RE);
-  const parsed = parseSemver(version);
-  if (!rangeMatch || !parsed) {
+  if (!rangeMatch) {
     return null;
+  }
+  const parsed = parseSemver(version);
+  if (!parsed) {
+    return false;
   }
   const [, firstMinimumRaw, upperMajorRaw, upperMinorRaw, upperPatchRaw, secondMinimumRaw] =
     rangeMatch;

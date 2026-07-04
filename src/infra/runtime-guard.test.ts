@@ -84,6 +84,8 @@ describe("runtime-guard", () => {
     expect(nodeVersionSatisfiesEngine("23.10.9", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine("24.0.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
 
   it("throws via exit when runtime is too old", () => {
