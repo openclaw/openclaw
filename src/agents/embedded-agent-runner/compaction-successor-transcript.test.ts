@@ -20,6 +20,7 @@ async function createTmpDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     tmpDir = undefined;
@@ -85,6 +86,19 @@ function requireEntryByType<T extends TranscriptEntry["type"]>(
     throw new Error(`expected ${label}`);
   }
   return entry as Extract<TranscriptEntry, { type: T }>;
+}
+
+function readUserTexts(entries: readonly TranscriptEntry[]): string[] {
+  return entries
+    .filter((entry) => entry.type === "message" && entry.message.role === "user")
+    .map((entry) => {
+      if (entry.type !== "message" || entry.message.role !== "user") {
+        return "";
+      }
+      return typeof entry.message.content === "string"
+        ? entry.message.content
+        : JSON.stringify(entry.message.content);
+    });
 }
 
 function createCompactedSession(sessionDir: string): {
@@ -183,6 +197,78 @@ describe("rotateTranscriptAfterCompaction", () => {
         content: [{ type: "text", text: "post assistant" }],
         timestamp: 6,
       },
+    ]);
+  });
+
+  it("rotates a long file-backed transcript without rereading compacted history", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    for (let index = 0; index < 900; index += 1) {
+      manager.appendMessage({
+        role: "user",
+        content: `historical prompt ${index} ${"x".repeat(900)}`,
+        timestamp: index * 2 + 1,
+      });
+      manager.appendMessage(
+        makeAssistant(`historical answer ${index} ${"y".repeat(900)}`, index * 2 + 2),
+      );
+    }
+
+    manager.appendModelChange("anthropic", "claude-opus-4-8");
+    manager.appendThinkingLevelChange("medium");
+    manager.appendMessage({ role: "user", content: "pre kept request", timestamp: 5_000 });
+    manager.appendMessage(makeAssistant("preserved assistant before kept tail", 5_001));
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept deployment prompt",
+      timestamp: 5_002,
+    });
+    manager.appendLabelChange(firstKeptId, "kept bookmark");
+    manager.appendMessage(makeAssistant("kept deployment answer", 5_003));
+    manager.appendCompaction("Summary of the long historical transcript.", firstKeptId, 200_000);
+    manager.appendMessage({
+      role: "user",
+      content: "post compaction followup",
+      timestamp: 5_004,
+    });
+    manager.appendMessage(makeAssistant("post compaction answer", 5_005));
+
+    const sessionFile = requireString(manager.getSessionFile(), "source session file");
+    const sourcePath = path.resolve(sessionFile);
+    const sourceBytes = (await fs.stat(sourcePath)).size;
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    const result = await rotateTranscriptFileAfterCompaction({
+      sessionFile: sourcePath,
+      now: () => new Date("2026-07-04T16:30:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    expect(sourceBytes).toBeGreaterThan(1024 * 1024);
+    expect(readFileSpy.mock.calls.some(([file]) => path.resolve(String(file)) === sourcePath)).toBe(
+      false,
+    );
+    const successor = SessionManager.open(requireString(result.sessionFile, "successor file"));
+    const successorEntries = successor.getEntries();
+    const serializedSuccessor = JSON.stringify(successorEntries);
+    expect(serializedSuccessor).toContain("Summary of the long historical transcript.");
+    expect(serializedSuccessor).toContain("preserved assistant before kept tail");
+    expect(serializedSuccessor).toContain("kept deployment prompt");
+    expect(serializedSuccessor).toContain("post compaction followup");
+    expect(serializedSuccessor).not.toContain("historical prompt 100");
+    expect(readUserTexts(successorEntries)).toEqual([
+      "kept deployment prompt",
+      "post compaction followup",
+    ]);
+    expect(successor.getLabel(firstKeptId)).toBe("kept bookmark");
+    expect(successor.buildSessionContext().messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
     ]);
   });
 

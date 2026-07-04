@@ -43,6 +43,11 @@ type TranscriptLeafControlEntry = {
 
 export type TranscriptPersistedEntry = SessionEntry | TranscriptLeafControlEntry;
 
+const SUCCESSOR_ROTATION_HEAD_BYTES = 32 * 1024;
+const SUCCESSOR_ROTATION_TAIL_BYTES = 512 * 1024;
+const SUCCESSOR_ROTATION_SMALL_FILE_BYTES =
+  SUCCESSOR_ROTATION_HEAD_BYTES + SUCCESSOR_ROTATION_TAIL_BYTES;
+
 const sessionEntryTypes = new Set<string>([
   "branch_summary",
   "compaction",
@@ -936,6 +941,84 @@ export class TranscriptFileState {
 export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
   const raw = await fs.readFile(sessionFile, "utf-8");
   const fileEntries = (parseSessionEntries(raw) as unknown[]).map(fileEntryOrMigrationSlot);
+  return buildTranscriptFileState(fileEntries);
+}
+
+/** Read only the transcript slices needed to attempt successor rotation. */
+export async function readTranscriptFileStateForSuccessorRotation(
+  sessionFile: string,
+): Promise<TranscriptFileState> {
+  const partialEntries = await readSuccessorRotationFileEntries(sessionFile);
+  if (!partialEntries) {
+    return readTranscriptFileState(sessionFile);
+  }
+  return buildTranscriptFileState(partialEntries);
+}
+
+async function readSuccessorRotationFileEntries(sessionFile: string): Promise<FileEntry[] | null> {
+  const handle = await fs.open(sessionFile, "r");
+  try {
+    const { size } = await handle.stat();
+    if (size <= SUCCESSOR_ROTATION_SMALL_FILE_BYTES) {
+      return null;
+    }
+
+    const headBytes = Math.min(size, SUCCESSOR_ROTATION_HEAD_BYTES);
+    const headBuffer = Buffer.allocUnsafe(headBytes);
+    const headRead = await handle.read(headBuffer, 0, headBytes, 0);
+    const headRecords = parseCompleteJsonlRecords(
+      headBuffer.toString("utf-8", 0, headRead.bytesRead),
+      { dropLeadingPartial: false, dropTrailingPartial: headRead.bytesRead < size },
+    );
+    const header = headRecords.find((entry) => entry.type === "session");
+    if (!header) {
+      return null;
+    }
+
+    const tailStart = Math.max(0, size - SUCCESSOR_ROTATION_TAIL_BYTES);
+    if (tailStart <= headRead.bytesRead) {
+      return null;
+    }
+    const tailBytes = size - tailStart;
+    const tailBuffer = Buffer.allocUnsafe(tailBytes);
+    const tailRead = await handle.read(tailBuffer, 0, tailBytes, tailStart);
+    const tailRecords = parseCompleteJsonlRecords(
+      tailBuffer.toString("utf-8", 0, tailRead.bytesRead),
+      { dropLeadingPartial: tailStart > 0, dropTrailingPartial: false },
+    );
+
+    return [header, ...tailRecords].map(fileEntryOrMigrationSlot);
+  } finally {
+    await handle.close();
+  }
+}
+
+function parseCompleteJsonlRecords(
+  raw: string,
+  options: { dropLeadingPartial: boolean; dropTrailingPartial: boolean },
+): Record<string, unknown>[] {
+  const lines = raw.split("\n");
+  if (options.dropLeadingPartial) {
+    lines.shift();
+  }
+  if (options.dropTrailingPartial) {
+    lines.pop();
+  }
+  const records: unknown[] = [];
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      continue;
+    }
+  }
+  return records.filter(isRecord);
+}
+
+function buildTranscriptFileState(fileEntries: FileEntry[]): TranscriptFileState {
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const headerVersionBeforeMigration = sessionHeaderVersion(headerBeforeMigration);
