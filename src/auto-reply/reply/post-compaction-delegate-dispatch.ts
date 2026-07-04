@@ -737,7 +737,11 @@ export async function deliverQueuedPostCompactionDelegate(
     },
   );
   if (spawnResult.status !== "accepted") {
-    if (spawnResult.status === "forbidden") {
+    if (
+      spawnResult.status === "forbidden" &&
+      params.entry.sourceFlowId &&
+      params.entry.sourceExpectedRevision !== undefined
+    ) {
       failSourceBackedPostCompactionDelivery(
         deps,
         params.entry,

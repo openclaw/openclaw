@@ -1095,6 +1095,23 @@ describe("post-compaction delegate dispatch extraction", () => {
 
       expect(transient.markPendingDelegateFailed).not.toHaveBeenCalled();
       expect(transient.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
+
+      const nonSourceForbidden = createDeliveryDeps({
+        storePath,
+        spawnStatus: "forbidden",
+      });
+
+      await expect(
+        deliverQueuedPostCompactionDelegate(
+          {
+            entry: createQueuedEntry(),
+          },
+          nonSourceForbidden.deps,
+        ),
+      ).rejects.toThrow("post-compaction delegate spawn forbidden");
+
+      expect(nonSourceForbidden.markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(nonSourceForbidden.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
     });
   });
 
