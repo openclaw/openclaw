@@ -134,6 +134,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  compareSessionRowsByUpdatedAt,
   createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
@@ -186,11 +187,13 @@ import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.t
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canArchiveSessionRow,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiConfiguredMainKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
@@ -560,7 +563,7 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         !isActiveSidebarSessionRow(state, row.key) &&
         (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .toSorted(compareSessionRowsByUpdatedAt)
     .slice(0, 9);
 }
 
@@ -576,21 +579,23 @@ function isActiveSidebarSessionRow(state: AppViewState, rowKey: string): boolean
 // open chat from every tab.
 function renderSidebarChatFallbackRow(state: AppViewState) {
   return html`
-    <a
-      href=${pathForTab("chat", state.basePath)}
+    <div
       class="sidebar-recent-session ${state.tab === "chat" ? "sidebar-recent-session--active" : ""}"
-      @click=${(event: MouseEvent) => {
-        if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
-          return;
-        }
-        event.preventDefault();
-        state.setTab("chat" as import("./navigation.ts").Tab);
-      }}
     >
-      <span class="sidebar-recent-session__body">
+      <a
+        href=${pathForTab("chat", state.basePath)}
+        class="sidebar-recent-session__link"
+        @click=${(event: MouseEvent) => {
+          if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
+            return;
+          }
+          event.preventDefault();
+          state.setTab("chat" as import("./navigation.ts").Tab);
+        }}
+      >
         <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
-      </span>
-    </a>
+      </a>
+    </div>
   `;
 }
 
@@ -740,34 +745,75 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
   const label = resolveSessionDisplayName(row.key, row);
   const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "";
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
+  const pinned = row.pinned === true;
+  const running = row.hasActiveRun === true;
+  const controlsDisabled = !state.connected || !state.client;
+  const archiveAllowed = canArchiveSessionRow(row, resolveUiConfiguredMainKey(state));
+  const rowClass = [
+    "sidebar-recent-session",
+    "session-row-host",
+    active ? "sidebar-recent-session--active" : "",
+    pinned ? "session-row-host--pinned" : "",
+    running ? "session-row-host--running" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`
-    <a
-      href=${href}
-      class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
-      data-session-key=${row.key}
-      title=${`${label} · ${row.key}`}
-      @click=${(event: MouseEvent) => {
-        if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
-          return;
-        }
-        event.preventDefault();
-        if (!isActiveSidebarSessionRow(state, row.key)) {
-          switchChatSession(state, row.key);
-        }
-        state.setTab("chat" as import("./navigation.ts").Tab);
-      }}
-    >
-      <span class="sidebar-recent-session__body">
+    <div class=${rowClass} data-session-key=${row.key}>
+      <a
+        href=${href}
+        class="sidebar-recent-session__link"
+        title=${`${label} · ${row.key}`}
+        @click=${(event: MouseEvent) => {
+          if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
+            return;
+          }
+          event.preventDefault();
+          if (!isActiveSidebarSessionRow(state, row.key)) {
+            switchChatSession(state, row.key);
+          }
+          state.setTab("chat" as import("./navigation.ts").Tab);
+        }}
+      >
         <span class="sidebar-recent-session__name">${label}</span>
-        ${meta ? html`<span class="sidebar-recent-session__meta">${meta}</span>` : nothing}
+      </a>
+      <span class="sidebar-recent-session__aside session-row-aside">
+        <span class="session-row-trail">
+          ${running
+            ? html`<span
+                class="session-run-spinner"
+                role="img"
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
+              ></span>`
+            : meta}
+        </span>
+        <span class="session-row-actions">
+          <button
+            class="session-action"
+            data-sidebar-session-archive="true"
+            type="button"
+            title=${t("sessionsView.archiveSession")}
+            aria-label=${t("sessionsView.archiveSession")}
+            ?disabled=${controlsDisabled || !archiveAllowed}
+            @click=${() => void patchSessionFromSessionsView(state, row.key, { archived: true })}
+          >
+            ${icons.archive}
+          </button>
+          <button
+            class="session-action session-action--pin"
+            data-sidebar-session-pin="true"
+            type="button"
+            title=${pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+            aria-label=${pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}
+            ?disabled=${controlsDisabled}
+            @click=${() => void patchSessionFromSessionsView(state, row.key, { pinned: !pinned })}
+          >
+            ${icons.pin}
+          </button>
+        </span>
       </span>
-      ${row.hasActiveRun
-        ? html`<span
-            class="sidebar-recent-session__live"
-            aria-label=${t("sessions.sessionDetails.activeRun")}
-          ></span>`
-        : nothing}
-    </a>
+    </div>
   `;
 }
 

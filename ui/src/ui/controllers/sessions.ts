@@ -473,7 +473,9 @@ function appendSessionsResult(
   };
 }
 
-function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+// Pinned sessions float above recency everywhere a session list renders
+// (sessions view, chat picker, sidebar recents); keep this the only sort.
+export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
   const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
   if (pinnedDiff !== 0) {
     return pinnedDiff;

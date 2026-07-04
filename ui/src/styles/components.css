@@ -6686,3 +6686,143 @@ details[open] > .ov-expandable-toggle::after {
     gap: 4px;
   }
 }
+
+/* ── Session row primitives ──
+   Shared by the sidebar recents list and the chat session picker. Rows read
+   as plain text lines: the trailing aside stacks a relative time (or the run
+   spinner) and the management actions in one grid cell, so hovering swaps
+   them without any layout shift. The pin action doubles as the pinned badge
+   and stays visible for pinned rows even without hover. */
+.session-row-host {
+  position: relative;
+}
+
+.session-row-aside {
+  display: grid;
+  align-items: center;
+  justify-items: end;
+  flex: 0 0 auto;
+}
+
+.session-row-aside > * {
+  grid-area: 1 / 1;
+}
+
+.session-row-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: opacity var(--duration-fast) ease;
+  /* Display-only, and its opacity transition forms a stacking context that
+     would otherwise sit above the action buttons and swallow their clicks. */
+  pointer-events: none;
+}
+
+.session-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.session-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.session-action svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
+  color: var(--text);
+}
+
+.session-action:disabled {
+  cursor: not-allowed;
+}
+
+.session-row-host:hover .session-action,
+.session-row-host:focus-within .session-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Disabled actions still surface on hover (dimmed) so the tooltip can
+   explain why archiving is unavailable instead of the button vanishing. */
+.session-row-host:hover .session-action:disabled,
+.session-row-host:focus-within .session-action:disabled {
+  opacity: 0.35;
+  pointer-events: auto;
+}
+
+.session-row-host:hover .session-row-trail,
+.session-row-host:focus-within .session-row-trail {
+  opacity: 0;
+}
+
+/* Pinned badge: accent pin visible without hover. A live run wins the
+   trailing slot, so the badge only holds it while the session is idle;
+   both indicators share one grid cell and would overlap otherwise. */
+.session-row-host--pinned .session-action--pin {
+  color: var(--accent);
+}
+
+.session-row-host--pinned:not(.session-row-host--running) .session-action--pin {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.session-row-host--pinned:not(.session-row-host--running) .session-row-trail {
+  opacity: 0;
+}
+
+.session-run-spinner {
+  box-sizing: border-box;
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full);
+  animation: session-run-spin 0.8s linear infinite;
+}
+
+@keyframes session-run-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-run-spinner {
+    animation: none;
+    border-color: var(--accent);
+  }
+}

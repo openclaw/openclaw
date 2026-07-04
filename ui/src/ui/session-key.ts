@@ -217,6 +217,23 @@ export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | nu
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
 }
 
+// Archive policy shared by the chat picker, sidebar recents, and Sessions
+// table: agent main sessions must stay reachable, live runs must finish
+// first, and global/unknown scopes are not archivable conversation threads.
+export function canArchiveSessionRow(
+  row: { key: string; kind?: string; hasActiveRun?: boolean },
+  configuredMainKey: string,
+): boolean {
+  if (row.hasActiveRun === true || row.kind === "global" || row.kind === "unknown") {
+    return false;
+  }
+  const isMainSession =
+    row.key === "main" ||
+    normalizeLowercaseStringOrEmpty(parseAgentSessionKey(row.key)?.rest) ===
+      normalizeMainKey(configuredMainKey);
+  return !isMainSession;
+}
+
 export function isSessionKeyTiedToAgent(
   sessionKey: string | undefined | null,
   agentId: string,

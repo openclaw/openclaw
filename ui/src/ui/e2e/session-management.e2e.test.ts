@@ -1,7 +1,7 @@
-// Control UI tests cover session management through the chat picker.
+// Control UI tests cover session management through the sidebar and chat picker.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -25,7 +25,7 @@ function sessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: { pinned?: boolean; pinnedAt?: number } = {},
+  options: { pinned?: boolean; pinnedAt?: number; hasActiveRun?: boolean; status?: string } = {},
 ) {
   return {
     contextTokens: null,
@@ -88,6 +88,19 @@ async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
+function actionOpacity(button: Locator): Promise<string> {
+  return button.evaluate((element) => globalThis.getComputedStyle(element).opacity);
+}
+
+async function captureUiProof(page: Page, fileName: string) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "thread-management");
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
+}
+
 describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -104,7 +117,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("renames, pins, and archives sessions through the chat picker", async () => {
+  it("manages sessions through the sidebar and chat picker", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
       locale: "en-US",
@@ -120,6 +133,10 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             pinned: true,
             pinnedAt: baseTime - 30_000,
           }),
+          sessionRow("agent:main:migration", "Data migration", baseTime - 90_000, {
+            hasActiveRun: true,
+            status: "running",
+          }),
           sessionRow("agent:main:research", "Research notes", baseTime - 120_000),
         ]),
         "sessions.patch": {},
@@ -129,6 +146,30 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+
+      // Sidebar recents: pinned first, live-run spinner, hover-revealed actions.
+      const sidebarRows = page.locator(".sidebar-recent-sessions__list .sidebar-recent-session");
+      await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => sidebarRows.first().textContent()).toContain("Release planning");
+      const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
+      await expect
+        .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
+        .toBe(true);
+
+      const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
+      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
+      await page.mouse.move(900, 500);
+      await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
+      const sidebarReleasePin = sidebarRows
+        .filter({ hasText: "Release planning" })
+        .getByRole("button", { name: "Unpin session" });
+      // Pinned badge stays visible without hover.
+      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      await sidebarResearch.hover();
+      await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
+      await captureUiProof(page, "sidebar-sessions.png");
+
+      // Chat picker: single-line rows with hover-revealed management actions.
       await page.getByRole("button", { name: "Search sessions" }).click();
       const releaseRow = page
         .locator(".chat-session-picker__option-row")
@@ -136,25 +177,30 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await releaseRow.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => releaseRow.getByRole("button").count()).toBe(3);
 
+      const migrationRow = page
+        .locator(".chat-session-picker__option-row")
+        .filter({ hasText: "Data migration" });
+      await expect.poll(() => migrationRow.locator(".session-run-spinner").isVisible()).toBe(true);
+
       const mainRow = page.locator(".chat-session-picker__option-row").filter({ hasText: "Main" });
       await expect
         .poll(() => mainRow.getByRole("button", { name: "Archive session" }).isDisabled())
         .toBe(true);
 
-      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const artifactDir = path.join(
-          process.cwd(),
-          ".artifacts",
-          "control-ui-e2e",
-          "thread-management",
-        );
-        await mkdir(artifactDir, { recursive: true });
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "chat-session-management.png"),
-        });
-      }
+      const researchRow = page
+        .locator(".chat-session-picker__option-row")
+        .filter({ hasText: "Research notes" });
+      const researchArchive = researchRow.getByRole("button", { name: "Archive session" });
+      await page.mouse.move(900, 500);
+      await expect.poll(() => actionOpacity(researchArchive)).toBe("0");
+      await expect
+        .poll(() => actionOpacity(releaseRow.getByRole("button", { name: "Unpin session" })))
+        .toBe("1");
+      await researchRow.hover();
+      await expect.poll(() => actionOpacity(researchArchive)).toBe("1");
+      await captureUiProof(page, "chat-session-management.png");
 
+      await releaseRow.hover();
       await releaseRow.getByRole("button", { name: "Unpin session" }).click();
       const pinPatch = await waitForPatch(
         gateway,
@@ -166,6 +212,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
 
       page.once("dialog", (dialog) => dialog.accept("Launch plan"));
+      await releaseRow.hover();
       await releaseRow.getByRole("button", { name: "Rename session" }).click();
       const renamePatch = await waitForPatch(
         gateway,
@@ -176,10 +223,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         label: "Launch plan",
       });
 
-      const researchRow = page
-        .locator(".chat-session-picker__option-row")
-        .filter({ hasText: "Research notes" });
-      await researchRow.getByRole("button", { name: "Archive session" }).click();
+      await researchRow.hover();
+      await researchArchive.click();
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
