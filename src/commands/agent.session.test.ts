@@ -213,7 +213,7 @@ describe("agent session resolution", () => {
   it("rotates endedAt-only terminal main sessions whose transcript is newer than the registry", async () => {
     const scenarios = [
       { label: "endedAt-only main", mainKey: "main", sessionKey: "agent:main:main" },
-    ];
+    ] as const;
     for (const scenario of scenarios) {
       await withTempHome(async (home) => {
         const store = path.join(home, "sessions.json");
@@ -232,7 +232,6 @@ describe("agent session resolution", () => {
             sessionId,
             sessionFile,
             updatedAt: registryUpdatedAt,
-            ...(scenario.status ? { status: scenario.status } : {}),
             sessionStartedAt: registryUpdatedAt - 60_000,
             lastInteractionAt: registryUpdatedAt - 30_000,
             startedAt: registryUpdatedAt - 1_000,
