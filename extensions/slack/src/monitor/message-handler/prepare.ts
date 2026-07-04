@@ -1387,7 +1387,9 @@ export async function prepareSlackMessage(params: {
   }
 
   if (shouldLogVerbose()) {
-    logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);
+    logVerbose(
+      `slack inbound: account=${route.accountId} agent=${route.agentId} channel=${message.channel} message_ts=${message.ts ?? "unknown"} thread_ts=${effectiveMessageThreadId ?? "none"} from=${slackFrom} chat=${chatType} chars=${rawBody.length}`,
+    );
   }
 
   const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({ route, sessionKey });
