@@ -164,7 +164,8 @@ describe("runCapability video provider wiring", () => {
                   {
                     id: "moonshot",
                     capabilities: ["video"],
-                    describeVideo: async () => ({ text: "moonshot", model: "kimi-k2.5" }),
+                    defaultModels: { video: "kimi-k2.5" },
+                    describeVideo: async (req) => ({ text: "moonshot", model: req.model }),
                   },
                 ],
               ]),
@@ -177,6 +178,63 @@ describe("runCapability video provider wiring", () => {
           });
         },
       );
+    });
+  });
+
+  it("uses the provider video default when the active provider has no model", async () => {
+    let seenModel: string | undefined;
+
+    await withTempDir({ prefix: "openclaw-video-active-provider-" }, async (isolatedAgentDir) => {
+      await withVideoFixture("openclaw-video-active-default", async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              moonshot: {
+                auth: "api-key",
+                apiKey: "moonshot-key", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+          tools: {
+            media: {
+              video: {
+                enabled: true,
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "video",
+          cfg,
+          ctx,
+          agentDir: isolatedAgentDir,
+          attachments: cache,
+          media,
+          providerRegistry: new Map([
+            [
+              "moonshot",
+              {
+                id: "moonshot",
+                capabilities: ["video"],
+                defaultModels: { video: "kimi-k2.5" },
+                describeVideo: async (req) => {
+                  seenModel = req.model;
+                  return { text: "moonshot", model: req.model };
+                },
+              },
+            ],
+          ]),
+          activeModel: { provider: "moonshot" },
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        const output = requireCapabilityOutput(result, 0);
+        expect(output.provider).toBe("moonshot");
+        expect(output.model).toBe("kimi-k2.5");
+        expect(seenModel).toBe("kimi-k2.5");
+      });
     });
   });
 
