@@ -578,6 +578,38 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload).not.toHaveProperty("enable_thinking");
   });
 
+  it("omits Z.AI reasoning effort for non-GLM-5.2 models", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      {
+        ...reasoningModel,
+        id: "glm-5.1",
+        name: "GLM 5.1",
+        provider: "zai",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        compat: {
+          thinkingFormat: "zai",
+        },
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "medium",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.thinking).toEqual({ type: "enabled" });
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload).not.toHaveProperty("enable_thinking");
+  });
+
   it("maps disabled Z.AI reasoning to thinking disabled", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const stream = streamOpenAICompletions(

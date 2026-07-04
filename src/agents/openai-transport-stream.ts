@@ -3886,6 +3886,8 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
 function applyZaiOpenAICompletionsThinkingParams(params: {
   compatThinkingFormat: string;
   modelReasoning: boolean;
+  modelId: string;
+  supportsReasoningEffort: boolean;
   payload: Record<string, unknown>;
   requestedEffort: OpenAIReasoningEffort;
   reasoningEffortMap: Record<string, string> | undefined;
@@ -3898,7 +3900,9 @@ function applyZaiOpenAICompletionsThinkingParams(params: {
   }
   const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
   params.payload.thinking = { type: enabled ? "enabled" : "disabled" };
-  if (enabled) {
+  const supportsZaiReasoningEffort =
+    params.modelId.trim().toLowerCase().startsWith("glm-5.2") || params.supportsReasoningEffort;
+  if (enabled && supportsZaiReasoningEffort) {
     const mapped = params.reasoningEffortMap?.[params.requestedEffort] ?? params.requestedEffort;
     params.payload.reasoning_effort = mapped;
   }
@@ -4452,6 +4456,8 @@ export function buildOpenAICompletionsParams(
   const handledZaiThinkingFormat = applyZaiOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
+    modelId: model.id,
+    supportsReasoningEffort: compat.supportsReasoningEffort,
     payload: params,
     requestedEffort: completionsReasoningEffort,
     reasoningEffortMap: compat.reasoningEffortMap,

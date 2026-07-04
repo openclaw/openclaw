@@ -90,6 +90,13 @@ function isThinkingContentBlock(block: { type: string }): block is ThinkingConte
   return block.type === "thinking";
 }
 
+function supportsZaiReasoningEffort(model: Model<"openai-completions">): boolean {
+  return (
+    model.id.trim().toLowerCase().startsWith("glm-5.2") ||
+    model.compat?.supportsReasoningEffort === true
+  );
+}
+
 function isToolCallBlock(block: { type: string }): block is ToolCall {
   return block.type === "toolCall";
 }
@@ -746,7 +753,7 @@ function buildParams(
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
-    if (options?.reasoningEffort) {
+    if (options?.reasoningEffort && supportsZaiReasoningEffort(model)) {
       params.reasoning_effort =
         model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
     }
