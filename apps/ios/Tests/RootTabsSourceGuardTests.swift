@@ -897,6 +897,9 @@ struct RootTabsSourceGuardTests {
         let onboardingContent = try #require(onboardingScannerSheet.range(of: "content: {"))
 
         #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
+        #expect(appSource.contains("func application(\n        _ app: UIApplication,\n        open url: URL,"))
+        #expect(appSource.contains("self.pendingOpenURLs.append(url)"))
+        #expect(appSource.contains("model.stageGatewaySetupLink(link)"))
         #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
         #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
         #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))
@@ -912,6 +915,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
         #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains(
+            "self.applyPendingGatewaySetupLinkIfNeeded()\n                self.attemptAutomaticPairingResumeIfNeeded()"))
         #expect(onboardingOnDismiss.lowerBound < onboardingProcessing.lowerBound)
         #expect(onboardingProcessing.lowerBound < onboardingContent.lowerBound)
         #expect(!onboardingSource.contains(".onChange(of: self.showQRScanner)"))

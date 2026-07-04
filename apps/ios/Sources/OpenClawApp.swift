@@ -44,6 +44,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
     private var pendingExecApprovalRequestedPushIDs: [String] = []
     private var pendingExecApprovalResolvedPushIDs: [String] = []
+    private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
         didSet {
@@ -94,6 +95,15 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     }
                 }
             }
+            if !self.pendingOpenURLs.isEmpty {
+                let pending = self.pendingOpenURLs
+                self.pendingOpenURLs.removeAll()
+                Task { @MainActor in
+                    for url in pending {
+                        await self.handleOpenURL(url, model: model)
+                    }
+                }
+            }
         }
     }
 
@@ -127,6 +137,33 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             await self.registerForRemoteNotificationsIfEnrollmentReady(application)
         }
         return true
+    }
+
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
+    {
+        guard DeepLinkParser.parse(url) != nil else { return false }
+        guard let model = self.resolvedAppModel() else {
+            self.pendingOpenURLs.append(url)
+            return true
+        }
+        Task { @MainActor in
+            await self.handleOpenURL(url, model: model)
+        }
+        return true
+    }
+
+    private func handleOpenURL(_ url: URL, model: NodeAppModel) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case .agent, .dashboard:
+            await model.handleDeepLink(url: url)
+        case let .gateway(link):
+            model.stageGatewaySetupLink(link)
+        }
     }
 
     private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {

@@ -104,6 +104,7 @@ struct OnboardingWizardView: View {
         self.lifecycleContent
             .onChange(of: self.scenePhase) { _, newValue in
                 guard newValue == ScenePhase.active else { return }
+                self.applyPendingGatewaySetupLinkIfNeeded()
                 self.attemptAutomaticPairingResumeIfNeeded()
             }
             .onReceive(Self.pairingAutoResumeTicker) { _ in
