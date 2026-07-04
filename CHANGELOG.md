@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **ClawRouter routing and quotas:** add the bundled ClawRouter provider plugin with credential-scoped dynamic model discovery, OpenAI-compatible and native Anthropic/Gemini transports, and managed budget reporting across OpenClaw usage surfaces. (#99658)
 - **Model and provider coverage:** add GPT-5.6 support, use Nemotron Super's 1M context window, and preserve explicit OpenRouter authentication headers. (#98333, #98726, #98187) Thanks @steipete-oai, @eleqtrizit, @sunlit-deng, and @laurencebrown.
 - **CLI and node workflows:** add `openclaw attach`, node context-path support, actionable device-approval recovery guidance, and clearer plugin install exit diagnostics. (#96454, #97679, #98115, #98146, #98497) Thanks @anagnorisis2peripeteia, @obviyus, @wm0018, @welfo-beo, @RomneyDa, @Sanjays2402, and @vincentkoc.
 - **Cron and usage:** add exit-triggered schedules, detached session-targeted runs, an in-flight job doctor warning, and a built-in full usage footer. (#92037, #98755, #98620, #92657, #92877) Thanks @anagnorisis2peripeteia, @obviyus, @EthanSK, @masatohoshino, and @Marvinthebored.

@@ -7286,8 +7286,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/clawrouter
 - Headings:
   - H2: Getting started
+  - H2: Model discovery
   - H2: Protocol and provider plugins
   - H2: Quotas and usage
+  - H2: Troubleshooting
   - H2: Security behavior
   - H2: Related
 
