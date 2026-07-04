@@ -490,7 +490,7 @@ export async function monitorLineProvider(
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   // One-time quota check on startup (non-blocking)
-  logLineChannelQuota({ cfg: config, accountId: resolvedAccountId });
+  void logLineChannelQuota({ cfg: config, accountId: resolvedAccountId });
 
   let stopped = false;
   const stopHandler = () => {

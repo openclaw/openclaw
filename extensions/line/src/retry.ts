@@ -1,7 +1,5 @@
 // Retry logic for LINE API calls
 
-type IsRetryableFn = (error: unknown, attempt: number) => boolean;
-
 /**
  * Determine if an error is retryable.
  * - 5xx: retry

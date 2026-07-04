@@ -6,7 +6,6 @@ const LINE_TEST_CFG = { channels: { line: { channelAccessToken: "line-token" } }
 
 function createReplyChunksHarness() {
   const replyMessageLine = vi.fn(async () => ({}));
-  const pushMessageLine = vi.fn(async () => ({}));
   const pushMessagesLine = vi.fn(async () => ({}));
   const pushTextMessageWithQuickReplies = vi.fn(async () => ({}));
   const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
@@ -16,7 +15,6 @@ function createReplyChunksHarness() {
 
   return {
     replyMessageLine,
-    pushMessageLine,
     pushMessagesLine,
     pushTextMessageWithQuickReplies,
     createTextMessageWithQuickReplies,
@@ -27,7 +25,6 @@ describe("sendLineReplyChunks", () => {
   it("uses reply token for all chunks when possible", async () => {
     const {
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
@@ -42,7 +39,6 @@ describe("sendLineReplyChunks", () => {
       cfg: LINE_TEST_CFG,
       accountId: "default",
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
@@ -60,13 +56,12 @@ describe("sendLineReplyChunks", () => {
       ],
       { cfg: LINE_TEST_CFG, accountId: "default" },
     );
-    expect(pushMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
     expect(pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
   });
 
   it("attaches quick replies to a single reply chunk", async () => {
-    const { replyMessageLine, pushMessageLine, pushMessagesLine, pushTextMessageWithQuickReplies } =
+    const { replyMessageLine, pushMessagesLine, pushTextMessageWithQuickReplies } =
       createReplyChunksHarness();
     const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
       type: "text" as const,
@@ -82,7 +77,6 @@ describe("sendLineReplyChunks", () => {
       replyTokenUsed: false,
       cfg: LINE_TEST_CFG,
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
@@ -91,7 +85,6 @@ describe("sendLineReplyChunks", () => {
     expect(result.replyTokenUsed).toBe(true);
     expect(createTextMessageWithQuickReplies).toHaveBeenCalledWith("only", ["A"]);
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
     expect(pushTextMessageWithQuickReplies).not.toHaveBeenCalled();
   });
@@ -99,7 +92,6 @@ describe("sendLineReplyChunks", () => {
   it("replies with up to five chunks before pushing the rest", async () => {
     const {
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
@@ -114,7 +106,6 @@ describe("sendLineReplyChunks", () => {
       replyTokenUsed: false,
       cfg: LINE_TEST_CFG,
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
@@ -150,7 +141,6 @@ describe("sendLineReplyChunks", () => {
   it("falls back to push flow when replying fails", async () => {
     const {
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
@@ -168,7 +158,6 @@ describe("sendLineReplyChunks", () => {
       cfg: LINE_TEST_CFG,
       accountId: "default",
       replyMessageLine,
-      pushMessageLine,
       pushMessagesLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,

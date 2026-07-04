@@ -14,7 +14,7 @@ const {
   resolveLineChannelAccessTokenMock,
   recordChannelActivityMock,
   logVerboseMock,
-  warnMock,
+  logErrorMock,
   resolvePinnedHostnameWithPolicyMock,
 } = vi.hoisted(() => {
   const pushMessageMockLocal = vi.fn();
@@ -38,7 +38,7 @@ const {
   const resolveLineChannelAccessTokenMockLocal = vi.fn(() => "line-token");
   const recordChannelActivityMockLocal = vi.fn();
   const logVerboseMockLocal = vi.fn();
-  const warnMockLocal = vi.fn();
+  const logErrorMockLocal = vi.fn();
   const resolvePinnedHostnameWithPolicyMockLocal = vi.fn();
   return {
     pushMessageMock: pushMessageMockLocal,
@@ -53,7 +53,7 @@ const {
     resolveLineChannelAccessTokenMock: resolveLineChannelAccessTokenMockLocal,
     recordChannelActivityMock: recordChannelActivityMockLocal,
     logVerboseMock: logVerboseMockLocal,
-    warnMock: warnMockLocal,
+    logErrorMock: logErrorMockLocal,
     resolvePinnedHostnameWithPolicyMock: resolvePinnedHostnameWithPolicyMockLocal,
   };
 });
@@ -85,7 +85,16 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return {
     ...actual,
     logVerbose: logVerboseMock,
-    warn: warnMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/logging-core", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
+    "openclaw/plugin-sdk/logging-core",
+  );
+  return {
+    ...actual,
+    logError: logErrorMock,
   };
 });
 
@@ -137,7 +146,7 @@ describe("LINE send helpers", () => {
     resolveLineChannelAccessTokenMock.mockReset();
     recordChannelActivityMock.mockReset();
     logVerboseMock.mockReset();
-    warnMock.mockReset();
+    logErrorMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockReset();
 
     MessagingApiClientMock.mockImplementation(function () {
@@ -479,7 +488,7 @@ describe("LINE send helpers", () => {
       }),
     ).rejects.toThrow("LINE push failed");
 
-    expect(warnMock).toHaveBeenCalledWith(
+    expect(logErrorMock).toHaveBeenCalledWith(
       "line: push message failed (400 Bad Request): invalid flex payload",
     );
   });

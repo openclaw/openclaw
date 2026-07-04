@@ -3,8 +3,9 @@ import { randomUUID } from "node:crypto";
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { logVerbose, retryAsync, warn } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, retryAsync } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction } from "./actions.js";
@@ -187,7 +188,7 @@ function logLineHttpError(err: unknown, context: string): void {
     const code = status ?? statusCode;
     const text = statusText ?? statusMessage ?? "";
     const summary = code ? `${code} ${text}`.trim() : "unknown status";
-    warn(`line: ${context} failed (${summary}): ${body}`);
+    logError(`line: ${context} failed (${summary}): ${body}`);
   }
 }
 
