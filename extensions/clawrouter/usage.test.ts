@@ -94,12 +94,10 @@ describe("ClawRouter usage", () => {
       fetchClawRouterUsage({
         token: "proxy-key",
         timeoutMs: 5000,
-        fetchFn: vi.fn(
-          async () =>
-            new Response(oversizedPayload, {
-              headers: { "content-type": "application/json" },
-            }),
-        ) as unknown as typeof fetch,
+        fetchFn: async () =>
+          new Response(oversizedPayload, {
+            headers: { "content-type": "application/json" },
+          }),
       }),
     ).rejects.toThrow("ClawRouter usage response exceeds");
   });
