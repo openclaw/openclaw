@@ -288,7 +288,8 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;
-  const rootPromise = workspaceOnly ? fsRoot(options.cwd) : undefined;
+  let rootPromise: ReturnType<typeof fsRoot> | undefined;
+  const getRoot = () => (rootPromise ??= fsRoot(options.cwd));
   return {
     readFile: async (filePath) => {
       if (!workspaceOnly) {
@@ -312,7 +313,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await (await rootPromise)?.write(relative, content, { encoding: "utf8" });
+      await (await getRoot()).write(relative, content, { encoding: "utf8" });
     },
     remove: async (filePath) => {
       if (!workspaceOnly) {
@@ -320,7 +321,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
-      await (await rootPromise)?.remove(relative);
+      await (await getRoot()).remove(relative);
     },
     mkdirp: async (dir) => {
       if (!workspaceOnly) {
@@ -328,10 +329,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });
-      const root = await rootPromise;
-      if (!root) {
-        return;
-      }
+      const root = await getRoot();
       if (relative === "" || relative === ".") {
         await root.ensureRoot();
         return;
