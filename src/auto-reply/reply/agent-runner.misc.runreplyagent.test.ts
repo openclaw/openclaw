@@ -503,6 +503,106 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
   });
 
+  it("surfaces empty interactive direct replies as visible failures", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+        finalAssistantVisibleText: "",
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const payload = expectRecordFields(result, { isError: true }, "empty interactive fallback");
+    expect(payload.text).toContain("did not produce a visible reply");
+  });
+
+  it("keeps spawn-only empty direct replies silent", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+        finalAssistantVisibleText: "",
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toBeUndefined();
+  });
+
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
     const sessionEntry = {

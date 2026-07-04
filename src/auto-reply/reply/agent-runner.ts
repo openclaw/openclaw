@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
@@ -94,6 +95,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { buildEmptyInteractiveReplyFallbackPayload } from "./empty-interactive-reply.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -268,12 +270,14 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
   didSendViaMessagingTool?: boolean;
+  acceptedSessionSpawns?: readonly unknown[];
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
     params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     (params.successfulCronAdds ?? 0) > 0 ||
     params.didSendDeterministicApprovalPrompt === true
   );
@@ -1980,6 +1984,7 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
       didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
     });
@@ -2025,6 +2030,26 @@ export async function runReplyAgent(params: {
       );
       await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+    };
+    const returnEmptyInteractiveReplyIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      const emptyInteractiveReplyPayload = buildEmptyInteractiveReplyFallbackPayload({
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery:
+          successfulSideEffectDelivery || committedMessagingToolSourceReplyDelivery,
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+        sourceReplyDeliveryMode:
+          opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode,
+      });
+      if (!emptyInteractiveReplyPayload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error("empty interactive reply produced no visible payload"),
+      );
+      await signalTypingIfNeeded([emptyInteractiveReplyPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(emptyInteractiveReplyPayload);
     };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
@@ -2106,6 +2131,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2194,6 +2223,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }

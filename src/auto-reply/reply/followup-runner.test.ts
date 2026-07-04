@@ -4868,6 +4868,119 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectBlockReplyText(onBlockReply, "hello world!");
   });
 
+  it("routes a visible fallback when an interactive followup completes empty", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    const routed = requireMockCallArg(routeReplyMock, 0);
+    expect(routed).toMatchObject({
+      channel: "discord",
+      to: "channel:C1",
+      replyKind: "final",
+      payload: {
+        isError: true,
+      },
+    });
+    expect(String(requireRecord(routed.payload, "fallback payload").text)).toContain(
+      "did not produce a visible reply",
+    );
+  });
+
+  it("keeps empty message-tool-only followup completions silent", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [] },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps empty followup completions silent after source delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didDeliverSourceReplyViaMessageTool: true,
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps spawn-only empty followup completions silent", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:child" }],
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps empty followup completions silent after cron side effects", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        successfulCronAdds: 1,
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps empty followup completions silent after deterministic approval prompts", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        didSendDeterministicApprovalPrompt: true,
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("keeps message-tool-only queued followup finals private", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({

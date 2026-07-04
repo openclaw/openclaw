@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -80,6 +81,10 @@ import {
   shouldNotifyUserAboutCompaction,
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
+import {
+  buildEmptyInteractiveReplyFallbackPayload,
+  hasCommittedSourceReplyDeliveryEvidence,
+} from "./empty-interactive-reply.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -660,6 +665,7 @@ export function createFollowupRunner(params: {
         }),
       );
       let autoCompactionCount = 0;
+      let didObserveCompactionRetry = false;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
@@ -670,6 +676,7 @@ export function createFollowupRunner(params: {
           ? queued.originatingReplyToId
           : queued.messageId;
       const compactionNoticeReplyToId = resolveFollowupCurrentMessageId();
+      let didSendCompactionNoticePayload = false;
       const sendCompactionNoticePayload = async (
         payload: ReplyPayload,
         resolvedRun: { provider: string; modelId: string } = {
@@ -700,6 +707,7 @@ export function createFollowupRunner(params: {
           mirror: false,
           runId,
         });
+        didSendCompactionNoticePayload = true;
       };
       const notifyPreflightCompaction = shouldNotifyUserAboutCompaction(runtimeConfig)
         ? async (phase: CompactionNoticePhase) => {
@@ -1276,6 +1284,14 @@ export function createFollowupRunner(params: {
                 onToolResult: deliverFollowupToolSummary,
                 onAgentEvent: (evt) => {
                   lifecycleBackstop.note(evt);
+                  if (
+                    evt.stream === "compaction" &&
+                    evt.data?.phase === "end" &&
+                    evt.data?.completed === true &&
+                    evt.data?.willRetry === true
+                  ) {
+                    didObserveCompactionRetry = true;
+                  }
                   return enqueueProgressDelivery(async () => {
                     await forwardFollowupProgressEvent({
                       evt,
@@ -1420,6 +1436,45 @@ export function createFollowupRunner(params: {
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const providerUsed =
         runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
+      const sendEmptyInteractiveFallbackIfNeeded = async (): Promise<boolean> => {
+        const payload = buildEmptyInteractiveReplyFallbackPayload({
+          isHeartbeat: opts?.isHeartbeat === true,
+          silentExpected: run.silentExpected,
+          allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
+          sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+          hasSuccessfulSideEffectDelivery:
+            didSendCompactionNoticePayload ||
+            didObserveCompactionRetry ||
+            hasAcceptedSessionSpawn(runResult.acceptedSessionSpawns) ||
+            hasCommittedSourceReplyDeliveryEvidence({
+              didSendViaMessagingTool: runResult.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+              messagingToolSentTexts: runResult.messagingToolSentTexts,
+              messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+              messagingToolSentTargets: runResult.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+            }),
+          successfulCronAdds: runResult.successfulCronAdds,
+          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+        });
+        if (!payload) {
+          return false;
+        }
+        replyOperation?.fail(
+          "run_failed",
+          new Error("empty interactive follow-up produced no visible payload"),
+        );
+        await sendFollowupPayloads(
+          [payload],
+          effectiveQueued,
+          {
+            provider: providerUsed,
+            modelId: modelUsed,
+          },
+          { runId },
+        );
+        return true;
+      };
       const usedCliProvider = isCliProvider(providerUsed, runtimeConfig);
       const contextTokensUsed =
         resolveContextTokensForModel({
@@ -1457,6 +1512,7 @@ export function createFollowupRunner(params: {
 
       const payloadArray = runResult.payloads ?? [];
       if (payloadArray.length === 0) {
+        await sendEmptyInteractiveFallbackIfNeeded();
         return;
       }
       const finalPayloads = resolveFollowupDeliveryPayloads({
@@ -1476,6 +1532,7 @@ export function createFollowupRunner(params: {
       });
 
       if (finalPayloads.length === 0) {
+        await sendEmptyInteractiveFallbackIfNeeded();
         return;
       }
 
