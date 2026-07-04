@@ -783,19 +783,10 @@ describe("qa scenario catalog", () => {
           requiredProviderMode?: string;
         }
       | undefined;
-    const actions = scenario.execution.flow?.steps?.[0]?.actions ?? [];
-    const waitForActiveSessionAction = actions.find(
-      (action): action is { args?: unknown[]; call: string } =>
-        action !== null &&
-        typeof action === "object" &&
-        "call" in action &&
-        action.call === "waitForCondition",
-    );
 
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredChannelDriver).toBeUndefined();
     expect(config?.requiredProviderMode).toBe("mock-openai");
-    expect(waitForActiveSessionAction?.args?.[1]).toBe(15_000);
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

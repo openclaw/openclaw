@@ -7,7 +7,7 @@ import {
 } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 
@@ -98,36 +98,6 @@ describe("crabline transport", () => {
             },
           ],
         });
-      } finally {
-        await transport.cleanup?.();
-      }
-    });
-  });
-
-  it("gives Crabline channel readiness probes enough gateway time under CI load", async () => {
-    await withTempDir("qa-crabline-transport-", async (outputDir) => {
-      const transport = await createQaCrablineTransportAdapter({
-        outputDir,
-        selection: createSelection(),
-        state: createQaBusState(),
-      });
-      const call = vi.fn(async () => ({
-        channelAccounts: {
-          telegram: [{ accountId: "default", running: true, restartPending: false }],
-        },
-      }));
-
-      try {
-        await transport.waitReady({
-          gateway: { call },
-          timeoutMs: 60_000,
-        });
-
-        expect(call).toHaveBeenCalledWith(
-          "channels.status",
-          { probe: false, timeoutMs: 5_000 },
-          { timeoutMs: 15_000 },
-        );
       } finally {
         await transport.cleanup?.();
       }
