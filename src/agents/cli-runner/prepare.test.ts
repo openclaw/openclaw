@@ -2053,7 +2053,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         "OpenClaw resumed this CLI session after prompt content changed.",
       );
       expect(context.params.prompt).toContain("changed=system-prompt");
-      expect(context.params.prompt).toContain("Current session context:\nnew stable prompt");
       expect(context.params.prompt).toContain("latest ask");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

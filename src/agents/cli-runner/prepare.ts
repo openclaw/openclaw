@@ -134,43 +134,20 @@ function canApplySystemPromptOnResume(backend: CliBackendConfig): boolean {
   );
 }
 
-function buildCliSessionDriftUserContext(params: {
-  reusableCliSession: CliReusableSession;
-  extraSystemPrompt: string;
-  promptToolNames: string[];
-}): string | undefined {
-  const { reusableCliSession } = params;
+function buildCliSessionDriftUserContext(
+  reusableCliSession: CliReusableSession,
+): string | undefined {
   if (reusableCliSession.mode !== "reuse-with-drift") {
     return undefined;
   }
-  const lines = [
-    `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`,
-  ];
-  if (reusableCliSession.drift.reasons.includes("system-prompt") && params.extraSystemPrompt) {
-    lines.push(`Current session context:\n${params.extraSystemPrompt}`);
-  }
-  if (reusableCliSession.drift.reasons.includes("prompt-tools")) {
-    lines.push(
-      `Current prompt tool surface: ${
-        params.promptToolNames.length > 0 ? params.promptToolNames.join(", ") : "none"
-      }`,
-    );
-  }
-  return lines.join("\n\n");
+  return `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
 }
 
 function prependCliSessionDriftUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
-  driftContext: {
-    extraSystemPrompt: string;
-    promptToolNames: string[];
-  },
 ): RunCliAgentParams["currentInboundContext"] {
-  const note = buildCliSessionDriftUserContext({
-    reusableCliSession,
-    ...driftContext,
-  });
+  const note = buildCliSessionDriftUserContext(reusableCliSession);
   if (!note) {
     return context;
   }
@@ -889,10 +866,6 @@ export async function prepareCliRunContext(
       const currentInboundContext = prependCliSessionDriftUserContext(
         params.currentInboundContext,
         reusableCliSession,
-        {
-          extraSystemPrompt,
-          promptToolNames: promptTools.map((tool) => tool.name).toSorted(),
-        },
       );
       const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
         context: currentInboundContext,
