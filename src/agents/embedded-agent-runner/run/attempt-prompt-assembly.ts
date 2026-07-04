@@ -13,7 +13,6 @@ import {
 } from "../../../plugins/hook-agent-context.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
-import { appendRuntimeSelfContextForPromptSplit } from "./runtime-context-prompt.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -39,6 +38,7 @@ import {
 } from "./attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
+import { appendRuntimeSelfContextForPromptSplit } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
