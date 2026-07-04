@@ -1714,7 +1714,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Locale
   - H3: Non-interactive Z.AI endpoint choices
-  - H2: Additional non-interactive flags
   - H2: Flow notes
   - H2: Common follow-up commands
 
@@ -1894,8 +1893,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/setup
 - Headings:
   - H1: openclaw setup
-  - H2: Options
-  - H3: Baseline mode
   - H2: Examples
   - H2: Notes
   - H2: Related
@@ -8806,7 +8803,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /start/wizard
 - Headings:
   - H2: Locale
-  - H2: QuickStart vs Advanced
+  - H2: Default vs Advanced
   - H2: What onboarding configures
   - H2: Add another agent
   - H2: Full reference
