@@ -174,6 +174,7 @@ final class GatewayConnectionController {
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: PendingTrustConnect?
+    private var trustProbeGeneration: UInt64 = 0
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
@@ -310,12 +311,13 @@ final class GatewayConnectionController {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return "Failed to build TLS URL for trust verification." }
             self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
-            switch await self.probeTLSFingerprint(
+            guard let probeResult = await self.probeTLSFingerprint(
                 host: target.host,
                 port: target.port,
                 url: url,
                 queueLabel: "gateway.tls.discovered")
-            {
+            else { return nil }
+            switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = PendingTrustConnect(
                     url: url,
@@ -394,12 +396,13 @@ final class GatewayConnectionController {
         if resolvedUseTLS, stored == nil {
             guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
             self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
-            switch await self.probeTLSFingerprint(
+            guard let probeResult = await self.probeTLSFingerprint(
                 host: host,
                 port: resolvedPort,
                 url: url,
                 queueLabel: "gateway.tls.manual")
-            {
+            else { return }
+            switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = PendingTrustConnect(
                     url: url,
@@ -475,6 +478,7 @@ final class GatewayConnectionController {
         guard let appModel else { return }
         guard let cfg = appModel.activeGatewayConnectConfig else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
+        let generation = appModel.gatewayConnectGeneration
 
         let nodeOptions = await self.makeConnectOptions(stableID: cfg.stableID)
         let refreshedConfig = GatewayConnectConfig(
@@ -485,10 +489,12 @@ final class GatewayConnectionController {
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             nodeOptions: nodeOptions)
-        appModel.applyGatewayConnectConfig(refreshedConfig)
+        appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
     }
 
     func clearPendingTrustPrompt() {
+        // Invalidate an in-flight probe so its late result cannot restore a stale prompt.
+        self.trustProbeGeneration &+= 1
         self.pendingTrustPrompt = nil
         self.pendingTrustConnect = nil
     }
@@ -815,6 +821,7 @@ final class GatewayConnectionController {
         forceReconnect: Bool = false)
     {
         guard let appModel else { return }
+        let generation = appModel.beginGatewayConnectAttempt()
         appModel.gatewayStatusText = "Connecting…"
         Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
@@ -830,7 +837,10 @@ final class GatewayConnectionController {
                 bootstrapToken: bootstrapToken,
                 password: password,
                 nodeOptions: nodeOptions)
-            appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
+            appModel.applyGatewayConnectConfig(
+                cfg,
+                forceReconnect: forceReconnect,
+                expectedGeneration: generation)
         }
     }
 
@@ -880,8 +890,10 @@ final class GatewayConnectionController {
         host: String,
         port: Int,
         url: URL,
-        queueLabel: String) async -> GatewayTLSFingerprintProbeResult
+        queueLabel: String) async -> GatewayTLSFingerprintProbeResult?
     {
+        self.trustProbeGeneration &+= 1
+        let generation = self.trustProbeGeneration
         self.pendingTrustConnect = nil
         self.pendingTrustPrompt = nil
         let reachable = await self.tcpReachabilityProbe(
@@ -889,10 +901,13 @@ final class GatewayConnectionController {
             port,
             GatewayTLSFingerprintProbeBudget.tcpConnectTimeoutSeconds,
             queueLabel)
+        guard self.trustProbeGeneration == generation else { return nil }
         guard reachable else {
             return .failure(.endpointUnreachable)
         }
-        return await self.tlsFingerprintProbe(url)
+        let result = await self.tlsFingerprintProbe(url)
+        guard self.trustProbeGeneration == generation else { return nil }
+        return result
     }
 
     private func tlsProbeFailureMessage(

@@ -289,15 +289,15 @@ extension SettingsProTab {
     }
 
     func openGatewayQRScanner() {
-        self.scannerResultHandoff.beginScan()
+        self.scannerScanID = self.scannerResultHandoff.beginScan()
         self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.setupStatusText = "Opening QR scanner..."
         self.showQRScanner = true
     }
 
-    func queueScannedResult(_ result: QRScannerResult) {
-        self.scannerResultHandoff.queue(result)
+    func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
+        guard self.scannerResultHandoff.queue(result, scanID: scanID) else { return }
         self.setupStatusText = "QR loaded. Closing scanner..."
         self.showQRScanner = false
     }

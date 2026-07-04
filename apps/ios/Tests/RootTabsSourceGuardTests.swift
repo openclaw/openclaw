@@ -798,6 +798,18 @@ struct RootTabsSourceGuardTests {
             gatewaySetupSource.range(of: "self.handledGatewaySetupRequestID = requestID"))
         let onboardingSetupGuard = try #require(
             gatewaySetupSource.range(of: "guard !self.showOnboarding else { return }"))
+        let pendingSetupHandler = try Self.extract(
+            onboardingSource,
+            from: "private func applyPendingGatewaySetupLinkIfNeeded()",
+            to: "private func connectStagedGatewaySetupLink()")
+        let stagedSetupConnect = try Self.extract(
+            onboardingSource,
+            from: "private func connectStagedGatewaySetupLink()",
+            to: "private func clearStagedGatewaySetupLink()")
+        let stagedValidation = try #require(stagedSetupConnect.range(of: "guard link.isValidEndpoint"))
+        let stagedConsumption = try #require(stagedSetupConnect.range(of: "self.setupLinkStaging.take()"))
+        let stagedReset = try #require(
+            stagedSetupConnect.range(of: "await self.appModel.resetGatewaySessionsForTargetSwitch()"))
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -875,6 +887,25 @@ struct RootTabsSourceGuardTests {
         #expect(onboardingSource.contains("self.appModel.consumePendingGatewaySetupLink()"))
         #expect(onboardingSource.contains("self.scannerResultHandoff.cancel()"))
         #expect(!onboardingSource.contains("pendingScannerResult"))
+        #expect(onboardingSource.contains("self.setupLinkStaging.stage(link)"))
+        #expect(pendingSetupHandler.contains("self.gatewayController.clearPendingTrustPrompt()"))
+        #expect(pendingSetupHandler.contains("if self.selectedMode == nil"))
+        #expect(onboardingSource.contains("Tap Connect to apply."))
+        #expect(onboardingSource.contains("self.connectStagedGatewaySetupLink()"))
+        #expect(onboardingSource.contains("Credentials are applied only after you tap Connect."))
+        #expect(onboardingSource.contains("Plaintext (local network)"))
+        #expect(onboardingSource.contains("self.statusLine = message"))
+        #expect(!pendingSetupHandler.contains("self.manualHost ="))
+        #expect(!pendingSetupHandler.contains("self.manualPort ="))
+        #expect(!pendingSetupHandler.contains("self.manualTLS ="))
+        #expect(!pendingSetupHandler.contains("self.applyGatewayLink(link)"))
+        #expect(!pendingSetupHandler.contains("self.handleScannedLink(link)"))
+        #expect(!pendingSetupHandler.contains("self.connectManual()"))
+        #expect(stagedValidation.lowerBound < stagedConsumption.lowerBound)
+        #expect(stagedReset.lowerBound < stagedConsumption.lowerBound)
+        #expect(!stagedSetupConnect.contains("self.appModel.disconnectGateway()"))
+        #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
+        #expect(onboardingSource.contains("self.setupLinkStaging.link == nil else { return }"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
     }

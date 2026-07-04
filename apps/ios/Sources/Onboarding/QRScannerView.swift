@@ -16,25 +16,39 @@ final class QRScannerResultHandoff {
     private let settlingNanoseconds: UInt64
     private var pendingResult: QRScannerResult?
     private var deliveryTask: Task<Void, Never>?
+    private var activeScanID: UInt64 = 0
 
     init(settlingNanoseconds: UInt64 = QRScannerResultHandoff.defaultSettlingNanoseconds) {
         self.settlingNanoseconds = settlingNanoseconds
     }
 
-    func beginScan() {
+    @discardableResult
+    func beginScan() -> UInt64 {
         self.cancel()
+        return self.activeScanID
     }
 
-    func queue(_ result: QRScannerResult) {
+    func isActive(scanID: UInt64) -> Bool {
+        scanID == self.activeScanID
+    }
+
+    @discardableResult
+    func queue(_ result: QRScannerResult, scanID: UInt64) -> Bool {
+        guard self.isActive(scanID: scanID) else { return false }
         self.pendingResult = result
+        return true
     }
 
     @discardableResult
     func processAfterDismissal(
         _ process: @escaping @MainActor (QRScannerResult) -> Void) -> Task<Void, Never>?
     {
-        guard let result = self.pendingResult else { return nil }
+        guard let result = self.pendingResult else {
+            self.cancel()
+            return nil
+        }
         self.pendingResult = nil
+        self.activeScanID &+= 1
         self.deliveryTask?.cancel()
         let settlingNanoseconds = self.settlingNanoseconds
         let task = Task { @MainActor in
@@ -50,6 +64,7 @@ final class QRScannerResultHandoff {
     }
 
     func cancel() {
+        self.activeScanID &+= 1
         self.deliveryTask?.cancel()
         self.deliveryTask = nil
         self.pendingResult = nil

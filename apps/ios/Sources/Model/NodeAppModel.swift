@@ -185,6 +185,8 @@ final class NodeAppModel {
     private let operatorGateway = GatewayNodeSession()
     private var nodeGatewayTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
+    @ObservationIgnored private var gatewaySessionResetTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
     private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
@@ -2122,7 +2124,12 @@ extension NodeAppModel {
     }
 
     /// Preferred entry-point: apply a single config object and start both sessions.
-    func applyGatewayConnectConfig(_ cfg: GatewayConnectConfig, forceReconnect: Bool = false) {
+    func applyGatewayConnectConfig(
+        _ cfg: GatewayConnectConfig,
+        forceReconnect: Bool = false,
+        expectedGeneration: UInt64? = nil)
+    {
+        guard expectedGeneration == nil || expectedGeneration == self.gatewayConnectGeneration else { return }
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         self.connectToGateway(
@@ -2138,37 +2145,83 @@ extension NodeAppModel {
             forceReconnect: forceReconnect)
     }
 
+    func beginGatewayConnectAttempt() -> UInt64 {
+        self.gatewayConnectGeneration &+= 1
+        return self.gatewayConnectGeneration
+    }
+
+    private func invalidateGatewayConnectAttempts() {
+        self.gatewayConnectGeneration &+= 1
+    }
+
     func resetGatewaySessionsForForcedReconnect() async {
+        if let gatewaySessionResetTask {
+            await gatewaySessionResetTask.value
+            return
+        }
         let nodeGatewayTask = self.nodeGatewayTask
         let operatorGatewayTask = self.operatorGatewayTask
         nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
-        await self.operatorGateway.disconnect()
-        await self.nodeGateway.disconnect()
-        // Foreground recovery reuses the same config immediately after reset.
-        // Wait for canceled loops so their shutdown cleanup cannot clobber the new reconnect state.
-        if let operatorGatewayTask {
-            await operatorGatewayTask.value
+        let operatorGateway = self.operatorGateway
+        let nodeGateway = self.nodeGateway
+        // Concurrent reconnect triggers share one teardown. Otherwise a later reset can miss the
+        // captured loop tasks and let their shutdown cleanup clobber a replacement connection.
+        let gatewaySessionResetTask = Task {
+            await operatorGateway.disconnect()
+            await nodeGateway.disconnect()
+            if let operatorGatewayTask {
+                await operatorGatewayTask.value
+            }
+            if let nodeGatewayTask {
+                await nodeGatewayTask.value
+            }
         }
-        if let nodeGatewayTask {
-            await nodeGatewayTask.value
-        }
+        self.gatewaySessionResetTask = gatewaySessionResetTask
+        await gatewaySessionResetTask.value
+        self.gatewaySessionResetTask = nil
+    }
+
+    func resetGatewaySessionsForTargetSwitch() async {
+        // A target awaiting TLS trust must not retain a reconnect route to the previous gateway.
+        self.invalidateGatewayConnectAttempts()
+        self.gatewayAutoReconnectEnabled = false
+        self.activeGatewayConnectConfig = nil
+        ShareGatewayRelaySettings.clearConfig()
+        await self.resetGatewaySessionsForForcedReconnect()
+        guard !self.gatewayAutoReconnectEnabled, self.activeGatewayConnectConfig == nil else { return }
+        // A canceled loop may have persisted its relay config while teardown was in flight.
+        ShareGatewayRelaySettings.clearConfig()
+        self.gatewayHealthMonitor.stop()
+        self.gatewayStatusText = "Offline"
+        self.gatewayServerName = nil
+        self.gatewayRemoteAddress = nil
+        self.connectedGatewayID = nil
+        self.gatewayConnected = false
+        self.setOperatorConnected(false)
+        self.talkMode.updateGatewayConnected(false)
     }
 
     private func restartGatewaySessionsAfterForegroundStaleConnection() async {
+        guard self.gatewayAutoReconnectEnabled, let cfg = self.activeGatewayConnectConfig else { return }
         await self.resetGatewaySessionsForForcedReconnect()
+        guard self.gatewayAutoReconnectEnabled,
+              self.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true,
+              self.nodeGatewayTask == nil,
+              self.operatorGatewayTask == nil
+        else { return }
         guard !self.isLocalGatewayFixtureEnabled else { return }
         self.setOperatorConnected(false)
         self.gatewayConnected = false
         self.gatewayStatusText = "Reconnecting…"
         self.talkMode.updateGatewayConnected(false)
-        guard let cfg = self.activeGatewayConnectConfig else { return }
         self.applyGatewayConnectConfig(cfg, forceReconnect: true)
     }
 
     func disconnectGateway() {
+        self.invalidateGatewayConnectAttempts()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = false
@@ -2965,6 +3018,7 @@ extension NodeAppModel {
 
 extension NodeAppModel {
     func enterAppleReviewDemoMode() {
+        self.invalidateGatewayConnectAttempts()
         self.isAppleReviewDemoModeEnabled = true
         self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = false
@@ -3009,6 +3063,7 @@ extension NodeAppModel {
     }
 
     func enterScreenshotFixtureMode() {
+        self.invalidateGatewayConnectAttempts()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = true
         self.gatewayAutoReconnectEnabled = false

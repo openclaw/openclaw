@@ -44,6 +44,7 @@ struct SettingsProTab: View {
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
+    @State var scannerScanID: UInt64 = 0
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
@@ -197,7 +198,8 @@ struct SettingsProTab: View {
     }
 
     private func settingsModalPresentation(_ content: some View) -> some View {
-        content
+        let scanID = self.scannerScanID
+        return content
             .sheet(isPresented: self.$showTalkIssueDetails) {
                 if let issue = self.appModel.talkMode.gatewayTalkCurrentFallbackIssue {
                     TalkRuntimeIssueDetailsSheet(issue: issue)
@@ -212,14 +214,16 @@ struct SettingsProTab: View {
                     NavigationStack {
                         QRScannerView(
                             onResult: { result in
-                                self.queueScannedResult(result)
+                                self.queueScannedResult(result, scanID: scanID)
                             },
                             onError: { error in
+                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                                 self.showQRScanner = false
                                 self.setupStatusText = "Scanner error: \(error)"
                                 self.scannerError = error
                             },
                             onDismiss: {
+                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                                 self.showQRScanner = false
                             })
                             .ignoresSafeArea()
@@ -229,6 +233,7 @@ struct SettingsProTab: View {
                             .toolbar {
                                 ToolbarItem(placement: .topBarLeading) {
                                     Button {
+                                        self.scannerResultHandoff.cancel()
                                         self.showQRScanner = false
                                     } label: {
                                         Text("Cancel")

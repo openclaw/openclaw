@@ -40,6 +40,26 @@ private enum OnboardingStep: Int, CaseIterable {
     }
 }
 
+struct GatewaySetupLinkStaging {
+    private(set) var link: GatewayConnectDeepLink?
+
+    mutating func stage(_ link: GatewayConnectDeepLink) {
+        self.link = link
+    }
+
+    mutating func take() -> GatewayConnectDeepLink? {
+        defer { self.link = nil }
+        return self.link
+    }
+
+    @discardableResult
+    mutating func cancel() -> Bool {
+        guard self.link != nil else { return false }
+        self.link = nil
+        return true
+    }
+}
+
 struct OnboardingWizardView: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
@@ -65,10 +85,12 @@ struct OnboardingWizardView: View {
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var scannerResultHandoff = QRScannerResultHandoff()
+    @State private var scannerScanID: UInt64 = 0
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
     @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State private var setupLinkStaging = GatewaySetupLinkStaging()
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
@@ -255,6 +277,10 @@ struct OnboardingWizardView: View {
             .onChange(of: self.gatewayPassword) { _, newValue in
                 self.saveGatewayCredentials(token: self.gatewayToken, password: newValue)
             }
+            .onChange(of: self.setupCode) { _, newValue in
+                guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                self.clearStagedGatewaySetupLink()
+            }
             .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
                 self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
             }
@@ -265,7 +291,7 @@ struct OnboardingWizardView: View {
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                guard newValue != nil else { return }
+                guard newValue != nil, self.setupLinkStaging.link == nil else { return }
                 self.showQRScanner = false
                 self.statusLine = "Connected."
                 if !self.didMarkCompleted, let selectedMode {
@@ -277,17 +303,20 @@ struct OnboardingWizardView: View {
     }
 
     private var qrScannerSheet: some View {
-        NavigationStack {
+        let scanID = self.scannerScanID
+        return NavigationStack {
             QRScannerView(
                 onResult: { result in
-                    self.queueScannedResult(result)
+                    self.queueScannedResult(result, scanID: scanID)
                 },
                 onError: { error in
+                    guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                     self.showQRScanner = false
                     self.statusLine = "Scanner error: \(error)"
                     self.scannerError = error
                 },
                 onDismiss: {
+                    guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                     self.showQRScanner = false
                 })
                 .ignoresSafeArea()
@@ -300,6 +329,7 @@ struct OnboardingWizardView: View {
                     }
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
+                            self.scannerResultHandoff.cancel()
                             self.showQRScanner = false
                         } label: {
                             Text("Cancel")
@@ -320,17 +350,19 @@ struct OnboardingWizardView: View {
             self.selectedPhoto = nil
             Task {
                 guard let data = try? await item.loadTransferable(type: Data.self) else {
+                    guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                     self.showQRScanner = false
                     self.scannerError = "Could not load the selected image."
                     return
                 }
+                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
                 if let message = self.detectQRCode(from: data) {
                     if let link = GatewayConnectDeepLink.fromSetupInput(message) {
-                        self.queueScannedResult(.gatewayLink(link))
+                        self.queueScannedResult(.gatewayLink(link), scanID: scanID)
                         return
                     }
                     if AppleReviewDemoMode.isSetupCode(message) {
-                        self.queueScannedResult(.setupCode(message))
+                        self.queueScannedResult(.setupCode(message), scanID: scanID)
                         return
                     }
                 }
@@ -454,13 +486,17 @@ struct OnboardingWizardView: View {
                 }
             }
 
-            switch selectedMode {
-            case .homeNetwork:
-                self.homeNetworkConnectSection
-            case .remoteDomain:
-                self.remoteDomainConnectSection
-            case .developerLocal:
-                self.developerConnectSection
+            if let stagedLink = self.setupLinkStaging.link {
+                self.stagedGatewaySetupSection(stagedLink)
+            } else {
+                switch selectedMode {
+                case .homeNetwork:
+                    self.homeNetworkConnectSection
+                case .remoteDomain:
+                    self.remoteDomainConnectSection
+                case .developerLocal:
+                    self.developerConnectSection
+                }
             }
         } else {
             Section {
@@ -474,6 +510,50 @@ struct OnboardingWizardView: View {
                 }
                 .font(OpenClawType.subheadSemiBold)
             }
+        }
+    }
+
+    private func stagedGatewaySetupSection(_ link: GatewayConnectDeepLink) -> some View {
+        Section {
+            self.onboardingLabeledContent("Host", value: link.host)
+            self.onboardingLabeledContent("Port", value: String(link.port))
+            self.onboardingLabeledContent("Security", value: link.tls ? "TLS" : "Plaintext (local network)")
+
+            Button {
+                Task { await self.connectStagedGatewaySetupLink() }
+            } label: {
+                if self.connectingGatewayID == "manual" {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                        Text("Connecting…")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                } else {
+                    Text("Connect")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
+            .font(OpenClawType.subheadSemiBold)
+            .disabled(self.connectingGatewayID != nil)
+
+            Button {
+                self.clearStagedGatewaySetupLink()
+            } label: {
+                Text("Use Manual Setup")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .font(OpenClawType.subheadSemiBold)
+            .disabled(self.connectingGatewayID != nil)
+        } header: {
+            Text("Setup Link")
+                .font(OpenClawType.captionSemiBold)
+        } footer: {
+            Text(link.tls
+                ? "Review this endpoint. Credentials are applied only after you tap Connect."
+                :
+                "Plaintext may expose credentials. Continue only if you trust this local network and host.")
+                .font(OpenClawType.caption)
         }
     }
 
@@ -810,6 +890,7 @@ extension OnboardingWizardView {
             self.setupCodeStatus = "Paste a setup code to continue."
             return
         }
+        self.clearStagedGatewaySetupLink()
 
         if AppleReviewDemoMode.isSetupCode(raw) {
             self.setupCode = ""
@@ -833,8 +914,8 @@ extension OnboardingWizardView {
         await self.connectManual()
     }
 
-    private func queueScannedResult(_ result: QRScannerResult) {
-        self.scannerResultHandoff.queue(result)
+    private func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
+        guard self.scannerResultHandoff.queue(result, scanID: scanID) else { return }
         self.statusLine = "QR loaded. Closing scanner..."
         self.showQRScanner = false
     }
@@ -863,7 +944,46 @@ extension OnboardingWizardView {
         guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.showQRScanner = false
         self.scannerResultHandoff.cancel()
-        self.handleScannedLink(link)
+        self.showGatewayProblemDetails = false
+        self.gatewayController.clearPendingTrustPrompt()
+        if self.selectedMode == nil {
+            self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
+        }
+        self.setupLinkStaging.stage(link)
+        self.setupCodeStatus = "Setup link loaded for \(link.host):\(link.port). Tap Connect to apply."
+        self.connectMessage = nil
+        self.statusLine = self.setupCodeStatus ?? ""
+        self.step = .connect
+    }
+
+    private func connectStagedGatewaySetupLink() async {
+        guard self.connectingGatewayID == nil else { return }
+        guard let link = self.setupLinkStaging.link else { return }
+        guard link.isValidEndpoint else {
+            let message = "Setup link has an invalid gateway endpoint."
+            self.setupCodeStatus = message
+            self.statusLine = message
+            return
+        }
+        self.connectingGatewayID = "manual"
+        defer { self.connectingGatewayID = nil }
+        self.gatewayController.clearPendingTrustPrompt()
+        await self.appModel.resetGatewaySessionsForTargetSwitch()
+        guard self.setupLinkStaging.link == link else { return }
+        _ = self.setupLinkStaging.take()
+        self.applyGatewayLink(link)
+        self.setupCodeStatus = "Setup link applied. Connecting..."
+        self.issue = .none
+        self.connectMessage = "Connecting to \(link.host)…"
+        self.statusLine = "Connecting to \(link.host):\(link.port)…"
+        await self.connectCurrentManualGateway(host: link.host, forceReconnect: false)
+    }
+
+    private func clearStagedGatewaySetupLink() {
+        guard self.setupLinkStaging.cancel() else { return }
+        let message = "Setup link cleared."
+        self.setupCodeStatus = message
+        self.statusLine = message
     }
 
     private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
@@ -903,7 +1023,8 @@ extension OnboardingWizardView {
 
     private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
         // Stop active reconnect loops before scanning new credentials.
-        self.scannerResultHandoff.beginScan()
+        self.clearStagedGatewaySetupLink()
+        self.scannerScanID = self.scannerResultHandoff.beginScan()
         self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.connectMessage = nil
