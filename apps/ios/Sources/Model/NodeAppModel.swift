@@ -2360,6 +2360,19 @@ extension NodeAppModel {
         return hasStoredOperatorToken
     }
 
+    fileprivate nonisolated static func shouldRequestOperatorRolePairingAfterBootstrap(
+        token: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
+        // If setup-code auto-approval falls back to manual node approval, no
+        // operator token is handed off. Still open the operator lane so the
+        // gateway can request the missing role instead of leaving Chat unusable.
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmedToken.isEmpty && trimmedPassword.isEmpty && !hasStoredOperatorToken
+    }
+
     fileprivate nonisolated static func clearingBootstrapToken(in config: GatewayConnectConfig?)
     -> GatewayConnectConfig? {
         guard let config else { return nil }
@@ -2415,11 +2428,16 @@ extension NodeAppModel {
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
 
-        if self.shouldStartOperatorGatewayLoop(
+        let hasStoredOperatorToken = self.hasStoredGatewayRoleToken("operator")
+        if Self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: nil,
             password: password,
-            stableID: stableID)
+            hasStoredOperatorToken: hasStoredOperatorToken) ||
+            Self.shouldRequestOperatorRolePairingAfterBootstrap(
+                token: token,
+                password: password,
+                hasStoredOperatorToken: hasStoredOperatorToken)
         {
             self.startOperatorGatewayLoop(
                 url: url,
@@ -5365,6 +5383,17 @@ extension NodeAppModel {
         self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
+            password: password,
+            hasStoredOperatorToken: hasStoredOperatorToken)
+    }
+
+    nonisolated static func _test_shouldRequestOperatorRolePairingAfterBootstrap(
+        token: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
+        self.shouldRequestOperatorRolePairingAfterBootstrap(
+            token: token,
             password: password,
             hasStoredOperatorToken: hasStoredOperatorToken)
     }

@@ -1221,6 +1221,24 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 hasStoredOperatorToken: false))
     }
 
+    @Test func operatorLoopRequestsRolePairingAfterBootstrapWithoutHandoffToken() {
+        #expect(
+            NodeAppModel._test_shouldRequestOperatorRolePairingAfterBootstrap(
+                token: nil,
+                password: nil,
+                hasStoredOperatorToken: false))
+        #expect(
+            !NodeAppModel._test_shouldRequestOperatorRolePairingAfterBootstrap(
+                token: nil,
+                password: nil,
+                hasStoredOperatorToken: true))
+        #expect(
+            !NodeAppModel._test_shouldRequestOperatorRolePairingAfterBootstrap(
+                token: "shared-token",
+                password: nil,
+                hasStoredOperatorToken: false))
+    }
+
     @Test @MainActor func operatorGatewayRequestedEventShowsNotificationGuidanceWhenNotificationsOff() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
