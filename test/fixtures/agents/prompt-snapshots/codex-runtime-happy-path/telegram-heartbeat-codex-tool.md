@@ -88,17 +88,17 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
     "message",
+    "agents_list",
+    "sessions_spawn",
     "sessions_yield",
     "nodes",
     "cron",
     "heartbeat_respond",
     "tts",
     "gateway",
-    "agents_list",
     "sessions_list",
     "sessions_history",
     "sessions_send",
-    "sessions_spawn",
     "subagents",
     "session_status",
     "web_search",
@@ -228,20 +228,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 51910,
-    "roughTokens": 12978
+    "chars": 51374,
+    "roughTokens": 12844
   },
   "openClawDeveloperInstructions": {
-    "chars": 1984,
-    "roughTokens": 496
+    "chars": 1955,
+    "roughTokens": 489
   },
   "totalTextOnly": {
-    "chars": 27024,
-    "roughTokens": 6756
+    "chars": 26995,
+    "roughTokens": 6749
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78936,
-    "roughTokens": 19734
+    "chars": 78371,
+    "roughTokens": 19593
   },
   "userInputText": {
     "chars": 1271,
@@ -428,7 +428,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: agents_list, cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, sessions_spawn, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: cron, gateway, heartbeat_respond, nodes, session_status, sessions_history, sessions_list, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.
 
@@ -547,17 +547,17 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 ```json
 [
   "message",
+  "agents_list",
+  "sessions_spawn",
   "sessions_yield",
   "nodes",
   "cron",
   "heartbeat_respond",
   "tts",
   "gateway",
-  "agents_list",
   "sessions_list",
   "sessions_history",
   "sessions_send",
-  "sessions_spawn",
   "subagents",
   "session_status",
   "web_search",

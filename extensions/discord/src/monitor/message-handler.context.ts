@@ -428,6 +428,7 @@ export async function buildDiscordMessageProcessContext(params: {
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
       GroupSubject: groupSubject,
       GroupChannel: groupChannel,
+      ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
       UntrustedStructuredContext: untrustedContext,
       OwnerAllowFrom: ownerAllowFrom,
     },

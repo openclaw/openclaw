@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-
 // Measures gateway watch idle CPU and dist/runtime artifact churn.
+
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -14,6 +14,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
+import { sleep } from "./lib/sleep.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -332,12 +333,6 @@ function runCheckedCommand(command, args) {
     return;
   }
   throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function parsePsCpuTimeMs(timeText) {

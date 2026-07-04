@@ -3,12 +3,6 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
-    static let strictHostKeyCheckingSSHOptions = [
-        "-o", "StrictHostKeyChecking=yes",
-    ]
-    static let updateHostKeysSSHOptions = [
-        "-o", "UpdateHostKeys=yes",
-    ]
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -401,9 +395,10 @@ enum CommandResolver {
           echo "openclaw CLI missing on remote host"; exit 127;
         fi
         """
+        // Remote credentials require strict host verification unless config explicitly opts into OpenSSH policy.
         let options: [String] = [
             "-o", "BatchMode=yes",
-        ] + self.strictHostKeyCheckingSSHOptions + self.updateHostKeysSSHOptions
+        ] + settings.sshHostKeyPolicy.commandOptions
         let args = self.sshArguments(
             target: parsed,
             identity: settings.identity,
@@ -412,12 +407,39 @@ enum CommandResolver {
         return ["/usr/bin/ssh"] + args
     }
 
+    enum SSHHostKeyPolicy: String {
+        case strict
+        case openssh
+
+        var hostKeyOptions: [String] {
+            switch self {
+            case .strict:
+                [
+                    "-o", "StrictHostKeyChecking=yes",
+                    "-o", "UpdateHostKeys=yes",
+                ]
+            case .openssh:
+                []
+            }
+        }
+
+        var commandOptions: [String] {
+            [
+                "-o", "ControlMaster=no",
+                "-o", "ControlPath=none",
+                "-o", "ControlPersist=no",
+                "-o", "ForkAfterAuthentication=no",
+            ] + self.hostKeyOptions
+        }
+    }
+
     struct RemoteSettings {
         let mode: AppState.ConnectionMode
         let target: String
         let identity: String
         let projectRoot: String
         let cliPath: String
+        let sshHostKeyPolicy: SSHHostKeyPolicy
     }
 
     static func connectionSettings(
@@ -427,20 +449,31 @@ enum CommandResolver {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
         let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
-        let target = defaults.string(forKey: remoteTargetKey)?.nonEmpty
-            ?? remote?["sshTarget"] as? String
-            ?? ""
+        let configuredTarget = self.sanitizedTarget(remote?["sshTarget"] as? String ?? "")
+        let target = self.sanitizedTarget(
+            defaults.string(forKey: remoteTargetKey)?.nonEmpty ?? configuredTarget)
         let identity = defaults.string(forKey: remoteIdentityKey)?.nonEmpty
             ?? remote?["sshIdentity"] as? String
             ?? ""
         let projectRoot = defaults.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
         let cliPath = defaults.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
+        let rawHostKeyPolicy = remote?["sshHostKeyPolicy"] as? String
+        let configuredHostKeyPolicy = rawHostKeyPolicy.flatMap(SSHHostKeyPolicy.init(rawValue:)) ?? .strict
+        let sshHostKeyPolicy: SSHHostKeyPolicy = if configuredHostKeyPolicy == .openssh,
+                                                    !target.isEmpty,
+                                                    target == configuredTarget
+        {
+            .openssh
+        } else {
+            .strict
+        }
         return RemoteSettings(
             mode: mode,
-            target: self.sanitizedTarget(target),
+            target: target,
             identity: identity,
             projectRoot: projectRoot,
-            cliPath: cliPath)
+            cliPath: cliPath,
+            sshHostKeyPolicy: sshHostKeyPolicy)
     }
 
     static func connectionModeIsRemote(defaults: UserDefaults = .standard) -> Bool {

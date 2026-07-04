@@ -316,6 +316,7 @@ export async function buildWhatsAppInboundContext(params: {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
+  const wasMentioned = params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned;
   const inboundHistory =
     conversationKind === "group"
       ? buildInboundHistoryFromEntries({
@@ -385,11 +386,12 @@ export async function buildWhatsAppInboundContext(params: {
       commandBody: params.commandBody ?? params.msg.payload.body,
     },
     access: {
-      ...(params.msg.wasMentioned !== undefined
+      ...(wasMentioned !== undefined
         ? {
             mentions: {
               canDetectMention: conversationKind === "group",
-              wasMentioned: params.msg.wasMentioned,
+              wasMentioned,
+              requireMention: params.msg.groupMention?.requireMention,
             },
           }
         : {}),
@@ -812,7 +814,9 @@ export async function dispatchWhatsAppBufferedReply(params: {
       // Message-tool-only unmentioned group turns have no automatic visible reply.
       // Suppress composing there so silent background runs do not leak presence.
       suppressTyping:
-        sourceRepliesAreToolOnly && conversationKind === "group" && !params.msg.wasMentioned,
+        sourceRepliesAreToolOnly &&
+        conversationKind === "group" &&
+        !(params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned),
       disableBlockStreaming,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,

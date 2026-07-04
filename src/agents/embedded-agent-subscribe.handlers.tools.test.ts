@@ -3067,4 +3067,27 @@ describe("control UI credential redaction (issue #72283)", () => {
     expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
     expect(emittedResult).toContain("OPENROUTER_API_KEY=");
   });
+
+  it("emits primitive string results as visible tool output", async () => {
+    const { ctx } = createTestContext();
+    ctx.shouldEmitToolOutput = () => true;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-string-output",
+        isError: false,
+        result: "plain result",
+      } as never,
+    );
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "gateway",
+      undefined,
+      "plain result",
+      "plain result",
+    );
+  });
 });

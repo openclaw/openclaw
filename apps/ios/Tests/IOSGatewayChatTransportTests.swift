@@ -41,6 +41,21 @@ import Testing
         #expect(params["limit"] as? Int == 12)
     }
 
+    @Test func commandsListParamsRequestTextScopeWithArgs() throws {
+        let params = try self.object(from: IOSGatewayChatTransport.makeCommandsListParamsJSON())
+        #expect(params["scope"] as? String == "text")
+        #expect(params["includeArgs"] as? Bool == true)
+        #expect(params["agentId"] == nil)
+    }
+
+    @Test func commandsListParamsIncludeAgentForAgentScopedSession() throws {
+        let params = try self.object(
+            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(sessionKey: "agent:reviewer:ios-main"))
+        #expect(params["scope"] as? String == "text")
+        #expect(params["includeArgs"] as? Bool == true)
+        #expect(params["agentId"] as? String == "reviewer")
+    }
+
     @Test func chatSendParamsOmitEmptyAttachmentsAndKeepSessionFields() throws {
         let params = try self.object(
             from: IOSGatewayChatTransport.makeChatSendParamsJSON(

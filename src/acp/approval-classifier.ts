@@ -9,6 +9,7 @@ import {
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
 const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
@@ -52,13 +53,7 @@ function readFirstStringValue(
   if (!source) {
     return undefined;
   }
-  for (const key of keys) {
-    const value = normalizeOptionalString(source[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(source, keys);
 }
 
 function normalizeToolName(value: string): string | undefined {
