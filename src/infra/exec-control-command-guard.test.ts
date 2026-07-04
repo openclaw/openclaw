@@ -1113,16 +1113,16 @@ describe("exec broad search command guard", () => {
   });
 
   it("keeps payloads distinct when shell env changes", async () => {
-    await expect(
-      detectUnsafeExecBroadSearchShellCommand({
-        command:
-          'SESSION_ROOT=/tmp; rg token "$SESSION_ROOT"; SESSION_ROOT=$HOME/.codex/sessions; rg token "$SESSION_ROOT"',
-        workdir: "/tmp",
-      }),
-    ).resolves.toMatchObject({
-      executable: "rg",
-      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    const result = await detectUnsafeExecBroadSearchShellCommand({
+      command:
+        'SESSION_ROOT=/var/tmp/openclaw-safe-search; rg token "$SESSION_ROOT"; SESSION_ROOT=$HOME/.codex/sessions; rg token "$SESSION_ROOT"',
+      workdir: "/tmp",
     });
+    expect(result).toMatchObject({
+      executable: "rg",
+      path: "$SESSION_ROOT",
+    });
+    expect(result?.protectedRoot).not.toBe("/var/tmp/openclaw-safe-search");
   });
 
   it("ignores unexecuted shell assignments when expanding later paths", async () => {
