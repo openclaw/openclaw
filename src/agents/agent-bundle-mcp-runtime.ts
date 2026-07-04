@@ -665,10 +665,13 @@ export function createSessionMcpRuntime(params: {
               catalog?.diagnostics?.some((diagnostic) => diagnostic.serverName === serverName),
             );
             if (currentCatalogHasServerDiagnostic) {
-              throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+              throw new Error(`bundle-mcp server "${serverName}" is not connected`, {
+                cause: error,
+              });
             }
             throw new Error(
               `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`,
+              { cause: error },
             );
           }
           throw error;
@@ -710,7 +713,7 @@ export function createSessionMcpRuntime(params: {
         },
       },
     );
-    return {
+    const createdSession: BundleMcpSession = {
       serverName,
       client,
       transport: resolved.transport,
@@ -724,6 +727,14 @@ export function createSessionMcpRuntime(params: {
       sharedAcrossCatalogGenerations: false,
       detachStderr: resolved.detachStderr,
     };
+    // The SDK exposes lifecycle hooks as callback properties. A close is
+    // terminal for this client/transport pair.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
+    client.onclose = () => {
+      createdSession.connected = false;
+      createdSession.disconnectReason = "mcp transport closed";
+    };
+    return createdSession;
   };
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
@@ -816,13 +827,11 @@ export function createSessionMcpRuntime(params: {
                 session.sharedAcrossCatalogGenerations = true;
               }
               session.catalogUseCount += 1;
-              let connectedForCatalog = false;
               const loadCatalogForSession = async (
                 currentSession: BundleMcpSession,
               ): Promise<ServerResult> => {
                 failIfDisposed();
                 await ensureSessionConnected(currentSession, resolved.connectionTimeoutMs);
-                connectedForCatalog = true;
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
                   currentSession.client.getServerCapabilities(),
@@ -897,7 +906,6 @@ export function createSessionMcpRuntime(params: {
                 if (session.usesOAuth && isRetriableMcpAuthSessionFailure(error)) {
                   const retired = await retireSessionIfCurrent(serverName, session);
                   if (retired) {
-                    connectedForCatalog = false;
                     const retryResolved = resolveMcpTransport(serverName, rawServer);
                     if (retryResolved) {
                       session = createResolvedSession(serverName, retryResolved);
