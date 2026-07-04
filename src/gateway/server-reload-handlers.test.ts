@@ -53,6 +53,7 @@ const hoisted = vi.hoisted(() => ({
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
   reloadEvents: [] as string[],
   resetModelCatalogCache: vi.fn(() => {}),
+  resetModelDiscoveryCache: vi.fn(() => {}),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -116,6 +117,13 @@ vi.mock("../agents/model-catalog.js", () => ({
   resetModelCatalogCache: () => {
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
+  },
+}));
+
+vi.mock("../agents/embedded-agent-runner/model-discovery-cache.js", () => ({
+  resetModelDiscoveryCache: () => {
+    hoisted.reloadEvents.push("reset-model-discovery-cache");
+    hoisted.resetModelDiscoveryCache();
   },
 }));
 
@@ -188,6 +196,7 @@ afterEach(() => {
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.reloadEvents.length = 0;
   hoisted.resetModelCatalogCache.mockClear();
+  hoisted.resetModelDiscoveryCache.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
@@ -255,9 +264,11 @@ describe("gateway hot reload model state", () => {
     expect(firstResetIndex).toBeGreaterThanOrEqual(0);
     expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
       "reset-model-catalog",
+      "reset-model-discovery-cache",
       "clear-provider-auth",
       "reload-plugins",
       "reset-model-catalog",
+      "reset-model-discovery-cache",
       "clear-provider-auth",
       "refresh-context-window",
       "warm-provider-auth",
