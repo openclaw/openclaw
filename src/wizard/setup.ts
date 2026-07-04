@@ -491,6 +491,11 @@ async function runSetupWizardOnce(
       ],
     });
 
+    if (action === "keep") {
+      await prompter.outro(t("wizard.setup.existingConfigKept"));
+      return;
+    }
+
     if (action === "reset") {
       const workspaceDefault =
         baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE;

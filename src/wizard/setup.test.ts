@@ -698,6 +698,60 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps an existing config without re-entering setup", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          port: 19001,
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    replaceConfigFile.mockClear();
+    promptAuthChoiceGrouped.mockClear();
+    configureGatewayForSetup.mockClear();
+    setupChannels.mockClear();
+    setupSkills.mockClear();
+    setupInternalHooks.mockClear();
+    finalizeSetupWizard.mockClear();
+
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) =>
+      opts.message === "Config handling" ? "keep" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(prompter.outro).toHaveBeenCalledWith("Current configuration kept.");
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(promptAuthChoiceGrouped).not.toHaveBeenCalled();
+    expect(configureGatewayForSetup).not.toHaveBeenCalled();
+    expect(setupChannels).not.toHaveBeenCalled();
+    expect(setupSkills).not.toHaveBeenCalled();
+    expect(setupInternalHooks).not.toHaveBeenCalled();
+    expect(finalizeSetupWizard).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
   it("treats auth-only Gateway policy as existing", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
@@ -1720,7 +1774,7 @@ describe("runSetupWizard", () => {
     finishAgentAssistedSetup.mockClear();
 
     const select = vi.fn(async ({ message }: WizardSelectParams<unknown>) =>
-      message === "Config handling" ? "keep" : "quickstart",
+      message === "Config handling" ? "modify" : "quickstart",
     ) as unknown as WizardPrompter["select"];
     const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime();
@@ -1964,8 +2018,8 @@ describe("runSetupWizard", () => {
     const workspaceDir = await makeCaseDir("plugin-install-migration-");
     const select = vi.fn(async ({ options }: WizardSelectParams<unknown>) => {
       const values = options.map((option) => option.value);
-      if (values.includes("keep")) {
-        return "keep";
+      if (values.includes("modify")) {
+        return "modify";
       }
       if (values.includes("quickstart")) {
         return "quickstart";
@@ -2493,7 +2547,7 @@ describe("runSetupWizard", () => {
     });
     const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
       if (opts.message === "Config handling") {
-        return "keep";
+        return "modify";
       }
       return "quickstart";
     }) as unknown as WizardPrompter["select"];

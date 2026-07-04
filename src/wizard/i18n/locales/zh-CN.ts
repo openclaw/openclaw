@@ -253,6 +253,7 @@ export const zh_CN = {
       durationNote:
         "接下来会依次设置模型/认证、工作区、Gateway、频道、网页搜索、技能和可选插件。QuickStart 通常只需几分钟，但提供商登录、频道配对、daemon 安装、网络下载和可选依赖可能需要更久。你可以跳过可选步骤，之后用 {command} 返回配置。",
       durationTitle: "设置流程",
+      existingConfigKept: "已保留当前配置。",
       existingConfigTitle: "检测到已有配置",
       flowAdvanced: "手动设置",
       flowAdvancedHint: "选择 Gateway 端口、网络暴露、Tailscale 和认证方式。",
