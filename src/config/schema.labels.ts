@@ -661,6 +661,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.models.*.agentRuntime.id": "Default Agent Model Runtime ID",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",
+  "agents.defaults.utilityModel": "Utility Model",
+  "agents.list.*.utilityModel": "Agent Utility Model",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
   "agents.defaults.imageGenerationModel.primary": "Image Generation Model",
