@@ -35,9 +35,9 @@ export function shouldIgnoreInstalledPluginDirName(name: string): boolean {
 }
 
 /**
- * Lists installed plugin directories under the state extensions dir. Stat and
- * readdir failures surface through `onReadError` so audits can report scan
- * problems instead of silently treating them as "no plugins".
+ * Lists installed plugin directories under the state extensions dir. Read
+ * failures surface through `onReadError` so audits can report scan problems,
+ * except a missing extensions dir, which is the normal no-plugins state.
  */
 export async function listInstalledPluginDirs(params: {
   stateDir: string;
@@ -45,7 +45,10 @@ export async function listInstalledPluginDirs(params: {
 }): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
   const extensionsDir = path.join(params.stateDir, "extensions");
   const st = await fs.stat(extensionsDir).catch((err: unknown) => {
-    params.onReadError?.(err);
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      params.onReadError?.(err);
+    }
     return null;
   });
   if (!st?.isDirectory()) {
