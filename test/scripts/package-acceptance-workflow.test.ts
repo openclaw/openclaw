@@ -378,7 +378,7 @@ describe("package acceptance workflow", () => {
     );
   });
 
-  it("keeps default Crabbox capacity on the Azure credit-backed lane", () => {
+  it("defaults Crabbox proof to Blacksmith while keeping direct jobs on Azure", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       aws?: { region?: string };
       capacity?: {
@@ -388,22 +388,30 @@ describe("package acceptance workflow", () => {
         regions?: string[];
       };
       jobs?: {
-        changed?: { command?: string; market?: string; shell?: boolean; type?: string };
-        prewarm?: { market?: string; type?: string };
+        changed?: {
+          command?: string;
+          market?: string;
+          provider?: string;
+          shell?: boolean;
+          type?: string;
+        };
+        prewarm?: { market?: string; provider?: string; type?: string };
       };
       provider?: string;
       ssh?: { port?: string; user?: string };
     };
 
-    expect(crabboxConfig.provider).toBe("azure");
+    expect(crabboxConfig.provider).toBe("blacksmith-testbox");
     expect(crabboxConfig.capacity?.market).toBe("on-demand");
     expect(crabboxConfig.capacity?.fallback).toBeUndefined();
     expect(crabboxConfig.capacity?.regions).toBeUndefined();
     expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
     expect(crabboxConfig.aws?.region).toBe("eu-west-1");
     expect(crabboxConfig.jobs?.prewarm?.market).toBe("on-demand");
+    expect(crabboxConfig.jobs?.prewarm?.provider).toBe("azure");
     expect(crabboxConfig.jobs?.prewarm?.type).toBe("Standard_D4ads_v6");
     expect(crabboxConfig.jobs?.changed?.market).toBe("on-demand");
+    expect(crabboxConfig.jobs?.changed?.provider).toBe("azure");
     expect(crabboxConfig.jobs?.changed?.type).toBe("Standard_D4ads_v6");
     expect(crabboxConfig.jobs?.changed?.shell).toBe(true);
     expect(crabboxConfig.jobs?.changed?.command).toContain("set -euo pipefail");
@@ -2140,7 +2148,7 @@ describe("package artifact reuse", () => {
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
     );
     expect(clawHubWorkflow).toContain(
-      "family: ${{ contains(fromJson('[\"@openclaw/acpx\",\"@openclaw/diffs\",\"@openclaw/feishu\",\"@openclaw/qqbot\"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}",
+      'family: ${{ contains(fromJson(\'["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]\'), matrix.plugin.packageName) && \'bundle-plugin\' || \'\' }}',
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");

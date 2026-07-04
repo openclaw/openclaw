@@ -172,6 +172,14 @@ function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string
 }
 
 describe("docker build helper", () => {
+  it("allows deployments to build an immutable sandbox image tag", () => {
+    const script = readFileSync("scripts/sandbox-setup.sh", "utf8");
+
+    expect(script).toContain(
+      'IMAGE_NAME="${OPENCLAW_SANDBOX_IMAGE:-openclaw-sandbox:bookworm-slim}"',
+    );
+  });
+
   it("forces BuildKit for centralized Docker builds", () => {
     const helper = readFileSync(HELPER_PATH, "utf8");
 
