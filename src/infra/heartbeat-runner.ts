@@ -1593,13 +1593,19 @@ export async function runHeartbeatOnce(opts: {
   if (delivery.reason === "unknown-account") {
     log.warn("heartbeat: unknown accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId ?? null,
+      logEvent: "heartbeat.delivery.account_unknown",
+      logOutcome: "warning",
+      logReason: "unknown_account",
       target: heartbeat?.target ?? "none",
     });
   } else if (heartbeatAccountId) {
     log.info("heartbeat: using explicit accountId", {
       accountId: delivery.accountId ?? heartbeatAccountId,
-      target: heartbeat?.target ?? "none",
       channel: delivery.channel,
+      logEvent: "heartbeat.delivery.account_selected",
+      logOutcome: "success",
+      logReason: "explicit_account",
+      target: heartbeat?.target ?? "none",
     });
   }
   const visibility =
@@ -1742,6 +1748,9 @@ export async function runHeartbeatOnce(opts: {
     if (lifecycleResult.artifactCleanupError) {
       log.warn("heartbeat: failed to archive stale isolated session transcript", {
         err: formatErrorMessage(lifecycleResult.artifactCleanupError),
+        logEvent: "heartbeat.session.archive_failed",
+        logOutcome: "failure",
+        logReason: "artifact_cleanup_failed",
         sessionKey: staleIsolatedSessionKey,
       });
     }
@@ -2209,6 +2218,9 @@ export async function runHeartbeatOnce(opts: {
         });
         log.info("heartbeat: channel not ready", {
           channel: delivery.channel,
+          logEvent: "heartbeat.delivery.channel_not_ready",
+          logOutcome: "warning",
+          logReason: readiness.reason,
           reason: readiness.reason,
         });
         return { status: "skipped", reason: readiness.reason };
@@ -2303,7 +2315,12 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
     });
-    log.error(`heartbeat failed: ${reason}`, { error: reason });
+    log.error(`heartbeat failed: ${reason}`, {
+      error: reason,
+      logEvent: "heartbeat.run.failed",
+      logOutcome: "failure",
+      logReason: "run_failed",
+    });
     return { status: "failed", reason };
   } finally {
     heartbeatTyping?.onCleanup?.();
@@ -2407,8 +2424,11 @@ export function startHeartbeatRunner(opts: {
       if (!agent.floodLoggedSinceLastRun) {
         log.warn("heartbeat: flood guard tripped, deferring wake", {
           agentId: agent.agentId,
-          reason: reason ?? "(none)",
+          logEvent: "heartbeat.wake.deferred",
+          logOutcome: "warning",
+          logReason: "flood",
           recentRunCount: agent.recentRunStarts.length,
+          reason: reason ?? "(none)",
         });
         agent.floodLoggedSinceLastRun = true;
       }
@@ -2451,6 +2471,9 @@ export function startHeartbeatRunner(opts: {
       log.warn("heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d", {
         rawDelayMs: rawDelay,
         clampedMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+        logEvent: "heartbeat.schedule.delay_clamped",
+        logOutcome: "warning",
+        logReason: "timeout_cap",
       });
     }
     const delay = resolveSafeTimeoutDelayMs(rawDelay, { minMs: 0 });
@@ -2522,16 +2545,36 @@ export function startHeartbeatRunner(opts: {
     const nextEnabled = nextAgents.size > 0;
     if (!initialized) {
       if (!nextEnabled) {
-        log.info("heartbeat: disabled", { enabled: false });
+        log.info("heartbeat: disabled", {
+          enabled: false,
+          logEvent: "heartbeat.runner.disabled",
+          logOutcome: "success",
+          logReason: "configured",
+        });
       } else {
-        log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
+        log.info("heartbeat: started", {
+          intervalMs: Math.min(...intervals),
+          logEvent: "heartbeat.runner.started",
+          logOutcome: "success",
+          logReason: "configured",
+        });
       }
       initialized = true;
     } else if (prevEnabled !== nextEnabled) {
       if (!nextEnabled) {
-        log.info("heartbeat: disabled", { enabled: false });
+        log.info("heartbeat: disabled", {
+          enabled: false,
+          logEvent: "heartbeat.runner.disabled",
+          logOutcome: "success",
+          logReason: "configured",
+        });
       } else {
-        log.info("heartbeat: started", { intervalMs: Math.min(...intervals) });
+        log.info("heartbeat: started", {
+          intervalMs: Math.min(...intervals),
+          logEvent: "heartbeat.runner.started",
+          logOutcome: "success",
+          logReason: "configured",
+        });
       }
     }
 
@@ -2620,6 +2663,9 @@ export function startHeartbeatRunner(opts: {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
+            logEvent: "heartbeat.runner.targeted_run_failed",
+            logOutcome: "failure",
+            logReason: "exception",
           });
           // Throw counts as a non-retryable terminal attempt for cooldown
           // purposes — record bookkeeping so the wake layer doesn't tight-loop
@@ -2662,8 +2708,11 @@ export function startHeartbeatRunner(opts: {
         } catch (err) {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, {
-            error: errMsg,
             agentId: agent.agentId,
+            error: errMsg,
+            logEvent: "heartbeat.runner.agent_run_failed",
+            logOutcome: "failure",
+            logReason: "exception",
           });
           // Throw counts as a non-retryable terminal attempt for cooldown
           // purposes — record bookkeeping so the wake layer doesn't tight-loop
@@ -2712,8 +2761,11 @@ export function startHeartbeatRunner(opts: {
           } catch (err) {
             const errMsg = formatErrorMessage(err);
             log.error(`heartbeat runner: commitment runOnce threw unexpectedly: ${errMsg}`, {
-              error: errMsg,
               agentId: agent.agentId,
+              error: errMsg,
+              logEvent: "heartbeat.runner.commitment_run_failed",
+              logOutcome: "failure",
+              logReason: "exception",
             });
             continue;
           }

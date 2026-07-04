@@ -63,6 +63,14 @@ describe("startHeartbeatRunner timeout overflow warnings", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d",
+      expect.objectContaining({
+        logEvent: "heartbeat.schedule.delay_clamped",
+        logOutcome: "warning",
+        logReason: "timeout_cap",
+      }),
+    );
 
     runnerA.stop();
     runnerB.stop();

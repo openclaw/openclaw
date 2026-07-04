@@ -1,4 +1,5 @@
 // Logger implementation writes structured log output with redaction and transports.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +65,12 @@ type HostnameResolver = () => string;
 type DiagnosticLogCode = {
   line?: number;
   functionName?: string;
+  siteId?: string;
+};
+export type DiagnosticLogSource = {
+  filePath?: string;
+  line?: number;
+  functionName?: string;
 };
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
@@ -83,11 +90,128 @@ const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
 const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
+const DIAGNOSTIC_LOG_SEMANTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const DIAGNOSTIC_LOG_REASON_CODE_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u;
+const DIAGNOSTIC_LOG_SEMANTIC_SOURCE_KEYS = new Set([
+  "eventName",
+  "logEvent",
+  "logCategory",
+  "logOutcome",
+  "logReason",
+  "otel.event.name",
+  "signal.type",
+  "log.event",
+  "log.category",
+  "log.outcome",
+  "log.reason",
+  "__openclawDiagnosticLogSemantics",
+  "__openclawDiagnosticLogSource",
+]);
+const DIAGNOSTIC_LOG_SEMANTICS_FIELD = "__openclawDiagnosticLogSemantics";
+const DIAGNOSTIC_LOG_SOURCE_FIELD = "__openclawDiagnosticLogSource";
+const DIAGNOSTIC_LOG_SEMANTICS_TOKEN = `${Date.now()}:${Math.random()}`;
 const defaultHostnameResolver: HostnameResolver = () => os.hostname();
 let hostnameResolver: HostnameResolver = defaultHostnameResolver;
 let cachedHostname: string | null = null;
 
 type DiagnosticLogAttributes = Record<string, string | number | boolean>;
+type DiagnosticLogSemantics = {
+  event?: unknown;
+  category?: unknown;
+  outcome?: unknown;
+  reason?: unknown;
+};
+type DiagnosticLogCategoryCandidate = {
+  value: unknown;
+  source: string;
+};
+type AttachedDiagnosticLogSemantics = {
+  fields: DiagnosticLogSemantics;
+  proof: string;
+};
+type AttachedDiagnosticLogSource = {
+  fields: DiagnosticLogSource;
+  proof: string;
+};
+const STRIPPED_DIAGNOSTIC_LOG_VALUE = Symbol("strippedDiagnosticLogValue");
+
+function readAttachedDiagnosticLogSemantics(
+  source: Record<string, unknown> | undefined,
+): DiagnosticLogSemantics | undefined {
+  const candidate = source?.[DIAGNOSTIC_LOG_SEMANTICS_FIELD] as
+    | AttachedDiagnosticLogSemantics
+    | undefined;
+  return candidate?.proof === DIAGNOSTIC_LOG_SEMANTICS_TOKEN ? candidate.fields : undefined;
+}
+
+function readAttachedDiagnosticLogSource(
+  source: Record<string, unknown> | undefined,
+): DiagnosticLogSource | undefined {
+  const candidate = source?.[DIAGNOSTIC_LOG_SOURCE_FIELD] as
+    | AttachedDiagnosticLogSource
+    | undefined;
+  return candidate?.proof === DIAGNOSTIC_LOG_SEMANTICS_TOKEN ? candidate.fields : undefined;
+}
+
+export function attachDiagnosticLogSemantics<T extends Record<string, unknown>>(
+  source: T,
+  semantics: DiagnosticLogSemantics,
+): T {
+  source[DIAGNOSTIC_LOG_SEMANTICS_FIELD] = {
+    fields: semantics,
+    proof: DIAGNOSTIC_LOG_SEMANTICS_TOKEN,
+  };
+  return source;
+}
+
+export function hasDiagnosticLogSemantics(source: Record<string, unknown> | undefined): boolean {
+  return Boolean(readAttachedDiagnosticLogSemantics(source));
+}
+
+export function attachDiagnosticLogSource<T extends Record<string, unknown>>(
+  source: T,
+  diagnosticSource: DiagnosticLogSource,
+): T {
+  source[DIAGNOSTIC_LOG_SOURCE_FIELD] = {
+    fields: diagnosticSource,
+    proof: DIAGNOSTIC_LOG_SEMANTICS_TOKEN,
+  };
+  return source;
+}
+
+export function splitDiagnosticLogSemanticFields(source: Record<string, unknown> | undefined): {
+  attributes?: Record<string, unknown>;
+  semantics?: DiagnosticLogSemantics;
+} {
+  if (!source) {
+    return {};
+  }
+  const attributes: Record<string, unknown> = {};
+  const semantics: DiagnosticLogSemantics = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key === "logEvent") {
+      semantics.event = value;
+      continue;
+    }
+    if (key === "logCategory") {
+      semantics.category = value;
+      continue;
+    }
+    if (key === "logOutcome") {
+      semantics.outcome = value;
+      continue;
+    }
+    if (key === "logReason") {
+      semantics.reason = value;
+      continue;
+    }
+    attributes[key] = value;
+  }
+  return {
+    ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
+    ...(Object.keys(semantics).length > 0 ? { semantics } : {}),
+  };
+}
 
 function clampDiagnosticLogText(value: string, maxChars: number): string {
   return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
@@ -106,6 +230,261 @@ function normalizeDiagnosticLogName(value: string | undefined): string | undefin
   }
   const sanitized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS);
   return DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE.test(sanitized) ? sanitized : undefined;
+}
+
+function normalizeDiagnosticLogSemanticValue(value: unknown, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS)
+    .replace(/[/:]+/gu, ".")
+    .replace(/\s+/gu, "-")
+    .replace(/\.+/gu, ".")
+    .replace(/^\.|\.$/gu, "");
+  return DIAGNOSTIC_LOG_SEMANTIC_VALUE_RE.test(normalized) ? normalized : fallback;
+}
+
+function diagnosticLogEventFromCategory(category: string, level: string): string {
+  if (category === "unknown") {
+    return "log.record";
+  }
+  const levelSegment = normalizeDiagnosticLogSemanticValue(level.toLowerCase(), "log");
+  return `${category}.${levelSegment}`;
+}
+
+function normalizeDiagnosticLogCategorySegment(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS)
+    .replace(/[/:]+/gu, ".")
+    .replace(/[^A-Za-z0-9_.:-]+/gu, ".")
+    .replace(/\.+/gu, ".")
+    .replace(/^\.|\.$/gu, "")
+    .toLowerCase();
+  return DIAGNOSTIC_LOG_SEMANTIC_VALUE_RE.test(normalized) ? normalized : undefined;
+}
+
+function firstDiagnosticLogCategoryCandidate(
+  sources: readonly (Record<string, unknown> | undefined)[],
+): DiagnosticLogCategoryCandidate | undefined {
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    const semanticValue = readDiagnosticLogSemanticValue(source, "category");
+    if (semanticValue !== undefined) {
+      return { value: semanticValue, source: "semantic" };
+    }
+    if (Object.hasOwn(source, "logCategory")) {
+      return { value: source.logCategory, source: "logCategory" };
+    }
+  }
+
+  const bindings = sources[1];
+  if (!bindings) {
+    return undefined;
+  }
+  for (const key of ["subsystem", "module", "name", "capability"]) {
+    if (Object.hasOwn(bindings, key)) {
+      return { value: bindings[key], source: key };
+    }
+  }
+  if (Object.hasOwn(bindings, "feature") && Object.hasOwn(bindings, "plugin")) {
+    return {
+      value: `${String(bindings.plugin)}.${String(bindings.feature)}`,
+      source: "plugin.feature",
+    };
+  }
+  if (Object.hasOwn(bindings, "plugin")) {
+    return { value: bindings.plugin, source: "plugin" };
+  }
+  return undefined;
+}
+
+function normalizeDiagnosticLogEventSegment(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS)
+    .replace(/[<>]/gu, "")
+    .replace(/[^A-Za-z0-9_.:-]+/gu, ".")
+    .replace(/\.+/gu, ".")
+    .replace(/^\.|\.$/gu, "")
+    .toLowerCase();
+  return DIAGNOSTIC_LOG_SEMANTIC_VALUE_RE.test(normalized) ? normalized : undefined;
+}
+
+function diagnosticLogEventFromCode(category: string, level: string, code: DiagnosticLogCode) {
+  const levelSegment = normalizeDiagnosticLogSemanticValue(level.toLowerCase(), "log");
+  const functionSegment = normalizeDiagnosticLogEventSegment(code.functionName);
+  if (category === "unknown") {
+    return functionSegment ? `log.${functionSegment}.${levelSegment}` : "log.record";
+  }
+  return functionSegment
+    ? `${category}.${functionSegment}.${levelSegment}`
+    : diagnosticLogEventFromCategory(category, level);
+}
+
+function normalizeDiagnosticSourcePath(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const normalized = value.replace(/\\/gu, "/");
+  for (const root of ["src/", "extensions/", "packages/", "ui/", "docs/"]) {
+    if (normalized.startsWith(root)) {
+      return normalized;
+    }
+  }
+  const rootMarkerIndex = ["src/", "extensions/", "packages/", "ui/", "docs/"].reduce<
+    number | undefined
+  >((best, root) => {
+    const index = normalized.indexOf(`/${root}`);
+    if (index < 0) {
+      return best;
+    }
+    return best === undefined || index < best ? index : best;
+  }, undefined);
+  if (rootMarkerIndex !== undefined) {
+    return normalized.slice(rootMarkerIndex + 1);
+  }
+  const basename = path.basename(normalized);
+  return basename || undefined;
+}
+
+function diagnosticLogSiteId(params: {
+  filePath?: unknown;
+  line?: number;
+  functionName?: string;
+  category: string;
+  level: string;
+}): string | undefined {
+  const sourcePath = normalizeDiagnosticSourcePath(params.filePath);
+  const functionName = normalizeDiagnosticLogEventSegment(params.functionName) ?? "unknown";
+  const line = params.line ?? "unknown";
+  if (!sourcePath && line === "unknown" && functionName === "unknown") {
+    return undefined;
+  }
+  const seed = `${sourcePath ?? "unknown"}:${line}:${functionName}:${params.category}:${
+    params.level
+  }`;
+  return createHash("sha256").update(seed).digest("hex").slice(0, 16);
+}
+
+function diagnosticLogOutcomeFromLevel(level: string): string {
+  switch (level.toUpperCase()) {
+    case "ERROR":
+    case "FATAL":
+      return "failure";
+    case "WARN":
+      return "warning";
+    case "INFO":
+      return "success";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeDiagnosticLogReasonCode(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS);
+  if (!normalized || normalized !== value.trim()) {
+    return undefined;
+  }
+  return DIAGNOSTIC_LOG_REASON_CODE_RE.test(normalized) ? normalized : undefined;
+}
+
+function diagnosticLogOutcomeFromStatus(value: unknown): string | undefined {
+  const status = normalizeDiagnosticLogReasonCode(value)?.toLowerCase();
+  if (!status) {
+    return undefined;
+  }
+  if (
+    status === "failed" ||
+    status === "failure" ||
+    status === "error" ||
+    status.endsWith("-failed") ||
+    status.endsWith("_failed")
+  ) {
+    return "failure";
+  }
+  if (
+    status === "skipped" ||
+    status === "warning" ||
+    status === "deferred" ||
+    status === "blocked" ||
+    status.endsWith("-skipped") ||
+    status.endsWith("_skipped")
+  ) {
+    return "warning";
+  }
+  if (
+    status === "ok" ||
+    status === "success" ||
+    status === "started" ||
+    status === "sent" ||
+    status === "ran" ||
+    status.endsWith("-ok") ||
+    status.endsWith("_ok")
+  ) {
+    return "success";
+  }
+  return undefined;
+}
+
+function readDiagnosticLogSemanticValue(
+  source: Record<string, unknown> | undefined,
+  key: keyof DiagnosticLogSemantics,
+): unknown {
+  if (!source) {
+    return undefined;
+  }
+  const semantics = readAttachedDiagnosticLogSemantics(source);
+  return semantics?.[key];
+}
+
+function stripDiagnosticLogInternalFieldsFromValue(
+  value: unknown,
+): unknown | typeof STRIPPED_DIAGNOSTIC_LOG_VALUE {
+  if (
+    !isPlainLogRecordObject(value) ||
+    (!hasDiagnosticLogSemantics(value) && !readAttachedDiagnosticLogSource(value))
+  ) {
+    return value;
+  }
+  const copy = { ...value };
+  delete copy[DIAGNOSTIC_LOG_SEMANTICS_FIELD];
+  delete copy[DIAGNOSTIC_LOG_SOURCE_FIELD];
+  if (Object.keys(copy).length === 0) {
+    return STRIPPED_DIAGNOSTIC_LOG_VALUE;
+  }
+  return copy;
+}
+
+function stripDiagnosticLogSemanticsFromRecord<T extends LogObj>(record: T): T {
+  const copy = { ...record };
+  for (const key of Object.keys(copy)) {
+    const stripped = stripDiagnosticLogInternalFieldsFromValue(copy[key]);
+    if (stripped === STRIPPED_DIAGNOSTIC_LOG_VALUE) {
+      delete copy[key];
+    } else {
+      copy[key] = stripped;
+    }
+  }
+  const numericEntries = Object.entries(copy)
+    .filter(([key]) => /^\d+$/u.test(key))
+    .toSorted((a, b) => Number(a[0]) - Number(b[0]));
+  if (numericEntries.some(([key], index) => key !== String(index))) {
+    for (const [key] of numericEntries) {
+      delete copy[key];
+    }
+    numericEntries.forEach(([, value], index) => {
+      copy[String(index)] = value;
+    });
+  }
+  return copy;
 }
 
 function assignDiagnosticLogAttribute(
@@ -159,6 +538,9 @@ function addDiagnosticLogAttributesFrom(
       break;
     }
     if (!Object.hasOwn(source, key) || key === "trace") {
+      continue;
+    }
+    if (DIAGNOSTIC_LOG_SEMANTIC_SOURCE_KEYS.has(key.trim())) {
       continue;
     }
     assignDiagnosticLogAttribute(attributes, state, key, source[key]);
@@ -439,27 +821,123 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   addDiagnosticLogAttributesFrom(attributes, attributeState, bindings);
   addDiagnosticLogAttributesFrom(attributes, attributeState, structuredBindings);
 
+  const diagnosticSource = readAttachedDiagnosticLogSource(structuredBindings);
+  const hasDiagnosticSource = Boolean(diagnosticSource);
   const code: DiagnosticLogCode = {};
-  if (meta?.path?.fileLine) {
-    const line = Number(meta.path.fileLine);
+  const sourceLine = diagnosticSource?.line ?? meta?.path?.fileLine;
+  if (sourceLine !== undefined) {
+    const line = Number(sourceLine);
     if (Number.isFinite(line)) {
       code.line = line;
     }
   }
-  if (meta?.path?.method) {
-    code.functionName = sanitizeDiagnosticLogText(meta.path.method, MAX_DIAGNOSTIC_LOG_NAME_CHARS);
+  const sourceFunctionName = hasDiagnosticSource
+    ? diagnosticSource?.functionName
+    : meta?.path?.method;
+  if (sourceFunctionName) {
+    code.functionName = sanitizeDiagnosticLogText(
+      sourceFunctionName,
+      MAX_DIAGNOSTIC_LOG_NAME_CHARS,
+    );
   }
 
   const loggerName = normalizeDiagnosticLogName(meta?.name);
   const loggerParents = meta?.parentNames
     ?.map(normalizeDiagnosticLogName)
     .filter((name): name is string => Boolean(name));
+  const semanticSources = [structuredBindings, bindings] as const;
+  const firstSemanticSourceValue = (
+    semanticKey: keyof DiagnosticLogSemantics,
+    keys: readonly string[],
+  ) => {
+    for (const source of semanticSources) {
+      if (!source) {
+        continue;
+      }
+      const semanticValue = readDiagnosticLogSemanticValue(source, semanticKey);
+      if (semanticValue !== undefined) {
+        return semanticValue;
+      }
+      for (const key of keys) {
+        if (Object.hasOwn(source, key)) {
+          return source[key];
+        }
+      }
+    }
+    return undefined;
+  };
+  const categoryCandidate = firstDiagnosticLogCategoryCandidate(semanticSources);
+  const firstReasonCodeValue = (keys: readonly string[]) => {
+    for (const source of semanticSources) {
+      if (!source) {
+        continue;
+      }
+      for (const key of keys) {
+        if (!Object.hasOwn(source, key)) {
+          continue;
+        }
+        const reason = normalizeDiagnosticLogReasonCode(source[key]);
+        if (reason) {
+          return reason;
+        }
+      }
+    }
+    return undefined;
+  };
+  const logLevelName = meta?.logLevelName ?? "INFO";
+  const category =
+    normalizeDiagnosticLogCategorySegment(categoryCandidate?.value) ??
+    normalizeDiagnosticLogSemanticValue(categoryCandidate?.value, "unknown");
+  if (
+    categoryCandidate?.source &&
+    categoryCandidate.source !== "semantic" &&
+    categoryCandidate.source !== "subsystem" &&
+    categoryCandidate.source !== "logCategory"
+  ) {
+    assignDiagnosticLogAttribute(
+      attributes,
+      attributeState,
+      "log.category_source",
+      categoryCandidate.source,
+    );
+  }
+  const event = normalizeDiagnosticLogSemanticValue(
+    firstSemanticSourceValue("event", ["logEvent"]),
+    diagnosticLogEventFromCode(category, logLevelName, code),
+  );
+  const siteId = diagnosticLogSiteId({
+    filePath: diagnosticSource?.filePath ?? meta?.path?.filePath,
+    line: code.line,
+    functionName: code.functionName,
+    category,
+    level: logLevelName,
+  });
+  if (siteId) {
+    code.siteId = siteId;
+  }
+  const statusOutcome = diagnosticLogOutcomeFromStatus(
+    firstSemanticSourceValue("outcome", ["logOutcome"]) ??
+      firstReasonCodeValue(["status", "state"]),
+  );
+  const outcome = normalizeDiagnosticLogSemanticValue(
+    firstSemanticSourceValue("outcome", ["logOutcome"]),
+    statusOutcome ?? diagnosticLogOutcomeFromLevel(logLevelName),
+  );
+  const sourceReason = firstReasonCodeValue(["reason", "status", "state", "errorCategory"]);
+  const reason = normalizeDiagnosticLogSemanticValue(
+    firstSemanticSourceValue("reason", ["logReason"]),
+    sourceReason ?? (outcome === "warning" || outcome === "failure" ? outcome : "none"),
+  );
 
   return {
     event: {
       type: "log.record" as const,
       level: meta?.logLevelName ?? "INFO",
       message,
+      event,
+      category,
+      outcome,
+      reason,
       ...(loggerName ? { loggerName } : {}),
       ...(loggerParents?.length ? { loggerParents } : {}),
       ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
@@ -604,8 +1082,9 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const traceFields = buildTraceFileLogFields(logObj as TsLogRecord);
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
+      const visibleLogObj = stripDiagnosticLogSemanticsFromRecord(logObj);
       const record = {
-        ...logObj,
+        ...visibleLogObj,
         _meta: withResolvedLogMetaHostname(logObj["_meta"], structuredFields.hostname),
         time,
         ...structuredFields,
@@ -744,6 +1223,7 @@ export function resetLogger() {
 }
 
 export const testApi = {
+  normalizeDiagnosticSourcePath,
   resolveActiveLogFile,
   setHostnameResolverForTests: (resolver?: HostnameResolver) => {
     hostnameResolver = resolver ?? defaultHostnameResolver;
