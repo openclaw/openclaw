@@ -1,14 +1,15 @@
-/**
- * Built-in find session tool.
- *
- * Searches files by glob through fd/local operations and returns bounded, renderable results.
- */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+/**
+ * Built-in find session tool.
+ *
+ * Searches files by glob through fd/local operations and returns bounded, renderable results.
+ */
+import { toPosixPath } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -24,10 +25,6 @@ import {
 import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
-
-function toPosixPath(value: string): string {
-  return value.split(path.sep).join("/");
-}
 
 const findSchema = Type.Object({
   pattern: Type.String({

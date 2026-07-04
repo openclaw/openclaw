@@ -1,8 +1,3 @@
-/**
- * Built-in read session tool.
- *
- * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
- */
 import { constants } from "node:fs";
 import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
@@ -16,6 +11,12 @@ import {
   normalizeMediaReferenceSource,
   resolveMediaReferenceLocalPath,
 } from "../../../media/media-reference.js";
+/**
+ * Built-in read session tool.
+ *
+ * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
+ */
+import { toPosixPath } from "../../../shared/ignore-rules.js";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import {
@@ -116,10 +117,6 @@ function getNonVisionImageNote(model: Model | undefined): string | undefined {
     return undefined;
   }
   return "[Current model does not support images. The image will be omitted from this request.]";
-}
-
-function toPosixPath(filePath: string): string {
-  return filePath.split(sep).join("/");
 }
 
 function quotePosixShellArg(value: string): string {
