@@ -344,12 +344,26 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/net-policy/url-protocol",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-protocol.ts"),
+      },
+      {
         find: "@openclaw/net-policy/url-userinfo",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
       },
       {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/boolean-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "boolean-coercion.ts",
+        ),
       },
       {
         find: "@openclaw/normalization-core/number-coercion",
@@ -392,7 +406,7 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "@openclaw/normalization-core",
+        find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
       sourcePackageAlias("media-core", "base64"),

@@ -106,6 +106,10 @@ In the macOS app's SSH tunnel transport, discovered gateway hostnames belong in
 `gateway.remote.sshTarget`; `gateway.remote.url` remains the local tunnel URL.
 If those ports differ, set `gateway.remote.remotePort` to the gateway port on
 the SSH host.
+Host-key verification is strict by default. Managed aliases can explicitly use
+their effective OpenSSH trust policy with
+`gateway.remote.sshHostKeyPolicy: "openssh"`; review matching user and system
+SSH settings before enabling it.
 
 For a gateway already reachable on a trusted LAN or Tailnet, use direct mode:
 

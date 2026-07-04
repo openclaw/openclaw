@@ -129,6 +129,9 @@
       "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
       "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
       "@openclaw/normalization-core": ["./packages/normalization-core/src/index.ts"],
+      "@openclaw/normalization-core/boolean-coercion": [
+        "./packages/normalization-core/src/boolean-coercion.ts"
+      ],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
@@ -208,6 +211,7 @@
       "@openclaw/net-policy/redact-sensitive-url": [
         "./packages/net-policy/src/redact-sensitive-url.ts"
       ],
+      "@openclaw/net-policy/url-protocol": ["./packages/net-policy/src/url-protocol.ts"],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
       "@openclaw/web-content-core": ["./packages/web-content-core/src/index.ts"],

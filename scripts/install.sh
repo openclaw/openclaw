@@ -2659,10 +2659,26 @@ install_openclaw_from_git() {
 
     ensure_user_local_bin_on_path
 
+    local node_bin="" node_bin_quoted="" entry_path_quoted=""
+    node_bin="$(type -P node 2>/dev/null || true)"
+    if [[ -n "$node_bin" && "$node_bin" != /* ]]; then
+        local node_dir=""
+        node_dir="$(cd "$(dirname "$node_bin")" && pwd -P 2>/dev/null)" || node_dir=""
+        if [[ -n "$node_dir" ]]; then
+            node_bin="${node_dir}/$(basename "$node_bin")"
+        fi
+    fi
+    if [[ -z "$node_bin" || ! -x "$node_bin" ]]; then
+        ui_error "Node.js runtime not found after build"
+        return 1
+    fi
+    printf -v node_bin_quoted "%q" "$node_bin"
+    printf -v entry_path_quoted "%q" "${repo_dir}/dist/entry.js"
+
     cat > "$HOME/.local/bin/openclaw" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec node "${repo_dir}/dist/entry.js" "\$@"
+exec ${node_bin_quoted} ${entry_path_quoted} "\$@"
 EOF
     chmod +x "$HOME/.local/bin/openclaw"
     ui_success "OpenClaw wrapper installed to \$HOME/.local/bin/openclaw"

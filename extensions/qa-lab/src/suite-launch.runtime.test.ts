@@ -374,6 +374,78 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
+  it("runs script scenarios after flow Gateways stop without serializing Playwright", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-script-isolation-");
+    let releaseFlow!: () => void;
+    let markFlowStarted!: () => void;
+    const flowStarted = new Promise<void>((resolve) => {
+      markFlowStarted = resolve;
+    });
+    const flowBlocked = new Promise<void>((resolve) => {
+      releaseFlow = resolve;
+    });
+    runQaFlowSuite.mockImplementationOnce(
+      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+        markFlowStarted();
+        await flowBlocked;
+        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+        const evidencePath = path.join(outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
+        return {
+          outputDir,
+          evidencePath,
+          reportPath: path.join(outputDir, "qa-suite-report.md"),
+          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+          report: "# QA Suite Report\n",
+          scenarios: scenarioIds.map((scenarioId) => ({
+            name: scenarioId,
+            status: "pass",
+            steps: [],
+          })),
+          watchUrl: "http://127.0.0.1:43124",
+        };
+      },
+    );
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/script-isolation",
+      concurrency: 8,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "control-ui-chat-flow-playwright",
+        "docker-npm-onboard-channel-agent",
+      ],
+    });
+    await flowStarted;
+    await vi.waitFor(() => {
+      expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    });
+
+    expect(runQaTestFileScenarios).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        scenarios: [
+          expect.objectContaining({ execution: expect.objectContaining({ kind: "playwright" }) }),
+        ],
+      }),
+    );
+
+    releaseFlow();
+    await runPromise;
+
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
+    expect(runQaTestFileScenarios).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        scenarios: [
+          expect.objectContaining({ execution: expect.objectContaining({ kind: "script" }) }),
+        ],
+      }),
+    );
+  });
+
   it("keeps multiple isolated flow scenarios in separate serial partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-serial-isolated-");
     await runQaSuite({

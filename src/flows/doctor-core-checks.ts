@@ -678,6 +678,19 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   },
 };
 
+const legacyCronStoreCheck: SplitHealthCheckInput = {
+  id: "core/doctor/legacy-cron-store",
+  kind: "core",
+  description: "Legacy cron store, run-log, and payload state is normalized.",
+  source: "doctor",
+  defaultEnabled: false,
+  async detect(ctx) {
+    const { collectLegacyCronStoreHealthFindings } =
+      await import("../commands/doctor/cron/index.js");
+    return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
+  },
+};
+
 const codexSessionRoutesCheck: HealthCheck = {
   id: CODEX_SESSION_ROUTES_CHECK_ID,
   kind: "core",
@@ -1066,6 +1079,7 @@ function createConvertedWorkflowChecks(
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    legacyCronStoreCheck,
     codexSessionRoutesCheck,
     sessionLocksCheck,
     shellCompletionCheck,

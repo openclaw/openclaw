@@ -705,6 +705,7 @@ class GatewaySession(
             setOf(
               "operator.approvals",
               "operator.read",
+              "operator.talk.secrets",
               "operator.write",
             )
           scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()

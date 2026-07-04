@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,33 +12,6 @@ import org.junit.Test
 
 class GatewayNodeApprovalStateTest {
   @Test
-  fun exactApprovalCommandsAgeOutToStatusFallbacks() {
-    assertEquals(
-      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
-      GatewayNodeCapabilityApproval.PendingApproval(requestId = "request-1").withoutExactRequestId(),
-    )
-    assertEquals(
-      GatewayNodeCapabilityApproval.PendingReapproval(requestId = null),
-      GatewayNodeCapabilityApproval.PendingReapproval(requestId = "request-2").withoutExactRequestId(),
-    )
-    assertNull(GatewayNodeCapabilityApproval.PendingApproval(requestId = null).withoutExactRequestId())
-
-    val summary =
-      GatewayNodesDevicesSummary(
-        nodes = listOf(pendingNode(requestId = "request-1")),
-        pendingDevices = emptyList(),
-        pairedDevices = emptyList(),
-      )
-    assertNull(
-      summary
-        .withoutExactApprovalRequestIds()
-        .nodes
-        .single()
-        .pendingRequestId,
-    )
-  }
-
-  @Test
   fun parsesGatewayNodeApprovalState() {
     assertEquals(GatewayNodeApprovalState.Approved, parseGatewayNodeApprovalState("approved"))
     assertEquals(GatewayNodeApprovalState.PendingApproval, parseGatewayNodeApprovalState("pending-approval"))
@@ -43,6 +19,48 @@ class GatewayNodeApprovalStateTest {
     assertEquals(GatewayNodeApprovalState.Unapproved, parseGatewayNodeApprovalState("unapproved"))
     assertEquals(GatewayNodeApprovalState.Loading, parseGatewayNodeApprovalState(null))
     assertEquals(GatewayNodeApprovalState.Loading, parseGatewayNodeApprovalState("future-state"))
+  }
+
+  @Test
+  fun nodePairingEventsInvalidateNodeDeviceState() {
+    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.requested"))
+    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.resolved"))
+    assertFalse(gatewayEventInvalidatesNodesDevices("device.pair.resolved"))
+    assertFalse(gatewayEventInvalidatesNodesDevices("exec.approval.resolved"))
+  }
+
+  @Test
+  fun nodePairingFailuresRefreshNodeDeviceState() {
+    assertTrue(
+      nodeConnectFailureNeedsApprovalRefresh(
+        GatewaySession.ErrorShape(
+          code = "NOT_PAIRED",
+          message = "pairing required",
+          details =
+            GatewayConnectErrorDetails(
+              code = "PAIRING_REQUIRED",
+              canRetryWithDeviceToken = false,
+              recommendedNextStep = "wait_then_retry",
+              pauseReconnect = false,
+              reason = "not-paired",
+            ),
+        ),
+      ),
+    )
+    assertFalse(
+      nodeConnectFailureNeedsApprovalRefresh(
+        GatewaySession.ErrorShape(
+          code = "UNAUTHORIZED",
+          message = "token mismatch",
+          details =
+            GatewayConnectErrorDetails(
+              code = "AUTH_TOKEN_MISMATCH",
+              canRetryWithDeviceToken = false,
+              recommendedNextStep = null,
+            ),
+        ),
+      ),
+    )
   }
 
   @Test
@@ -69,6 +87,45 @@ class GatewayNodeApprovalStateTest {
     assertEquals("request-1", node.pendingRequestId)
     assertEquals(listOf("device"), node.capabilities)
     assertEquals(listOf("device.status"), node.commands)
+  }
+
+  @Test
+  fun parsesSplitNodeListShapeFromGateway() {
+    val root =
+      Json
+        .parseToJsonElement(
+          """
+          {
+            "pending": [
+              {
+                "nodeId": "pending-node",
+                "paired": false,
+                "connected": false,
+                "approvalState": "pending-approval",
+                "pendingRequestId": "request-pending"
+              }
+            ],
+            "paired": [
+              {
+                "nodeId": "self",
+                "paired": true,
+                "connected": true,
+                "approvalState": "approved",
+                "caps": ["device"],
+                "commands": ["device.status"]
+              }
+            ]
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    val nodes = parseGatewayNodeList(root)
+
+    assertEquals(2, nodes.size)
+    assertEquals(
+      GatewayNodeCapabilityApproval.Approved,
+      currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "self"),
+    )
   }
 
   @Test
@@ -113,14 +170,14 @@ class GatewayNodeApprovalStateTest {
           paired = true,
           connected = true,
           approvalState = GatewayNodeApprovalState.PendingApproval,
-          pendingRequestId = null,
+          pendingRequestId = "request-self",
           capabilities = emptyList(),
           commands = emptyList(),
         ),
       )
 
     assertEquals(
-      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
+      GatewayNodeCapabilityApproval.PendingApproval("request-self"),
       currentNodeCapabilityApproval(nodes = nodes, selfNodeId = "self"),
     )
     assertEquals(
@@ -130,46 +187,16 @@ class GatewayNodeApprovalStateTest {
   }
 
   @Test
-  fun currentPhoneApprovalCarriesOnlySafePendingRequestIds() {
-    val safe = pendingNode(requestId = "request-1")
-    val unsafe = pendingNode(requestId = "request-1;echo unsafe")
-
-    assertEquals(
-      GatewayNodeCapabilityApproval.PendingApproval("request-1"),
-      currentNodeCapabilityApproval(nodes = listOf(safe), selfNodeId = "self"),
-    )
-    assertEquals(
-      GatewayNodeCapabilityApproval.PendingApproval(requestId = null),
-      currentNodeCapabilityApproval(nodes = listOf(unsafe), selfNodeId = "self"),
-    )
-  }
-
-  @Test
   fun ignoresStaleNodeApprovalRefreshResults() {
     val guard = GatewayNodeApprovalRefreshGuard()
-    var approval: GatewayNodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading
+    var approvalState = GatewayNodeApprovalState.Loading
     val staleRefresh = guard.begin()
     val currentRefresh = guard.begin()
 
-    assertFalse(guard.publishIfCurrent(staleRefresh) { approval = GatewayNodeCapabilityApproval.Approved })
+    assertFalse(guard.publishIfCurrent(staleRefresh) { approvalState = GatewayNodeApprovalState.Approved })
     assertTrue(
-      guard.publishIfCurrent(currentRefresh) { approval = GatewayNodeCapabilityApproval.PendingReapproval("request-2") },
+      guard.publishIfCurrent(currentRefresh) { approvalState = GatewayNodeApprovalState.PendingReapproval },
     )
-    assertEquals(GatewayNodeCapabilityApproval.PendingReapproval("request-2"), approval)
+    assertEquals(GatewayNodeApprovalState.PendingReapproval, approvalState)
   }
-
-  private fun pendingNode(requestId: String): GatewayNodeSummary =
-    GatewayNodeSummary(
-      id = "self",
-      displayName = null,
-      remoteIp = null,
-      version = null,
-      deviceFamily = null,
-      paired = true,
-      connected = true,
-      approvalState = GatewayNodeApprovalState.PendingApproval,
-      pendingRequestId = requestId,
-      capabilities = emptyList(),
-      commands = emptyList(),
-    )
 }
