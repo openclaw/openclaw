@@ -56,6 +56,7 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
@@ -131,6 +132,8 @@ import type { TypingController } from "./typing.js";
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const RESTART_LIFECYCLE_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+const EMPTY_INTERACTIVE_REPLY_TEXT =
+  "⚠️ I finished this turn, but it did not produce a visible reply. Please try again, or use /new if this keeps happening.";
 
 function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -180,6 +183,28 @@ function buildSilentFallbackFailurePayload(params: {
     text:
       `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
       `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    isError: true,
+  });
+}
+
+function buildEmptyInteractiveReplyPayload(params: {
+  isHeartbeat: boolean;
+  hasSuccessfulSideEffectDelivery: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  silentExpected?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): ReplyPayload | undefined {
+  if (
+    params.isHeartbeat ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
+    params.silentExpected === true ||
+    params.sourceReplyDeliveryMode === "message_tool_only" ||
+    params.hasSuccessfulSideEffectDelivery
+  ) {
+    return undefined;
+  }
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: EMPTY_INTERACTIVE_REPLY_TEXT,
     isError: true,
   });
 }
@@ -2017,6 +2042,27 @@ export async function runReplyAgent(params: {
       await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
+    const returnEmptyInteractiveReplyFailureIfNeeded = async (): Promise<
+      ReplyPayload | undefined
+    > => {
+      const emptyInteractiveReplyPayload = buildEmptyInteractiveReplyPayload({
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+        sourceReplyDeliveryMode:
+          followupRun.run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
+      });
+      if (!emptyInteractiveReplyPayload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error("agent completed without a visible reply payload"),
+      );
+      await signalTypingIfNeeded([emptyInteractiveReplyPayload], typingSignals);
+      return returnWithQueuedFollowupDrain(emptyInteractiveReplyPayload);
+    };
 
     const fallbackNoticePayloads: ReplyPayload[] = [];
     if (
@@ -2094,6 +2140,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyFailureIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2147,6 +2197,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const emptyInteractiveReplyPayload = await returnEmptyInteractiveReplyFailureIfNeeded();
+      if (emptyInteractiveReplyPayload) {
+        return emptyInteractiveReplyPayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }

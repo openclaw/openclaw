@@ -942,6 +942,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(res).toBeUndefined();
   });
 
+  it("surfaces an empty interactive completion instead of silently dropping the reply", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        MessageSid: "8836419572",
+      },
+    });
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("did not produce a visible reply");
+  });
+
+  it("preserves empty message-tool-only completions as intentional silence", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      runOverrides: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+  });
+
   it("does not start typing on assistant message start without prior text in message mode", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onAssistantMessageStart?.();
