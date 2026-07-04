@@ -72,6 +72,11 @@ function buildMatrixApprovalRoomTarget(
   };
 }
 
+// Pending approvals expire in the future; the reaction target store TTLs its
+// memory layer from `view.expiresAtMs - now`, so epoch-past fixtures would
+// evict the mapping before assertions run.
+const TEST_APPROVAL_EXPIRES_AT_MS = Date.now() + 5 * 60_000;
+
 function buildExecApprovalView(
   overrides: Partial<MatrixPendingExecApprovalView> = {},
 ): MatrixPendingExecApprovalView {
@@ -102,7 +107,7 @@ function buildExecApprovalView(
         command: "/approve req-1 deny",
       },
     ],
-    expiresAtMs: 1_000,
+    expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
     ...overrides,
   };
 }
@@ -129,7 +134,7 @@ function buildPluginApprovalView(
         command: "/approve plugin:req-1 allow-once",
       },
     ],
-    expiresAtMs: 1_000,
+    expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
     ...overrides,
   };
 }
@@ -273,7 +278,7 @@ describe("matrixApprovalNativeRuntime", () => {
       kind: "plugin",
       title: "Plugin Approval Required",
       description: "Approve the tool call.",
-      expiresAtMs: 1_000,
+      expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
       metadata: [],
       allowedDecisions: ["allow-once"],
       actions: [
