@@ -40,9 +40,14 @@ import {
   type ThemeName,
 } from "../app/theme.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import {
+  loadToolsEffective as loadToolsEffectiveInternal,
+  refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
+} from "../lib/agents/index.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { ChatSideResult } from "../lib/chat/side-result.ts";
 import {
   DEFAULT_CRON_FORM,
   loadCronJobsPage,
@@ -63,25 +68,22 @@ import {
   handleActivityScroll as handleActivityScrollInternal,
   scheduleActivityScroll as scheduleActivityScrollInternal,
 } from "../pages/activity/scroll.ts";
+import { removeQueuedMessage as removeQueuedMessageInternal } from "../pages/chat/chat-queue.ts";
 import {
-  loadToolsEffective as loadToolsEffectiveInternal,
-  refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
-} from "../pages/agents/data.ts";
-import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
-import { restoreChatComposerState } from "../pages/chat/composer-persistence.ts";
-import {
-  handleAbortChat as handleAbortChatInternal,
-  handleChatDraftChange as handleChatDraftChangeInternal,
-  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
   handleSendChat as handleSendChatInternal,
-  removeQueuedMessage as removeQueuedMessageInternal,
-  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   retryQueuedChatMessage as retryQueuedChatMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
+} from "../pages/chat/chat-send.ts";
+import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
+import { restoreChatComposerState } from "../pages/chat/composer-persistence.ts";
+import { exportChatMarkdown } from "../pages/chat/export.ts";
+import {
+  handleChatDraftChange as handleChatDraftChangeInternal,
+  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
+  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
-} from "../pages/chat/data.ts";
-import { exportChatMarkdown } from "../pages/chat/export.ts";
+} from "../pages/chat/input-history.ts";
 import {
   reconcileRealtimeTalkCatalogSelection,
   type RealtimeTalkCatalogProvider,
@@ -97,6 +99,7 @@ import {
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "../pages/chat/realtime-talk.ts";
+import { handleAbortChat as handleAbortChatInternal } from "../pages/chat/run-lifecycle.ts";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import {
   handleChatScroll as handleChatScrollInternal,
@@ -104,7 +107,6 @@ import {
   scheduleChatScroll as scheduleChatScrollInternal,
 } from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
-import type { ChatSideResult } from "../pages/chat/side-result.ts";
 import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";

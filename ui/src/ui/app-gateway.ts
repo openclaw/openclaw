@@ -24,7 +24,9 @@ import {
   pruneExecApprovalQueue,
 } from "../app/exec-approval.ts";
 import { setLastActiveSessionKey, type UiSettings } from "../app/settings.ts";
+import { loadAgents, type AgentsState } from "../lib/agents/index.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { parseChatSideResult, type ChatSideResult } from "../lib/chat/side-result.ts";
 import { loadModelAuthStatusState, type ModelAuthStatusState } from "../lib/model-auth.ts";
 import { scopedAgentParamsForSession } from "../lib/sessions/index.ts";
 import {
@@ -37,32 +39,34 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
-import { loadAgents, type AgentsState } from "../pages/agents/data.ts";
 import { refreshChatAvatar } from "../pages/chat/chat-avatar.ts";
-import {
-  loadChatComposerSnapshot,
-  restoreChatComposerState,
-} from "../pages/chat/composer-persistence.ts";
-import {
-  clearPendingQueueItemsForRun,
-  flushChatQueueForEvent,
-  hasReconnectableQueuedChatSends,
-  markQueuedChatSendsWaitingForReconnect,
-  recordChatSendServerTiming,
-  recordFirstAssistantChatTiming,
-  refreshChat,
-  retryReconnectableQueuedChatSends,
-} from "../pages/chat/data.ts";
 import {
   loadChatHistory,
   handleChatEvent,
   shouldReloadHistoryForFinalEvent,
   type ChatEventPayload,
   type ChatState,
-} from "../pages/chat/gateway.ts";
+} from "../pages/chat/chat-gateway.ts";
+import {
+  clearPendingQueueItemsForRun,
+  hasReconnectableQueuedChatSends,
+  markQueuedChatSendsWaitingForReconnect,
+} from "../pages/chat/chat-queue.ts";
+import {
+  recordChatSendServerTiming,
+  recordFirstAssistantChatTiming,
+} from "../pages/chat/chat-send-timing.ts";
+import {
+  flushChatQueueForEvent,
+  retryReconnectableQueuedChatSends,
+} from "../pages/chat/chat-send.ts";
+import { refreshChat } from "../pages/chat/chat-state.ts";
+import {
+  loadChatComposerSnapshot,
+  restoreChatComposerState,
+} from "../pages/chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
-import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
 import { applySettings, syncUrlWithSessionKey } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";

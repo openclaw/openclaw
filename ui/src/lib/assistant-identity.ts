@@ -11,8 +11,8 @@ const MAX_ASSISTANT_TEXT_AVATAR = 64;
 const MAX_ASSISTANT_IMAGE_AVATAR = 2_000_000;
 const MAX_ASSISTANT_AVATAR_SOURCE = 500;
 const MAX_ASSISTANT_AVATAR_REASON = 200;
-// Mirrors agents-utils.CONTROL_UI_AVATAR_URL_RE — duplicated locally to keep
-// this module free of UI view imports (avoids an import cycle).
+// Mirrors lib/agents/display avatar URL handling. Keep this local so assistant
+// identity loading does not import agent display helpers or Lit templates.
 const RENDERABLE_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
 
 const DEFAULT_ASSISTANT_NAME = "Assistant";

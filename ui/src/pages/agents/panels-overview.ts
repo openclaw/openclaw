@@ -17,8 +17,8 @@ import {
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
-} from "../../ui/views/agents-utils.ts";
-import type { AgentsPanel } from "./types.ts";
+} from "../../lib/agents/display.ts";
+import type { AgentsPanel } from "../../lib/agents/index.ts";
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];

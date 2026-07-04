@@ -2,7 +2,6 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadAgentsList } from "../../lib/agents/index.ts";
 import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../../lib/cron/index.ts";
 import type { CronRouteData } from "./cron-page.ts";
 
@@ -18,7 +17,7 @@ async function loadCronRouteData(context: ApplicationContext<RouteId>): Promise<
   let agentsList: CronRouteData["agentsList"] = null;
   await Promise.all([
     context.channels.refresh(false),
-    loadAgentsList(gateway.client).then(
+    context.agents.ensureList().then(
       (result) => {
         agentsList = result;
       },

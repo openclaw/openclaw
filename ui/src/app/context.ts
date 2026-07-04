@@ -3,6 +3,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability } from "../lib/channels/index.ts";
 import type { RuntimeConfigCapability } from "../lib/config/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -73,6 +74,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly assistantName: string;
   readonly gateway: ApplicationGateway;
+  readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;
   readonly channels: ChannelCapability;

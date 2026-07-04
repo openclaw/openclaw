@@ -207,7 +207,7 @@ vi.mock("../../lib/agents/tools-effective.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
 
-vi.mock("../../ui/views/agents-utils.ts", () => ({
+vi.mock("../../lib/agents/display.ts", () => ({
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
   agentLogoUrl: () => "/openclaw-logo.svg",

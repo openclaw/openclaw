@@ -13,6 +13,7 @@ import { pathForRoute } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveAgentRuntimeLabel } from "../../lib/agents/display.ts";
 import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
@@ -29,7 +30,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
-import { resolveAgentRuntimeLabel } from "../../ui/views/agents-utils.ts";
 
 export type SessionsProps = {
   loading: boolean;

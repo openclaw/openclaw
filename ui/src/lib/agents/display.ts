@@ -13,13 +13,10 @@ import type {
   ToolCatalogProfile,
   ToolsCatalogResult,
 } from "../../api/types.ts";
-import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
-import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
-import { controlUiPublicAssetPath } from "../public-assets.ts";
+import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
+import { buildQualifiedChatModelValue } from "../chat/model-ref.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
 export type AgentToolEntry = {
   id: string;

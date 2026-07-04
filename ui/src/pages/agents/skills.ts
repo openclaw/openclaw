@@ -1,7 +1,7 @@
+// Control UI controller manages agent skills gateway state.
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
-// Control UI controller manages agent skills gateway state.
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type AgentSkillsState = {
   client: GatewayBrowserClient | null;

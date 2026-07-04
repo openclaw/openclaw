@@ -8,6 +8,10 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
+import {
+  assistantAvatarFallbackUrl,
+  resolveAssistantTextAvatar,
+} from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
@@ -17,10 +21,6 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import {
-  assistantAvatarFallbackUrl,
-  resolveAssistantTextAvatar,
-} from "../../ui/views/agents-utils.ts";
 
 export function renderChatAvatar(
   role: string,

@@ -27,6 +27,7 @@ import type { ThemeTransitionContext } from "../app/theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "../app/theme.ts";
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
+import type { ChatSideResult } from "../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../lib/chat/tool-display.ts";
 import type { CronModelSuggestionsState, CronState } from "../lib/cron/index.ts";
 import type {
@@ -38,8 +39,8 @@ import type {
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
+import type { ChatSendOptions } from "../pages/chat/chat-send.ts";
 import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
-import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
 import type {
   ChatInputHistoryKeyInput,
   ChatInputHistoryKeyResult,
@@ -47,9 +48,8 @@ import type {
 import type { RealtimeTalkCatalogProvider } from "../pages/chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../pages/chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../pages/chat/realtime-talk.ts";
-import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
+import type { ChatAbortOptions, ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
-import type { ChatSideResult } from "../pages/chat/side-result.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";

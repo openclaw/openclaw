@@ -6,8 +6,8 @@ import {
   loadToolsEffective,
   saveAgentsConfig,
   setDefaultAgent,
-} from "./data.ts";
-import type { AgentsConfigCapability, AgentsState } from "./data.ts";
+} from "./index.ts";
+import type { AgentsConfigCapability, AgentsState } from "./index.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
@@ -66,7 +66,6 @@ function createSaveState(): {
   } as AgentsConfigCapability["state"];
   const config: AgentsConfigCapability = {
     state: configState,
-    refresh: vi.fn(async () => undefined),
     save: vi.fn(async () => true),
     stageDefaultAgent: vi.fn(() => false),
   };

@@ -123,6 +123,8 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
+export type ChatAbortOptions = { preserveDraft?: boolean };
+
 export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {
     return false;
@@ -141,7 +143,7 @@ export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   }
 }
 
-export async function handleAbortChat(host: ChatAbortHost, opts?: { preserveDraft?: boolean }) {
+export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
   const activeRunId = host.chatRunId;
   const queueAbort = !host.connected && hasAbortableSessionRun(host);
   if (!host.connected && !queueAbort) {

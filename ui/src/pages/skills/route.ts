@@ -2,7 +2,6 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadAgentsList } from "../../lib/agents/index.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
 
@@ -27,7 +26,7 @@ async function loadSkillsRouteData(context: ApplicationContext<RouteId>): Promis
   let agentsList: SkillsRouteData["agentsList"] = null;
   let report: SkillsRouteData["report"] = null;
   try {
-    agentsList = await loadAgentsList(client);
+    agentsList = await context.agents.ensureList();
   } catch (err) {
     error = errorMessage(err);
   }

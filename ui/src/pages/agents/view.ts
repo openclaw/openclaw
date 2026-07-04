@@ -14,16 +14,15 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { renderAgentOverview } from "./panels-overview.ts";
-import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
-export type { AgentsPanel } from "./types.ts";
 import {
   agentBadgeText,
   buildAgentContext,
   normalizeAgentLabel,
-} from "../../ui/views/agents-utils.ts";
+} from "../../lib/agents/display.ts";
+import type { AgentsPanel } from "../../lib/agents/index.ts";
+import { renderAgentOverview } from "./panels-overview.ts";
+import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
-import type { AgentsPanel } from "./types.ts";
 
 export type ConfigState = {
   form: Record<string, unknown> | null;

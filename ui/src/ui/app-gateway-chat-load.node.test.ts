@@ -96,14 +96,24 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("../pages/chat/data.ts", () => ({
+vi.mock("../pages/chat/chat-queue.ts", () => ({
   clearPendingQueueItemsForRun: vi.fn(),
-  flushChatQueueForEvent: vi.fn(),
   hasReconnectableQueuedChatSends: vi.fn(() => false),
   markQueuedChatSendsWaitingForReconnect: vi.fn(),
+}));
+
+vi.mock("../pages/chat/chat-send.ts", () => ({
+  flushChatQueueForEvent: vi.fn(),
   retryReconnectableQueuedChatSends: vi.fn(async () => undefined),
+}));
+
+vi.mock("../pages/chat/chat-send-timing.ts", () => ({
+  recordChatSendServerTiming: vi.fn(),
+  recordFirstAssistantChatTiming: vi.fn(),
+}));
+
+vi.mock("../pages/chat/chat-state.ts", () => ({
   refreshChat: refreshChatMock,
-  refreshChatAvatar: refreshChatAvatarMock,
 }));
 
 vi.mock("../pages/chat/chat-avatar.ts", () => ({
@@ -140,7 +150,8 @@ vi.mock("./app-settings.ts", () => ({
   syncUrlWithSessionKey: syncUrlWithSessionKeyMock,
 }));
 
-vi.mock("../pages/agents/data.ts", () => ({
+vi.mock("../lib/agents/index.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/agents/index.ts")>()),
   loadAgents: loadAgentsMock,
 }));
 
@@ -183,10 +194,13 @@ vi.mock("../pages/nodes/data.ts", () => ({
 afterAll(() => {
   vi.doUnmock("../app-routes.ts");
   vi.doUnmock("./gateway.ts");
-  vi.doUnmock("../pages/chat/data.ts");
+  vi.doUnmock("../pages/chat/chat-queue.ts");
+  vi.doUnmock("../pages/chat/chat-send.ts");
+  vi.doUnmock("../pages/chat/chat-send-timing.ts");
+  vi.doUnmock("../pages/chat/chat-state.ts");
   vi.doUnmock("../pages/chat/scroll.ts");
   vi.doUnmock("./app-settings.ts");
-  vi.doUnmock("../pages/agents/data.ts");
+  vi.doUnmock("../lib/agents/index.ts");
   vi.doUnmock("./controllers/assistant-identity.ts");
   vi.doUnmock("./controllers/control-ui-bootstrap.ts");
   vi.doUnmock("../pages/nodes/devices.ts");

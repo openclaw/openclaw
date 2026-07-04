@@ -6,7 +6,6 @@ import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { loadAgentsList } from "../../lib/agents/index.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -88,6 +87,7 @@ export class SkillsPage extends LitElement {
   @state() skillCardErrors: Record<string, string> = {};
 
   private stopGatewaySubscription?: () => void;
+  private stopAgentsSubscription?: () => void;
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
   override connectedCallback() {
@@ -101,6 +101,11 @@ export class SkillsPage extends LitElement {
       }
       this.ensureInitialData();
     });
+    this.stopAgentsSubscription = this.context.agents.subscribe(() => {
+      this.syncAgentState();
+      this.requestUpdate();
+    });
+    this.syncAgentState();
     this.ensureInitialData();
   }
 
@@ -113,6 +118,8 @@ export class SkillsPage extends LitElement {
   override disconnectedCallback() {
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    this.stopAgentsSubscription?.();
+    this.stopAgentsSubscription = undefined;
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
@@ -124,6 +131,21 @@ export class SkillsPage extends LitElement {
     const gateway = this.context.gateway.snapshot;
     this.client = gateway.client;
     this.connected = gateway.connected;
+  }
+
+  private syncAgentState() {
+    const state = this.context.agents.state;
+    this.agentsLoading = state.agentsLoading;
+    this.agentsError = state.agentsError;
+    this.agentsList = state.agentsList;
+    if (state.agentsList) {
+      const previousAgentId = this.skillsAgentId;
+      reconcileSkillsAgentId(this, state.agentsList);
+      if (previousAgentId !== this.skillsAgentId) {
+        this.skillsDetailKey = null;
+        this.skillsDetailTab = "overview";
+      }
+    }
   }
 
   private resetLoadedSkillState() {
@@ -156,14 +178,14 @@ export class SkillsPage extends LitElement {
     if (!data) {
       return;
     }
-    if (this.skillsAgentId && data.selectedAgentId !== this.skillsAgentId) {
+    if (this.skillsAgentId && data.selectedAgentId && data.selectedAgentId !== this.skillsAgentId) {
       return;
     }
     this.connected = data.connected;
     this.agentsLoading = false;
     this.agentsError = null;
-    this.agentsList = data.agentsList;
-    this.skillsAgentId = data.selectedAgentId;
+    this.agentsList = data.agentsList ?? this.context.agents.state.agentsList;
+    this.skillsAgentId = data.selectedAgentId ?? this.skillsAgentId;
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
@@ -189,10 +211,14 @@ export class SkillsPage extends LitElement {
     if (!client || !this.connected || this.agentsLoading) {
       return;
     }
+    if (this.context.agents.state.agentsList) {
+      this.syncAgentState();
+      return;
+    }
     this.agentsLoading = true;
     this.agentsError = null;
     try {
-      const agents = await loadAgentsList(client);
+      const agents = await this.context.agents.ensureList();
       if (this.client !== client) {
         return;
       }

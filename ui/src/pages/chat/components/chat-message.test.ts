@@ -60,7 +60,7 @@ function requireFirstMockArg(
   return arg;
 }
 
-vi.mock("../../../ui/views/agents-utils.ts", () => {
+vi.mock("../../../lib/agents/display.ts", () => {
   const isRenderableControlUiAvatarUrl = (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
 

@@ -1,11 +1,11 @@
+// Control UI controller manages agent files gateway state.
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentFileEntry,
   AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsFilesSetResult,
 } from "../../api/types.ts";
-// Control UI controller manages agent files gateway state.
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type AgentFilesState = {
   client: GatewayBrowserClient | null;
@@ -31,29 +31,6 @@ function mergeFileEntry(
     ? list.files.map((file) => (file.name === entry.name ? entry : file))
     : [...list.files, entry];
   return { ...list, files: nextFiles };
-}
-
-export async function loadAgentFiles(state: AgentFilesState, agentId: string) {
-  if (!state.client || !state.connected || state.agentFilesLoading) {
-    return;
-  }
-  state.agentFilesLoading = true;
-  state.agentFilesError = null;
-  try {
-    const res = await state.client.request<AgentsFilesListResult | null>("agents.files.list", {
-      agentId,
-    });
-    if (res) {
-      state.agentFilesList = res;
-      if (state.agentFileActive && !res.files.some((file) => file.name === state.agentFileActive)) {
-        state.agentFileActive = null;
-      }
-    }
-  } catch (err) {
-    state.agentFilesError = String(err);
-  } finally {
-    state.agentFilesLoading = false;
-  }
 }
 
 export async function loadAgentFileContent(

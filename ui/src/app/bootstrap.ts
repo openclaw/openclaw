@@ -17,6 +17,7 @@ import {
   type RouteId,
 } from "../app-routes.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
+import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability, resolveSessionKey } from "../lib/sessions/index.ts";
@@ -432,6 +433,7 @@ export function bootstrapApplication(): ApplicationRuntime {
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(settings, startup.password ?? "");
+  const agents = createAgentCapability(gateway);
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway);
   const channels = createChannelCapability(gateway);
@@ -520,6 +522,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     basePath,
     assistantName: identity.name || "OpenClaw",
     gateway,
+    agents,
     agentIdentity,
     agentSelection,
     channels,
@@ -552,6 +555,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       stopConfigRefresh();
       router.stop();
       gateway.stop();
+      agents.dispose();
       channels.dispose();
       sessions.dispose();
       runtimeConfig.dispose();

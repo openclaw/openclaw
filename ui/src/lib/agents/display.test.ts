@@ -4,7 +4,7 @@ import {
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
   resolveChatAvatarRenderUrl,
-} from "../../lib/avatar.ts";
+} from "../avatar.ts";
 import {
   agentLogoUrl,
   assistantAvatarFallbackUrl,
@@ -12,7 +12,7 @@ import {
   resolveConfiguredCronModelSuggestions,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
-} from "./agents-utils.ts";
+} from "./display.ts";
 
 describe("resolveEffectiveModelFallbacks", () => {
   it("inherits defaults when no entry fallbacks are configured", () => {

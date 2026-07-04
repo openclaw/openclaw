@@ -9,6 +9,16 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  type AgentToolEntry,
+  type AgentToolSection,
+  isAllowedByPolicy,
+  matchesList,
+  resolveAgentConfig,
+  resolveToolProfileOptions,
+  resolveToolProfile,
+  resolveToolSections,
+} from "../../lib/agents/display.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -20,16 +30,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "../../lib/string-coerce.ts";
-import {
-  type AgentToolEntry,
-  type AgentToolSection,
-  isAllowedByPolicy,
-  matchesList,
-  resolveAgentConfig,
-  resolveToolProfileOptions,
-  resolveToolProfile,
-  resolveToolSections,
-} from "../../ui/views/agents-utils.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
