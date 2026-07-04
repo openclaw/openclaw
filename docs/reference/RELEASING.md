@@ -101,14 +101,17 @@ the maintainer-only release runbook.
    prior evidence stale.
 9. For a tagged beta candidate, run
    `pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N` from the matching
-   `release/YYYY.M.PATCH` branch. For stable, pass the required Windows source
-   release too:
-   `pnpm release:candidate -- --tag vYYYY.M.PATCH --windows-node-tag vX.Y.Z`.
+   `release/YYYY.M.PATCH` branch. Strict stable validation is npm-only and uses
+   a policy-only preflight:
+   `pnpm release:candidate -- --tag vYYYY.M.33 --policy-mode strict --release-selector stable --external-contract-revision <40-char-sha>`.
+   Do not pass Windows or macOS release inputs for strict stable validation.
    The helper runs the local generated-release checks, dispatches or verifies
    the full release validation and npm preflight evidence, runs Parallels
    fresh/update proof against the exact prepared tarball plus Telegram package
    proof, records plugin npm and ClawHub plans, and prints the exact
    `OpenClaw Release Publish` command only after the evidence bundle is green.
+   Strict stable validation is nonpublishable: it emits policy evidence without
+   a publish command or platform-release handoff.
    `OpenClaw Release Publish` dispatches the selected or all-publishable plugin
    packages to npm and the same set to ClawHub in parallel, and then promotes the
    prepared OpenClaw npm preflight artifact with the matching dist-tag as soon as
@@ -403,6 +406,7 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
     them again
+
 - For stable correction releases like `YYYY.M.PATCH-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.PATCH` to `YYYY.M.PATCH-N`
   so release corrections cannot silently leave older global installs on the

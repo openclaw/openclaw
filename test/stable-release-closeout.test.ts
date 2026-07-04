@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   extractStableChangelogSection,
@@ -38,12 +40,28 @@ describe("stable release closeout", () => {
   it("parses stable and correction tags", () => {
     expect(parseStableReleaseTag("v2026.6.8")).toBe("2026.6.8");
     expect(parseStableReleaseTag("v2026.6.8-2")).toBe("2026.6.8");
-    expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow(
-      "expected a stable release tag",
-    );
+    expect(() => parseStableReleaseTag("v2026.6.8-0")).toThrow("expected a stable release tag");
     expect(() => parseStableReleaseTag("v2026.6.8-beta.1")).toThrow(
       "expected a stable release tag",
     );
+  });
+
+  it("keeps strict evidence out of the legacy platform closeout path", () => {
+    const workflow = readFileSync(
+      join(process.cwd(), ".github/workflows/openclaw-stable-main-closeout.yml"),
+      "utf8",
+    );
+    const policyGate = workflow.indexOf('evidence_schema_version="$(jq -r');
+    const legacyVerify = workflow.indexOf("Verify stable state and write closeout manifest");
+
+    expect(policyGate).toBeGreaterThan(-1);
+    expect(policyGate).toBeLessThan(legacyVerify);
+    expect(workflow).toContain("alpha|beta|daily)");
+    expect(workflow).toContain("stable-base|stable-patch)");
+    expect(workflow).toContain("Strict npm stable closeout is deferred");
+    expect(workflow).not.toContain("strict_closeout");
+    expect(workflow).not.toContain("--publish-manifest");
+    expect(workflow).not.toContain("--postpublish-descriptor");
   });
 
   it("extracts only the requested stable changelog section", () => {

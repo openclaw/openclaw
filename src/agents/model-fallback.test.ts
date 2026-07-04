@@ -2265,7 +2265,7 @@ describe("runWithModelFallback", () => {
       error: Error;
       expectedFallback: [string, string];
       expectedReason?: string;
-      isFinalFallbackAttempt?: boolean;
+      isFinalFallbackAttempt: boolean;
     }> = [
       {
         name: "unknown anthropic override",
@@ -2273,6 +2273,7 @@ describe("runWithModelFallback", () => {
         model: "claude-opus-4-6",
         error: new Error("Unknown model: anthropic/claude-opus-4-6"),
         expectedFallback: ["anthropic", "claude-haiku-3-5"],
+        isFinalFallbackAttempt: false,
       },
       {
         name: "openai model not found",
@@ -2280,6 +2281,7 @@ describe("runWithModelFallback", () => {
         model: "gpt-6",
         error: new Error("Model not found: openai/gpt-6"),
         expectedFallback: ["anthropic", "claude-haiku-3-5"],
+        isFinalFallbackAttempt: false,
       },
       {
         name: "bare stream read transport error",
@@ -2308,7 +2310,7 @@ describe("runWithModelFallback", () => {
         expect(run).toHaveBeenCalledTimes(2);
         expect(requireMockCall(run, 1, "fallback run")).toEqual([
           ...testCase.expectedFallback,
-          { isFinalFallbackAttempt: testCase.isFinalFallbackAttempt ?? false },
+          { isFinalFallbackAttempt: testCase.isFinalFallbackAttempt },
         ]);
         if (testCase.expectedReason) {
           expect(result.attempts).toHaveLength(1);

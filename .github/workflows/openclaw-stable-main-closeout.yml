@@ -230,6 +230,33 @@ jobs:
             echo "Postpublish evidence checksum failed for $tag." >&2
             exit 1
           fi
+          evidence_schema_version="$(jq -r '.version // empty' "$evidence_path")"
+          if [[ "$evidence_schema_version" == "2" ]]; then
+            release_class="$(jq -r '.releasePolicy.releaseClass // empty' "$evidence_path")"
+            case "$release_class" in
+              alpha|beta|daily)
+                echo "Stable closeout skipped: release class ${release_class} is not stable." >&2
+                echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              stable-base|stable-patch)
+                if [[ "$EVENT_NAME" == "push" ]]; then
+                  echo "::warning::Strict npm stable closeout is deferred; skipping the legacy platform closeout path."
+                  echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "Strict npm stable closeout is deferred and cannot use the legacy platform closeout path." >&2
+                exit 1
+                ;;
+              *)
+                echo "Unsupported release class in postpublish evidence: ${release_class:-<missing>}." >&2
+                exit 1
+                ;;
+            esac
+          elif [[ "$evidence_schema_version" != "1" ]]; then
+            echo "Unsupported postpublish evidence version: ${evidence_schema_version:-<missing>}." >&2
+            exit 1
+          fi
           evidence_release_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
           full_release_validation_run_id="$(jq -r '[.workflowRuns[]? | select(.label == "Full Release Validation") | .id] | if length == 1 then .[0] else empty end' "$evidence_path")"
           release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$evidence_path")"
