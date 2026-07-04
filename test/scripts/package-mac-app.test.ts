@@ -402,6 +402,17 @@ describe("package-mac-app plist stamping", () => {
     expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
   });
 
+  it("embeds the canonical CLI installer as a signed app resource", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    expect(script).toContain('INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"');
+    expect(script).toContain('cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"');
+    expect(script).toContain('chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"');
+    expect(script.indexOf("Copying CLI installer")).toBeLessThan(
+      script.indexOf('echo "🔏 Signing bundle'),
+    );
+  });
+
   it("does not mask required Info.plist stamp failures", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stampBlock = script.slice(
