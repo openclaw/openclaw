@@ -215,19 +215,11 @@ function resolveTrustedLocalTelegramRoot(
   return null;
 }
 
-/**
- * Default data root used by the official telegram-bot-api server when it runs
- * with --local. Containerized servers report absolute file_path values rooted
- * here even though the host mounts the data volume at a different path (one of
- * the trustedLocalFileRoots entries), so the absolute path never matches a
- * trusted root directly.
- */
+// The maintained aiogram/telegram-bot-api image stores --local files here.
+// getFile returns this container path, while OpenClaw reads the host volume mount.
 const TELEGRAM_BOT_API_CONTAINER_DATA_ROOT = "/var/lib/telegram-bot-api";
 
 function normalizeTrustedTelegramRelativeFilePath(filePath: string): string | null {
-  if (path.isAbsolute(filePath)) {
-    return null;
-  }
   const normalized = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
   if (!normalized || normalized.includes("\0")) {
     return null;
@@ -239,45 +231,37 @@ function normalizeTrustedTelegramRelativeFilePath(filePath: string): string | nu
   return normalized;
 }
 
-function normalizeTelegramBotApiContainerFilePath(filePath: string): string | null {
+function resolveTelegramBotApiContainerRelativePaths(filePath: string, token: string): string[] {
   if (!path.isAbsolute(filePath)) {
-    return null;
+    return [];
   }
   const normalized = filePath.replace(/\\/g, "/");
   const prefix = `${TELEGRAM_BOT_API_CONTAINER_DATA_ROOT}/`;
   if (!normalized.startsWith(prefix)) {
-    return null;
+    return [];
   }
-  return normalizeTrustedTelegramRelativeFilePath(normalized.slice(prefix.length));
-}
-
-function resolveTrustedRelativeTelegramRoots(
-  filePath: string,
-  trustedLocalFileRoots: readonly string[] | undefined,
-  token: string,
-): Array<{ rootDir: string; relativePath: string }> {
-  const relativePath = normalizeTrustedTelegramRelativeFilePath(filePath);
+  const relativePath = normalizeTrustedTelegramRelativeFilePath(normalized.slice(prefix.length));
   if (!relativePath) {
     return [];
   }
-  // The local Bot API server keeps files under a per-token directory; match
-  // both with and without that segment so trustedLocalFileRoots can point
-  // either at the data root or at the token directory itself.
-  const tokenSegment = token.trim();
-  const canUseTokenSegment =
-    Boolean(tokenSegment) &&
-    !tokenSegment.includes("/") &&
-    !tokenSegment.includes("\\") &&
-    !tokenSegment.includes("\0") &&
-    !relativePath.startsWith(`${tokenSegment}/`);
-  const candidates: Array<{ rootDir: string; relativePath: string }> = [];
-  for (const rootDir of trustedLocalFileRoots ?? []) {
-    candidates.push({ rootDir, relativePath });
-    if (canUseTokenSegment) {
-      candidates.push({ rootDir, relativePath: path.posix.join(tokenSegment, relativePath) });
+  const candidates = [relativePath];
+  // telegram-bot-api owns a per-token directory. On filesystems that reject
+  // colons it replaces ':' with '~'; accept either host-mount layout.
+  for (const tokenDirectory of [token, token.replaceAll(":", "~")]) {
+    const tokenPrefix = `${tokenDirectory}/`;
+    if (tokenDirectory && relativePath.startsWith(tokenPrefix)) {
+      candidates.push(relativePath.slice(tokenPrefix.length));
     }
   }
-  return candidates;
+  return [...new Set(candidates)];
+}
+
+function isTrustedLocalTelegramFileMissing(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "not-found" || error.code === "ENOENT" || error.code === "ENOTDIR")
+  );
 }
 
 async function downloadAndSaveTelegramFile(params: {
@@ -317,27 +301,25 @@ async function downloadAndSaveTelegramFile(params: {
       params.telegramFileName ?? path.basename(localFile.realPath),
     );
   }
-  const relativeCandidates = [
+  const containerRelativePaths = resolveTelegramBotApiContainerRelativePaths(
     params.filePath,
-    normalizeTelegramBotApiContainerFilePath(params.filePath),
-  ].filter(
-    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+    params.token,
   );
-  for (const candidatePath of relativeCandidates) {
-    for (const trustedRelativeFile of resolveTrustedRelativeTelegramRoots(
-      candidatePath,
-      params.trustedLocalFileRoots,
-      params.token,
-    )) {
+  for (const rootDir of params.trustedLocalFileRoots ?? []) {
+    for (const relativePath of containerRelativePaths) {
       let localFile;
       try {
-        const root = await fsRoot(trustedRelativeFile.rootDir);
-        localFile = await root.read(trustedRelativeFile.relativePath, {
-          maxBytes: params.maxBytes,
-        });
-      } catch {
-        logVerbose("telegram: trusted local relative media candidate failed");
-        continue;
+        const root = await fsRoot(rootDir);
+        localFile = await root.read(relativePath, { maxBytes: params.maxBytes });
+      } catch (err) {
+        if (isTrustedLocalTelegramFileMissing(err)) {
+          continue;
+        }
+        throw new MediaFetchError(
+          "fetch_failed",
+          `Failed to read mapped local Telegram Bot API media: ${formatErrorMessage(err)}`,
+          { cause: err },
+        );
       }
       return await saveMediaBuffer(
         localFile.buffer,
