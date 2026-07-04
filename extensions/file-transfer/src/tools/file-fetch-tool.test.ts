@@ -88,8 +88,6 @@ describe("file_fetch tool", () => {
         ok: true,
         path: "/tmp/empty.png",
         size: 0,
-        // Extension-derived MIME fallback for a zero-byte file that content
-        // sniffing could not classify -- see detectFetchedFileMime.
         mimeType: "image/png",
         base64: "",
         sha256: crypto.createHash("sha256").update(Buffer.alloc(0)).digest("hex"),

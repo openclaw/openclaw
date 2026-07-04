@@ -73,12 +73,8 @@ export function createFileFetchTool(): AnyAgentTool {
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);
 
-      // detectFetchedFileMime falls back to the extension-derived MIME type when
-      // content sniffing finds nothing (e.g. a zero-byte file), so an empty
-      // ".png"/".jpg" fetch can carry an image mimeType with base64="". Require
-      // a real payload before inlining as an image block -- an empty inline
-      // image block reaches the provider as an unrecoverable placeholder
-      // instead of the "saved at <path>" text fallback below. See #98673.
+      // Extension-derived image MIME can accompany an empty payload when there
+      // are no bytes to sniff. Keep those fetches on the saved-path text fallback.
       const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType) && base64.length > 0;
       const isInlineText = TEXT_INLINE_MIME_SET.has(mimeType) && size <= TEXT_INLINE_MAX_BYTES;
 
