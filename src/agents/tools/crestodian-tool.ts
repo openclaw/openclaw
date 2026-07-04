@@ -134,6 +134,16 @@ function operationForAction(params: Record<string, unknown>): CrestodianOperatio
     }
     case "set_default_model":
       return { kind: "set-default-model", model: requireParam(params, "model") };
+    case "create_agent": {
+      const workspace = readStringParam(params, "workspace")?.trim();
+      const model = readStringParam(params, "model")?.trim();
+      return {
+        kind: "create-agent",
+        agentId: requireParam(params, "agentId"),
+        ...(workspace ? { workspace } : {}),
+        ...(model ? { model } : {}),
+      };
+    }
     case "config_set":
       return {
         kind: "config-set",

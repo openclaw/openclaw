@@ -116,6 +116,27 @@ describe("crestodian tool", () => {
     expect(text).toContain("gateway.port: Expected number");
   });
 
+  it("maps create_agent with optional workspace and model", async () => {
+    mocks.executeCrestodianOperation.mockImplementationOnce(
+      async (_op: unknown, runtime: { log: (m: string) => void }) => {
+        runtime.log("op-output");
+        return { applied: true };
+      },
+    );
+    const tool = createCrestodianTool({ surface: "cli" });
+    await tool.execute("t6", {
+      action: "create_agent",
+      agentId: "work",
+      workspace: "/tmp/work",
+      approved: true,
+    });
+    expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
+      { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
+      expect.anything(),
+      expect.objectContaining({ approved: true }),
+    );
+  });
+
   it("rejects unknown or underspecified actions as input errors", async () => {
     const tool = createCrestodianTool({ surface: "cli" });
     await expect(tool.execute("t5", { action: "config_get" })).rejects.toThrow(/path/);
