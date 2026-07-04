@@ -484,13 +484,20 @@ type CronRollbackSnapshot = {
 // jobs, so restoring only the touched job would leave siblings and deferrals
 // ahead of disk; without the rollback a failed add/update/remove keeps
 // running, reverting, or resurrecting jobs the caller was told did not apply.
-async function persistOrRestore(state: CronServiceState, snapshot: CronRollbackSnapshot) {
+async function persistOrRestore(
+  state: CronServiceState,
+  snapshot: CronRollbackSnapshot,
+  postPersistAutoDisableNotifications: Array<() => void> = [],
+) {
   try {
     await persist(state);
   } catch (err) {
     state.store = snapshot.store;
     state.pendingCatchupDeferralJobIds = snapshot.pendingCatchupDeferralJobIds;
     throw err;
+  }
+  for (const notify of postPersistAutoDisableNotifications) {
+    notify();
   }
 }
 
@@ -510,9 +517,14 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
-    recomputeNextRunsForMaintenance(state);
+    // Auto-disable notifications describe durable state, so publish them only
+    // after the write succeeds instead of leaking a rolled-back transition.
+    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    recomputeNextRunsForMaintenance(state, {
+      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+    });
 
-    await persistOrRestore(state, snapshot);
+    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
     armTimer(state);
 
     state.deps.log.info(
@@ -637,9 +649,12 @@ export async function remove(state: CronServiceState, id: string) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
-    recomputeNextRunsForMaintenance(state);
+    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    recomputeNextRunsForMaintenance(state, {
+      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+    });
 
-    await persistOrRestore(state, snapshot);
+    await persistOrRestore(state, snapshot, postPersistAutoDisableNotifications);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
