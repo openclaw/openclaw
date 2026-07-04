@@ -94,4 +94,99 @@ describe("compileSlackInteractiveReplies", () => {
     );
     expect(result.interactive).toBeUndefined();
   });
+
+  it("keeps time-style colons in Slack button labels", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045, Today 11:30:ticket:123]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Fr 10.07. 9:00", value: "slot_fr_0900" },
+            { label: "Mo 13.07. 10:45", value: "slot_mo_1045" },
+            { label: "Today 11:30", value: "ticket:123" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps button style suffixes after time-style labels", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900:primary, Later 10:45:slot_later:danger]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Fr 10.07. 9:00", value: "slot_fr_0900", style: "primary" },
+            { label: "Later 10:45", value: "slot_later", style: "danger" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves colon-containing Slack callback values", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Open:ticket:123, Timed:ticket:9:00:id, Allow:pluginbind:approval-123:o, Deny:/approve plugin:approval-123 deny]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Open", value: "ticket:123" },
+            { label: "Timed", value: "ticket:9:00:id" },
+            { label: "Allow", value: "pluginbind:approval-123:o" },
+            { label: "Deny", value: "/approve plugin:approval-123 deny" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps single-colon button entries unchanged when the value matches a style name", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Primary:primary, Danger:danger, Fr 10.07. 9:00:primary]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Primary", value: "primary" },
+            { label: "Danger", value: "danger" },
+            { label: "Fr 10.07. 9:00", value: "primary" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("keeps time-style colons in Slack select option labels", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_select: Pick a time | Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "select",
+          placeholder: "Pick a time",
+          options: [
+            { label: "Fr 10.07. 9:00", value: "slot_fr_0900" },
+            { label: "Mo 13.07. 10:45", value: "slot_mo_1045" },
+          ],
+        },
+      ],
+    });
+  });
 });

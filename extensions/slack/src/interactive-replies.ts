@@ -21,41 +21,60 @@ type SlackChoice = {
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
+function resolveChoiceDelimiter(value: string): number {
+  const firstDelimiter = value.indexOf(":");
+  if (firstDelimiter === -1) {
+    return -1;
+  }
+  const prefix = value.slice(0, firstDelimiter);
+  const suffix = value.slice(firstDelimiter + 1);
+  if (/\b\d{1,2}$/.test(prefix) && /^\d{2}:/.test(suffix)) {
+    return firstDelimiter + 3;
+  }
+  if (/\b\d{1,2}$/.test(prefix) && /^\d{2}$/.test(suffix)) {
+    return -1;
+  }
+  return firstDelimiter;
+}
+
 function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoice | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
-  const delimiter = trimmed.indexOf(":");
-  if (delimiter === -1) {
-    return {
-      label: trimmed,
-      value: trimmed,
-    };
-  }
-  const label = trimmed.slice(0, delimiter).trim();
-  let value = trimmed.slice(delimiter + 1).trim();
-  if (!label || !value) {
-    return null;
-  }
+  let working = trimmed;
   let style: SlackChoice["style"];
   if (options?.allowStyle) {
-    const styleDelimiter = value.lastIndexOf(":");
+    const styleDelimiter = working.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
+      const maybeStyle = normalizeLowercaseStringOrEmpty(working.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
         maybeStyle === "success" ||
         maybeStyle === "danger"
       ) {
-        const unstyledValue = value.slice(0, styleDelimiter).trim();
-        if (unstyledValue) {
-          value = unstyledValue;
+        const withoutStyle = working.slice(0, styleDelimiter).trim();
+        const delimiterBeforeStyle = resolveChoiceDelimiter(withoutStyle);
+        if (
+          delimiterBeforeStyle !== -1 &&
+          withoutStyle.slice(0, delimiterBeforeStyle).trim() &&
+          withoutStyle.slice(delimiterBeforeStyle + 1).trim()
+        ) {
+          working = withoutStyle;
           style = maybeStyle;
         }
       }
     }
+  }
+  const delimiter = resolveChoiceDelimiter(working);
+  if (delimiter === -1) {
+    return style ? { label: working, value: working, style } : { label: working, value: working };
+  }
+  const label = working.slice(0, delimiter).trim();
+  const value = working.slice(delimiter + 1).trim();
+  if (!label || !value) {
+    return null;
   }
   return style ? { label, value, style } : { label, value };
 }
