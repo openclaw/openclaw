@@ -2,6 +2,10 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -294,6 +298,22 @@ export function createCronPromptExecutor(params: {
         recorder: UserTurnTranscriptRecorder;
       }
     | undefined;
+  // CLI providers surface their own terminal classification. Embedded cron
+  // results can return fallback-safe incomplete/empty payloads, so the fallback
+  // classifier must agree with the branch that produced the result.
+  const resolveCronExecutionProvider = (provider: string, model: string) => {
+    const executionProvider =
+      resolveCliRuntimeExecutionProvider({
+        provider,
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        modelId: model,
+      }) ?? provider;
+    return {
+      executionProvider,
+      isCli: isCliProvider(executionProvider, params.cfgWithAgentDefaults),
+    };
+  };
 
   const runPrompt = async (promptText: string) => {
     const userTurnTranscriptRecorder =
@@ -339,22 +359,24 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      classifyResult: ({ provider, model, result }) =>
+        resolveCronExecutionProvider(provider, model).isCli
+          ? null
+          : classifyEmbeddedAgentRunResultForModelFallback({ provider, model, result }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
         }
-        const executionProvider =
-          resolveCliRuntimeExecutionProvider({
-            provider: providerOverride,
-            cfg: params.cfgWithAgentDefaults,
-            agentId: params.agentId,
-            modelId: modelOverride,
-          }) ?? providerOverride;
+        const { executionProvider, isCli } = resolveCronExecutionProvider(
+          providerOverride,
+          modelOverride,
+        );
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
-        if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
+        if (isCli) {
           const cliSessionBinding = params.cronSession.isNewSession
             ? undefined
             : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
