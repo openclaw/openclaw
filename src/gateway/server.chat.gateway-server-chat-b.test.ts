@@ -453,7 +453,7 @@ describe("gateway server chat", () => {
           JSON.stringify({
             message: {
               role: "user",
-              content: [{ type: "text", text: "owned topic ancestor context" }],
+              content: [{ type: "text", text: "older topic ancestor context" }],
               timestamp: startedAt - 40_000,
             },
           }),
@@ -560,7 +560,7 @@ describe("gateway server chat", () => {
 
       const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
       expect(familyHistory).toContain("ancestor thread context");
-      expect(familyHistory).toContain("owned topic ancestor context");
+      expect(familyHistory).toContain("older topic ancestor context");
       expect(familyHistory).toContain("newer owned topic ancestor context");
       expect(familyHistory).toContain("current thread context");
       expect(familyHistory).not.toContain("unrelated topic context");
@@ -572,7 +572,7 @@ describe("gateway server chat", () => {
       );
       expect(limitedFamilyHistory).toContain("newer owned topic ancestor context");
       expect(limitedFamilyHistory).toContain("current thread context");
-      expect(limitedFamilyHistory).not.toContain("owned topic ancestor context");
+      expect(limitedFamilyHistory).not.toContain("older topic ancestor context");
     });
   });
 
