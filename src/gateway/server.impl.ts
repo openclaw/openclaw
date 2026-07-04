@@ -17,7 +17,7 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import {
   getRuntimeConfig,
   promoteConfigSnapshotToLastKnownGood,
-  readConfigFileSnapshot,
+  readConfigFileSnapshotWithPluginMetadata,
   registerConfigWriteListener,
   setRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -609,6 +609,7 @@ export async function startGatewayServer(
   let cfgAtStart: OpenClawConfig;
   let startupInternalWriteHash: string | null = null;
   let startupLastGoodSnapshot = configSnapshot;
+  let startupIncludeFilePaths = startupConfigLoad.includeFilePaths;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
@@ -665,11 +666,15 @@ export async function startGatewayServer(
   // Keep the old startup-write suppression path intact for compatibility with
   // callers that may still report a write, but startup itself no longer mutates config.
   if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
-    const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
-      readConfigFileSnapshot(),
+    const startupSnapshotRead = await startupTrace.measure("config.final-snapshot", () =>
+      readConfigFileSnapshotWithPluginMetadata(),
     );
+    const startupSnapshot = startupSnapshotRead.snapshot;
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
+    if (startupSnapshotRead.includeFilePaths) {
+      startupIncludeFilePaths = startupSnapshotRead.includeFilePaths;
+    }
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
@@ -1720,8 +1725,9 @@ export async function startGatewayServer(
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,
+      initialIncludeFilePaths: startupIncludeFilePaths,
       watchPath: configSnapshot.path,
-      readSnapshot: readConfigFileSnapshot,
+      readSnapshot: readConfigFileSnapshotWithPluginMetadata,
       promoteSnapshot: promoteConfigSnapshotToLastKnownGood,
       subscribeToWrites: registerConfigWriteListener,
       deps,

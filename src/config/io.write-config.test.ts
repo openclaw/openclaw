@@ -1915,6 +1915,57 @@ describe("config io write", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "exposes only canonical valid include paths through the metadata wrapper",
+    async () => {
+      await withSuiteHome(async (home) => {
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const fragmentsDir = path.join(configDir, "fragments");
+        const aliasDir = path.join(configDir, "alias");
+        const defaultsPath = path.join(fragmentsDir, "defaults.json5");
+        const nestedPath = path.join(fragmentsDir, "nested.json5");
+        await fs.mkdir(fragmentsDir, { recursive: true });
+        await fs.symlink(fragmentsDir, aliasDir, "dir");
+        await fs.writeFile(nestedPath, '{ workspace: "~/.openclaw/workspace" }\n', "utf-8");
+        await fs.writeFile(
+          defaultsPath,
+          '{ $include: "./nested.json5", maxConcurrent: 1 }\n',
+          "utf-8",
+        );
+        await fs.writeFile(
+          configPath,
+          '{ agents: { defaults: { $include: "./alias/defaults.json5" } } }\n',
+          "utf-8",
+        );
+        const io = createConfigIO({
+          env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+          homedir: () => home,
+          logger: silentLogger,
+        });
+
+        const valid = await io.readConfigFileSnapshotWithPluginMetadata();
+
+        expect(valid.snapshot.valid).toBe(true);
+        expect(valid.includeFilePaths).toEqual(
+          [await fs.realpath(defaultsPath), await fs.realpath(nestedPath)].toSorted(),
+        );
+        expect(valid.includeFilePaths).not.toContain(path.join(aliasDir, "defaults.json5"));
+        expect(valid.snapshot).not.toHaveProperty("includeFilePaths");
+
+        await fs.writeFile(nestedPath, "{ malformed", "utf-8");
+        const invalid = await io.readConfigFileSnapshotWithPluginMetadata();
+        expect(invalid.snapshot.valid).toBe(false);
+        expect(invalid).not.toHaveProperty("includeFilePaths");
+
+        await fs.rm(nestedPath);
+        const missing = await io.readConfigFileSnapshotWithPluginMetadata();
+        expect(missing.snapshot.valid).toBe(false);
+        expect(missing).not.toHaveProperty("includeFilePaths");
+      });
+    },
+  );
+
   it("repairs invalid root-authored siblings without flattening included config", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

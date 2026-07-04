@@ -528,13 +528,25 @@ candidate contains redacted secret placeholders such as `***`.
       and re-checked, so a path that lexically lives in a config dir but whose
       real target escapes every allowed root is still rejected.
     - **Error handling**: clear errors for missing files, parse errors, circular includes, invalid path format, and excessive length
+    - **Hot reload**: edits to regular include files successfully resolved by the
+      last valid config are watched, including nested includes. Changing an
+      authored `$include` target inside a watched file re-resolves the graph.
+      Paths that were missing or invalid during the last successful resolution,
+      and filesystem or symlink retargets that do not modify a watched file, are
+      not discovered automatically; edit `openclaw.json` or restart the Gateway
+      to resolve the graph again.
 
   </Accordion>
 </AccordionGroup>
 
 ## Config hot reload
 
-The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically - no manual restart needed for most settings.
+The Gateway watches `~/.openclaw/openclaw.json` plus the canonical include files
+successfully resolved by the last valid config, and applies changes
+automatically - no manual restart needed for most settings. Invalid candidates
+keep the last valid watch set. Missing or invalid paths outside that set, plus
+filesystem or symlink retargets that do not modify a watched file, require an
+`openclaw.json` edit or a Gateway restart before they can be discovered.
 
 Direct file edits are treated as untrusted until they validate. The watcher waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects

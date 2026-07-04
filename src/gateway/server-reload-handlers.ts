@@ -210,8 +210,9 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
+  initialIncludeFilePaths?: readonly string[];
   watchPath: string;
-  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
+  readSnapshot: typeof import("../config/config.js").readConfigFileSnapshotWithPluginMetadata;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & {
@@ -733,6 +734,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     initialConfig: params.initialConfig,
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
+    initialIncludeFilePaths: params.initialIncludeFilePaths,
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
