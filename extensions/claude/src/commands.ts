@@ -7,6 +7,7 @@
  *   - threads        list .claude-binding.json files for the active session
  *   - conversations  list this agent's other real conversations with a bound Claude/GLM thread
  *   - resume <id>    rotate the current session's binding to a given thread_id
+ *   - thread-pop     rotate back to the thread you last switched away from via resume
  *   - help           print subcommand listing
  *
  * The bridge client is shared per host process (see app-server/client.ts).
@@ -38,7 +39,15 @@ export function createClaudeCommand(
   };
 }
 
-const SUBCOMMANDS = ["status", "version", "threads", "conversations", "resume", "help"] as const;
+const SUBCOMMANDS = [
+  "status",
+  "version",
+  "threads",
+  "conversations",
+  "resume",
+  "thread-pop",
+  "help",
+] as const;
 type ClaudeSubcommand = (typeof SUBCOMMANDS)[number];
 
 function parseSubcommand(raw: string | undefined): {
@@ -75,6 +84,8 @@ export async function handleClaudeCommand(
         return await handlers.handleConversations(ctx);
       case "resume":
         return await handlers.handleResume(ctx, rest);
+      case "thread-pop":
+        return await handlers.handleThreadPop(ctx);
       default:
         return handlers.handleHelp();
     }

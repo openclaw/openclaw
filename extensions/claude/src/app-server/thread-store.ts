@@ -67,7 +67,18 @@ export type ClaudeAppServerBinding = {
   lastAssistantPreview?: string;
   /** Count of completed turns recorded against this thread binding. */
   turnCount?: number;
+  /**
+   * LIFO back-stack of thread ids this session was bound to before an
+   * explicit `/claude resume` switched away from them (most-recently-left
+   * thread at the end). `/claude thread-pop` pops one entry and rebinds to
+   * it, so switching to a different conversation is never a one-way trip —
+   * capped at {@link THREAD_STACK_MAX} entries (oldest dropped first).
+   */
+  threadStack?: string[];
 };
+
+/** Cap on threadStack length so repeated /claude resume calls can't grow the sidecar unbounded. */
+export const THREAD_STACK_MAX = 20;
 
 export function resolveClaudeAppServerBindingPath(sessionFile: string): string {
   return `${sessionFile}.claude-binding.json`;
