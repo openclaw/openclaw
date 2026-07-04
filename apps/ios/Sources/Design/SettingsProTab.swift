@@ -6,8 +6,6 @@ struct SettingsProTab: View {
     @Environment(VoiceWakeManager.self) var voiceWake
     @Environment(GatewayConnectionController.self) var gatewayController
     @Environment(\.scenePhase) var scenePhase
-    @AppStorage(AppAppearancePreference.storageKey) var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @AppStorage("node.displayName") var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") var instanceId: String = UUID().uuidString
     @AppStorage("camera.enabled") var cameraEnabled: Bool = true
@@ -64,7 +62,6 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
-    @State var isShowingAppearanceDialog = false
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
@@ -120,18 +117,16 @@ struct SettingsProTab: View {
             self.settingsListSection
         }
         .font(OpenClawType.body)
-        .listStyle(.insetGrouped)
         .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
+        }
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                    OpenClawSidebarRevealButton(action: headerLeadingAction)
                 }
             }
-        }
-        .navigationDestination(for: SettingsRoute.self) { route in
-            self.destination(for: route)
         }
     }
 

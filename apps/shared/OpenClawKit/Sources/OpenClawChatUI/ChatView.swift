@@ -44,6 +44,18 @@ public struct OpenClawChatView: View {
         case clean
     }
 
+    public struct StarterPrompt: Hashable, Identifiable, Sendable {
+        public let id: String
+        public let title: String
+        public let prompt: String
+
+        public init(id: String, title: String, prompt: String) {
+            self.id = id
+            self.title = title
+            self.prompt = prompt
+        }
+    }
+
     @State private var viewModel: OpenClawChatViewModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var scrollerBottomID = UUID()
@@ -69,6 +81,7 @@ public struct OpenClawChatView: View {
     private let isComposerEnabled: Bool
     private let messagePlaceholder: String?
     private let emptyAssistantIntro: String?
+    private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
 
     private enum ScrollFollowTarget: Equatable {
@@ -118,9 +131,10 @@ public struct OpenClawChatView: View {
         isComposerEnabled: Bool = true,
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
+        emptyAssistantPrompts: [StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil)
     {
-        self._viewModel = State(initialValue: viewModel)
+        _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
@@ -135,6 +149,7 @@ public struct OpenClawChatView: View {
         self.isComposerEnabled = isComposerEnabled
         self.messagePlaceholder = messagePlaceholder
         self.emptyAssistantIntro = emptyAssistantIntro
+        self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
     }
 
@@ -298,25 +313,19 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListRows: some View {
-        if let introText = self.visibleEmptyAssistantIntro {
-            ChatAssistantIntroCard(text: introText)
+        if let introText = visibleEmptyAssistantIntro {
+            ChatAssistantIntroCard(
+                text: introText,
+                prompts: self.emptyAssistantPrompts,
+                onPrompt: { prompt in
+                    self.viewModel.input = prompt.prompt
+                    self.viewModel.send()
+                })
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         if self.showsCleanLoadingPlaceholder {
             ChatLoadingBubble()
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        if let error = self.inlineCleanErrorText {
-            let presentation = self.errorPresentation(for: error)
-            ChatNoticeCard(
-                systemImage: presentation.systemImage,
-                title: presentation.title,
-                message: error,
-                tint: presentation.tint,
-                actionTitle: "Refresh",
-                action: { self.viewModel.refresh() })
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
@@ -356,7 +365,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = self.viewModel.streamingAssistantText,
+        if let text = viewModel.streamingAssistantText,
            AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
         {
             ChatStreamingAssistantBubble(
@@ -375,7 +384,7 @@ public struct OpenClawChatView: View {
     private var visibleMessages: [OpenClawChatMessage] {
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
-            guard let first = self.viewModel.messages.first else { return [] }
+            guard let first = viewModel.messages.first else { return [] }
             base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
                 .messages
         } else {
@@ -435,9 +444,7 @@ public struct OpenClawChatView: View {
             EmptyView()
         } else if self.showsCleanLoadingPlaceholder {
             EmptyView()
-        } else if self.inlineCleanErrorText != nil {
-            EmptyView()
-        } else if let error = self.activeErrorText {
+        } else if let error = activeErrorText {
             if self.hasVisibleMessageListContent {
                 EmptyView()
             } else {
@@ -445,8 +452,7 @@ public struct OpenClawChatView: View {
                 ChatNoticeCard(
                     systemImage: presentation.systemImage,
                     title: presentation.title,
-                    message: error,
-                    tint: presentation.tint,
+                    message: presentation.message,
                     actionTitle: "Refresh",
                     action: { self.viewModel.refresh() })
                     .padding(.horizontal, 24)
@@ -457,7 +463,6 @@ public struct OpenClawChatView: View {
                 systemImage: "bubble.left.and.bubble.right.fill",
                 title: self.emptyStateTitle,
                 message: self.emptyStateMessage,
-                tint: OpenClawChatTheme.accent,
                 actionTitle: nil,
                 action: nil)
                 .padding(.horizontal, 24)
@@ -466,20 +471,13 @@ public struct OpenClawChatView: View {
     }
 
     private var activeErrorText: String? {
-        guard let text = self.viewModel.errorText?
+        guard let text = viewModel.errorText?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !text.isEmpty
         else {
             return nil
         }
         return text
-    }
-
-    private var inlineCleanErrorText: String? {
-        guard self.composerChrome == .clean, !self.hasVisibleMessageListContent else {
-            return nil
-        }
-        return self.activeErrorText
     }
 
     private var hasVisibleMessageListContent: Bool {
@@ -499,10 +497,10 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListNoticeBanner: some View {
-        if let error = self.activeErrorText,
-           self.hasVisibleMessageListContent,
+        if let error = activeErrorText,
+           hasVisibleMessageListContent,
            !self.viewModel.isLoading,
-           self.visibleEmptyAssistantIntro == nil,
+           visibleEmptyAssistantIntro == nil,
            !self.showsCleanLoadingPlaceholder
         {
             let presentation = self.errorPresentation(for: error)
@@ -536,7 +534,7 @@ public struct OpenClawChatView: View {
         else {
             return nil
         }
-        guard let text = self.emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let text = emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty
         else {
             return nil
@@ -569,19 +567,22 @@ public struct OpenClawChatView: View {
         #endif
     }
 
-    private func errorPresentation(for error: String) -> (title: String, systemImage: String, tint: Color) {
+    private func errorPresentation(
+        for error: String) -> (title: String, message: String, systemImage: String, tint: Color)
+    {
         let lower = error.lowercased()
         if lower.contains("not connected") || lower.contains("socket") {
-            return ("Disconnected", "wifi.slash", .orange)
+            return ("Disconnected", "Reconnect to your gateway to continue.", "wifi.slash", .orange)
         }
         if lower.contains("timed out") {
-            return ("Timed out", "clock.badge.exclamationmark", .orange)
+            return ("Timed out", "The gateway took too long to respond.", "clock.badge.exclamationmark", .orange)
         }
-        return ("Error", "exclamationmark.triangle.fill", .orange)
+        // Unknown errors: keep the raw text as the description so it stays actionable.
+        return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
     }
 
     private func restoreInitialScrollPosition() {
-        if let latestUserMessageID = self.latestVisibleUserMessageID {
+        if let latestUserMessageID = latestVisibleUserMessageID {
             self.followTarget = nil
             self.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: latestUserMessageID,
@@ -620,7 +621,7 @@ public struct OpenClawChatView: View {
         {
         case let .removed(latestRemainingID):
             self.lastUserMessageID = latestRemainingID
-            if case let .user(messageID) = self.followTarget,
+            if case let .user(messageID) = followTarget,
                !visibleUserMessageIDs.contains(messageID)
             {
                 self.followTarget = nil
@@ -682,7 +683,7 @@ public struct OpenClawChatView: View {
 
             guard let toolCallId = message.toolCallId,
                   let last = result.last,
-                  self.toolCallIds(in: last).contains(toolCallId)
+                  toolCallIds(in: last).contains(toolCallId)
             else {
                 result.append(message)
                 continue
@@ -712,6 +713,7 @@ public struct OpenClawChatView: View {
                 role: last.role,
                 content: content,
                 timestamp: last.timestamp,
+                idempotencyKey: last.idempotencyKey,
                 toolCallId: last.toolCallId,
                 toolName: last.toolName,
                 usage: last.usage,
@@ -825,23 +827,49 @@ public struct OpenClawChatView: View {
 
 private struct ChatAssistantIntroCard: View {
     let text: String
+    let prompts: [OpenClawChatView.StarterPrompt]
+    let onPrompt: (OpenClawChatView.StarterPrompt) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(OpenClawChatTypography.title3)
-                .foregroundStyle(OpenClawChatTheme.accent)
-                .accessibilityHidden(true)
-
+        VStack(alignment: .leading, spacing: 10) {
+            // Rendered as a grey assistant bubble so the greeting reads like the
+            // agent's first message, matching the in-conversation bubble style.
             Text(self.text)
-                .font(OpenClawChatTypography.title3SemiBold)
+                .font(OpenClawChatTypography.body)
                 .foregroundStyle(OpenClawChatTheme.assistantText)
                 .multilineTextAlignment(.leading)
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(OpenClawChatTheme.assistantBubble))
+
+            ForEach(self.prompts) { prompt in
+                Button {
+                    self.onPrompt(prompt)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(prompt.title)
+                            .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .callout))
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 8)
+                        Image(systemName: "arrow.up.right")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(OpenClawChatTheme.subtleCard))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("chat-starter-\(prompt.id)")
+            }
         }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 4)
-        .frame(maxWidth: 320, alignment: .leading)
+        .frame(maxWidth: 340, alignment: .leading)
         .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -867,45 +895,27 @@ private struct ChatNoticeCard: View {
     let systemImage: String
     let title: String
     let message: String
-    let tint: Color
     let actionTitle: String?
     let action: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Image(systemName: self.systemImage)
-                .font(OpenClawChatTypography.display(size: 19, weight: .semibold, relativeTo: .headline))
-                .foregroundStyle(self.tint)
-                .frame(width: 42, height: 42)
-                .background(self.tint.opacity(0.14), in: Circle())
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(self.title)
-                    .font(OpenClawChatTypography.headline)
-
-                Text(self.message)
-                    .font(OpenClawChatTypography.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(3)
-            }
-
-            Spacer(minLength: 8)
-
+        // Native empty/error state: SwiftUI's standard ContentUnavailableView, not a custom card.
+        ContentUnavailableView {
+            Label(self.title, systemImage: self.systemImage)
+                .font(OpenClawChatTypography.headline)
+        } description: {
+            Text(self.message)
+                .font(OpenClawChatTypography.body)
+        } actions: {
             if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                Button(action: action) {
+                    Text(actionTitle)
+                        .font(OpenClawChatTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(OpenClawChatTheme.subtleCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)))
-        .shadow(color: .black.opacity(0.12), radius: 14, y: 7)
     }
 }
 

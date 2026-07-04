@@ -49,7 +49,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `share extension profile uses separate identity and auth files`() throws {
+    func `secondary profiles use separate identity and auth files`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -65,11 +65,17 @@ struct DeviceIdentityStoreTests {
         }
 
         let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+        let nodeIdentity = DeviceIdentityStore.loadOrCreate(profile: .node)
         let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
         _ = DeviceAuthStore.storeToken(
             deviceId: primaryIdentity.deviceId,
             role: "node",
             token: "primary-token")
+        _ = DeviceAuthStore.storeToken(
+            deviceId: nodeIdentity.deviceId,
+            role: "node",
+            token: "node-token",
+            profile: .node)
         _ = DeviceAuthStore.storeToken(
             deviceId: shareIdentity.deviceId,
             role: "node",
@@ -77,13 +83,21 @@ struct DeviceIdentityStoreTests {
             profile: .shareExtension)
 
         let identityDir = tempDir.appendingPathComponent("identity", isDirectory: true)
+        #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
         #expect(primaryIdentity.deviceId != shareIdentity.deviceId)
         #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device.json").path))
+        #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("node-device.json").path))
         #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("share-device.json").path))
         #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device-auth.json").path))
         #expect(FileManager.default
+            .fileExists(atPath: identityDir.appendingPathComponent("node-device-auth.json").path))
+        #expect(FileManager.default
             .fileExists(atPath: identityDir.appendingPathComponent("share-device-auth.json").path))
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?.token == "primary-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: nodeIdentity.deviceId,
+            role: "node",
+            profile: .node)?.token == "node-token")
         #expect(
             DeviceAuthStore
                 .loadToken(deviceId: shareIdentity.deviceId, role: "node", profile: .shareExtension)?.token ==
@@ -92,6 +106,10 @@ struct DeviceIdentityStoreTests {
         DeviceAuthStore.clearAll(profile: .shareExtension)
 
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?.token == "primary-token")
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: nodeIdentity.deviceId,
+            role: "node",
+            profile: .node)?.token == "node-token")
         #expect(DeviceAuthStore
             .loadToken(deviceId: shareIdentity.deviceId, role: "node", profile: .shareExtension) == nil)
     }

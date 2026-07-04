@@ -4,6 +4,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
@@ -162,8 +163,8 @@ export function createLocationMessage(location: {
 }): LocationMessage {
   return {
     type: "location",
-    title: location.title.slice(0, 100),
-    address: location.address.slice(0, 100),
+    title: truncateUtf16Safe(location.title, 100),
+    address: truncateUtf16Safe(location.address, 100),
     latitude: location.latitude,
     longitude: location.longitude,
   };
@@ -419,7 +420,7 @@ export async function pushFlexMessage(
 ): Promise<LineSendResult> {
   const flexMessage: FlexMessage = {
     type: "flex",
-    altText: altText.slice(0, 400),
+    altText: truncateUtf16Safe(altText, 400),
     contents,
   };
 

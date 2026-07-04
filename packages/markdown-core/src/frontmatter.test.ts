@@ -103,6 +103,28 @@ metadata:
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
   });
 
+  it("preserves prototype-named keys when YAML value is null", () => {
+    const content = `---
+title: Hello
+toString: null
+constructor: null
+valueOf: null
+hasOwnProperty: null
+---
+Body text`;
+    const result = parseFrontmatterBlock(content);
+    expect(Object.hasOwn(result, "toString")).toBe(true);
+    expect(result["toString"]).toBe("null");
+    expect(Object.hasOwn(result, "constructor")).toBe(true);
+    expect(result["constructor"]).toBe("null");
+    expect(Object.hasOwn(result, "valueOf")).toBe(true);
+    expect(result["valueOf"]).toBe("null");
+    expect(Object.hasOwn(result, "hasOwnProperty")).toBe(true);
+    expect(result["hasOwnProperty"]).toBe("null");
+    // normal key unaffected
+    expect(result.title).toBe("Hello");
+  });
+
   it("parses frontmatter after a leading UTF-8 BOM", () => {
     const content = "\uFEFF---\nname: windows-skill\ndescription: Written by PowerShell\n---\n";
     const result = parseFrontmatterBlock(content);

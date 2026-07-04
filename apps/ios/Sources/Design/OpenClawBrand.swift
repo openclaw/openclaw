@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 
 enum AppAppearancePreference: String, CaseIterable, Identifiable {
@@ -44,12 +45,29 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         case .dark: .dark
         }
     }
+}
 
-    var userInterfaceStyle: UIUserInterfaceStyle {
-        switch self {
-        case .system: .unspecified
-        case .light: .light
-        case .dark: .dark
+@MainActor
+@Observable
+final class AppAppearanceModel {
+    private(set) var preference: AppAppearancePreference
+
+    init(userDefaults: UserDefaults = .standard) {
+        let storedPreference = userDefaults.string(forKey: AppAppearancePreference.storageKey)
+            .flatMap(AppAppearancePreference.init(rawValue:))
+        self.preference = AppAppearancePreference.launchArgumentPreference ?? storedPreference ?? .system
+        if AppAppearancePreference.launchArgumentPreference != nil {
+            userDefaults.set(self.preference.rawValue, forKey: AppAppearancePreference.storageKey)
+        }
+    }
+
+    func select(_ preference: AppAppearancePreference, userDefaults: UserDefaults = .standard) {
+        guard self.preference != preference else { return }
+        userDefaults.set(preference.rawValue, forKey: AppAppearancePreference.storageKey)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            self.preference = preference
         }
     }
 }
@@ -65,7 +83,6 @@ enum OpenClawBrand {
     static let uiTeal = adaptiveUIColor(light: (0, 196, 176), dark: (0, 196, 176))
     static let uiVoid = adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17))
     static let uiObsidian = adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28))
-    static let uiSlate = adaptiveUIColor(light: (242, 243, 247), dark: (28, 31, 43))
     static let uiTextPrimary = adaptiveUIColor(light: (11, 12, 17), dark: (242, 239, 232))
     static let uiTextSecondary = adaptiveUIColor(light: (90, 94, 110), dark: (168, 170, 191))
     static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (48, 209, 88))
@@ -81,7 +98,6 @@ enum OpenClawBrand {
     static let teal = Color(uiColor: Self.uiTeal)
     static let void = Color(uiColor: Self.uiVoid)
     static let obsidian = Color(uiColor: Self.uiObsidian)
-    static let slate = Color(uiColor: Self.uiSlate)
     static let textPrimary = Color(uiColor: Self.uiTextPrimary)
     static let textSecondary = Color(uiColor: Self.uiTextSecondary)
     static let danger = Color(uiColor: Self.uiDanger)

@@ -22,8 +22,13 @@ scenario:
   codeRefs:
     - scripts/e2e/lib/openai-web-search-minimal/assertions.mjs
     - scripts/e2e/lib/openai-web-search-minimal/mock-server.mjs
+    - scripts/e2e/openai-web-search-minimal-docker.sh
+    - test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     - test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts
   execution:
-    kind: vitest
-    path: test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts
-    summary: Vitest coverage for native OpenAI web_search request-log assertions.
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the OpenAI web_search Docker E2E lane and asserts the emitted native Responses request log.
+    args:
+      - --lane
+      - openai-web-search-minimal

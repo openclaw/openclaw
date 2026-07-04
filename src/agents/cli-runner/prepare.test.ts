@@ -6,6 +6,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -147,6 +148,7 @@ function createCliBackendConfig(
   params: {
     bundleMcp?: boolean;
     reseedFromRawTranscriptWhenUncompacted?: boolean;
+    systemPromptWhen?: "first" | "always" | "never";
   } = {},
 ): OpenClawConfig {
   return {
@@ -157,7 +159,7 @@ function createCliBackendConfig(
             command: "test-cli",
             args: ["--print"],
             systemPromptArg: "--system-prompt",
-            systemPromptWhen: "first",
+            systemPromptWhen: params.systemPromptWhen ?? "first",
             sessionMode: "existing",
             output: "text",
             input: "arg",
@@ -1396,7 +1398,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       });
 
-      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
       expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
       expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
@@ -1847,7 +1849,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.systemPrompt).toContain("## Inbound Context\nchannel=telegram");
       expect(context.extraSystemPromptHash).toBeUndefined();
-      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1880,7 +1882,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.messageToolPolicyHash).toBeDefined();
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "message-policy",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2006,7 +2011,83 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(context.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));
-      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("soft-resumes content drift and surfaces a per-turn drift note", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        currentInboundContext: {
+          text: "Conversation info (untrusted metadata):\nchannel=telegram",
+        },
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-soft-resume-drift-note",
+        extraSystemPrompt: "new stable prompt",
+        extraSystemPromptStatic: "new stable prompt",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: "cli-session",
+        drift: { reasons: ["system-prompt"] },
+      });
+      expect(context.openClawHistoryPrompt).toBeUndefined();
+      expect(context.params.prompt).toContain(
+        "OpenClaw resumed this CLI session after prompt content changed.",
+      );
+      expect(context.params.prompt).toContain("changed=system-prompt");
+      expect(context.params.prompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-soft-resume-unsupported-backend",
+        extraSystemPrompt: "new stable prompt",
+        extraSystemPromptStatic: "new stable prompt",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText("old stable prompt"),
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig({ systemPromptWhen: "never" }),
+      });
+
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "system-prompt",
+      });
+      expect(context.params.prompt).not.toContain(
+        "OpenClaw resumed this CLI session after prompt content changed.",
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2110,12 +2191,103 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             "if current-turn context says final text stays private, use `message(action=send)`",
           );
         }
-        expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+        expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }
     },
   );
+
+  it("reuses CLI session bindings across explicit mention toggles with stable group prompt facts", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const baseGroupCtx = {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "SirPinchALotBot",
+      } as const;
+      const mentionedStaticPrompt = [
+        buildGroupChatContext({
+          sessionCtx: {
+            ...baseGroupCtx,
+            ExplicitlyMentionedBot: true,
+          },
+          sourceReplyDeliveryMode: "automatic",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+        buildGroupIntro({
+          defaultActivation: "mention",
+        }),
+      ].join("\n\n");
+      const unmentionedStaticPrompt = [
+        buildGroupChatContext({
+          sessionCtx: {
+            ...baseGroupCtx,
+            ExplicitlyMentionedBot: false,
+          },
+          sourceReplyDeliveryMode: "automatic",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+        buildGroupIntro({
+          defaultActivation: "mention",
+        }),
+      ].join("\n\n");
+      expect(unmentionedStaticPrompt).toBe(mentionedStaticPrompt);
+
+      const first = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "first ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-mention-binding-a",
+        extraSystemPrompt: [
+          "The incoming message explicitly mentions your channel identity @SirPinchALotBot.",
+          mentionedStaticPrompt,
+        ].join("\n\n"),
+        sourceReplyDeliveryMode: "automatic",
+        cliSessionBindingFacts: {
+          extraSystemPromptStatic: mentionedStaticPrompt,
+          sourceReplyDeliveryMode: "automatic",
+        },
+        config: createCliBackendConfig(),
+      });
+      const second = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "second ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-mention-binding-b",
+        extraSystemPrompt: unmentionedStaticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+        cliSessionBindingFacts: {
+          extraSystemPromptStatic: unmentionedStaticPrompt,
+          sourceReplyDeliveryMode: "automatic",
+        },
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: first.extraSystemPromptHash,
+          messageToolPolicyHash: first.messageToolPolicyHash,
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("reuses CLI session bindings across owner sender flips with stable prompt tool scope", async () => {
     const { dir, sessionFile } = createSessionFile();
@@ -2236,7 +2408,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       );
       expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
-      expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(second.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2276,7 +2448,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       });
 
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: "cli-session",
+        drift: { reasons: ["system-prompt"] },
+      });
       expect(context.openClawHistoryPrompt).toContain("prior no-compaction ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
     } finally {
@@ -2316,7 +2492,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       });
 
-      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.openClawHistoryPrompt).toContain("prior resumable ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
     } finally {
@@ -2464,6 +2640,18 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           },
         ],
       });
+      const baselineContext = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-prompt-tools-baseline",
+        config: createCliBackendConfig({ bundleMcp: true }),
+      });
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
@@ -2478,6 +2666,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cliSessionBinding: {
           sessionId: "cli-session",
           promptToolNamesHash: "old-tool-surface",
+          ...(baselineContext.preparedBackend.mcpConfigHash
+            ? { mcpConfigHash: baselineContext.preparedBackend.mcpConfigHash }
+            : {}),
+          ...(baselineContext.preparedBackend.mcpResumeHash
+            ? { mcpResumeHash: baselineContext.preparedBackend.mcpResumeHash }
+            : {}),
         },
       });
 
@@ -2503,7 +2697,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.promptToolNamesHash).toBe(
         hashCliSessionText(JSON.stringify(["memory_search"])),
       );
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse-with-drift",
+        sessionId: "cli-session",
+        drift: { reasons: ["prompt-tools"] },
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2852,7 +3050,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
       });
       expect(orphanCheck).not.toHaveBeenCalled();
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "missing-transcript" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "missing-transcript",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2896,7 +3097,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionId: "orphaned-claude-sid",
         workspaceDir: dir,
       });
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "orphaned-tool-use" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "orphaned-tool-use",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2935,7 +3139,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(transcriptCheck).not.toHaveBeenCalled();
       expect(orphanCheck).not.toHaveBeenCalled();
-      expect(context.reusableCliSession).toEqual({ invalidatedReason: "auth-profile" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "invalidate",
+        invalidatedReason: "auth-profile",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -2975,7 +3182,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionId: "live-claude-sid",
         workspaceDir: dir,
       });
-      expect(context.reusableCliSession).toEqual({ sessionId: "live-claude-sid" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "live-claude-sid",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3029,7 +3239,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionId: "live-claude-sid",
         workspaceDir: taskDir,
       });
-      expect(context.reusableCliSession).toEqual({ sessionId: "live-claude-sid" });
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "live-claude-sid",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3410,7 +3623,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(transcriptCheck).not.toHaveBeenCalled();
-      expect(context.reusableCliSession).toEqual({ sessionId: "test-cli-sid" });
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "test-cli-sid" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3624,7 +3837,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
       });
 
-      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.openClawHistoryPrompt).toBeDefined();
       expect(context.openClawHistoryPrompt).toContain(recentMarker);
       expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");

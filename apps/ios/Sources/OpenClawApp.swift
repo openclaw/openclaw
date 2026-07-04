@@ -618,10 +618,9 @@ extension NodeAppModel {
 
 @main
 struct OpenClawApp: App {
+    @State private var appearanceModel: AppAppearanceModel
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
-    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -647,6 +646,7 @@ struct OpenClawApp: App {
         }
         #endif
         OpenClawAppModelRegistry.appModel = appModel
+        _appearanceModel = State(initialValue: AppAppearanceModel())
         _appModel = State(initialValue: appModel)
         _gatewayController = State(
             initialValue: GatewayConnectionController(
@@ -660,13 +660,14 @@ struct OpenClawApp: App {
             RootTabs()
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)
-                .preferredColorScheme(self.appearancePreference.colorScheme)
+                .environment(self.appearanceModel)
+                .preferredColorScheme(self.appearanceModel.preference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
                     self.appDelegate.appModel = self.appModel
-                    self.applyAppearancePreference()
+                    self.applyWindowTint()
                     self.gatewayController.setScenePhase(self.scenePhase)
                 }
                 .onReceive(
@@ -677,22 +678,13 @@ struct OpenClawApp: App {
                 .onOpenURL { url in
                     Task { await self.handleOpenURL(url) }
                 }
-                .onChange(of: self.appearancePreferenceRaw) { _, _ in
-                    self.applyAppearancePreference()
-                }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
-                    self.applyAppearancePreference()
+                    self.applyWindowTint()
                 }
         }
-    }
-
-    private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference.launchArgumentPreference
-            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
-            ?? .system
     }
 
     private static var screenshotModeEnabled: Bool {
@@ -712,10 +704,8 @@ struct OpenClawApp: App {
     }
 
     @MainActor
-    private func applyAppearancePreference() {
-        let style = self.appearancePreference.userInterfaceStyle
+    private func applyWindowTint() {
         for window in Self.connectedWindows() {
-            window.overrideUserInterfaceStyle = style
             window.tintColor = OpenClawBrand.uiAccent
         }
     }

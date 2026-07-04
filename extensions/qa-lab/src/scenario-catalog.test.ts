@@ -242,14 +242,36 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("openai-web-search-minimal").coverage?.secondary).toContain(
       "runtime.reasoning-and-cache-controls",
     );
-    expect(
-      readQaScenarioById("openai-web-search-native-assertions").coverage?.secondary,
-    ).toEqual(
-      expect.arrayContaining(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]),
+    expect(readQaScenarioById("openai-web-search-native-assertions").coverage?.secondary).toEqual(
+      expect.arrayContaining([
+        "web-search.openai-native-web-search",
+        "plugins.web-search-and-fetch",
+      ]),
     );
     expect(readQaScenarioById("openwebui-openai-compatible").coverage?.secondary).toEqual(
       expect.arrayContaining(["gateway.openai-compatible-apis", "runtime.hosted-provider-turns"]),
     );
+  });
+
+  it("routes Docker runtime scenarios through the shared lane adapter", () => {
+    const scenarioLanes = [
+      ["openai-compatible-chat-tools", "openai-chat-tools"],
+      ["openai-web-search-minimal", "openai-web-search-minimal"],
+      ["openai-web-search-native-assertions", "openai-web-search-minimal"],
+      ["openwebui-openai-compatible", "openwebui"],
+      ["plugin-lifecycle-probe", "plugin-lifecycle-matrix"],
+      ["packaged-bundled-plugin-install-uninstall", "bundled-plugin-install-uninstall"],
+    ] as const;
+
+    for (const [scenarioId, lane] of scenarioLanes) {
+      const execution = readQaScenarioById(scenarioId).execution;
+      expect(execution.kind).toBe("script");
+      if (execution.kind !== "script") {
+        throw new Error(`expected script scenario, got ${execution.kind}`);
+      }
+      expect(execution.path).toBe("test/e2e/qa-lab/runtime/docker-e2e-lane.ts");
+      expect(execution.args).toStrictEqual(["--lane", lane]);
+    }
   });
 
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {

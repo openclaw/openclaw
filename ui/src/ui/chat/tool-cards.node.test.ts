@@ -11,10 +11,16 @@ vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
   resolveToolDisplay: ({ name }: { name: string }) => ({
     name,
-    label: name
-      .split(/[._-]/g)
-      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-      .join(" "),
+    label:
+      {
+        sessions_spawn: "Sub-agent",
+        skill_workshop: "Skill Workshop",
+        web_search: "Web Search",
+      }[name] ??
+      name
+        .split(/[._-]/g)
+        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+        .join(" "),
     icon: "zap",
   }),
 }));
