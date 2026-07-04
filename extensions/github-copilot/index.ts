@@ -23,7 +23,10 @@ import {
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import {
+  resolveCopilotExtendedThinkingLevels,
+  resolveCopilotTransportApi,
+} from "./model-metadata.js";
 import {
   PROVIDER_ID,
   fetchCopilotModelCatalog,
@@ -456,6 +459,7 @@ export default definePluginEntry({
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
       resolveThinkingProfile: ({ modelId, compat }) => {
         const extendedLevels = resolveCopilotExtendedThinkingLevels(modelId, compat);
+        const isClaudeModel = resolveCopilotTransportApi(modelId) === "anthropic-messages";
         return {
           levels: [
             { id: "off" },
@@ -465,6 +469,13 @@ export default definePluginEntry({
             { id: "high" },
             ...extendedLevels.map((id) => ({ id })),
           ],
+          // Copilot's /models endpoint does not advertise OpenAI-style
+          // reasoning_effort for Anthropic-backed models, so discovery marks
+          // Claude models reasoning:false and the shared resolver collapses
+          // this profile to off-only. Claude models do support reasoning, so
+          // preserve the declared levels for them; non-Claude Copilot models
+          // without reasoning_effort stay off-only. See #99240.
+          ...(isClaudeModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
         };
       },
       prepareRuntimeAuth: async (ctx) => {
