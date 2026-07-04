@@ -4781,6 +4781,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
   });
 
+  it("opts partial preview tool progress into quiet tool lifecycle callbacks", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial", preview: { toolProgress: true } } },
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: {
+        allowToolLifecycleWhenProgressHidden?: boolean;
+        suppressDefaultToolProgressMessages?: boolean;
+      };
+    };
+    expect(dispatchParams.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(dispatchParams.replyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
+  });
+
   it("opts shared dispatch into durable reasoning payload delivery when reasoning streams", async () => {
     setupDraftStreams({
       answerMessageId: 2001,

@@ -2666,6 +2666,8 @@ export const dispatchTelegramMessage = async ({
                       },
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
+                  allowToolLifecycleWhenProgressHidden:
+                    answerLane.stream && streamToolProgressEnabled ? true : undefined,
                   forceToolResultProgress: streamMode === "progress" && streamToolProgressEnabled,
                   allowProgressCallbacksWhenSourceDeliverySuppressed:
                     !isRoomEvent && Boolean(answerLane.stream),
