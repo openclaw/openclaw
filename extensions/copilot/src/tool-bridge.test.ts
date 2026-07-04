@@ -695,6 +695,27 @@ describe("createCopilotToolBridge", () => {
       expect(opts.runtimeToolAllowlist).toEqual(["read", "edit"]);
     });
 
+    it("forwards the native conversation identity from attemptParams", async () => {
+      const { createOpenClawCodingTools, getOpts } = captureCall();
+
+      await createCopilotToolBridge({
+        agentId: "agent-1",
+        attemptParams: {
+          chatId: "oc_native_chat",
+          chatType: "direct",
+        } as never,
+        createOpenClawCodingTools,
+        modelId: "gpt-4o",
+        modelProvider: "github-copilot",
+        sessionId: "session-1",
+      });
+
+      expect(getOpts()).toMatchObject({
+        chatType: "direct",
+        nativeChannelId: "oc_native_chat",
+      });
+    });
+
     it("onYield routes to sessionRef.current.abort() and invokes onYieldDetected when the live session is bound", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
       const abort = vi.fn();

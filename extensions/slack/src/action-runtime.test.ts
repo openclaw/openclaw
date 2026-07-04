@@ -277,6 +277,28 @@ describe("handleSlackAction", () => {
     expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456", { cfg });
   });
 
+  it("rejects reaction clearing outside allowlisted Slack channels", async () => {
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      channels: {
+        C_ALLOWED: { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction(
+        {
+          action: "react",
+          channelId: "C_OTHER",
+          messageId: "123.456",
+          emoji: "",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(removeOwnSlackReactions).not.toHaveBeenCalled();
+  });
+
   it("removes reactions when remove flag set", async () => {
     const cfg = slackConfig();
     await handleSlackAction(

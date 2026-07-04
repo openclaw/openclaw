@@ -474,6 +474,8 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  /** Trusted normalized conversation kind for the active inbound turn. */
+  currentChatType?: ChatType;
   /** Routable messaging target when it differs from the platform-native channel id. */
   currentMessagingTarget?: string;
   currentGraphChannelId?: string;

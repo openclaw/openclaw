@@ -1,6 +1,7 @@
 /** Handles /btw side-question commands against the active session context. */
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -55,8 +56,12 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
 
   try {
     await params.typing?.startTypingLoop();
-    const currentChannelId =
+    const messageTo =
       params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
+    const nativeChannelId =
+      params.ctx.NativeChannelId?.trim() || params.ctx.ChatId?.trim() || undefined;
+    const currentChannelId = nativeChannelId ?? messageTo;
+    const chatType = normalizeChatType(params.ctx.ChatType);
     const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
@@ -81,13 +86,15 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       isNewSession: false,
       ...(params.command.channel ? { messageChannel: params.command.channel } : {}),
       ...(params.command.channel ? { messageProvider: params.command.channel } : {}),
+      ...(chatType ? { chatType } : {}),
       ...(params.ctx.AccountId ? { agentAccountId: params.ctx.AccountId } : {}),
-      ...(currentChannelId ? { messageTo: currentChannelId } : {}),
+      ...(messageTo ? { messageTo } : {}),
       ...(params.ctx.MessageThreadId !== undefined
         ? { messageThreadId: params.ctx.MessageThreadId }
         : params.ctx.TransportThreadId !== undefined
           ? { messageThreadId: params.ctx.TransportThreadId }
           : {}),
+      ...(nativeChannelId ? { chatId: nativeChannelId } : {}),
       ...(groupId ? { groupId } : {}),
       ...(params.ctx.GroupChannel || params.ctx.GroupSubject || targetSessionEntry.groupChannel
         ? {

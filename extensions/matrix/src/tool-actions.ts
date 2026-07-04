@@ -33,6 +33,8 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import { withAuthorizedMatrixReadTarget, type MatrixReadContext } from "./matrix/read-policy.js";
+import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
 import {
@@ -147,7 +149,7 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
-  opts: { mediaLocalRoots?: readonly string[] } = {},
+  opts: { mediaLocalRoots?: readonly string[]; readContext?: MatrixReadContext } = {},
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
@@ -156,6 +158,18 @@ export async function handleMatrixAction(
     cfg,
     ...(accountId ? { accountId } : {}),
   };
+  const withReadTarget = async <T>(
+    roomId: string,
+    run: (target: { roomId: string; client: MatrixClient }) => Promise<T>,
+  ) =>
+    await withAuthorizedMatrixReadTarget({
+      cfg,
+      accountId,
+      roomId,
+      context: opts.readContext,
+      opts: clientOpts,
+      run,
+    });
 
   if (reactionActions.has(action)) {
     if (!isActionEnabled("reactions")) {
@@ -168,9 +182,12 @@ export async function handleMatrixAction(
         removeErrorMessage: "Emoji is required to remove a Matrix reaction.",
       });
       if (remove || isEmpty) {
-        const result = await removeMatrixReactions(roomId, messageId, {
-          ...clientOpts,
-          emoji: remove ? emoji : undefined,
+        const result = await withReadTarget(roomId, async (target) => {
+          return await removeMatrixReactions(target.roomId, messageId, {
+            ...clientOpts,
+            client: target.client,
+            emoji: remove ? emoji : undefined,
+          });
         });
         return jsonResult({ ok: true, removed: result.removed });
       }
@@ -180,9 +197,12 @@ export async function handleMatrixAction(
     const limit = readPositiveIntegerParam(params, "limit", {
       message: "limit must be a positive integer.",
     });
-    const reactions = await listMatrixReactions(roomId, messageId, {
-      ...clientOpts,
-      limit: limit ?? undefined,
+    const reactions = await withReadTarget(roomId, async (target) => {
+      return await listMatrixReactions(target.roomId, messageId, {
+        ...clientOpts,
+        client: target.client,
+        limit: limit ?? undefined,
+      });
     });
     return jsonResult({ ok: true, reactions });
   }
@@ -205,10 +225,13 @@ export async function handleMatrixAction(
       ...readPositiveIntegerArrayParam(params, "pollOptionIndexes"),
       ...(optionIndex !== undefined ? [optionIndex] : []),
     ];
-    const result = await voteMatrixPoll(roomId, pollId, {
-      ...clientOpts,
-      optionIds,
-      optionIndexes,
+    const result = await withReadTarget(roomId, async (target) => {
+      return await voteMatrixPoll(target.roomId, pollId, {
+        ...clientOpts,
+        client: target.client,
+        optionIds,
+        optionIndexes,
+      });
     });
     return jsonResult({ ok: true, result });
   }
@@ -273,12 +296,15 @@ export async function handleMatrixAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
-        const result = await readMatrixMessages(roomId, {
-          limit: limit ?? undefined,
-          before: before ?? undefined,
-          after: after ?? undefined,
-          threadId: threadId ?? undefined,
-          ...clientOpts,
+        const result = await withReadTarget(roomId, async (target) => {
+          return await readMatrixMessages(target.roomId, {
+            limit: limit ?? undefined,
+            before: before ?? undefined,
+            after: after ?? undefined,
+            threadId: threadId ?? undefined,
+            ...clientOpts,
+            client: target.client,
+          });
         });
         return jsonResult({ ok: true, ...result });
       }
@@ -302,7 +328,12 @@ export async function handleMatrixAction(
       const result = await unpinMatrixMessage(roomId, messageId, clientOpts);
       return jsonResult({ ok: true, pinned: result.pinned });
     }
-    const result = await listMatrixPins(roomId, clientOpts);
+    const result = await withReadTarget(roomId, async (target) => {
+      return await listMatrixPins(target.roomId, {
+        ...clientOpts,
+        client: target.client,
+      });
+    });
     return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
   }
 
@@ -330,10 +361,13 @@ export async function handleMatrixAction(
       throw new Error("Matrix member info is disabled.");
     }
     const userId = readStringParam(params, "userId", { required: true });
-    const roomId = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
-    const result = await getMatrixMemberInfo(userId, {
-      roomId: roomId ?? undefined,
-      ...clientOpts,
+    const roomId = readRoomId(params);
+    const result = await withReadTarget(roomId, async (target) => {
+      return await getMatrixMemberInfo(userId, {
+        roomId: target.roomId,
+        ...clientOpts,
+        client: target.client,
+      });
     });
     return jsonResult({ ok: true, member: result });
   }
@@ -343,7 +377,12 @@ export async function handleMatrixAction(
       throw new Error("Matrix room info is disabled.");
     }
     const roomId = readRoomId(params);
-    const result = await getMatrixRoomInfo(roomId, clientOpts);
+    const result = await withReadTarget(roomId, async (target) => {
+      return await getMatrixRoomInfo(target.roomId, {
+        ...clientOpts,
+        client: target.client,
+      });
+    });
     return jsonResult({ ok: true, room: result });
   }
 

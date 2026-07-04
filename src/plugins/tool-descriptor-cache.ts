@@ -111,6 +111,7 @@ function buildDescriptorContextCacheKey(params: {
     browser: ctx.browser ?? null,
     messageChannel: ctx.messageChannel ?? null,
     agentAccountId: ctx.agentAccountId ?? null,
+    nativeChannelId: ctx.nativeChannelId ?? null,
     deliveryContext: ctx.deliveryContext ?? null,
     requesterSenderId: ctx.requesterSenderId ?? null,
     senderIsOwner: ctx.senderIsOwner ?? null,

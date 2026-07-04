@@ -31,6 +31,17 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.senderIsOwner).toBe(true);
   });
 
+  it("forwards the trusted native conversation id", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        nativeChannelId: "oc_native_chat",
+      },
+    });
+
+    expect(result.context.nativeChannelId).toBe("oc_native_chat");
+  });
+
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

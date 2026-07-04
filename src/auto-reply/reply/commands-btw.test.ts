@@ -172,6 +172,8 @@ describe("handleBtwCommand", () => {
   it("uses the originating target before the command transport target", async () => {
     const params = buildParams("/btw what changed?");
     params.ctx.OriginatingTo = "channel:source";
+    params.ctx.NativeChannelId = "native:source";
+    params.ctx.ChatType = "channel";
     params.command.to = "slash:transport";
     params.agentDir = "/tmp/agent";
     params.sessionEntry = {
@@ -183,7 +185,10 @@ describe("handleBtwCommand", () => {
     await handleBtwCommand(params, true);
 
     expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
-      currentChannelId: "channel:source",
+      chatId: "native:source",
+      chatType: "channel",
+      messageTo: "channel:source",
+      currentChannelId: "native:source",
     });
   });
 

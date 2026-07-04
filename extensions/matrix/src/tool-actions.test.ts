@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   getMatrixMemberInfo: vi.fn(),
   getMatrixRoomInfo: vi.fn(),
   applyMatrixProfileUpdate: vi.fn(),
+  matrixClient: { id: "matrix-client" },
+  withAuthorizedMatrixReadTarget: vi.fn(),
+}));
+
+vi.mock("./matrix/read-policy.js", () => ({
+  withAuthorizedMatrixReadTarget: mocks.withAuthorizedMatrixReadTarget,
 }));
 
 vi.mock("./matrix/actions.js", () => {
@@ -40,6 +46,16 @@ vi.mock("./profile-update.js", () => ({
 describe("handleMatrixAction pollVote", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.withAuthorizedMatrixReadTarget.mockImplementation(
+      async (params: {
+        roomId: string;
+        run: (target: { client: unknown; roomId: string }) => Promise<unknown>;
+      }) =>
+        await params.run({
+          client: mocks.matrixClient,
+          roomId: params.roomId.replace(/^room:/, ""),
+        }),
+    );
     mocks.voteMatrixPoll.mockResolvedValue({
       eventId: "evt-poll-vote",
       roomId: "!room:example",
@@ -91,6 +107,7 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.voteMatrixPoll).toHaveBeenCalledWith("!room:example", "$poll", {
       cfg,
       accountId: "main",
+      client: mocks.matrixClient,
       optionIds: ["a2", "a1"],
       optionIndexes: [1, 2],
     });
@@ -160,9 +177,30 @@ describe("handleMatrixAction pollVote", () => {
 
     expect(mocks.voteMatrixPoll).toHaveBeenCalledWith("!room:example", "$poll", {
       cfg,
+      client: mocks.matrixClient,
       optionIds: [],
       optionIndexes: [1],
     });
+  });
+
+  it("authorizes the room before reading the poll", async () => {
+    mocks.withAuthorizedMatrixReadTarget.mockRejectedValueOnce(
+      new Error("Matrix read target is not allowed."),
+    );
+
+    await expect(
+      handleMatrixAction(
+        {
+          action: "pollVote",
+          roomId: "!blocked:example",
+          pollId: "$poll",
+          pollOptionIndex: 1,
+        },
+        {} as CoreConfig,
+      ),
+    ).rejects.toThrow("Matrix read target is not allowed.");
+
+    expect(mocks.voteMatrixPoll).not.toHaveBeenCalled();
   });
 
   it("passes account-scoped opts to add reactions", async () => {
@@ -201,6 +239,7 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.removeMatrixReactions).toHaveBeenCalledWith("!room:example", "$msg", {
       cfg,
       accountId: "ops",
+      client: mocks.matrixClient,
       emoji: "👍",
     });
   });
@@ -221,6 +260,7 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.listMatrixReactions).toHaveBeenCalledWith("!room:example", "$msg", {
       cfg,
       accountId: "ops",
+      client: mocks.matrixClient,
       limit: 5,
     });
     expect(result.details).toEqual({
@@ -353,6 +393,7 @@ describe("handleMatrixAction pollVote", () => {
     expect(mocks.listMatrixPins).toHaveBeenCalledWith("!room:example", {
       cfg,
       accountId: "ops",
+      client: mocks.matrixClient,
     });
   });
 
@@ -383,10 +424,12 @@ describe("handleMatrixAction pollVote", () => {
       cfg: memberCfg,
       accountId: "ops",
       roomId: "!room:example",
+      client: mocks.matrixClient,
     });
     expect(mocks.getMatrixRoomInfo).toHaveBeenCalledWith("!room:example", {
       cfg: roomCfg,
       accountId: "ops",
+      client: mocks.matrixClient,
     });
   });
 

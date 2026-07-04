@@ -8,6 +8,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -123,6 +124,8 @@ export function createOpenClawTools(
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
+    /** Trusted platform-native conversation id for the active inbound turn. */
+    nativeChannelId?: string;
     agentDir?: string;
     sandboxRoot?: string;
     sandboxContainerWorkdir?: string;
@@ -138,6 +141,8 @@ export function createOpenClawTools(
     cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
+    /** Trusted normalized conversation kind for the active inbound turn. */
+    currentChatType?: ChatType;
     /** Routable target for the current conversation when it differs from the native channel ID. */
     currentMessagingTarget?: string;
     /** Current thread timestamp for auto-threading. */
@@ -391,6 +396,7 @@ export function createOpenClawTools(
         sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
+        currentChatType: options?.currentChatType,
         currentMessagingTarget: options?.currentMessagingTarget,
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,

@@ -142,6 +142,7 @@ type RunMessageActionInput = {
   inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
+    currentChatType?: string;
     currentMessagingTarget?: string;
     currentChannelProvider?: string;
     currentThreadTs?: string;
@@ -1009,10 +1010,32 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
     expect(input?.toolContext?.currentChannelId).toBe("-5150615830");
+    expect(input?.toolContext?.currentChatType).toBe("group");
     expect(input?.params).toEqual({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
+  });
+
+  it("preserves a routable current target that differs from the channel id", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "msteams",
+        currentChannelId: "conversation:19:channel@thread.tacv2",
+        currentChatType: "channel",
+        currentMessagingTarget: "graph-team/19:channel@thread.tacv2",
+      },
+    });
+
+    expect(input?.toolContext).toMatchObject({
+      currentChannelProvider: "msteams",
+      currentChannelId: "conversation:19:channel@thread.tacv2",
+      currentChatType: "channel",
+      currentMessagingTarget: "graph-team/19:channel@thread.tacv2",
+    });
   });
 
   it("preserves empty opaque target segments in inferred session delivery", async () => {
@@ -1128,6 +1151,7 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("msteams");
     expect(input?.toolContext?.currentChannelId).toBe("user:user-1");
+    expect(input?.toolContext?.currentChatType).toBe("direct");
     expect(input?.params).toEqual({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
@@ -1555,6 +1579,7 @@ describe("message tool agent routing", () => {
       config: {} as never,
       agentChannel: "slack",
       currentChannelId: "D123",
+      currentChatType: "direct",
       currentMessagingTarget: "user:U123",
       currentThreadTs: "111.222",
       replyToMode: "all",
@@ -1574,6 +1599,7 @@ describe("message tool agent routing", () => {
     const call = firstRunMessageActionInput();
     expect(call?.toolContext).toMatchObject({
       currentChannelId: "D123",
+      currentChatType: "direct",
       currentMessagingTarget: "user:U123",
       currentChannelProvider: "slack",
       currentThreadTs: "111.222",

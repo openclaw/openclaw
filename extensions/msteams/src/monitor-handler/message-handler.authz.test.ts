@@ -267,8 +267,8 @@ describe("msteams monitor handler authz", () => {
         conversationType: "channel",
       },
       channelData: {
-        team: { id: "team123", name: "Team 123" },
-        channel: { name: "General" },
+        team: { id: "team123", name: "Team 123", aadGroupId: "graph-team-123" },
+        channel: { id: "19:graph-channel@thread.tacv2", name: "General" },
       },
       extraActivity: { replyToId: "parent-msg" },
       attachments: params?.attachments ?? [],
@@ -928,6 +928,7 @@ describe("msteams monitor handler authz", () => {
       "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
     );
     expect(ctxPayload.GroupSpace).toBe("team123");
+    expect(ctxPayload.NativeChannelId).toBe("graph-team-123/19:graph-channel@thread.tacv2");
     expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
       "Mallory",
     );

@@ -1018,6 +1018,8 @@ describe("Codex app-server dynamic tool build", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.chatId = "native-chat-123";
+    params.chatType = "direct";
     params.currentChannelId = "D123";
     params.currentMessagingTarget = "user:U123";
     params.runtimePlan = createCodexRuntimePlanFixture();
@@ -1030,8 +1032,10 @@ describe("Codex app-server dynamic tool build", () => {
     await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
     expect(factoryOptions[0]).toMatchObject({
+      chatType: "direct",
       currentChannelId: "D123",
       currentMessagingTarget: "user:U123",
+      nativeChannelId: "native-chat-123",
     });
   });
 

@@ -21,6 +21,7 @@ import {
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
+import { assertGoogleChatMessageReadAllowed } from "./read-policy.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import { resolveGoogleChatOutboundSpace } from "./targets.js";
 
@@ -100,6 +101,8 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    requesterAccountId,
+    toolContext,
   }) => {
     const account = resolveGoogleChatAccount({
       cfg,
@@ -184,6 +187,12 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         removeErrorMessage: "Emoji is required to remove a Google Chat reaction.",
       });
       if (remove || isEmpty) {
+        await assertGoogleChatMessageReadAllowed({
+          cfg,
+          account,
+          context: { accountId, requesterAccountId, toolContext },
+          messageName,
+        });
         const reactions = await listGoogleChatReactions({ account, messageName });
         const appUsers = resolveAppUserNames(account);
         const toRemove = reactions.filter((reaction) => {
@@ -215,6 +224,12 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     if (action === "reactions") {
       const messageName = readStringParam(params, "messageId", { required: true });
       const limit = readPositiveIntegerParam(params, "limit");
+      await assertGoogleChatMessageReadAllowed({
+        cfg,
+        account,
+        context: { accountId, requesterAccountId, toolContext },
+        messageName,
+      });
       const reactions = await listGoogleChatReactions({
         account,
         messageName,

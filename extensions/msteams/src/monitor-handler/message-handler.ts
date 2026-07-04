@@ -266,6 +266,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    const graphChannelId = activity.channelData?.channel?.id?.trim() || conversationId;
+    const graphTeamId = activity.channelData?.team?.aadGroupId?.trim();
+    const graphChannelId = activity.channelData?.channel?.id?.trim() || conversationId;
     // For channel thread messages, resolve the thread root message ID so outbound
     // replies land in the correct thread. The root ID comes from the `messageid=`
     // portion of conversation.id (preferred) or from activity.replyToId.
@@ -846,7 +849,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
     // own because channel Graph endpoints require the owning team id too.
     const nativeChannelId =
-      isChannel && teamAadGroupId ? `${teamAadGroupId}/${conversationId}` : undefined;
+      isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
     const ctxPayload = buildChannelInboundEventContext({
       channel: "msteams",
       finalize: core.channel.reply.finalizeInboundContext,

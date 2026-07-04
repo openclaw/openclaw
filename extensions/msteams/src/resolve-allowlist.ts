@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsConfig } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   listChannelsForTeam,
@@ -16,6 +17,7 @@ type MSTeamsChannelResolution = {
   input: string;
   resolved: boolean;
   teamId?: string;
+  graphTeamId?: string;
   teamName?: string;
   channelId?: string;
   channelName?: string;
@@ -67,35 +69,23 @@ export function parseMSTeamsConversationId(raw: string): string | null {
 }
 
 /**
- * Detect whether a raw target string looks like a Microsoft Teams conversation
- * or user id that cron announce delivery and other explicit-target paths can
- * forward verbatim to the channel adapter.
+ * Detect whether a raw target string is a supported Microsoft Teams
+ * conversation id.
  *
  * Accepts both prefixed and bare formats:
  * - `conversation:<id>` — explicit conversation prefix
- * - `user:<aad-guid>`   — user id (16+ hex chars, UUID-like)
  * - `19:abc@thread.tacv2` / `19:abc@thread.skype` — channel / legacy group
  * - `19:{userId}_{appId}@unq.gbl.spaces` — Graph 1:1 chat thread format
  * - `a:1xxx` — Bot Framework personal (1:1) chat id
  * - `8:orgid:xxx` — Bot Framework org-scoped personal chat id
- * - `29:xxx` — Bot Framework user id
- *
- * Display-name user targets such as `user:John Smith` intentionally return
- * false so that the Graph API directory lookup still runs for them.
  */
-export function looksLikeMSTeamsTargetId(raw: string): boolean {
+export function looksLikeMSTeamsConversationId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
     return false;
   }
   if (/^conversation:/i.test(trimmed)) {
     return true;
-  }
-  if (/^user:/i.test(trimmed)) {
-    // Only treat as an id when the value after `user:` looks like a UUID;
-    // display names must fall through to directory lookup.
-    const id = trimmed.slice("user:".length).trim();
-    return /^[0-9a-fA-F-]{16,}$/.test(id);
   }
   // Bare Bot Framework / Graph conversation id formats.
   // Channel / group ids always start with `19:` and include an `@thread.*`
@@ -115,12 +105,27 @@ export function looksLikeMSTeamsTargetId(raw: string): boolean {
   if (/^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed)) {
     return true;
   }
-  if (/^29:[A-Za-z0-9_-]+$/i.test(trimmed)) {
-    return true;
-  }
   // Fallback: anything containing @thread is still treated as a conversation
   // id so the current matches for tenant-specific suffixes remain accepted.
   return /@thread\b/i.test(trimmed);
+}
+
+/**
+ * Detect conversation ids plus stable user ids that explicit-target delivery
+ * can forward verbatim to the channel adapter.
+ */
+export function looksLikeMSTeamsTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (looksLikeMSTeamsConversationId(trimmed)) {
+    return true;
+  }
+  if (/^user:/i.test(trimmed)) {
+    // Only treat as an id when the value after `user:` looks like a UUID;
+    // display names must fall through to directory lookup.
+    const id = trimmed.slice("user:".length).trim();
+    return /^[0-9a-fA-F-]{16,}$/.test(id);
+  }
+  return /^29:[A-Za-z0-9_-]+$/i.test(trimmed);
 }
 
 function normalizeMSTeamsTeamKey(raw: string): string | undefined {
@@ -248,6 +253,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
           input,
           resolved: true,
           teamId,
+          graphTeamId,
           teamName,
           note: teams.length > 1 ? "multiple teams; chose first" : undefined,
         };
@@ -269,6 +275,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         input,
         resolved: true,
         teamId,
+        graphTeamId,
         teamName,
         channelId: channelMatch.id,
         channelName: channelMatch.displayName ?? channel,
@@ -276,6 +283,88 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       };
     },
   });
+}
+
+export async function resolveMSTeamsTeamsConfig(params: {
+  cfg: unknown;
+  teamIdMode: "bot-framework" | "graph";
+  teams: NonNullable<MSTeamsConfig["teams"]>;
+}): Promise<{
+  teams: NonNullable<MSTeamsConfig["teams"]>;
+  mapping: string[];
+  unresolved: string[];
+}> {
+  const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
+  for (const [teamKey, teamCfg] of Object.entries(params.teams)) {
+    if (teamKey === "*") {
+      continue;
+    }
+    const channelKeys = Object.keys(teamCfg?.channels ?? {}).filter((key) => key !== "*");
+    if (channelKeys.length === 0) {
+      entries.push({ input: teamKey, teamKey });
+      continue;
+    }
+    for (const channelKey of channelKeys) {
+      entries.push({
+        input: `${teamKey}/${channelKey}`,
+        teamKey,
+        channelKey,
+      });
+    }
+  }
+  if (entries.length === 0) {
+    return { teams: params.teams, mapping: [], unresolved: [] };
+  }
+
+  const resolved = await resolveMSTeamsChannelAllowlist({
+    cfg: params.cfg,
+    entries: entries.map((entry) => entry.input),
+  });
+  const mapping: string[] = [];
+  const unresolved: string[] = [];
+  const teams = { ...params.teams };
+
+  resolved.forEach((entry, index) => {
+    const source = entries[index];
+    if (!source) {
+      return;
+    }
+    const sourceTeam = params.teams[source.teamKey] ?? {};
+    const resolvedTeamId = params.teamIdMode === "graph" ? entry.graphTeamId : entry.teamId;
+    if (!entry.resolved || !resolvedTeamId) {
+      unresolved.push(entry.input);
+      return;
+    }
+    mapping.push(
+      entry.channelId
+        ? `${entry.input}→${resolvedTeamId}/${entry.channelId}`
+        : `${entry.input}→${resolvedTeamId}`,
+    );
+    const existing = teams[resolvedTeamId] ?? {};
+    const mergedChannels = {
+      ...sourceTeam.channels,
+      ...existing.channels,
+    };
+    const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
+    teams[resolvedTeamId] = mergedTeam;
+    if (source.channelKey && entry.channelId) {
+      const sourceChannel = sourceTeam.channels?.[source.channelKey];
+      if (sourceChannel) {
+        teams[resolvedTeamId] = {
+          ...mergedTeam,
+          channels: {
+            ...mergedChannels,
+            [entry.channelId]: {
+              ...sourceChannel,
+              ...mergedChannels?.[entry.channelId],
+            },
+          },
+        };
+      }
+    }
+  });
+
+  return { teams, mapping, unresolved };
 }
 
 export async function resolveMSTeamsUserAllowlist(params: {

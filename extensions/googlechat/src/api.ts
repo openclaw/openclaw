@@ -225,6 +225,28 @@ export async function sendGoogleChatMessage(params: {
   return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
+export async function getGoogleChatSpace(params: {
+  account: ResolvedGoogleChatAccount;
+  space: string;
+}): Promise<GoogleChatSpace> {
+  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.space}`, {
+    method: "GET",
+  });
+}
+
+export async function getGoogleChatSpaceMembership(params: {
+  account: ResolvedGoogleChatAccount;
+  space: string;
+  member: string;
+}): Promise<{ name?: string; member?: { name?: string } }> {
+  const member = params.member.replace(/^users\//i, "");
+  return await fetchJson(
+    params.account,
+    `${CHAT_API_BASE}/${params.space}/members/${encodeURIComponent(member)}`,
+    { method: "GET" },
+  );
+}
+
 export async function updateGoogleChatMessage(params: {
   account: ResolvedGoogleChatAccount;
   messageName: string;

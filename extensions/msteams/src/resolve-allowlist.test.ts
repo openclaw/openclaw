@@ -29,6 +29,7 @@ vi.mock("./graph-users.js", () => ({
 import {
   looksLikeMSTeamsTargetId,
   resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsTeamsConfig,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 
@@ -119,6 +120,7 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       input: "Product Team/Roadmap",
       resolved: true,
       teamId: "19:general-conv-id@thread.tacv2",
+      graphTeamId: "team-guid-1",
       teamName: "Product Team",
       channelId: "19:roadmap-conv-id@thread.tacv2",
       channelName: "Roadmap",
@@ -144,6 +146,7 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       input: "Engineering",
       resolved: true,
       teamId: "19:eng-general@thread.tacv2",
+      graphTeamId: "guid-engineering",
       teamName: "Engineering",
     });
   });
@@ -164,6 +167,7 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       input: "Flaky Team",
       resolved: true,
       teamId: "guid-flaky",
+      graphTeamId: "guid-flaky",
       teamName: "Flaky Team",
     });
   });
@@ -186,7 +190,72 @@ describe("resolveMSTeamsChannelAllowlist", () => {
       input: "Operations",
       resolved: true,
       teamId: "guid-ops",
+      graphTeamId: "guid-ops",
       teamName: "Operations",
+    });
+  });
+});
+
+describe("resolveMSTeamsTeamsConfig", () => {
+  it("adds resolved stable keys while preserving the configured policy", async () => {
+    listTeamsByName.mockResolvedValueOnce([{ id: "team-guid-1", displayName: "Product Team" }]);
+    listChannelsForTeam.mockResolvedValueOnce([
+      { id: "19:general@thread.tacv2", displayName: "General" },
+      { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
+    ]);
+
+    const result = await resolveMSTeamsTeamsConfig({
+      cfg: {},
+      teamIdMode: "bot-framework",
+      teams: {
+        "Product Team": {
+          requireMention: false,
+          channels: {
+            Roadmap: { requireMention: true },
+          },
+        },
+      },
+    });
+
+    expect(result.mapping).toEqual([
+      "Product Team/Roadmap→19:general@thread.tacv2/19:roadmap@thread.tacv2",
+    ]);
+    expect(result.teams["19:general@thread.tacv2"]).toMatchObject({
+      requireMention: false,
+      channels: {
+        "19:roadmap@thread.tacv2": { requireMention: true },
+      },
+    });
+  });
+
+  it("builds a Graph-keyed projection for action routing", async () => {
+    listTeamsByName.mockResolvedValueOnce([
+      { id: "11111111-1111-1111-1111-111111111111", displayName: "Product Team" },
+    ]);
+    listChannelsForTeam.mockResolvedValueOnce([
+      { id: "19:general@thread.tacv2", displayName: "General" },
+      { id: "19:roadmap@thread.tacv2", displayName: "Roadmap" },
+    ]);
+
+    const result = await resolveMSTeamsTeamsConfig({
+      cfg: {},
+      teamIdMode: "graph",
+      teams: {
+        "Product Team": {
+          channels: {
+            Roadmap: { requireMention: true },
+          },
+        },
+      },
+    });
+
+    expect(result.mapping).toEqual([
+      "Product Team/Roadmap→11111111-1111-1111-1111-111111111111/19:roadmap@thread.tacv2",
+    ]);
+    expect(result.teams["11111111-1111-1111-1111-111111111111"]).toMatchObject({
+      channels: {
+        "19:roadmap@thread.tacv2": { requireMention: true },
+      },
     });
   });
 });

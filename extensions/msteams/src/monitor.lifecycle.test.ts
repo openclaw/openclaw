@@ -14,23 +14,21 @@ type FakeServer = EventEmitter & {
   headersTimeout: number;
 };
 
-type MSTeamsChannelResolution = {
-  input: string;
-  resolved: boolean;
-  teamId?: string;
-  channelId?: string;
-};
-
 type MSTeamsUserResolution = {
   input: string;
   resolved: boolean;
   id?: string;
 };
 
-type ResolveMSTeamsChannelAllowlistMock = (params: {
+type ResolveMSTeamsTeamsConfigMock = (params: {
   cfg: unknown;
-  entries: string[];
-}) => Promise<MSTeamsChannelResolution[]>;
+  teamIdMode: "bot-framework" | "graph";
+  teams: Record<string, unknown>;
+}) => Promise<{
+  teams: Record<string, unknown>;
+  mapping: string[];
+  unresolved: string[];
+}>;
 
 type ResolveMSTeamsUserAllowlistMock = (params: {
   cfg: unknown;
@@ -171,12 +169,16 @@ vi.mock("./file-consent-invoke.js", () => ({
 }));
 
 const resolveAllowlistMocks = vi.hoisted(() => ({
-  resolveMSTeamsChannelAllowlist: vi.fn<ResolveMSTeamsChannelAllowlistMock>(async () => []),
+  resolveMSTeamsTeamsConfig: vi.fn<ResolveMSTeamsTeamsConfigMock>(async ({ teams }) => ({
+    teams,
+    mapping: [],
+    unresolved: [],
+  })),
   resolveMSTeamsUserAllowlist: vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 }));
 
 vi.mock("./resolve-allowlist.js", () => ({
-  resolveMSTeamsChannelAllowlist: resolveAllowlistMocks.resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsTeamsConfig: resolveAllowlistMocks.resolveMSTeamsTeamsConfig,
   resolveMSTeamsUserAllowlist: resolveAllowlistMocks.resolveMSTeamsUserAllowlist,
 }));
 
@@ -281,7 +283,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expressControl.mode.value = "listening";
     expressControl.apps.length = 0;
     isDangerousNameMatchingEnabled.mockReset().mockReturnValue(false);
-    resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockReset().mockResolvedValue([]);
+    resolveAllowlistMocks.resolveMSTeamsTeamsConfig
+      .mockReset()
+      .mockImplementation(async ({ teams }) => ({ teams, mapping: [], unresolved: [] }));
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
@@ -930,14 +934,23 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         },
       },
     });
-    resolveAllowlistMocks.resolveMSTeamsChannelAllowlist.mockResolvedValueOnce([
-      {
-        input: "Product/Roadmap",
-        resolved: true,
-        teamId: "team-id",
-        channelId: "channel-id",
+    resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
+      teams: {
+        Product: {
+          channels: {
+            Roadmap: {},
+          },
+        },
+        "team-id": {
+          channels: {
+            Roadmap: {},
+            "channel-id": {},
+          },
+        },
       },
-    ]);
+      mapping: ["Product/Roadmap→team-id/channel-id"],
+      unresolved: [],
+    });
 
     const task = monitorMSTeamsProvider({
       cfg,
@@ -952,9 +965,16 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     expect(resolveAllowlistMocks.resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
-    expect(resolveAllowlistMocks.resolveMSTeamsChannelAllowlist).toHaveBeenCalledWith({
+    expect(resolveAllowlistMocks.resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
       cfg,
-      entries: ["Product/Roadmap"],
+      teamIdMode: "bot-framework",
+      teams: {
+        Product: {
+          channels: {
+            Roadmap: {},
+          },
+        },
+      },
     });
 
     const registeredCfg = requireRegisteredMSTeamsConfig();

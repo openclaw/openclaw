@@ -44,6 +44,8 @@ export type OpenClawPluginToolContext = {
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
+  /** Trusted platform-native conversation id for the active inbound turn. */
+  nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */

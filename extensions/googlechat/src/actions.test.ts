@@ -7,6 +7,9 @@ const resolveGoogleChatAccount = vi.hoisted(() => vi.fn());
 const createGoogleChatReaction = vi.hoisted(() => vi.fn());
 const deleteGoogleChatReaction = vi.hoisted(() => vi.fn());
 const listGoogleChatReactions = vi.hoisted(() => vi.fn());
+const findGoogleChatDirectMessage = vi.hoisted(() => vi.fn());
+const getGoogleChatSpace = vi.hoisted(() => vi.fn());
+const getGoogleChatSpaceMembership = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const uploadGoogleChatAttachment = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpace = vi.hoisted(() => vi.fn());
@@ -20,6 +23,9 @@ vi.mock("./accounts.js", () => ({
 vi.mock("./api.js", () => ({
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  findGoogleChatDirectMessage,
+  getGoogleChatSpace,
+  getGoogleChatSpaceMembership,
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -29,7 +35,8 @@ vi.mock("./runtime.js", () => ({
   getGoogleChatRuntime,
 }));
 
-vi.mock("./targets.js", () => ({
+vi.mock("./targets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./targets.js")>()),
   resolveGoogleChatOutboundSpace,
 }));
 
@@ -42,6 +49,7 @@ describe("googlechat message actions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getGoogleChatSpace.mockResolvedValue(null);
   });
 
   afterAll(() => {
@@ -53,12 +61,20 @@ describe("googlechat message actions", () => {
   });
 
   function buildAccount(overrides: Record<string, unknown> = {}) {
+    const overrideConfig =
+      overrides.config && typeof overrides.config === "object"
+        ? (overrides.config as Record<string, unknown>)
+        : {};
     return {
       accountId: "default",
       enabled: true,
       credentialSource: "service-account",
-      config: {},
       ...overrides,
+      config: {
+        groupPolicy: "open",
+        dm: { policy: "open" },
+        ...overrideConfig,
+      },
     };
   }
 
@@ -319,6 +335,381 @@ describe("googlechat message actions", () => {
       } as never),
     ).rejects.toThrow("limit must be a positive integer");
 
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows reads from the trusted current Google Chat space", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        dm: { policy: "pairing" },
+        groups: {},
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "GROUP_CHAT" });
+    listGoogleChatReactions.mockResolvedValue([]);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "reactions",
+      params: {
+        messageId: "spaces/CURRENT/messages/msg-1",
+      },
+      cfg: {},
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "googlechat",
+        currentChannelId: "spaces/CURRENT",
+      },
+    } as never);
+
+    expect(listGoogleChatReactions).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/CURRENT/messages/msg-1",
+      limit: undefined,
+    });
+  });
+
+  it("rejects reaction reads outside configured spaces before calling Google Chat", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        dm: { policy: "allowlist", allowFrom: [] },
+        groups: {
+          "spaces/ALLOWED": {},
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "GROUP_CHAT" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "react",
+        params: {
+          messageId: "spaces/BLOCKED/messages/msg-1",
+          emoji: "",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target is not allowed.");
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("preserves an exact disabled-space denial when space lookup fails", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "open",
+        dm: { policy: "open", allowFrom: ["*"] },
+        groups: {
+          "spaces/BLOCKED": { enabled: false },
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockRejectedValue(new Error("lookup unavailable"));
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/BLOCKED/messages/msg-1",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target is not allowed.");
+
+    expect(getGoogleChatSpace).not.toHaveBeenCalled();
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("preserves a wildcard disabled-space denial when space lookup fails", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "open",
+        dm: { policy: "open", allowFrom: ["*"] },
+        groups: {
+          "*": { enabled: false },
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockRejectedValue(new Error("lookup unavailable"));
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/BLOCKED/messages/msg-1",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target is not allowed.");
+
+    expect(getGoogleChatSpace).toHaveBeenCalledOnce();
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-canonical message resource paths before calling Google Chat", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "open",
+        dm: { policy: "open", allowFrom: ["*"] },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/ALLOWED/messages/x/../../spaces/BLOCKED/messages/y",
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat message target is invalid.");
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows an API-confirmed direct space when direct messages are open", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        dm: { policy: "open", allowFrom: ["*"] },
+        groups: {},
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "DIRECT_MESSAGE" });
+    listGoogleChatReactions.mockResolvedValue([]);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "reactions",
+      params: { messageId: "spaces/DM/messages/msg-1" },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(listGoogleChatReactions).toHaveBeenCalledOnce();
+  });
+
+  it("keeps wildcard group denials independent from API-confirmed direct spaces", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "open",
+        dm: { policy: "open", allowFrom: ["*"] },
+        groups: {
+          "*": { enabled: false },
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "DIRECT_MESSAGE" });
+    listGoogleChatReactions.mockResolvedValue([]);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "reactions",
+      params: { messageId: "spaces/DM/messages/msg-1" },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(listGoogleChatReactions).toHaveBeenCalledOnce();
+  });
+
+  it("does not classify a configured direct space as a group", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "open",
+        dm: { enabled: false, policy: "disabled", allowFrom: [] },
+        groups: {
+          "spaces/DM": {},
+        },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "DIRECT_MESSAGE" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: { messageId: "spaces/DM/messages/msg-1" },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target is not allowed.");
+
+    expect(getGoogleChatSpace).toHaveBeenCalledWith({
+      account,
+      space: "spaces/DM",
+    });
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows an opted-in raw email only for its API-confirmed direct space", async () => {
+    const account = buildAccount({
+      config: {
+        dangerouslyAllowNameMatching: true,
+        groupPolicy: "allowlist",
+        dm: { policy: "allowlist", allowFrom: ["alice@example.com"] },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpaceMembership.mockResolvedValue({
+      name: "spaces/DM/members/123",
+      member: { name: "users/123" },
+    });
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "DIRECT_MESSAGE" });
+    listGoogleChatReactions.mockResolvedValue([]);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "reactions",
+      params: { messageId: "spaces/DM/messages/msg-1" },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(getGoogleChatSpaceMembership).toHaveBeenCalledWith({
+      account,
+      space: "spaces/DM",
+      member: "alice@example.com",
+    });
+    expect(findGoogleChatDirectMessage).not.toHaveBeenCalled();
+    expect(listGoogleChatReactions).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat an opted-in raw email membership in a group as a DM allowlist match", async () => {
+    const account = buildAccount({
+      config: {
+        dangerouslyAllowNameMatching: true,
+        groupPolicy: "allowlist",
+        dm: { policy: "allowlist", allowFrom: ["alice@example.com"] },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpaceMembership.mockResolvedValue({
+      name: "spaces/GROUP/members/123",
+      member: { name: "users/123" },
+    });
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "GROUP_CHAT" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: { messageId: "spaces/GROUP/messages/msg-1" },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target is not allowed.");
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
+
+  it("allows an API-confirmed group space when groups are open", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "open",
+        dm: { policy: "allowlist", allowFrom: [] },
+        groups: {},
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "SPACE" });
+    listGoogleChatReactions.mockResolvedValue([]);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "reactions",
+      params: { messageId: "spaces/GROUP/messages/msg-1" },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(listGoogleChatReactions).toHaveBeenCalledOnce();
+  });
+
+  it("allows an API-confirmed group space admitted by wildcard config", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        dm: { policy: "allowlist", allowFrom: [] },
+        groups: { "*": { requireMention: false } },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "GROUP_CHAT" });
+    listGoogleChatReactions.mockResolvedValue([]);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await googlechatMessageActions.handleAction({
+      action: "reactions",
+      params: { messageId: "spaces/WILDCARD/messages/msg-1" },
+      cfg: { channels: { googlechat: {} } },
+      accountId: "default",
+    } as never);
+
+    expect(listGoogleChatReactions).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat per-DM history config as read authorization", async () => {
+    const account = buildAccount({
+      config: {
+        groupPolicy: "allowlist",
+        dm: { policy: "allowlist", allowFrom: [] },
+        dms: { "users/alice": { historyLimit: 5 } },
+      },
+    });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    getGoogleChatSpace.mockResolvedValue({ spaceType: "DIRECT_MESSAGE" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: { messageId: "spaces/DM/messages/msg-1" },
+        cfg: { channels: { googlechat: {} } },
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("Google Chat read target is not allowed.");
     expect(listGoogleChatReactions).not.toHaveBeenCalled();
   });
 });

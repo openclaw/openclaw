@@ -18,6 +18,7 @@ export type OpenClawPluginToolOptions = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  nativeChannelId?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -95,6 +96,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
+      nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
       sandboxed: options?.sandboxed,

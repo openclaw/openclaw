@@ -600,6 +600,30 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
+  it("rejects reaction clearing outside allowlisted Discord channels", async () => {
+    const cfg = discordAllowlistCfg({
+      "111": {
+        channels: {
+          "222": { enabled: true },
+        },
+      },
+    });
+
+    await expect(
+      handleMessagingAction(
+        "react",
+        {
+          channelId: "444",
+          messageId: "M1",
+          emoji: "",
+        },
+        enableAllActions,
+        cfg,
+      ),
+    ).rejects.toThrow("Discord read target channel is not allowed.");
+    expect(removeOwnReactionsDiscord).not.toHaveBeenCalled();
+  });
+
   it("removes reactions when remove flag set", async () => {
     await handleMessagingAction(
       "react",

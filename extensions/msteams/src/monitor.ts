@@ -28,10 +28,7 @@ import {
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
 } from "./polls.js";
-import {
-  resolveMSTeamsChannelAllowlist,
-  resolveMSTeamsUserAllowlist,
-} from "./resolve-allowlist.js";
+import { resolveMSTeamsTeamsConfig, resolveMSTeamsUserAllowlist } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
@@ -150,77 +147,13 @@ export async function monitorMSTeamsProvider(
     }
 
     if (teamsConfig && Object.keys(teamsConfig).length > 0) {
-      const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
-      for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
-        if (teamKey === "*") {
-          continue;
-        }
-        const channels = teamCfg?.channels ?? {};
-        const channelKeys = Object.keys(channels).filter((key) => key !== "*");
-        if (channelKeys.length === 0) {
-          entries.push({ input: teamKey, teamKey });
-          continue;
-        }
-        for (const channelKey of channelKeys) {
-          entries.push({
-            input: `${teamKey}/${channelKey}`,
-            teamKey,
-            channelKey,
-          });
-        }
-      }
-
-      if (entries.length > 0) {
-        const resolved = await resolveMSTeamsChannelAllowlist({
-          cfg,
-          entries: entries.map((entry) => entry.input),
-        });
-        const mapping: string[] = [];
-        const unresolved: string[] = [];
-        const nextTeams = { ...teamsConfig };
-
-        resolved.forEach((entry, idx) => {
-          const source = entries[idx];
-          if (!source) {
-            return;
-          }
-          const sourceTeam = teamsConfig?.[source.teamKey] ?? {};
-          if (!entry.resolved || !entry.teamId) {
-            unresolved.push(entry.input);
-            return;
-          }
-          mapping.push(
-            entry.channelId
-              ? `${entry.input}→${entry.teamId}/${entry.channelId}`
-              : `${entry.input}→${entry.teamId}`,
-          );
-          const existing = nextTeams[entry.teamId] ?? {};
-          const mergedChannels = {
-            ...sourceTeam.channels,
-            ...existing.channels,
-          };
-          const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
-          nextTeams[entry.teamId] = mergedTeam;
-          if (source.channelKey && entry.channelId) {
-            const sourceChannel = sourceTeam.channels?.[source.channelKey];
-            if (sourceChannel) {
-              nextTeams[entry.teamId] = {
-                ...mergedTeam,
-                channels: {
-                  ...mergedChannels,
-                  [entry.channelId]: {
-                    ...sourceChannel,
-                    ...mergedChannels?.[entry.channelId],
-                  },
-                },
-              };
-            }
-          }
-        });
-
-        teamsConfig = nextTeams;
-        summarizeMapping("msteams channels", mapping, unresolved, runtime);
-      }
+      const resolved = await resolveMSTeamsTeamsConfig({
+        cfg,
+        teamIdMode: "bot-framework",
+        teams: teamsConfig,
+      });
+      teamsConfig = resolved.teams;
+      summarizeMapping("msteams channels", resolved.mapping, resolved.unresolved, runtime);
     }
   } catch (err) {
     // Allowlist Graph resolution is security-sensitive — surface failures at

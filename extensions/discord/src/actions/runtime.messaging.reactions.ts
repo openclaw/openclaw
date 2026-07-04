@@ -31,6 +31,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
+        await ctx.assertReadTargetAllowed({ channelId });
         const removed = await discordMessagingActionRuntime.removeOwnReactionsDiscord(
           channelId,
           messageId,
