@@ -76,6 +76,8 @@ const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
+const WORKSPACE_SKILL_PATH_REFERENCE_PATTERN =
+  /(?:^|[^A-Za-z0-9._-])(?:\.\/)?skills\/([^/\\\s"'`<>]+)\//g;
 
 /** Lists skill workshop proposals, optionally scoped to a workspace. */
 export async function listSkillProposals(
@@ -252,6 +254,10 @@ export async function proposeCreateSkill(
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
+  await assertCreateProposalDoesNotReferenceExistingWorkspaceSkills({
+    workspaceDir: input.workspaceDir,
+    content: input.content,
+  });
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const now = new Date().toISOString();
@@ -760,6 +766,36 @@ function assertProposalContentWithinLimit(content: string, maxSkillBytes: number
       `Skill proposal content is too large (${sizeBytes} bytes, max ${maxSkillBytes}).`,
     );
   }
+}
+
+async function assertCreateProposalDoesNotReferenceExistingWorkspaceSkills(params: {
+  workspaceDir: string;
+  content: string;
+}): Promise<void> {
+  const referencedExistingKeys = new Set<string>();
+  for (const match of params.content.matchAll(WORKSPACE_SKILL_PATH_REFERENCE_PATTERN)) {
+    const referencedKey = normalizeSkillIndexName(match[1] ?? "");
+    if (!referencedKey) {
+      continue;
+    }
+    const target = resolveSkillProposalTarget({
+      workspaceDir: params.workspaceDir,
+      skillName: referencedKey,
+    });
+    if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
+      referencedExistingKeys.add(target.skillKey);
+    }
+  }
+  if (referencedExistingKeys.size === 0) {
+    return;
+  }
+
+  const references = [...referencedExistingKeys].toSorted().map((key) => `skills/${key}`);
+  throw new Error(
+    `Create proposal content references existing workspace skill paths: ${references.join(
+      ", ",
+    )}. action=create always creates a new sibling skill; use action=update or propose-update separately for existing skills.`,
+  );
 }
 
 async function buildSupportFileMetadata(

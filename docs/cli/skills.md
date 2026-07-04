@@ -167,6 +167,11 @@ openclaw skills workshop reject <proposal-id> --reason "Duplicate"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
+`propose-create` always targets a new sibling skill under `skills/<name>/` and
+rejects drafts that reference existing workspace skill paths such as
+`skills/qa-check/SKILL.md`. Use `propose-update <skill>` once per existing skill
+when a change touches current skills.
+
 ## Related
 
 - [CLI reference](/cli)
