@@ -240,16 +240,19 @@ export async function recoverStuckDiagnosticSession(
         // When there is no active embedded run handle but the lane still has
         // active tasks, the task is likely orphaned (its promise will never
         // settle because the owning run was already cleaned up or abandoned).
-        // After the stale threshold, force-reset the lane to release it.
+        // After the stale threshold, force-reset the lane to release queued work.
+        //
+        // Only force-reset when queued work is being blocked (lane queuedCount
+        // or session queueDepth > 0). Without blocked work the stuck task is
+        // harmless and will time out naturally.
         //
         // Use params.ageMs directly rather than isActiveRunProgressStale()
         // because that function requires queueDepth > 0 to detect staleness.
-        // Orphaned tasks typically have no queued work, so the queueDepth
-        // gate would prevent stale detection. ageMs reflects how long the
-        // session has been classified as stuck, which is an adequate proxy
-        // for how long the lane task has been orphaned.
+        // Orphaned tasks may have lane-queued work with session queueDepth 0.
+        const hasBlockedWork = laneSnapshot.queuedCount > 0 || (params.queueDepth ?? 0) > 0;
         const shouldForceReset =
-          params.allowActiveAbort === true || params.ageMs >= staleActiveProgressAbortMs;
+          (params.allowActiveAbort === true || params.ageMs >= staleActiveProgressAbortMs) &&
+          hasBlockedWork;
 
         if (shouldForceReset) {
           const released = resetCommandLane(sessionLane);

@@ -549,14 +549,14 @@ describe("stuck session recovery", () => {
 
   // ─────── active_lane_task force-reset (orphaned task recovery) ───────
 
-  it("force-resets lane when active_lane_task ageMs exceeds stale threshold", async () => {
+  it("force-resets lane when active_lane_task ageMs exceeds threshold and queued work is blocked", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.getCommandLaneSnapshot.mockReturnValue({
       lane: "session:agent:cron:job-abc:run:run-1",
-      queuedCount: 0,
+      queuedCount: 1,
       activeCount: 1,
       maxConcurrent: 1,
       draining: false,
@@ -577,10 +577,38 @@ describe("stuck session recovery", () => {
       reason: "stale_lane_task",
       released: 1,
       activeCount: 1,
-      queuedCount: 0,
     });
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:cron:job-abc:run:run-1");
     expect(warnLogMessages().some((m) => m.includes("force-reset stale lane"))).toBe(true);
+  });
+
+  it("keeps lane when active_lane_task ageMs exceeds threshold but no queued work is blocked", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:cron:job-abc:run:run-1",
+      queuedCount: 0,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "orphaned-no-queue",
+      sessionKey: "agent:cron:job-abc:run:run-1",
+      ageMs: 360_000,
+      queueDepth: 0,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_lane_task",
+    });
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("keeps lane when active_lane_task ageMs is below stale threshold", async () => {
@@ -613,14 +641,14 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
-  it("force-resets lane when allowActiveAbort is true regardless of ageMs", async () => {
+  it("force-resets lane when allowActiveAbort is true and queued work is blocked", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
     mocks.getCommandLaneSnapshot.mockReturnValue({
       lane: "session:agent:cron:job-abc:run:run-1",
-      queuedCount: 0,
+      queuedCount: 1,
       activeCount: 1,
       maxConcurrent: 1,
       draining: false,
@@ -644,7 +672,37 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:cron:job-abc:run:run-1");
   });
 
-  it("force-resets lane with queueDepth=0 (orphaned task bypassing isActiveRunProgressStale)", async () => {
+  it("force-resets lane with queueDepth=0 but lane-queued work (bypasses isActiveRunProgressStale)", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:cron:job-abc:run:run-1",
+      queuedCount: 2,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.resetCommandLane.mockReturnValue(1);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "orphaned-lane-queue",
+      sessionKey: "agent:cron:job-abc:run:run-1",
+      ageMs: 360_000,
+      queueDepth: 0, // isActiveRunProgressStale returns false when queueDepth === 0
+    });
+
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      reason: "stale_lane_task",
+    });
+    expect(mocks.resetCommandLane).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps lane when active_lane_task has no queued work even with allowActiveAbort", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
@@ -657,21 +715,22 @@ describe("stuck session recovery", () => {
       draining: false,
       generation: 0,
     });
-    mocks.resetCommandLane.mockReturnValue(1);
 
     const outcome = await recoverStuckDiagnosticSession({
-      sessionId: "orphaned-zero-queue",
+      sessionId: "orphaned-no-queue-force",
       sessionKey: "agent:cron:job-abc:run:run-1",
-      ageMs: 360_000,
-      queueDepth: 0, // isActiveRunProgressStale returns false when queueDepth === 0
+      ageMs: 10_000,
+      allowActiveAbort: true,
+      queueDepth: 0,
     });
 
+    // No queued or blocked work → keep lane even with allowActiveAbort
     expect(outcome).toMatchObject({
-      status: "released",
-      action: "release_lane",
-      reason: "stale_lane_task",
+      status: "skipped",
+      action: "keep_lane",
+      reason: "active_lane_task",
     });
-    expect(mocks.resetCommandLane).toHaveBeenCalledTimes(1);
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
   it("reports when recovery finds no active work to release", async () => {
