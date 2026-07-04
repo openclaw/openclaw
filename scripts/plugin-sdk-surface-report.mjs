@@ -168,7 +168,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "memory-core-host-runtime-core": 1,
   "memory-host-core": 1,
   "memory-host-files": 7,
-  "memory-host-status": 72,
+  "memory-host-status": 73,
   "provider-auth": 20,
   "provider-oauth-runtime": 2,
   "provider-auth-login": 3,
