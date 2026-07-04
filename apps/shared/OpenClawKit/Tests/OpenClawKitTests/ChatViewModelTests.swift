@@ -1963,6 +1963,65 @@ struct ChatViewModelTests {
         })
     }
 
+    @Test func `late correlated user echo replaces optimistic row after final`() async throws {
+        let history = historyPayload()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "sensitive draft")
+        let runId = try await waitForLastSentRunId(transport)
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+        try await waitUntil("final clears pending correlation bookkeeping") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+
+        let canonicalTimestamp = Date().timeIntervalSince1970 * 1000 + 5000
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "redacted canonical text",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: canonicalTimestamp,
+                        idempotencyKey: "\(runId):user"),
+                    messageId: "srv-late-user-echo",
+                    messageSeq: 2)))
+
+        try await waitUntil("late canonical echo replaces optimistic row") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" }) == 1 &&
+                    vm.messages.contains(where: { message in
+                        message.id == optimisticID &&
+                            message.content.first?.text == "redacted canonical text" &&
+                            message.timestamp == canonicalTimestamp
+                    })
+            }
+        }
+    }
+
     @Test func `metadata free same text event cannot consume pending local identity`() async throws {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],

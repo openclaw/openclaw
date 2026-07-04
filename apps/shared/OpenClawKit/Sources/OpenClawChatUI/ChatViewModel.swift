@@ -822,13 +822,16 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func adoptPendingLocalUserEcho(incoming: OpenClawChatMessage) -> Bool {
-        // Same-content turns can arrive from another client. Without the
-        // persisted client key, preserving both rows is safer than erasing one.
+    private func adoptCorrelatedUserMessage(incoming: OpenClawChatMessage) -> Bool {
+        guard incoming.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
+            return false
+        }
+        // The final event can clear pending bookkeeping before session.message
+        // arrives. The persisted key still identifies the exact user turn, so
+        // adopt the durable row without losing the optimistic row's UI identity.
         guard let incomingKey = Self.normalizedIdempotencyKey(incoming.idempotencyKey) else { return false }
-        let pendingMessageIDs = Set(self.pendingLocalUserEchoMessageIDsByRunID.values)
         let matchIndex = self.messages.lastIndex { existing in
-            pendingMessageIDs.contains(existing.id) &&
+            existing.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" &&
                 Self.normalizedIdempotencyKey(existing.idempotencyKey) == incomingKey
         }
         guard let matchIndex else {
@@ -2028,9 +2031,10 @@ public final class OpenClawChatViewModel {
         // just sent. performSend already appended an optimistic row carrying a
         // local client timestamp, while the echo carries a server timestamp, so
         // the timestamp-keyed identity/dedupe paths below never collapse them.
-        // Adopt the server record only onto a still-visible row created by this
-        // client's pending send; same-content user turns from other clients must append.
-        if self.adoptPendingLocalUserEcho(incoming: sanitized) {
+        // Adopt the server record onto the exactly correlated row even when the
+        // run's final event already cleared pending state. Same-content turns
+        // without this key remain distinct.
+        if self.adoptCorrelatedUserMessage(incoming: sanitized) {
             return
         }
         if self.adoptProvisionalFinalMessage(incoming: sanitized) {
