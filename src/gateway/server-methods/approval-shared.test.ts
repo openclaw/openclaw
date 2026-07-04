@@ -987,6 +987,128 @@ describe("handlePendingApprovalRequest", () => {
     expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
   });
 
+  it("reports an expired approval distinctly while it is still in the grace window", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-expired-grace");
+    void manager.register(record, 60_000);
+    expect(manager.expire("approval-expired-grace")).toBe(true);
+    const respond = vi.fn();
+
+    await handleApprovalResolve({
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-operator",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        scopes: ["operator.admin"],
+      }),
+      resolvedEventName: "exec.approval.resolved",
+      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
+        id: approvalId,
+        decision,
+        request: snapshot.request,
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "approval expired",
+        details: expect.objectContaining({ reason: "APPROVAL_EXPIRED" }),
+      }),
+    );
+  });
+
+  it("reports expired vs already-resolved distinctly after the grace window archives the record", async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new ExecApprovalManager();
+      const expiredRecord = manager.create(
+        { command: "echo ok" },
+        600_000,
+        "approval-expired-archived",
+      );
+      void manager.register(expiredRecord, 600_000);
+      manager.expire("approval-expired-archived");
+      const resolvedRecord = manager.create(
+        { command: "echo ok" },
+        600_000,
+        "approval-resolved-archived",
+      );
+      void manager.register(resolvedRecord, 600_000);
+      manager.resolve("approval-resolved-archived", "allow-once");
+      // Fire the grace cleanup so both live records move to the bounded archive.
+      vi.advanceTimersByTime(15_000);
+
+      const client = createApprovalClient({
+        connId: "conn-operator",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        scopes: ["operator.admin"],
+      });
+      const baseArgs = {
+        manager,
+        decision: "allow-once" as const,
+        context: {
+          broadcast: vi.fn(),
+          broadcastToConnIds: vi.fn(),
+        } as unknown as GatewayRequestContext,
+        client,
+        resolvedEventName: "exec.approval.resolved",
+        buildResolvedEvent: ({
+          approvalId,
+          decision,
+          snapshot,
+        }: {
+          approvalId: string;
+          decision: string;
+          snapshot: { request: unknown };
+        }) => ({ id: approvalId, decision, request: snapshot.request }),
+      };
+
+      const expiredRespond = vi.fn();
+      await handleApprovalResolve({
+        ...baseArgs,
+        inputId: "approval-expired-archived",
+        respond: expiredRespond,
+      });
+      expect(expiredRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: "approval expired",
+          details: expect.objectContaining({ reason: "APPROVAL_EXPIRED" }),
+        }),
+      );
+
+      const resolvedRespond = vi.fn();
+      await handleApprovalResolve({
+        ...baseArgs,
+        inputId: "approval-resolved-archived",
+        // Submit a different decision so this is not treated as an idempotent retry.
+        decision: "deny",
+        respond: resolvedRespond,
+      });
+      expect(resolvedRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: "approval already resolved",
+          details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not wait on decisions for approvals hidden from the caller", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(

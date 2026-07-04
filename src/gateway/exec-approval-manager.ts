@@ -12,6 +12,15 @@ import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
+// Bounded archive of terminated (resolved/expired) approval ids so a resolve
+// attempt arriving after the grace window can still be told apart as
+// already-resolved vs expired vs genuinely unknown instead of collapsing to
+// "unknown or expired approval id". Capped to avoid unbounded growth.
+const MAX_RECENTLY_TERMINATED = 512;
+
+/** Terminal classification of an approval id for resolve-time UX messaging. */
+export type ApprovalIdClassification = "pending" | "resolved" | "expired" | "unknown";
+
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   const unref = (timer as { unref?: () => void }).unref;
   if (typeof unref === "function") {
@@ -28,6 +37,16 @@ function scheduleResolvedEntryCleanup(cleanup: () => void): void {
 
 function resolveApprovalTimeoutMs(timeoutMs: number): number {
   return resolveTimerTimeoutMs(timeoutMs, 1);
+}
+
+/**
+ * A terminated record carries a decision (including a consumed allow-once) when
+ * it was resolved by an operator; an elapsed window leaves no decision.
+ */
+function terminalStateOf<TPayload>(record: ExecApprovalRecord<TPayload>): "resolved" | "expired" {
+  return record.decision !== undefined || record.consumedDecision !== undefined
+    ? "resolved"
+    : "expired";
 }
 
 type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
@@ -64,6 +83,22 @@ export type ExecApprovalIdLookupResult =
 
 export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   private pending = new Map<string, PendingEntry<TPayload>>();
+  // Insertion-ordered archive of recently terminated records (FIFO eviction).
+  private recentlyTerminated = new Map<string, ExecApprovalRecord<TPayload>>();
+
+  private archiveTerminatedRecord(record: ExecApprovalRecord<TPayload>): void {
+    // Refresh insertion order so the newest terminal state wins and survives
+    // eviction longest.
+    this.recentlyTerminated.delete(record.id);
+    this.recentlyTerminated.set(record.id, record);
+    while (this.recentlyTerminated.size > MAX_RECENTLY_TERMINATED) {
+      const oldest = this.recentlyTerminated.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.recentlyTerminated.delete(oldest);
+    }
+  }
 
   create(request: TPayload, timeoutMs: number, id?: string | null): ExecApprovalRecord<TPayload> {
     const now = Date.now();
@@ -142,6 +177,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       // Only delete if the entry hasn't been replaced
       if (this.pending.get(recordId) === pending) {
         this.pending.delete(recordId);
+        this.archiveTerminatedRecord(pending.record);
       }
     });
     return true;
@@ -163,6 +199,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     scheduleResolvedEntryCleanup(() => {
       if (this.pending.get(recordId) === pending) {
         this.pending.delete(recordId);
+        this.archiveTerminatedRecord(pending.record);
       }
     });
     return true;
@@ -171,6 +208,32 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
   getSnapshot(recordId: string): ExecApprovalRecord<TPayload> | null {
     const entry = this.pending.get(recordId);
     return entry?.record ?? null;
+  }
+
+  /**
+   * Classifies an approval id for resolve-time UX without leaking records the
+   * caller cannot see. A terminated record with a recorded decision is
+   * "resolved"; one whose window elapsed with no decision is "expired". Live
+   * records still in the grace window are classified from their current state,
+   * and ids the caller cannot see (or never existed) are "unknown".
+   */
+  classifyApprovalId(
+    input: string,
+    opts: { filter?: (record: ExecApprovalRecord<TPayload>) => boolean } = {},
+  ): ApprovalIdClassification {
+    const normalized = input.trim();
+    if (!normalized) {
+      return "unknown";
+    }
+    const live = this.pending.get(normalized)?.record;
+    if (live && (opts.filter?.(live) ?? true)) {
+      return live.resolvedAtMs === undefined ? "pending" : terminalStateOf(live);
+    }
+    const archived = this.recentlyTerminated.get(normalized);
+    if (archived && (opts.filter?.(archived) ?? true)) {
+      return terminalStateOf(archived);
+    }
+    return "unknown";
   }
 
   listPendingRecords(): ExecApprovalRecord<TPayload>[] {
