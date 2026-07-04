@@ -20,6 +20,7 @@ export { checkContextPressure, clearContextPressureState } from "./context-press
 export { dispatchToolDelegates } from "./delegate-dispatch.js";
 export { scheduleContinuationWork, scheduleContinuationWorkBatch } from "./work-dispatch.js";
 export {
+  assertStagedPostCompactionFinalizationComplete,
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
   pendingDelegateCount,

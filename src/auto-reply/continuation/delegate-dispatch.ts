@@ -43,6 +43,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   annotateQueuedDelegatesInheritedPolicy,
+  assertStagedPostCompactionFinalizationComplete,
   clearQueuedDelegatesChainTokensFold,
   consumePendingDelegates,
   finalizeStagedPostCompactionDelegates,
@@ -65,6 +66,13 @@ import type { ContinuationRuntimeConfig, PendingContinuationDelegate } from "./t
 
 const log = createSubsystemLogger("continuation/delegate-dispatch");
 const HEDGE_DISPATCH_FAILURE_RETRY_MS = 30_000;
+
+class AcceptedChainStatePersistError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AcceptedChainStatePersistError";
+  }
+}
 
 // Per-session hedge timer for re-checking unmatured pending delegates in fully
 // quiet channels (no further response-finalize event). Idempotent per
@@ -112,6 +120,8 @@ function armHedgeTimer(
     loadFreshChainState?: () => ChainState;
     applyDelegateChainTokensFold?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
+    recoverRunningDelegates?: boolean;
+    includeRunningUpdatedAtOrBefore?: number;
     inheritedSilent?: boolean;
     inheritedWake?: boolean;
   },
@@ -152,6 +162,10 @@ function armHedgeTimer(
       // basis when its delay elapses and the hedge re-dispatches it (#1144).
       ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
       persistChainState: params.persistChainState,
+      ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
+      ...(params.includeRunningUpdatedAtOrBefore !== undefined
+        ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
+        : {}),
       // Inherited silent/wake policy must survive the hedge: a delayed delegate
       // armed by a silent/wake parent chain must still spawn internal when the
       // hedge finally dispatches it, not announce to the channel (#1158).
@@ -173,7 +187,11 @@ function armHedgeTimer(
         );
         surfaceHedgeDispatchFailure(sessionKey, errorMessage);
         try {
-          armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, params);
+          armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
+            ...params,
+            recoverRunningDelegates: true,
+            includeRunningUpdatedAtOrBefore: Date.now(),
+          });
         } catch (rearmErr) {
           log.error(
             `[continuation:delegate-hedge-rearm-error] error=${formatErrorMessage(rearmErr)} session=${sessionKey}`,
@@ -465,6 +483,27 @@ export async function dispatchToolDelegates(params: {
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
     const dispatchChainId = currentChainId ?? generateChainId();
+    const nextChainState = {
+      currentChainCount: nextHop,
+      chainStartedAt: chainState.chainStartedAt,
+      accumulatedChainTokens: accumulatedTokens,
+      ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
+    };
+    const persistAcceptedChainState = async (): Promise<void> => {
+      if (!params.persistChainState) {
+        return;
+      }
+      try {
+        await params.persistChainState(nextChainState);
+      } catch (err) {
+        const errorMessage = formatErrorMessage(err);
+        log.warn(
+          `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving accepted row recoverable: ${errorMessage}`,
+        );
+        dispatchSpan?.setStatus("ERROR", errorMessage);
+        throw new AcceptedChainStatePersistError(errorMessage);
+      }
+    };
     try {
       if (delegateDelivery === "timer") {
         emitContinuationDelegateFireSpan({
@@ -496,25 +535,7 @@ export async function dispatchToolDelegates(params: {
         (hasActiveSubagentRegistryRun(childSessionKey) ||
           (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
       ) {
-        const acceptedChainState = {
-          currentChainCount: nextHop,
-          chainStartedAt: chainState.chainStartedAt,
-          accumulatedChainTokens: accumulatedTokens,
-          ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
-        };
-        if (params.persistChainState) {
-          try {
-            await params.persistChainState(acceptedChainState);
-          } catch (err) {
-            const errorMessage = formatErrorMessage(err);
-            log.warn(
-              `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
-            );
-            dispatchSpan.setStatus("ERROR", errorMessage);
-            rejected++;
-            continue;
-          }
-        }
+        await persistAcceptedChainState();
         try {
           markPendingDelegateSpawnAccepted(
             delegate,
@@ -572,26 +593,8 @@ export async function dispatchToolDelegates(params: {
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
-        const acceptedChainState = {
-          currentChainCount: nextHop,
-          chainStartedAt: chainState.chainStartedAt,
-          accumulatedChainTokens: accumulatedTokens,
-          ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
-        };
-        if (params.persistChainState) {
-          try {
-            await params.persistChainState(acceptedChainState);
-          } catch (err) {
-            const errorMessage = formatErrorMessage(err);
-            log.warn(
-              `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
-            );
-            dispatchSpan.setStatus("ERROR", errorMessage);
-            rejected++;
-            continue;
-          }
-        }
         if (acceptedChildSessionKey) {
+          await persistAcceptedChainState();
           try {
             markPendingDelegateSpawnAccepted(
               delegate,
@@ -630,6 +633,10 @@ export async function dispatchToolDelegates(params: {
         rejected++;
       }
     } catch (err) {
+      if (err instanceof AcceptedChainStatePersistError) {
+        dispatchSpan?.recordException(err);
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       const summary = `DELEGATE spawn failed: ${message}`;
       dispatchSpan?.recordException(err);
@@ -1214,7 +1221,12 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
       });
       sessionStore[sessionKey] = inMemoryEntry;
-      finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+      const finalized = finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+      assertStagedPostCompactionFinalizationComplete({
+        flowIds: result.dispatchedFlowIds,
+        finalized,
+        context: `post-compaction startup recovery for ${sessionKey}`,
+      });
     }
   }
   return { sessions: recoveredSessions, dispatched, failed };

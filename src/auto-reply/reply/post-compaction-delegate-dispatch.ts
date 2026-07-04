@@ -1,6 +1,10 @@
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { deriveContinuationDelegateChildSessionKey } from "../../agents/subagent-continuation-ids.js";
 import {
+  getSubagentRunByChildSessionKey,
+  hasLiveContinuationDelegateChildRun,
+} from "../../agents/subagent-registry-read.js";
+import {
   spawnSubagentDirect,
   type SpawnSubagentContext,
   type SpawnSubagentParams,
@@ -25,10 +29,12 @@ import {
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
+  assertStagedPostCompactionFinalizationComplete,
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
+  requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
 } from "../continuation-delegate-store.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
@@ -75,6 +81,9 @@ export type PostCompactionDelegateDeliveryDeps = {
 export type PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates(sessionKey: string): SessionPostCompactionDelegate[];
   finalizeStagedPostCompactionDelegates(flowIds: readonly (string | undefined)[]): number;
+  requeueReleasedPostCompactionDelegate(
+    delegate: Pick<SessionPostCompactionDelegate, "flowId" | "expectedRevision" | "task">,
+  ): boolean;
   stagePostCompactionDelegate(sessionKey: string, delegate: SessionPostCompactionDelegate): void;
   drainPostCompactionDelegateDeliveries(params: {
     entryIds?: readonly string[];
@@ -144,6 +153,7 @@ const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryD
 const defaultPostCompactionDelegateDispatchDeps: PostCompactionDelegateDispatchDeps = {
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
+  requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
   drainPostCompactionDelegateDeliveries,
   enqueuePostCompactionDelegateDelivery,
@@ -385,10 +395,58 @@ function failSourceBackedPostCompactionDelivery(
     "Post-compaction delegate rejected",
   );
   if (!applied) {
-    deps.log(
+    throw new Error(
       `[continuation:post-compaction-source-fail-not-committed] flowId=${entry.sourceFlowId} reason=${summary}`,
     );
   }
+}
+
+function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
+  acceptedChildSessionKey: string | undefined;
+  deps: PostCompactionDelegateDeliveryDeps;
+  entry: QueuedPostCompactionDelegateDelivery;
+}): boolean {
+  const { acceptedChildSessionKey, deps, entry } = params;
+  if (
+    !entry.sourceFlowId ||
+    entry.sourceExpectedRevision === undefined ||
+    !acceptedChildSessionKey
+  ) {
+    return false;
+  }
+  if (
+    !getSubagentRunByChildSessionKey(acceptedChildSessionKey) &&
+    !hasLiveContinuationDelegateChildRun({
+      childSessionKey: acceptedChildSessionKey,
+      flowId: entry.sourceFlowId,
+    })
+  ) {
+    return false;
+  }
+  const committed = deps.markPendingDelegateSpawnAccepted(
+    {
+      flowId: entry.sourceFlowId,
+      expectedRevision: entry.sourceExpectedRevision,
+      task: entry.task,
+    },
+    acceptedChildSessionKey,
+  );
+  if (!committed) {
+    throw new Error(
+      `[continuation:post-compaction-source-accept-not-committed] flowId=${entry.sourceFlowId}`,
+    );
+  }
+  deps.enqueueSystemEvent(
+    `[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: ${entry.task}`,
+    {
+      sessionKey: entry.sessionKey,
+      ...(entry.traceparent ? { traceparent: entry.traceparent } : {}),
+    },
+  );
+  deps.log(
+    `[continuation:post-compaction-source-accepted-recovered] flowId=${entry.sourceFlowId} child=${acceptedChildSessionKey}`,
+  );
+  return true;
 }
 
 async function persistPostCompactionDelegateChainState(params: {
@@ -522,6 +580,18 @@ export async function deliverQueuedPostCompactionDelegate(
     sessionKey: params.entry.sessionKey,
     config: cfg,
   });
+  const sourceAcceptedChildSessionKey = params.entry.sourceFlowId
+    ? deriveContinuationDelegateChildSessionKey(agentId, params.entry.sourceFlowId)
+    : undefined;
+  if (
+    maybeFinalizePreviouslyAcceptedSourceBackedDelivery({
+      acceptedChildSessionKey: sourceAcceptedChildSessionKey,
+      deps,
+      entry: params.entry,
+    })
+  ) {
+    return;
+  }
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
   const sessionStore = deps.loadSessionStore(storePath);
   const resolved = resolveSessionStoreEntry({
@@ -667,13 +737,19 @@ export async function deliverQueuedPostCompactionDelegate(
     },
   );
   if (spawnResult.status !== "accepted") {
+    if (spawnResult.status === "forbidden") {
+      failSourceBackedPostCompactionDelivery(
+        deps,
+        params.entry,
+        `Post-compaction delegate spawn forbidden: ${spawnResult.error ?? "delegation was not accepted"}.`,
+      );
+      return;
+    }
     throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
   }
   if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
-    const acceptedChildSessionKey =
-      spawnResult.childSessionKey ??
-      deriveContinuationDelegateChildSessionKey(agentId, params.entry.sourceFlowId);
-    deps.markPendingDelegateSpawnAccepted(
+    const acceptedChildSessionKey = spawnResult.childSessionKey ?? sourceAcceptedChildSessionKey!;
+    const committed = deps.markPendingDelegateSpawnAccepted(
       {
         flowId: params.entry.sourceFlowId,
         expectedRevision: params.entry.sourceExpectedRevision,
@@ -681,6 +757,11 @@ export async function deliverQueuedPostCompactionDelegate(
       },
       acceptedChildSessionKey,
     );
+    if (!committed) {
+      throw new Error(
+        `[continuation:post-compaction-source-accept-not-committed] flowId=${params.entry.sourceFlowId}`,
+      );
+    }
   }
 
   deps.enqueueSystemEvent(
@@ -861,15 +942,26 @@ export async function dispatchPostCompactionDelegates(
     );
   }
 
+  const requeuedClaimedFlowIds = new Set<string>();
   if (params.postCompactionDelegatesToPreserve.length > 0) {
+    const delegatesToPersist: SessionPostCompactionDelegate[] = [];
+    for (const delegate of params.postCompactionDelegatesToPreserve) {
+      if (deps.requeueReleasedPostCompactionDelegate(delegate)) {
+        requeuedClaimedFlowIds.add(delegate.flowId!);
+        continue;
+      }
+      delegatesToPersist.push(delegate);
+    }
     try {
-      await persistPendingPostCompactionDelegates({
-        sessionEntry: params.sessionEntry,
-        sessionStore: params.sessionStore,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-        delegates: params.postCompactionDelegatesToPreserve,
-      });
+      if (delegatesToPersist.length > 0) {
+        await persistPendingPostCompactionDelegates({
+          sessionEntry: params.sessionEntry,
+          sessionStore: params.sessionStore,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          delegates: delegatesToPersist,
+        });
+      }
     } catch (err) {
       // Session-store persist failed. Re-stage the delegates as fresh queued
       // TaskFlow rows NOW — before finalizing the claimed rows — so they stay
@@ -878,8 +970,8 @@ export async function dispatchPostCompactionDelegates(
       // (listRecoverableStagedPostCompactionDelegates) re-dispatch delegates
       // that were already delivered or re-staged (#1144). Mirrors the
       // agent-runner post-compaction finalize path.
-      const restagedCount = params.postCompactionDelegatesToPreserve.length;
-      for (const delegate of params.postCompactionDelegatesToPreserve) {
+      const restagedCount = delegatesToPersist.length;
+      for (const delegate of delegatesToPersist) {
         deps.stagePostCompactionDelegate(params.sessionKey, delegate);
       }
       deps.log(
@@ -901,7 +993,15 @@ export async function dispatchPostCompactionDelegates(
   // (e.g. crash-orphaned ones awaiting recovery). A crash before this point
   // leaves the claimed rows recoverable via listRecoverableStagedPostCompactionDelegates
   // instead of silently losing them behind a premature finish (#1144).
-  deps.finalizeStagedPostCompactionDelegates(claimedFlowIds);
+  const flowIdsToFinalize = claimedFlowIds.filter(
+    (flowId) => !flowId || !requeuedClaimedFlowIds.has(flowId),
+  );
+  const finalized = deps.finalizeStagedPostCompactionDelegates(flowIdsToFinalize);
+  assertStagedPostCompactionFinalizationComplete({
+    flowIds: flowIdsToFinalize,
+    finalized,
+    context: `queued post-compaction release for ${params.sessionKey}`,
+  });
 
   const lifecycleEvent = buildPostCompactionLifecycleEvent({
     compactionCount: params.compactionCount,
