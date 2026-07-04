@@ -43,7 +43,9 @@ function isWildcardEndpoint(raw: string | undefined): boolean {
   if (!parsed) {
     return false;
   }
-  return parsed.port === 0;
+  // Windows localizes the TCP state text, so the wildcard peer is the stable
+  // listener signal. Be strict here because force paths can kill the returned PID.
+  return parsed.port === 0 && ["0.0.0.0", "::", "*"].includes(parsed.host);
 }
 
 export function parseWindowsNetstatListeners(
@@ -53,7 +55,7 @@ export function parseWindowsNetstatListeners(
   const listeners: WindowsNetstatListener[] = [];
   for (const rawLine of output.split(/\r?\n/)) {
     const parts = rawLine.trim().split(/\s+/);
-    if (parts.length < 4 || parts[0]?.toUpperCase() !== "TCP") {
+    if (parts.length < 5 || parts[0]?.toUpperCase() !== "TCP") {
       continue;
     }
     const localAddress = parts[1];

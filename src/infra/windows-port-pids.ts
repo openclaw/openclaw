@@ -65,7 +65,7 @@ export function readWindowsListeningPidsResultSync(
   if (powershellPids != null) {
     return { ok: true, pids: powershellPids };
   }
-  const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "tcp"], {
+  const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
     encoding: "utf8",
     timeout: timeoutMs,
     windowsHide: true,

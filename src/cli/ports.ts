@@ -164,7 +164,7 @@ export function parseLsofOutput(output: string): PortProcess[] {
 export function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
-      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "TCP"], {
+      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
         encoding: "utf-8",
       });
       const listeners = parseWindowsNetstatListeners(out, port);

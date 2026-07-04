@@ -506,7 +506,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   parse: (output: string, port: number) => T[],
 ): Promise<{ entries: T[]; detail?: string; errors: string[] }> {
   const errors: string[] = [];
-  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano", "-p", "tcp"]);
+  const res = await runCommandSafe([getWindowsSystem32ExePath("netstat.exe"), "-ano"]);
   if (res.code !== 0) {
     if (res.error) {
       errors.push(res.error);

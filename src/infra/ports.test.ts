@@ -506,6 +506,7 @@ describe("inspectPortUsage on Windows", () => {
           stdout:
             "  TCP    127.0.0.1:18789    0.0.0.0:0        ABHOEREN       4242\r\n" +
             "  TCP    [::1]:18789        [::]:0           ABHOEREN       4243\r\n" +
+            "  TCP    127.0.0.1:18789    127.0.0.1:0      ABHOEREN       8999\r\n" +
             "  TCP    127.0.0.1:18789    127.0.0.1:50123  HERGESTELLT    9000\r\n",
           stderr: "",
           code: 0,
@@ -528,6 +529,10 @@ describe("inspectPortUsage on Windows", () => {
 
     expect(result.status).toBe("busy");
     expect(result.listeners.map((listener) => listener.pid)).toEqual([4242, 4243]);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [getWindowsSystem32ExePath("netstat.exe"), "-ano"],
+      expect.anything(),
+    );
   });
 
   it("does not match Windows listener ports by substring", async () => {
