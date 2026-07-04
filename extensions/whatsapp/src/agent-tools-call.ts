@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { createActionGate, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -199,8 +199,14 @@ function createWhatsAppCallToolWithDependencies(
   context: OpenClawPluginToolContext,
   dependencies: WhatsAppCallToolDependencies,
 ): AnyAgentTool | null {
+  const cfg = resolveRuntimeConfig(api, context);
+  const isActionEnabled = createActionGate(cfg.channels?.whatsapp?.actions);
   const requesterSenderId = context.requesterSenderId?.trim();
-  if (context.messageChannel !== "whatsapp" || !requesterSenderId) {
+  if (
+    !isActionEnabled("calls", false) ||
+    context.messageChannel !== "whatsapp" ||
+    !requesterSenderId
+  ) {
     return null;
   }
 
@@ -248,7 +254,6 @@ function createWhatsAppCallToolWithDependencies(
         );
       }
 
-      const cfg = resolveRuntimeConfig(api, context);
       const target = await resolveRequesterE164({
         accountId,
         cfg,

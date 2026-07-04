@@ -50,7 +50,7 @@ function createContext(
   overrides: Partial<OpenClawPluginToolContext> = {},
 ): OpenClawPluginToolContext {
   return {
-    config: {},
+    config: { channels: { whatsapp: { actions: { calls: true } } } },
     messageChannel: "whatsapp",
     agentAccountId: "default",
     requesterSenderId: "+15551234567",
@@ -69,9 +69,18 @@ describe("WhatsApp call tool", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("is available only for a trusted WhatsApp requester", () => {
+  it("is opt-in and available only for a trusted WhatsApp requester", () => {
     const api = createApi();
 
+    expect(createWhatsAppCallTool(api, createContext({ config: {} }))).toBeNull();
+    expect(
+      createWhatsAppCallTool(
+        api,
+        createContext({
+          config: { channels: { whatsapp: { actions: { calls: false } } } },
+        }),
+      ),
+    ).toBeNull();
     expect(createWhatsAppCallTool(api, createContext({ messageChannel: "telegram" }))).toBeNull();
     expect(createWhatsAppCallTool(api, createContext({ requesterSenderId: undefined }))).toBeNull();
     expect(createWhatsAppCallTool(api, createContext())?.name).toBe("whatsapp_call");

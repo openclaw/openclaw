@@ -122,6 +122,7 @@ The WhatsApp plugin can expose `whatsapp_call` in WhatsApp-originated agent turn
 uses [MeowCaller](https://github.com/purpshell/meowcaller) to place a WhatsApp voice call to
 the current authorized requester and plays an OpenClaw TTS message after they answer. The tool
 does not accept a destination number, so a prompt cannot redirect the call to a third party.
+This experimental capability is disabled by default.
 
 <Warning>
 MeowCaller is experimental, has no tagged release, and uses a separately paired whatsmeow
@@ -132,6 +133,27 @@ to call your personal number.
 </Warning>
 
 <Steps>
+  <Step title="Enable experimental calls">
+
+    Add `actions.calls: true` to the WhatsApp channel in `openclaw.json`:
+
+```json
+{
+  "channels": {
+    "whatsapp": {
+      "actions": {
+        "calls": true
+      }
+    }
+  }
+}
+```
+
+    Merge this into your existing WhatsApp configuration, then restart the gateway. When the
+    setting is absent or `false`, OpenClaw does not expose the `whatsapp_call` tool to the agent.
+
+  </Step>
+
   <Step title="Install the reviewed MeowCaller CLI">
 
     The adapter expects an executable named `meowcaller` on the gateway host's `PATH`.
