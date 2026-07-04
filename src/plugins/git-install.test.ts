@@ -486,6 +486,47 @@ describe("installPluginFromGitSpec", () => {
     }
   });
 
+  it("stages the clone under the managed git dir so replacement never crosses filesystems (#99885)", async () => {
+    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-stage-"));
+    try {
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      installPluginFromInstalledPackageDirMock.mockImplementation(
+        async (params: { packageDir: string }) => {
+          await fs.mkdir(params.packageDir, { recursive: true });
+          return {
+            ok: true,
+            pluginId: "demo",
+            targetDir: params.packageDir,
+            version: "1.2.3",
+            extensions: ["index.js"],
+          };
+        },
+      );
+
+      const result = await installPluginFromGitSpec({
+        spec: "git:github.com/acme/demo",
+        gitDir,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+
+      // The clone destination must live under the resolved managed git dir, not
+      // os.tmpdir(). Staging elsewhere makes the final atomic rename into the
+      // persistent repo cross filesystems and fail with EXDEV in containers.
+      const cloneArgv = commandArgvAt(0);
+      const cloneDest = cloneArgv[cloneArgv.length - 1];
+      const resolvedGitDir = path.resolve(gitDir);
+      expect(path.resolve(cloneDest).startsWith(resolvedGitDir)).toBe(true);
+    } finally {
+      await fs.rm(gitDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses a credential-free managed repo path for authenticated git URLs", async () => {
     const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-path-"));
     try {
