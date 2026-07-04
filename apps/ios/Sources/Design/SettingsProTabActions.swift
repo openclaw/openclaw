@@ -289,6 +289,7 @@ extension SettingsProTab {
     }
 
     func openGatewayQRScanner() {
+        self.gatewayController.cancelPendingConnectionAttempts()
         self.scannerScanID = self.scannerResultHandoff.beginScan()
         self.appModel.disconnectGateway()
         self.connectingGatewayID = nil

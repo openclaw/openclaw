@@ -261,6 +261,53 @@ import os
         #expect(appModel.gatewayStatusText == message)
     }
 
+    @Test @MainActor func targetSwitchCancelsSuspendedDiscoveryResolution() async {
+        let defaults = UserDefaults.standard
+        let previousInstanceID = defaults.string(forKey: "node.instanceId")
+        defer {
+            if let previousInstanceID {
+                defaults.set(previousInstanceID, forKey: "node.instanceId")
+            } else {
+                defaults.removeObject(forKey: "node.instanceId")
+            }
+        }
+        defaults.set("ios-test", forKey: "node.instanceId")
+        let resolverStarted = AsyncStream<Void>.makeStream()
+        let resolverResults = AsyncStream<(host: String, port: Int)>.makeStream()
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            serviceEndpointResolver: { _ in
+                resolverStarted.continuation.yield()
+                for await result in resolverResults.stream {
+                    return result
+                }
+                return nil
+            })
+        let stableID = "discovered|\(UUID().uuidString)"
+        defer { self.clearTLSFingerprint(stableID: stableID) }
+        let gateway = self.makeDiscoveredGateway(
+            stableID: stableID,
+            lanHost: nil,
+            tailnetDns: nil,
+            gatewayPort: nil,
+            fingerprint: nil)
+        var startedIterator = resolverStarted.stream.makeAsyncIterator()
+
+        let connectTask = Task { await controller.connectWithDiagnostics(gateway) }
+        _ = await startedIterator.next()
+        controller.cancelPendingConnectionAttempts()
+        resolverResults.continuation.yield((host: "stale.gateway.invalid", port: 443))
+        resolverResults.continuation.finish()
+        let message = await connectTask.value
+
+        #expect(message == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(controller.pendingTrustPrompt == nil)
+    }
+
     @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
         let stableID1 = "test|\(UUID().uuidString)"
         let stableID2 = "test|\(UUID().uuidString)"

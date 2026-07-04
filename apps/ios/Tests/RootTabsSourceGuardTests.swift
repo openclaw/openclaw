@@ -888,7 +888,7 @@ struct RootTabsSourceGuardTests {
         #expect(onboardingSource.contains("self.scannerResultHandoff.cancel()"))
         #expect(!onboardingSource.contains("pendingScannerResult"))
         #expect(onboardingSource.contains("self.setupLinkStaging.stage(link)"))
-        #expect(pendingSetupHandler.contains("self.gatewayController.clearPendingTrustPrompt()"))
+        #expect(pendingSetupHandler.contains("self.gatewayController.cancelPendingConnectionAttempts()"))
         #expect(pendingSetupHandler.contains("if self.selectedMode == nil"))
         #expect(onboardingSource.contains("Tap Connect to apply."))
         #expect(onboardingSource.contains("self.connectStagedGatewaySetupLink()"))
@@ -908,6 +908,8 @@ struct RootTabsSourceGuardTests {
         #expect(onboardingSource.contains("self.setupLinkStaging.link == nil else { return }"))
         #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
         #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
+        #expect(controllerSource.contains("allowAutoReconnect: false"))
+        #expect(controllerSource.contains("guard allowAutoReconnect else { return }"))
     }
 
     @Test func `local network access is requested from visible gateway flows`() throws {
@@ -930,11 +932,15 @@ struct RootTabsSourceGuardTests {
         #expect(appSource.contains("model.stageGatewaySetupLink(link)"))
         #expect(appSource.contains(".onOpenURL"))
         #expect(appSource.contains("self.appDelegate.handleOpenURL(url, model: self.appModel)"))
-        #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
+        #expect(controllerSource.contains(
+            "func requestLocalNetworkAccess(reason: String, allowAutoReconnect: Bool = true)"))
         #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
-        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))
-        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\")"))
-        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_last_known\")"))
+        #expect(controllerSource.contains(
+            "self.requestLocalNetworkAccess(reason: \"connect_manual\", allowAutoReconnect: false)"))
+        #expect(controllerSource.contains(
+            "self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\", allowAutoReconnect: false)"))
+        #expect(controllerSource.contains(
+            "self.requestLocalNetworkAccess(reason: \"connect_last_known\", allowAutoReconnect: false)"))
 
         #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
         #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"scene_active\")"))

@@ -175,6 +175,7 @@ final class GatewayConnectionController {
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: PendingTrustConnect?
     private var trustProbeGeneration: UInt64 = 0
+    private var connectAttemptGeneration: UInt64 = 0
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
@@ -216,10 +217,10 @@ final class GatewayConnectionController {
         self.discovery.setDebugLoggingEnabled(enabled)
     }
 
-    func requestLocalNetworkAccess(reason: String) {
+    func requestLocalNetworkAccess(reason: String, allowAutoReconnect: Bool = true) {
         guard self.discoveryEnabled else {
             self.discovery.stop()
-            self.updateFromDiscovery()
+            self.updateFromDiscovery(allowAutoConnect: allowAutoReconnect)
             return
         }
 
@@ -228,7 +229,8 @@ final class GatewayConnectionController {
 
         guard self.currentScenePhase != .background else { return }
         self.discovery.start()
-        self.updateFromDiscovery()
+        self.updateFromDiscovery(allowAutoConnect: allowAutoReconnect)
+        guard allowAutoReconnect else { return }
         self.attemptAutoReconnectIfNeeded()
     }
 
@@ -278,7 +280,8 @@ final class GatewayConnectionController {
         _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
         forceReconnect: Bool = false) async -> String?
     {
-        self.requestLocalNetworkAccess(reason: "connect_discovered_gateway")
+        let connectGeneration = self.beginConnectAttempt()
+        self.requestLocalNetworkAccess(reason: "connect_discovered_gateway", allowAutoReconnect: false)
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if instanceId.isEmpty {
@@ -294,6 +297,7 @@ final class GatewayConnectionController {
         } else {
             await self.resolveServiceEndpoint(gateway.endpoint)
         }
+        guard self.connectAttemptGeneration == connectGeneration else { return nil }
         guard let target else {
             return "Failed to resolve the discovered gateway endpoint."
         }
@@ -317,6 +321,7 @@ final class GatewayConnectionController {
                 url: url,
                 queueLabel: "gateway.tls.discovered")
             else { return nil }
+            guard self.connectAttemptGeneration == connectGeneration else { return nil }
             switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = PendingTrustConnect(
@@ -376,7 +381,8 @@ final class GatewayConnectionController {
         authOverride: ManualAuthOverride? = nil,
         forceReconnect: Bool = false) async
     {
-        self.requestLocalNetworkAccess(reason: "connect_manual")
+        let connectGeneration = self.beginConnectAttempt()
+        self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let token =
             authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
@@ -402,6 +408,7 @@ final class GatewayConnectionController {
                 url: url,
                 queueLabel: "gateway.tls.manual")
             else { return }
+            guard self.connectAttemptGeneration == connectGeneration else { return }
             switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = PendingTrustConnect(
@@ -452,7 +459,7 @@ final class GatewayConnectionController {
     }
 
     func connectLastKnown() async {
-        self.requestLocalNetworkAccess(reason: "connect_last_known")
+        self.requestLocalNetworkAccess(reason: "connect_last_known", allowAutoReconnect: false)
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
         case let .manual(host, port, useTLS, _):
@@ -497,6 +504,11 @@ final class GatewayConnectionController {
         self.trustProbeGeneration &+= 1
         self.pendingTrustPrompt = nil
         self.pendingTrustConnect = nil
+    }
+
+    func cancelPendingConnectionAttempts() {
+        self.connectAttemptGeneration &+= 1
+        self.clearPendingTrustPrompt()
     }
 
     func acceptPendingTrustPrompt() async {
@@ -588,13 +600,15 @@ final class GatewayConnectionController {
         return true
     }
 
-    private func updateFromDiscovery() {
+    private func updateFromDiscovery(allowAutoConnect: Bool = true) {
         let newGateways = self.discovery.gateways
         self.gateways = newGateways
         self.discoveryStatusText = self.discovery.statusText
         self.discoveryDebugLog = self.discovery.debugLog
         self.updateLastDiscoveredGateway(from: newGateways)
-        self.maybeAutoConnect()
+        if allowAutoConnect {
+            self.maybeAutoConnect()
+        }
     }
 
     private func observeDiscovery() {
@@ -908,6 +922,11 @@ final class GatewayConnectionController {
         let result = await self.tlsFingerprintProbe(url)
         guard self.trustProbeGeneration == generation else { return nil }
         return result
+    }
+
+    private func beginConnectAttempt() -> UInt64 {
+        self.connectAttemptGeneration &+= 1
+        return self.connectAttemptGeneration
     }
 
     private func tlsProbeFailureMessage(

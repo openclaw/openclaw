@@ -945,7 +945,7 @@ extension OnboardingWizardView {
         self.showQRScanner = false
         self.scannerResultHandoff.cancel()
         self.showGatewayProblemDetails = false
-        self.gatewayController.clearPendingTrustPrompt()
+        self.gatewayController.cancelPendingConnectionAttempts()
         if self.selectedMode == nil {
             self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
         }
@@ -967,7 +967,7 @@ extension OnboardingWizardView {
         }
         self.connectingGatewayID = "manual"
         defer { self.connectingGatewayID = nil }
-        self.gatewayController.clearPendingTrustPrompt()
+        self.gatewayController.cancelPendingConnectionAttempts()
         await self.appModel.resetGatewaySessionsForTargetSwitch()
         guard self.setupLinkStaging.link == link else { return }
         _ = self.setupLinkStaging.take()
@@ -1024,6 +1024,7 @@ extension OnboardingWizardView {
     private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
         // Stop active reconnect loops before scanning new credentials.
         self.clearStagedGatewaySetupLink()
+        self.gatewayController.cancelPendingConnectionAttempts()
         self.scannerScanID = self.scannerResultHandoff.beginScan()
         self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
