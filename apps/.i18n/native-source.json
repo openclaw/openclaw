@@ -10667,7 +10667,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 7,
+      "line": 8,
       "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
       "source": "Trust this gateway?",
       "surface": "apple",
@@ -10675,7 +10675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 21,
+      "line": 22,
       "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -10683,7 +10683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 27,
+      "line": 28,
       "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
       "source": "Trust and connect",
       "surface": "apple",

@@ -913,7 +913,7 @@ struct RootTabs: View {
                     .environment(self.voiceWake)
                     .environment(self.gatewayController)
             }
-            .gatewayTrustPromptAlert()
+            .gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)
             .deepLinkAgentPromptAlert()
             .execApprovalPromptDialog(
                 suppressedApprovalID: self.activeExecApprovalPromptSuppressionID)
