@@ -7974,6 +7974,26 @@
       "translated": "\\(user)@\\(host):\\(port)"
     },
     {
+      "id": "native.apple.cfc2509b8bbcf1d7",
+      "source": "OpenClaw Gateway \\(version) is ready.",
+      "translated": "OpenClaw Gateway \\(version)이 준비되었습니다."
+    },
+    {
+      "id": "native.apple.9b767e46895714f9",
+      "source": "OpenClaw Gateway is not installed yet.",
+      "translated": "OpenClaw Gateway가 아직 설치되지 않았습니다."
+    },
+    {
+      "id": "native.apple.b4dc58a1b294e140",
+      "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
+      "translated": "OpenClaw Gateway를 확인할 수 없습니다. 설정에서 복구합니다."
+    },
+    {
+      "id": "native.apple.4088056ae7b0f3b4",
+      "source": "Gateway \\(found) does not match app \\(required). Setup will update it.",
+      "translated": "Gateway \\(found)이 앱 \\(required)과 일치하지 않습니다. 설정에서 업데이트합니다."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "카메라"
@@ -10229,29 +10249,54 @@
       "translated": "OpenClaw에 오신 것을 환영합니다"
     },
     {
-      "id": "native.apple.69f81c58c14a5df4",
-      "source": "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.",
-      "translated": "OpenClaw는 WhatsApp 또는 Telegram에 연결할 수 있는 강력한 개인용 AI 어시스턴트입니다."
+      "id": "native.apple.dd7411f18b0fe203",
+      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
+      "translated": "OpenClaw는 개인 AI 어시스턴트입니다. 질문에 답하고, 파일과 앱을 다루며, 사용자가 제어하는 Gateway를 통해 WhatsApp 및 Telegram 같은 서비스에 연결할 수 있습니다."
     },
     {
-      "id": "native.apple.e75671ec2ae4bf9d",
-      "source": "Security notice",
-      "translated": "보안 알림"
+      "id": "native.apple.86e4509eb0626ec8",
+      "source": "Ask, create, and automate",
+      "translated": "질문하고, 만들고, 자동화하기"
     },
     {
-      "id": "native.apple.c4778e8647a5aa9f",
-      "source": "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, including running commands, reading/writing files, and capturing screenshots — depending on the permissions you grant.\n\nOnly enable OpenClaw if you understand the risks and trust the prompts and integrations you use.",
-      "translated": "연결된 AI 에이전트(예: Claude)는 사용자가 부여한 권한에 따라 명령 실행, 파일 읽기/쓰기, 스크린샷 캡처를 포함해 Mac에서 강력한 작업을 트리거할 수 있습니다.\n\n위험을 이해하고 사용하는 프롬프트와 통합을 신뢰하는 경우에만 OpenClaw를 활성화하세요."
+      "id": "native.apple.a6950fed99ae450d",
+      "source": "Give your assistant tasks and let it help across your Mac.",
+      "translated": "어시스턴트에게 작업을 맡기고 Mac 전반에서 도움을 받으세요."
     },
     {
-      "id": "native.apple.9fb535bde270a73e",
-      "source": "Choose your Gateway",
-      "translated": "Gateway 선택"
+      "id": "native.apple.16ab10ed9293b718",
+      "source": "Connect the tools you use",
+      "translated": "사용하는 도구 연결하기"
     },
     {
-      "id": "native.apple.16dfe3ecc39e7bd5",
-      "source": "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.",
-      "translated": "OpenClaw는 계속 실행되는 단일 Gateway를 사용합니다. 이 Mac을 선택하거나, 주변에서 발견된 gateway에 연결하거나, 나중에 구성하세요."
+      "id": "native.apple.687c1c2abdb8581e",
+      "source": "Bring conversations and services together in one assistant.",
+      "translated": "대화와 서비스를 하나의 어시스턴트로 모으세요."
+    },
+    {
+      "id": "native.apple.caf822c2d393914f",
+      "source": "Stay in control",
+      "translated": "제어 유지하기"
+    },
+    {
+      "id": "native.apple.203bfa5e80135faa",
+      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
+      "translated": "Gateway가 실행될 위치와 OpenClaw가 받을 권한을 선택하세요."
+    },
+    {
+      "id": "native.apple.fb64a5b187cfdc15",
+      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "translated": "OpenClaw는 사용자가 활성화한 권한과 서비스를 사용해 작업을 수행할 수 있습니다. 프롬프트를 검토하고 신뢰하는 도구만 연결하세요."
+    },
+    {
+      "id": "native.apple.2033d33228ce52d7",
+      "source": "Where should OpenClaw run?",
+      "translated": "OpenClaw를 어디에서 실행할까요?"
+    },
+    {
+      "id": "native.apple.4791cce2ae762f19",
+      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
+      "translated": "가장 간단한 설정을 위해 이 Mac에서 Gateway를 실행하세요. OpenClaw가 이를 설치하고 계속 실행되도록 유지합니다."
     },
     {
       "id": "native.apple.300a583f28880928",
@@ -10434,39 +10479,44 @@
       "translated": "상태 새로 고침"
     },
     {
-      "id": "native.apple.507f071d2b76be9e",
-      "source": "Install the CLI",
-      "translated": "CLI 설치"
+      "id": "native.apple.8d7590f1d8f61a1d",
+      "source": "Setting up OpenClaw",
+      "translated": "OpenClaw 설정 중"
     },
     {
-      "id": "native.apple.5ced9b0fad1555e0",
-      "source": "Required for local mode: installs `openclaw` so launchd can run the gateway.",
-      "translated": "로컬 모드에 필요: launchd가 Gateway를 실행할 수 있도록 `openclaw`를 설치합니다."
+      "id": "native.apple.e88512a0fe7fb140",
+      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
+      "translated": "OpenClaw가 로컬 Gateway와 관리형 런타임을 설치하고 있습니다."
     },
     {
-      "id": "native.apple.fa55cb789ef49397",
-      "source": "Install CLI",
-      "translated": "CLI 설치"
+      "id": "native.apple.0c05ab4b362710de",
+      "source": "Checking existing setup…",
+      "translated": "기존 설정 확인 중…"
     },
     {
-      "id": "native.apple.03ab2f6a2e08734d",
-      "source": "Reinstall CLI",
-      "translated": "CLI 다시 설치"
+      "id": "native.apple.56b68eb592ecf449",
+      "source": "Installing the Gateway…",
+      "translated": "Gateway 설치 중…"
     },
     {
-      "id": "native.apple.d977c700e4ece7fb",
-      "source": "Copy install command",
-      "translated": "설치 명령 복사"
+      "id": "native.apple.80155398d97fbe63",
+      "source": "Gateway installed",
+      "translated": "Gateway 설치됨"
     },
     {
-      "id": "native.apple.e6a9668517354178",
-      "source": "Installed at \\(loc)",
-      "translated": "\\(loc)에 설치됨"
+      "id": "native.apple.2d2acbf2e16f8604",
+      "source": "Retry setup",
+      "translated": "설정 다시 시도"
     },
     {
-      "id": "native.apple.ac9f9e9da6ae6605",
-      "source": "Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).\nRerun anytime to reinstall or update.",
-      "translated": "사용자 공간 Node 22.19+ 런타임 및 CLI를 설치합니다(Homebrew 불필요).\n다시 설치하거나 업데이트하려면 언제든지 다시 실행하세요."
+      "id": "native.apple.4d58294df8d0b1e6",
+      "source": "Check again",
+      "translated": "다시 확인"
+    },
+    {
+      "id": "native.apple.15cfa96c75b57b04",
+      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
+      "translated": "개인 사용자 공간 설치를 사용합니다. Terminal, 관리자 권한 또는 Homebrew가 필요하지 않습니다."
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10672,6 +10722,21 @@
       "id": "native.apple.5ad203347ffbe0e8",
       "source": "Retry",
       "translated": "다시 시도"
+    },
+    {
+      "id": "native.apple.4850230e903ad303",
+      "source": "Setup is paused",
+      "translated": "설정이 일시 중지됨"
+    },
+    {
+      "id": "native.apple.860797a4ad8455d2",
+      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
+      "translated": "로컬 Gateway를 시작하고 설정을 계속하려면 OpenClaw를 재개하세요."
+    },
+    {
+      "id": "native.apple.9781249acc361d32",
+      "source": "Resume setup",
+      "translated": "설정 재개"
     },
     {
       "id": "native.apple.48cc28b5b02b9140",

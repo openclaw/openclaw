@@ -16,6 +16,10 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readBuildArtifactsTestboxWorkflow() {
+  return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
+}
+
 function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
@@ -287,10 +291,19 @@ describe("ci workflow guards", () => {
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
+    const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(source).toContain("createNodeTestShardBundles");
     expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(
+      buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
+        (step: { name?: string }) => step.name === "Build dist on cache miss",
+      ).env.NODE_OPTIONS,
+    ).toBe("--max-old-space-size=16384");
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );
@@ -907,16 +920,18 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(ciWorkflowText).toContain(
-      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
-    );
+    expect(ciWorkflowText).toContain('runner: "blacksmith-16vcpu-ubuntu-2404"');
+    expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(runStep.run).toContain("--qa-profile smoke-ci");
     expect(runStep.run).toContain("--concurrency 8");
     expect(runStep.run).not.toContain("--category");
     expect(runStep.run).not.toContain("--allow-failures");
     expect(runStep.run).toContain("qa_exit_code=0");
     expect(runStep.run).toContain('exit "$qa_exit_code"');
-    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
+    expect(runStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(runStep.run).toContain("--max-old-space-size=16384");
+    expect(runStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
     expect(runStep.run).not.toContain("OPENAI_API_KEY");
     expect(runStep.run).toMatch(
       /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
