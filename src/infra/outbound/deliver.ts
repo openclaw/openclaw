@@ -1613,20 +1613,34 @@ async function deliverOutboundPayloadsCore(
           recorded.push(false);
           continue;
         }
-        const receiptIds = resultPlatformIds(delivery, { receiptOnly: true });
-        const coveredIndices =
-          receiptIds.size === 0
-            ? []
-            : reportedResults
-                .filter(
-                  (reported) =>
-                    availableReportedIndices.has(reported.resultIndex) &&
-                    results[reported.resultIndex]?.channel === delivery.channel &&
-                    [...resultPlatformIds(results[reported.resultIndex])].some((id) =>
-                      receiptIds.has(id),
-                    ),
-                )
-                .map((reported) => reported.resultIndex);
+        const receiptPartIds = (delivery.receipt?.parts ?? [])
+          .map((part) => part.platformMessageId?.trim())
+          .filter((id): id is string => Boolean(id && id !== "unknown" && id !== "suppressed"));
+        const receiptIds =
+          receiptPartIds.length > 0
+            ? receiptPartIds
+            : [...resultPlatformIds(delivery, { receiptOnly: true })];
+        const coveredIndices: number[] = [];
+        for (const receiptId of receiptIds) {
+          const matchingIndices = reportedResults
+            .filter(
+              (reported) =>
+                availableReportedIndices.has(reported.resultIndex) &&
+                !coveredIndices.includes(reported.resultIndex) &&
+                results[reported.resultIndex]?.channel === delivery.channel &&
+                resultPlatformIds(results[reported.resultIndex]).has(receiptId),
+            )
+            .map((reported) => reported.resultIndex);
+          // One receipt part covers one progress result. Repeated parts preserve
+          // aggregate multiplicity, while one constant platform ID cannot erase
+          // other successful sends that the final receipt does not aggregate.
+          const matchingIndex = options?.finalResultIsLastReported
+            ? matchingIndices.at(-1)
+            : matchingIndices[0];
+          if (matchingIndex !== undefined && !coveredIndices.includes(matchingIndex)) {
+            coveredIndices.push(matchingIndex);
+          }
+        }
         let reportedIndex: number | undefined;
         if (coveredIndices.length > 0) {
           reportedIndex = Math.min(...coveredIndices);

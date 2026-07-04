@@ -2314,6 +2314,103 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((result) => result.messageId)).toEqual(["push", "push"]);
   });
 
+  it("preserves repeated receipt IDs within one adapter invocation", async () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "line", messageId: "push" }],
+      kind: "text",
+    });
+    const sendPayload = vi.fn(
+      async (ctx: {
+        onDeliveryResult?: (result: {
+          channel: "line";
+          messageId: string;
+          receipt: typeof receipt;
+        }) => Promise<void> | void;
+      }) => {
+        const result = { channel: "line" as const, messageId: "push", receipt };
+        await ctx.onDeliveryResult?.(result);
+        await ctx.onDeliveryResult?.(result);
+        return result;
+      },
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ channel: "line", messageId: "unused" }),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "text plus media", channelData: { line: { mode: "custom" } } }],
+      queuePolicy: "required",
+    });
+
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.messageId)).toEqual(["push", "push"]);
+  });
+
+  it("replaces repeated progress IDs covered by aggregate receipt parts", async () => {
+    const aggregateReceipt = createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "line", messageId: "push" },
+        { channel: "line", messageId: "push" },
+      ],
+      kind: "text",
+    });
+    const sendPayload = vi.fn(
+      async (ctx: {
+        onDeliveryResult?: (result: { channel: "line"; messageId: string }) => Promise<void> | void;
+      }) => {
+        await ctx.onDeliveryResult?.({ channel: "line", messageId: "push" });
+        await ctx.onDeliveryResult?.({ channel: "line", messageId: "push" });
+        return { channel: "line" as const, messageId: "push", receipt: aggregateReceipt };
+      },
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "line",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "line",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async () => ({ channel: "line", messageId: "unused" }),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "line",
+      to: "U123",
+      payloads: [{ text: "two pushes", channelData: { line: { mode: "custom" } } }],
+      queuePolicy: "required",
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
+      "push",
+      "push",
+    ]);
+  });
+
   it("replaces per-message progress with one aggregate final receipt", async () => {
     const aggregateReceipt = createMessageReceiptFromOutboundResults({
       results: [
