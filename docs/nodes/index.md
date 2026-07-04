@@ -51,8 +51,14 @@ Notes:
   different role that pairing approval never granted.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
-- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
-  separate gateway-owned node pairing store.
+- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a
+  device-backed node it revokes the device's `node` role in `devices/paired.json`
+  and disconnects that device's node-role sessions — a mixed-role device keeps
+  its row and only loses the `node` role, while a node-only device row is
+  deleted. It also clears any matching entry from the separate gateway-owned node
+  pairing store. `operator.pairing` may remove non-operator node rows; a
+  device-token caller revoking its own node role on a mixed-role device
+  additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -177,6 +183,14 @@ Related:
 - [Node host CLI](/cli/node)
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
+
+### Local model inference
+
+A desktop or server node can expose chat-capable models from an Ollama server
+running on that node. Agents use the Ollama plugin's `node_inference` tool to
+discover installed models and run a bounded prompt remotely; the Gateway does
+not need direct network access to Ollama. See [Ollama node-local inference](/providers/ollama#node-local-inference)
+for setup, model filtering, and direct verification commands.
 
 ## Invoking commands
 

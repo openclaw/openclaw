@@ -63,7 +63,6 @@ export const th: TranslationMap = {
     docs: "เอกสาร",
     theme: "ธีม",
     colorMode: "โหมดสี",
-    colorModeOption: "โหมดสี: {mode}",
     resources: "ทรัพยากร",
     search: "ค้นหา",
     save: "บันทึก",
@@ -199,6 +198,7 @@ export const th: TranslationMap = {
     inherit: "สืบทอด",
     defaultOption: "ค่าเริ่มต้น ({value})",
     offExplicit: "ปิด (ระบุชัดเจน)",
+    auto: "auto",
     on: "เปิด",
     off: "ปิด",
     full: "เต็ม",
@@ -1297,6 +1297,8 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
+    commentaryToggle: "เก็บคำอธิบายหลังคำตอบสุดท้าย",
+    commentaryLabel: "คำอธิบาย",
     autoScrollMode: "โหมดเลื่อนอัตโนมัติ",
     autoScrollAlways: "เสมอ",
     autoScrollNearBottom: "ใกล้ด้านล่าง",
@@ -1315,6 +1317,9 @@ export const th: TranslationMap = {
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
     switchedSession: "สลับไปยัง {session} แล้ว",
+    sidebar: {
+      allSessions: "เซสชันทั้งหมด",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1341,6 +1346,11 @@ export const th: TranslationMap = {
       retry: "ลองอีกครั้ง",
       retrySend: "ลองส่งอีกครั้ง",
       retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
+    },
+    pairingQrExpired: {
+      title: "QR การจับคู่หมดอายุ",
+      reason: "เรียกใช้ /pair qr อีกครั้งเพื่อสร้างรหัสตั้งค่าใหม่",
+      badge: "หมดอายุ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1408,6 +1418,7 @@ export const th: TranslationMap = {
     jaJP: "日本語 (ญี่ปุ่น)",
     ko: "한국어 (เกาหลี)",
     fr: "Français (ฝรั่งเศส)",
+    hi: "हिन्दी (ฮินดี)",
     ar: "العربية (อาหรับ)",
     it: "Italiano (อิตาลี)",
     tr: "Türkçe (ตุรกี)",
@@ -1418,6 +1429,7 @@ export const th: TranslationMap = {
     vi: "Tiếng Việt (เวียดนาม)",
     nl: "Nederlands (ดัตช์)",
     fa: "فارسی (เปอร์เซีย)",
+    ru: "Русский (รัสเซีย)",
   },
   cron: {
     quickCreate: {
@@ -1585,6 +1597,7 @@ export const th: TranslationMap = {
       nextHeartbeat: "heartbeat ถัดไป",
       wakeModeHelp: "Now จะทริกเกอร์ทันที ส่วน Next heartbeat จะรอรอบถัดไป",
       payloadKind: "ต้องการให้รันอะไร?",
+      command: "Command",
       systemEvent: "โพสต์ข้อความไปยังไทม์ไลน์หลัก",
       agentTurn: "รันงานของผู้ช่วย (แยก)",
       systemEventHelp: "ส่งข้อความของคุณไปยังไทม์ไลน์หลักของเกตเวย์ (เหมาะสำหรับการเตือน/ทริกเกอร์)",

@@ -57,8 +57,10 @@ export const runWithModelFallbackMock = createMock();
 export const runEmbeddedAgentMock = createMock();
 export const runCliAgentMock = createMock();
 export const lookupContextTokensMock = createMock();
+export const getCliSessionBindingMock = createMock();
 export const getCliSessionIdMock = createMock();
 export const clearCliSessionMock = createMock();
+export const setCliSessionBindingMock = createMock();
 export const updateSessionStoreMock = createMock();
 export const resolveCronSessionMock = createMock();
 export const logWarnMock = createMock();
@@ -69,6 +71,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const queueCronMessageToolDeliveryAwarenessMock = createMock();
 export const cleanupDirectCronSessionMock = createMock();
 export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
@@ -77,7 +80,10 @@ export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
+export const callGatewayMock = createMock();
 export const ensureRuntimePluginsLoadedMock = createMock();
+export const listWebSearchProvidersMock = createMock();
+export const resolveWebSearchProviderIdMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -159,6 +165,11 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
 
+vi.mock("../../web-search/runtime.js", () => ({
+  listWebSearchProviders: listWebSearchProvidersMock,
+  resolveWebSearchProviderId: resolveWebSearchProviderIdMock,
+}));
+
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   canExecRequestNode: vi.fn(() => false),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
@@ -230,6 +241,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSubagentModelFallbacksOverride: resolveSubagentModelFallbacksOverrideMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
+  getCliSessionBinding: getCliSessionBindingMock,
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
@@ -287,11 +299,16 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
   clearCliSession: clearCliSessionMock,
+  setCliSessionBinding: setCliSessionBindingMock,
   setCliSessionId: vi.fn(),
 }));
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
+}));
+
+vi.mock("../../gateway/call.runtime.js", () => ({
+  callGateway: callGatewayMock,
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => ({
@@ -312,6 +329,7 @@ vi.mock("./run-delivery.runtime.js", async () => {
     cleanupDirectCronSession: cleanupDirectCronSessionMock,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
+    queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
   };
 });
 
@@ -503,6 +521,8 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
   clearCliSessionMock.mockReset();
+  setCliSessionBindingMock.mockReset();
+  getCliSessionBindingMock.mockReturnValue(undefined);
   getCliSessionIdMock.mockReturnValue(undefined);
   countActiveDescendantRunsMock.mockReset();
   countActiveDescendantRunsMock.mockReturnValue(0);
@@ -625,12 +645,15 @@ function resetRunOutcomeMocks(): void {
           !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
+      cronRunSessionCleanupAttempted: false,
       summary,
       outputText,
       synthesizedText,
       deliveryPayloads,
     }),
   );
+  queueCronMessageToolDeliveryAwarenessMock.mockReset();
+  queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
   cleanupDirectCronSessionMock.mockReset();
   cleanupDirectCronSessionMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
@@ -648,6 +671,8 @@ function resetRunSessionMocks(): void {
   updateSessionStoreMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+  callGatewayMock.mockReset();
+  callGatewayMock.mockResolvedValue({ ok: true, deleted: true });
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }
@@ -661,6 +686,10 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   setSessionRuntimeModelMock.mockReturnValue(undefined);
   logWarnMock.mockReset();
   ensureRuntimePluginsLoadedMock.mockReset();
+  listWebSearchProvidersMock.mockReset();
+  listWebSearchProvidersMock.mockReturnValue([{ id: "duckduckgo" }]);
+  resolveWebSearchProviderIdMock.mockReset();
+  resolveWebSearchProviderIdMock.mockReturnValue("duckduckgo");
 }
 
 export function clearFastTestEnv(): string | undefined {

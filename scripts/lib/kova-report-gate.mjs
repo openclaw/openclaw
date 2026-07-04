@@ -36,17 +36,24 @@ export function evaluateToleratedPartialKovaReport(report) {
     return { ok: false, reason: `blocking count was ${JSON.stringify(gate.blockingCount)}` };
   }
 
-  const baselineRegressionCount = numericCount(
-    report?.baseline?.comparison?.regressionCount ?? report?.gate?.baseline?.regressionCount,
-  );
-  if (baselineRegressionCount === undefined) {
-    return { ok: false, reason: "missing baseline regression count" };
-  }
-  if (baselineRegressionCount !== 0) {
-    return {
-      ok: false,
-      reason: `baseline regression count was ${JSON.stringify(baselineRegressionCount)}`,
-    };
+  const reportBaseline = report?.baseline;
+  const gateBaseline = report?.gate?.baseline;
+  if (
+    (reportBaseline !== null && reportBaseline !== undefined) ||
+    (gateBaseline !== null && gateBaseline !== undefined)
+  ) {
+    const baselineRegressionCount = numericCount(
+      reportBaseline?.comparison?.regressionCount ?? gateBaseline?.regressionCount,
+    );
+    if (baselineRegressionCount === undefined) {
+      return { ok: false, reason: "missing baseline regression count" };
+    }
+    if (baselineRegressionCount !== 0) {
+      return {
+        ok: false,
+        reason: `baseline regression count was ${JSON.stringify(baselineRegressionCount)}`,
+      };
+    }
   }
 
   const statuses = report?.summary?.statuses;

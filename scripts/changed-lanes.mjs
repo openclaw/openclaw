@@ -35,9 +35,6 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
-  "apps/ios/Config/Version.xcconfig",
-  "apps/ios/fastlane/metadata/en-US/release_notes.txt",
-  "apps/ios/version.json",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
@@ -505,6 +502,9 @@ function toSnakeCase(value) {
 }
 
 function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -515,8 +515,8 @@ function parseArgs(argv) {
     help: false,
     paths: [],
   };
-  return parseFlagArgs(
-    argv,
+  const parsed = parseFlagArgs(
+    flagArgv,
     args,
     [
       stringFlag("--base", "base"),
@@ -530,14 +530,16 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
-        if (arg === "--") {
-          return "handled";
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
         }
         target.paths.push(arg);
         return "handled";
       },
     },
   );
+  parsed.paths.push(...explicitPaths);
+  return parsed;
 }
 
 function printUsage() {
@@ -586,7 +588,13 @@ function printHuman(result) {
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (args.help) {
     printUsage();
     process.exit(0);

@@ -1,10 +1,10 @@
-// Doctor heartbeat template repair tests cover migration and repair of heartbeat prompt templates.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeHeartbeatTemplateForRepair,
+  collectHeartbeatTemplateHealthFindings,
   maybeRepairHeartbeatTemplate,
 } from "./doctor-heartbeat-template-repair.js";
 
@@ -190,6 +190,71 @@ Add short tasks below the comments only when you want the agent to check somethi
     );
   });
 
+  it("collects a finding for pure dirty templates", async () => {
+    const { workspaceDir, heartbeatPath } = await makeWorkspaceWithHeartbeat(`\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`);
+
+    const findings = await collectHeartbeatTemplateHealthFindings({
+      agents: { defaults: { workspace: workspaceDir } },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/heartbeat-template",
+        severity: "warning",
+        path: heartbeatPath,
+        requirement: "legacy-template",
+        fixHint: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+  });
+
+  it("collects a manual finding when dirty templates include user content", async () => {
+    const { workspaceDir, heartbeatPath } = await makeWorkspaceWithHeartbeat(`\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+- Check email
+`);
+
+    const findings = await collectHeartbeatTemplateHealthFindings({
+      agents: { defaults: { workspace: workspaceDir } },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/heartbeat-template",
+        severity: "warning",
+        path: heartbeatPath,
+        requirement: "legacy-template-with-custom-content",
+        fixHint: expect.stringContaining("Remove the fenced template"),
+      }),
+    ]);
+  });
+
+  it("returns no findings for clean templates or missing heartbeat files", async () => {
+    const { workspaceDir } = await makeWorkspaceWithHeartbeat(`# Keep this file empty.
+`);
+    const missingWorkspaceDir = await makeTempRoot();
+
+    await expect(
+      collectHeartbeatTemplateHealthFindings({
+        agents: { defaults: { workspace: workspaceDir } },
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      collectHeartbeatTemplateHealthFindings({
+        agents: { defaults: { workspace: missingWorkspaceDir } },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("rewrites pure dirty templates to the clean runtime template", async () => {
     const { workspaceDir, heartbeatPath } = await makeWorkspaceWithHeartbeat(`\`\`\`markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
@@ -207,15 +272,11 @@ Add short tasks below the comments only when you want the agent to check somethi
       shouldRepair: true,
     });
 
-    await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(
-      `${[
-        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
-        "",
-        "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
-        "",
-        "# Add tasks below when you want the agent to check something periodically.",
-      ].join("\n")}\n`,
+    const cleanTemplate = await fs.readFile(
+      path.resolve("src", "agents", "templates", "HEARTBEAT.md"),
+      "utf-8",
     );
+    await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(cleanTemplate);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("clean heartbeat template"),
       "Doctor changes",

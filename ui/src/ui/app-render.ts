@@ -29,9 +29,12 @@ import {
 } from "./app-render.helpers.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { copyToClipboard } from "./chat/clipboard.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
-  renderChatSessionSelect,
+  renderChatQuotaPill,
+  renderSidebarAgentFilter,
+  renderSidebarSessionSearch,
   resolveChatAgentFilterId,
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
@@ -53,6 +56,7 @@ import {
   resetToolsEffectiveState,
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
+  setDefaultAgent,
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
@@ -66,7 +70,6 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
-  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigRawValue,
   updateConfigFormValue,
@@ -174,12 +177,15 @@ import {
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  resolveUiSelectedGlobalAgentId,
+  uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
 import "./components/dashboard-header.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
@@ -542,16 +548,89 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         !isCronSessionKey(row.key) &&
         !isSubagentSessionKey(row.key) &&
         !row.spawnedBy &&
+        // The active session renders as the pinned row above this list.
+        !isActiveSidebarSessionRow(state, row.key) &&
         (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 5);
+    .slice(0, 9);
 }
 
-function renderSidebarSessions(state: AppViewState) {
-  const collapsed = state.settings.navCollapsed;
+// Session keys have alias spellings ("main" vs "agent:<id>:main", and "global"
+// for the selected agent's global chat); active-row checks must use the
+// host-aware matcher so every spelling counts as the same session.
+function isActiveSidebarSessionRow(state: AppViewState, rowKey: string): boolean {
+  return uiSessionRowMatchesSelectedChat(state, rowKey, state.sessionKey);
+}
+
+// Generic Chat entry for sentinel selections ("unknown"/empty sessionKey)
+// where no pinned session row can render; keeps a deterministic way into the
+// open chat from every tab.
+function renderSidebarChatFallbackRow(state: AppViewState) {
+  return html`
+    <a
+      href=${pathForTab("chat", state.basePath)}
+      class="sidebar-recent-session ${state.tab === "chat" ? "sidebar-recent-session--active" : ""}"
+      @click=${(event: MouseEvent) => {
+        if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
+          return;
+        }
+        event.preventDefault();
+        state.setTab("chat" as import("./navigation.ts").Tab);
+      }}
+    >
+      <span class="sidebar-recent-session__body">
+        <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
+      </span>
+    </a>
+  `;
+}
+
+// Pinned current-session row, derived from sessionKey alone: with no dedicated
+// chat nav item this is the guaranteed way back to the open chat, so it must
+// survive filtered, capped, or replaced session lists (archived/global/cron
+// active sessions included).
+function resolveSidebarActiveRow(state: AppViewState): GatewaySessionRow | null {
+  const activeKey = normalizeOptionalString(state.sessionKey);
+  if (!activeKey || activeKey.toLowerCase() === "unknown") {
+    return null;
+  }
+  // Exact key equivalence wins; the looser host-aware global alias is only
+  // trusted when the row source is scoped to the active agent, so another
+  // agent's "global" row can never lend its metadata to the pinned entry.
+  // Keep the matched row's metadata but the selected key: an aliased row key
+  // (e.g. "global") in the pinned anchor's href would drop the agent scope on
+  // middle-click / open-in-new-tab navigation.
+  const activeAgentId = normalizeAgentId(
+    parseAgentSessionKey(activeKey)?.agentId ?? resolveUiSelectedGlobalAgentId(state),
+  );
+  const findActiveRow = (rows: readonly GatewaySessionRow[], scopeAgentId: string | null) =>
+    rows.find((row) => areUiSessionKeysEquivalent(row.key, activeKey)) ??
+    (scopeAgentId === activeAgentId
+      ? rows.find((row) => uiSessionRowMatchesSelectedChat(state, row.key, activeKey))
+      : undefined);
+  const fromResult = findActiveRow(
+    state.sessionsResult?.sessions ?? [],
+    state.sessionsResultAgentId ? normalizeAgentId(state.sessionsResultAgentId) : null,
+  );
+  if (fromResult) {
+    return { ...fromResult, key: activeKey };
+  }
+  for (const [agentId, rows] of Object.entries(state.chatAgentSessionRowsByAgent ?? {})) {
+    const cached = findActiveRow(rows, normalizeAgentId(agentId));
+    if (cached) {
+      return { ...cached, key: activeKey };
+    }
+  }
+  return { key: activeKey, kind: "direct", updatedAt: null };
+}
+
+// `collapsed` is the effective rail state (persisted setting minus an open
+// mobile drawer), not the raw setting: an open drawer must show the sessions.
+function renderSidebarSessions(state: AppViewState, collapsed: boolean) {
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
+  const activeRow = collapsed ? null : resolveSidebarActiveRow(state);
   const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
   const newSessionTitle = !state.connected
     ? "Connect to create a new session"
@@ -583,14 +662,7 @@ function renderSidebarSessions(state: AppViewState) {
               >${t("chat.runControls.newSession")}</span
             >`}
       </button>
-      <div class="sidebar-session-select ${collapsed ? "sidebar-session-select--collapsed" : ""}">
-        ${renderChatSessionSelect(state, switchChatSession, {
-          compact: collapsed,
-          sessionSwitcherOnly: true,
-          surface: "sidebar",
-        })}
-      </div>
-      ${collapsed || recent.length === 0
+      ${collapsed
         ? nothing
         : html`
             <div
@@ -599,35 +671,66 @@ function renderSidebarSessions(state: AppViewState) {
                 : ""}"
               aria-label=${t("overview.cards.recentSessions")}
             >
-              <button
-                class="sidebar-recent-sessions__label"
-                type="button"
-                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
-                @click=${() => {
-                  state.applySettings({
-                    ...state.settings,
-                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
-                  });
+              <div class="sidebar-recent-sessions__head">
+                <button
+                  class="sidebar-recent-sessions__label"
+                  type="button"
+                  aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
+                  @click=${() => {
+                    state.applySettings({
+                      ...state.settings,
+                      recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+                    });
+                  }}
+                >
+                  <span class="sidebar-recent-sessions__label-text"
+                    >${t("usage.sessions.recentShort")}</span
+                  >
+                  <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+                </button>
+                ${renderSidebarSessionSearch(state, switchChatSession)}
+              </div>
+              ${renderSidebarAgentFilter(state, switchChatSession)}
+              ${activeRow
+                ? renderSidebarRecentSession(state, activeRow)
+                : renderSidebarChatFallbackRow(state)}
+              ${recent.length === 0
+                ? nothing
+                : html`
+                    <div class="sidebar-recent-sessions__list">
+                      ${recent.map((row) => renderSidebarRecentSession(state, row))}
+                    </div>
+                  `}
+              <a
+                href=${pathForTab("sessions", state.basePath)}
+                class="sidebar-recent-sessions__all"
+                @click=${(event: MouseEvent) => {
+                  if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  state.setTab("sessions" as import("./navigation.ts").Tab);
                 }}
               >
-                <span class="sidebar-recent-sessions__label-text"
-                  >${t("usage.sessions.recentShort")}</span
+                <span>${t("chat.sidebar.allSessions")}</span>
+                <span class="sidebar-recent-sessions__all-icon" aria-hidden="true"
+                  >${icons.chevronRight}</span
                 >
-                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-              </button>
-              <div class="sidebar-recent-sessions__list">
-                ${recent.map((row) => renderSidebarRecentSession(state, row))}
-              </div>
+              </a>
             </div>
           `}
     </section>
   `;
 }
 
+function hasModifierKey(event: MouseEvent): boolean {
+  return event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+}
+
 function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow) {
-  const active = row.key === state.sessionKey;
+  const active = isActiveSidebarSessionRow(state, row.key);
   const label = resolveSessionDisplayName(row.key, row);
-  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "";
   const href = `${pathForTab("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
   return html`
     <a
@@ -636,27 +739,19 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
       data-session-key=${row.key}
       title=${`${label} · ${row.key}`}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (event.defaultPrevented || event.button !== 0 || hasModifierKey(event)) {
           return;
         }
         event.preventDefault();
-        if (row.key !== state.sessionKey) {
+        if (!isActiveSidebarSessionRow(state, row.key)) {
           switchChatSession(state, row.key);
         }
         state.setTab("chat" as import("./navigation.ts").Tab);
       }}
     >
-      <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
       <span class="sidebar-recent-session__body">
         <span class="sidebar-recent-session__name">${label}</span>
-        <span class="sidebar-recent-session__meta">${meta}</span>
+        ${meta ? html`<span class="sidebar-recent-session__meta">${meta}</span>` : nothing}
       </span>
       ${row.hasActiveRun
         ? html`<span
@@ -1824,10 +1919,12 @@ export function renderApp(state: AppViewState) {
               : typeof agentsDefaults.thinkingLevel === "string"
                 ? agentsDefaults.thinkingLevel
                 : "off";
+          const resolvedFastMode =
+            activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults.fastMode;
           const fastMode =
-            typeof activeSession?.fastMode === "boolean"
-              ? activeSession.fastMode
-              : agentsDefaults.fastMode === true;
+            resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean"
+              ? resolvedFastMode
+              : false;
           return renderQuickSettings({
             currentModel,
             thinkingLevel,
@@ -1842,8 +1939,8 @@ export function renderApp(state: AppViewState) {
                 requestHostUpdate?.(),
               );
             },
-            onFastModeToggle: () => {
-              void patchSession(state, state.sessionKey, { fastMode: !fastMode }).then(() =>
+            onFastModeChange: (mode) => {
+              void patchSession(state, state.sessionKey, { fastMode: mode }).then(() =>
                 requestHostUpdate?.(),
               );
             },
@@ -2245,7 +2342,7 @@ export function renderApp(state: AppViewState) {
     }, 160);
   };
   const copyChatWorkspacePath = (filePath: string) => {
-    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+    void copyToClipboard(filePath);
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {
@@ -2541,7 +2638,6 @@ export function renderApp(state: AppViewState) {
                         alt="OpenClaw"
                       />
                       <span class="sidebar-brand__copy">
-                        <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
                         <span class="sidebar-brand__title">OpenClaw</span>
                       </span>
                     `}
@@ -2568,9 +2664,13 @@ export function renderApp(state: AppViewState) {
               </button>
             </div>
             <div class="sidebar-shell__body">
-              ${renderSidebarSessions(state)}
+              ${renderSidebarSessions(state, navCollapsed)}
               <nav class="sidebar-nav">
-                ${TAB_GROUPS.map((group) => {
+                ${TAB_GROUPS.filter(
+                  // The expanded sidebar owns chat entry points via the sessions
+                  // section; the collapsed rail keeps the chat tab icon reachable.
+                  (group) => navCollapsed || group.label !== "chat",
+                ).map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
                   const showItems = navCollapsed || !isGroupCollapsed;
 
@@ -2609,6 +2709,13 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="sidebar-shell__footer">
               <div class="sidebar-utility-group">
+                ${(() => {
+                  // Cross-tab provider quota surface (#93041): the composer
+                  // pill only exists on the chat tab, the sidebar footer keeps
+                  // it reachable everywhere.
+                  const quotaPill = navCollapsed ? "" : renderChatQuotaPill(state);
+                  return quotaPill ? html`<div class="sidebar-quota">${quotaPill}</div>` : nothing;
+                })()}
                 <a
                   class="nav-item nav-item--external sidebar-utility-link"
                   href="https://docs.openclaw.ai"
@@ -2625,22 +2732,14 @@ export function renderApp(state: AppViewState) {
                     : nothing}
                 </a>
                 <div class="sidebar-mode-switch">${renderTopbarThemeModeToggle(state)}</div>
-                ${(() => {
-                  const version = state.hello?.server?.version ?? "";
-                  return version
-                    ? html`
-                        <div class="sidebar-version" title=${`v${version}`}>
-                          ${!navCollapsed
-                            ? html`
-                                <span class="sidebar-version__label">${t("common.version")}</span>
-                                <span class="sidebar-version__text">v${version}</span>
-                                ${renderSidebarConnectionStatus(state)}
-                              `
-                            : html` ${renderSidebarConnectionStatus(state)} `}
-                        </div>
-                      `
-                    : nothing;
-                })()}
+                <div class="sidebar-status">
+                  ${renderSidebarConnectionStatus(state)}
+                  ${navCollapsed
+                    ? nothing
+                    : html`<span class="sidebar-status__text"
+                        >${state.connected ? t("common.online") : t("common.offline")}</span
+                      >`}
+                </div>
               </div>
             </div>
           </div>
@@ -3478,7 +3577,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePathResult, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  stageDefaultAgentConfigEntry(state, agentId);
+                  void setDefaultAgent(state, agentId);
                 },
               }),
             )
@@ -3555,7 +3654,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onClawHubDetailOpen: (slug) => void loadClawHubDetail(state, slug),
                 onClawHubDetailClose: () => closeClawHubDetail(state),
-                onClawHubInstall: (slug) => void installFromClawHub(state, slug),
+                onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
+                  void installFromClawHub(state, slug, acknowledgeClawHubRisk, version),
               }),
             )
           : nothing}
@@ -3808,7 +3908,7 @@ export function renderApp(state: AppViewState) {
                     onSearch: searchChatWorkspaceFiles,
                     onOpenArtifact: openChatWorkspaceArtifact,
                   },
-                  autoExpandToolCalls: false,
+                  autoExpandToolCalls: state.chatVerboseLevel === "full",
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
@@ -3848,6 +3948,15 @@ export function renderApp(state: AppViewState) {
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },
+                  replyTarget: state.chatReplyTarget ?? null,
+                  onClearReply: () => {
+                    state.chatReplyTarget = null;
+                    requestHostUpdate?.();
+                  },
+                  onSetReply: (target) => {
+                    state.chatReplyTarget = target;
+                    requestHostUpdate?.();
+                  },
                   onNewSession: () => void createChatSession(state, { source: "user" }),
                   onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
@@ -3864,6 +3973,7 @@ export function renderApp(state: AppViewState) {
                         sessionKey: state.sessionKey,
                       });
                       state.chatSideResult = null;
+                      state.chatReplyTarget = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
                         {
@@ -3899,6 +4009,7 @@ export function renderApp(state: AppViewState) {
                   },
                   showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                   onScrollToBottom: () => state.scrollToBottom(),
+                  onAssistantAttachmentLoaded: () => state.scheduleChatScroll(),
                   // Sidebar props for tool output viewing
                   sidebarOpen: state.sidebarOpen,
                   sidebarContent: state.sidebarContent,

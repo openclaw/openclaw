@@ -144,6 +144,10 @@
       "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",
       "default": "./src/provider-auth-runtime.ts"
     },
+    "./provider-auth-login-flow-runtime": {
+      "types": "./dist/src/plugin-sdk/provider-auth-login-flow-runtime.d.ts",
+      "default": "./src/provider-auth-login-flow-runtime.ts"
+    },
     "./provider-env-vars": {
       "types": "./dist/src/plugin-sdk/provider-env-vars.d.ts",
       "default": "./src/provider-env-vars.ts"

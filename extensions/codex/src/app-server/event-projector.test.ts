@@ -18,6 +18,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -278,6 +279,11 @@ describe("CodexAppServerEventProjector", () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
 
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "" },
+      }),
+    );
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
     await projector.handleNotification(
@@ -305,7 +311,10 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
+      { text: "hel", delta: "hel" },
+      { text: "hello", delta: "lo" },
+    ]);
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
@@ -321,7 +330,13 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("streams final-answer assistant deltas into partial replies", async () => {
-    const { onPartialReply, projector } = await createProjectorWithAssistantHooks();
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+      onPartialReply,
+    });
 
     await projector.handleNotification(
       forCurrentTurn("item/started", {
@@ -340,6 +355,79 @@ describe("CodexAppServerEventProjector", () => {
     expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
       { text: "hel", delta: "hel" },
       { text: "hello", delta: "lo" },
+    ]);
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
+      { stream: "assistant", data: { text: "hel", delta: "hel" } },
+      { stream: "assistant", data: { text: "hello", delta: "lo" } },
+    ]);
+  });
+
+  it("streams assistant deltas when the app-server omits the item phase", async () => {
+    // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
+    // "final_answer" phase. These surface on the replaceable agent-event path;
+    // legacy append-oriented partial callbacks stay quiet.
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
+      { stream: "assistant", data: { text: "hel", delta: "hel", replaceable: true } },
+      { stream: "assistant", data: { text: "hello", delta: "lo", replaceable: true } },
+    ]);
+  });
+
+  it("marks partial replacement when an unphased intermediate item is superseded by a final item", async () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      onAgentEvent,
+      onPartialReply,
+    });
+
+    await projector.handleNotification(agentMessageDelta("coordination ", "msg-intermediate"));
+    await projector.handleNotification(agentMessageDelta("draft", "msg-intermediate"));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("final ", "msg-final"));
+    await projector.handleNotification(agentMessageDelta("answer", "msg-final"));
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
+      {
+        stream: "assistant",
+        data: { text: "coordination ", delta: "coordination ", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { text: "coordination draft", delta: "draft", replaceable: true },
+      },
+      {
+        stream: "assistant",
+        data: { text: "final ", delta: "", replace: true, replaceable: true },
+      },
+      { stream: "assistant", data: { text: "final answer", delta: "answer", replaceable: true } },
     ]);
   });
 
@@ -656,6 +744,47 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
   });
 
+  it("prefers gateway-managed image media when the typed event arrives first", async () => {
+    await withTempDir("openclaw-codex-media-state-", async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const projector = await createProjector();
+      const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
+
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "imageGeneration",
+            id: "ig_123",
+            status: "completed",
+            revisedPrompt: "A tiny blue square",
+            result: tinyPngBase64,
+            savedPath,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "image_generation_call",
+            id: "ig_123",
+            status: "generating",
+            result: tinyPngBase64,
+          },
+        }),
+      );
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      const mediaUrl = result.toolMediaUrls?.[0];
+
+      expect(result.toolMediaUrls).toHaveLength(1);
+      expect(mediaUrl).not.toBe(savedPath);
+      expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+      await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+        Buffer.from(tinyPngBase64, "base64"),
+      );
+    });
+  });
+
   it("preserves distinct raw image-generation items with identical image bytes", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
     tempDirs.add(stateDir);
@@ -705,6 +834,19 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(result.toolMediaUrls).toStrictEqual([]);
+  });
+
+  it("propagates message-tool-only source reply delivery telemetry", async () => {
+    const projector = await createProjector();
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
   });
 
   it("does not promote repeated tool progress text to the final assistant reply", async () => {
@@ -1041,6 +1183,8 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    // Phase-less snapshots stay on the replaceable agent-event path so legacy
+    // append-only channel previews do not render superseded coordination text.
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",

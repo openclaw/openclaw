@@ -12,20 +12,29 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import type { CliOutput } from "./cli-output.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
+import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
+import type {
+  CliReusableSession,
+  PreparedCliRunContext,
+  RunCliAgentParams,
+} from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./embedded-agent-helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -82,6 +91,12 @@ function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
 }
 
+function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
+  return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
+    ? reusableCliSession.sessionId
+    : undefined;
+}
+
 function shouldRetryFreshCliSessionAfterFailover(params: {
   error: FailoverError;
   hasHistoryPrompt: boolean;
@@ -94,8 +109,12 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
       return true;
     case "unknown":
       return params.error.code === "cli_unknown_empty_failure";
+    case "empty_response":
+      return params.error.code === "cli_unknown_empty_failure";
     case "timeout":
       return params.error.code === "cli_no_output_timeout";
+    case "context_overflow":
+      return params.error.code === "cli_context_overflow";
     default:
       return false;
   }
@@ -238,9 +257,11 @@ async function runCliAgentEndHook(
   runAgentEndSideEffects(hookParams);
 }
 
-async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
-  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscriptRecorder) {
-    return;
+async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<boolean> {
+  const recorder = params.userTurnTranscriptRecorder;
+  const reusingPersistedTurn = params.suppressNextUserMessagePersistence === true;
+  if (!recorder || (reusingPersistedTurn && !recorder.hasPersisted())) {
+    return recorder?.isBlocked() === true;
   }
 
   const target = {
@@ -251,8 +272,13 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     cwd: params.cwd ?? params.workspaceDir,
     ...(params.config ? { config: params.config } : {}),
   };
-  const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
-  if (persisted) {
+  const persisted = await recorder.persistApproved({ target });
+  if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
+    // A prepared user row can be rejected by before_message_write. Preserve
+    // that terminal decision so outer transcript mirrors do not retry it.
+    recorder.markBlocked();
+  }
+  if (persisted && !reusingPersistedTurn) {
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);
       if (notification) {
@@ -264,6 +290,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
       log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
     }
   }
+  return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
 }
 
 async function persistCliAssistantTranscript(params: {
@@ -364,7 +391,7 @@ async function finalizeCliContextEngineTurn(params: {
     sessionIdUsed: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     sessionFile: runParams.sessionFile,
-    isHeartbeat: runParams.bootstrapContextRunKind === "heartbeat",
+    isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
@@ -415,6 +442,12 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
         workspaceDir: params.workspaceDir,
         trigger: params.trigger,
         ...buildAgentHookContextChannelFields(params),
+        ...buildAgentHookContextIdentityFields({
+          trigger: params.trigger,
+          senderId: params.senderId,
+          chatId: params.chatId,
+          channelContext: params.channelContext,
+        }),
       } as const;
       params.onExecutionPhase?.({
         phase: "before_agent_reply",
@@ -548,6 +581,12 @@ export async function runPreparedCliAgent(
       ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
       : {}),
     ...buildAgentHookContextChannelFields(params),
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId,
+      chatId: params.chatId,
+      channelContext: params.channelContext,
+    }),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] => [
@@ -621,6 +660,7 @@ export async function runPreparedCliAgent(
   });
 
   let deliveredMessagingSideEffect = false;
+  let userTurnHandled = false;
   const buildCliSourceReplyMirrorPayloads = (
     evidence: Pick<
       CliOutput,
@@ -707,7 +747,9 @@ export async function runPreparedCliAgent(
           sessionId: "",
           provider: params.provider,
           model: context.modelId,
-          ...(context.reusableCliSession.sessionId ? { clearCliSessionBinding: true } : {}),
+          ...(resolveReusableCliSessionId(context.reusableCliSession)
+            ? { clearCliSessionBinding: true }
+            : {}),
         },
       },
       didSendViaMessagingTool: true,
@@ -733,6 +775,7 @@ export async function runPreparedCliAgent(
     message: string;
     pluginId: string;
   }): Promise<void> => {
+    params.userTurnTranscriptRecorder?.markBlocked();
     try {
       const nowMs = Date.now();
       const sessionManager = SessionManager.open(params.sessionFile);
@@ -854,6 +897,8 @@ export async function runPreparedCliAgent(
       assistantText,
       lastAssistant,
       sourceReplyWasDelivered: sourceReplyMirror.delivered,
+      usedHistoryPrompt:
+        cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
     };
   };
 
@@ -862,6 +907,7 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
+    usedHistoryPrompt: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
@@ -893,6 +939,27 @@ export async function runPreparedCliAgent(
     const persistedCliSessionId = unflushedCliSessionId
       ? undefined
       : resultParams.effectiveCliSessionId;
+    const createdReseedReceipt =
+      persistedCliSessionId &&
+      resultParams.usedHistoryPrompt &&
+      isClaudeCliProvider(params.provider) &&
+      resultParams.output.finalPromptText !== undefined &&
+      userTurnHandled &&
+      params.sessionId
+        ? {
+            version: 1 as const,
+            promptHash: hashCliReseedPrompt(resultParams.output.finalPromptText),
+            localSessionId: params.sessionId,
+            userTurnDisposition: params.userTurnTranscriptRecorder?.hasPersisted()
+              ? ("persisted" as const)
+              : ("omitted" as const),
+          }
+        : undefined;
+    const preservedReseedReceipt =
+      params.cliSessionBinding && persistedCliSessionId === params.cliSessionBinding.sessionId
+        ? params.cliSessionBinding.reseedReceipt
+        : undefined;
+    const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
     const agentSessionId = unflushedCliSessionId
       ? ""
       : (resultParams.effectiveCliSessionId ?? params.sessionId ?? "");
@@ -967,6 +1034,7 @@ export async function runPreparedCliAgent(
                   ...(context.preparedBackend.mcpResumeHash
                     ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
                     : {}),
+                  ...(reseedReceipt ? { reseedReceipt } : {}),
                 },
               }
             : {}),
@@ -1020,7 +1088,8 @@ export async function runPreparedCliAgent(
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
       fallbackCliSessionId?: string,
     ) => {
-      const { output, assistantText, lastAssistant, sourceReplyWasDelivered } = result;
+      const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
+        result;
       try {
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         await finalizeCliContextEngineTurn({
@@ -1056,6 +1125,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned,
+          usedHistoryPrompt,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
@@ -1132,16 +1202,17 @@ export async function runPreparedCliAgent(
       }
     }
 
-    await persistApprovedCliUserTurnTranscript(params);
+    userTurnHandled = await persistApprovedCliUserTurnTranscript(params);
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,
       hookRunner,
     });
+    const reusableCliSessionId = resolveReusableCliSessionId(context.reusableCliSession);
     try {
       return await finishCliAttempt(
-        await executeCliAttempt(context.reusableCliSession.sessionId),
-        context.reusableCliSession.sessionId,
+        await executeCliAttempt(reusableCliSessionId),
+        reusableCliSessionId,
       );
     } catch (err) {
       const deliveredFailure = await finishDeliveredFailure(err);
@@ -1149,7 +1220,7 @@ export async function runPreparedCliAgent(
         return deliveredFailure;
       }
       if (isFailoverError(err)) {
-        const retryableSessionId = context.reusableCliSession.sessionId;
+        const retryableSessionId = reusableCliSessionId;
         if (
           shouldRetryFreshCliSessionAfterFailover({
             error: err,

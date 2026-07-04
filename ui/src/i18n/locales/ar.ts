@@ -63,7 +63,6 @@ export const ar: TranslationMap = {
     docs: "المستندات",
     theme: "السمة",
     colorMode: "وضع اللون",
-    colorModeOption: "وضع اللون: {mode}",
     resources: "الموارد",
     search: "بحث",
     save: "حفظ",
@@ -200,6 +199,7 @@ export const ar: TranslationMap = {
     inherit: "وراثة",
     defaultOption: "الافتراضي ({value})",
     offExplicit: "إيقاف (صريح)",
+    auto: "auto",
     on: "تشغيل",
     off: "متوقف",
     full: "كامل",
@@ -1313,6 +1313,8 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    commentaryToggle: "الاحتفاظ بالتعليق بعد الإجابة النهائية",
+    commentaryLabel: "التعليق",
     autoScrollMode: "وضع التمرير التلقائي",
     autoScrollAlways: "دائمًا",
     autoScrollNearBottom: "قرب الأسفل",
@@ -1331,6 +1333,9 @@ export const ar: TranslationMap = {
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
     switchedSession: "تم التبديل إلى {session}",
+    sidebar: {
+      allSessions: "كل الجلسات",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1357,6 +1362,11 @@ export const ar: TranslationMap = {
       retry: "إعادة المحاولة",
       retrySend: "إعادة محاولة الإرسال",
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
+    },
+    pairingQrExpired: {
+      title: "انتهت صلاحية رمز الاقتران QR",
+      reason: "شغّل ‎/pair qr‎ مرة أخرى لإنشاء رمز إعداد جديد.",
+      badge: "منتهي الصلاحية",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1424,6 +1434,7 @@ export const ar: TranslationMap = {
     jaJP: "日本語 (اليابانية)",
     ko: "한국어 (الكورية)",
     fr: "Français (الفرنسية)",
+    hi: "الهندية (Hindi)",
     ar: "العربية",
     it: "Italiano (الإيطالية)",
     tr: "Türkçe (التركية)",
@@ -1434,6 +1445,7 @@ export const ar: TranslationMap = {
     vi: "Tiếng Việt (الفيتنامية)",
     nl: "Nederlands (الهولندية)",
     fa: "فارسی (الفارسية)",
+    ru: "الروسية (Russian)",
   },
   cron: {
     quickCreate: {
@@ -1601,6 +1613,7 @@ export const ar: TranslationMap = {
       nextHeartbeat: "النبضة التالية",
       wakeModeHelp: "الآن يشغّل فورًا. النبضة التالية تنتظر الدورة التالية.",
       payloadKind: "ما الذي يجب تشغيله؟",
+      command: "Command",
       systemEvent: "نشر رسالة إلى المخطط الزمني الرئيسي",
       agentTurn: "تشغيل مهمة المساعد (معزولة)",
       systemEventHelp: "يرسل نصك إلى المخطط الزمني الرئيسي لـ Gateway (مفيد للتذكيرات/المشغلات).",

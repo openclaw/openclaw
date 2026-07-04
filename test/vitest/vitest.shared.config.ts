@@ -165,15 +165,6 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
       },
       {
-        find: "discord-api-types/gateway/v10",
-        replacement: path.join(
-          repoRoot,
-          "test",
-          "vitest",
-          "discord-api-types-gateway-v10-runtime.ts",
-        ),
-      },
-      {
         find: "discord-api-types/payloads/v10",
         replacement: path.join(
           repoRoot,
@@ -353,12 +344,26 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/net-policy/url-protocol",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-protocol.ts"),
+      },
+      {
         find: "@openclaw/net-policy/url-userinfo",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
       },
       {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/boolean-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "boolean-coercion.ts",
+        ),
       },
       {
         find: "@openclaw/normalization-core/number-coercion",
@@ -401,7 +406,7 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "@openclaw/normalization-core",
+        find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
       sourcePackageAlias("media-core", "base64"),
@@ -627,18 +632,13 @@ export const sharedVitestConfig = {
         "src/agents/embedded-agent-runner.ts",
         "src/agents/sandbox-paths.ts",
         "src/agents/sandbox.ts",
-        "src/agents/skills-install.ts",
         "src/agents/agent-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
-        "src/agents/tools/slack-actions.ts",
         "src/infra/state-migrations.ts",
-        "src/infra/skills-remote.ts",
         "src/infra/update-check.ts",
         "src/infra/ports-inspect.ts",
         "src/infra/outbound/outbound-session.ts",
-        "src/memory/batch-gemini.ts",
         "src/gateway/control-ui.ts",
-        "src/gateway/server-bridge.ts",
         "src/gateway/server-channels.ts",
         "src/gateway/server-methods/config.ts",
         "src/gateway/server-methods/send.ts",
@@ -647,7 +647,6 @@ export const sharedVitestConfig = {
         "src/gateway/server-methods/web.ts",
         "src/gateway/server-methods/wizard.ts",
         "src/gateway/call.ts",
-        "src/process/tau-rpc.ts",
         "src/process/exec.ts",
         "src/tui/**",
         "src/wizard/**",

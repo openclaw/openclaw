@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -69,7 +70,7 @@ export function createSkillProposalId(name: string, now = new Date()): string {
 }
 
 export function hashSkillProposalContent(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex");
+  return sha256Hex(content);
 }
 
 function contentSizeBytes(content: string): number {
@@ -86,10 +87,7 @@ function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): 
   return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
-function resolveProposalDir(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
+function resolveProposalDir(proposalId: string, options: SkillWorkshopStoreOptions = {}): string {
   assertProposalId(proposalId);
   return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }
@@ -99,13 +97,6 @@ function resolveProposalRecordPath(
   options: SkillWorkshopStoreOptions = {},
 ): string {
   return path.join(resolveProposalDir(proposalId, options), PROPOSAL_RECORD_FILE);
-}
-
-export function resolveProposalDraftPath(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
-  return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
 }
 
 export function prepareSkillProposalSupportFiles(

@@ -48,6 +48,36 @@ describe("formatMediaUnderstandingBody", () => {
     expect(body).toBe("[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed");
   });
 
+  it("strips repeated leading media placeholders from user text", () => {
+    const body = formatMediaUnderstandingBody({
+      body: "<media:image> <media:audio> caption here",
+      outputs: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "transcribed",
+          provider: "groq",
+        },
+      ],
+    });
+    expect(body).toBe("[Audio]\nUser text:\ncaption here\nTranscript:\ntranscribed");
+  });
+
+  it("treats repeated media placeholders without captions as synthetic text", () => {
+    const body = formatMediaUnderstandingBody({
+      body: "<media:image> <media:audio>",
+      outputs: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          text: "a chart",
+          provider: "openai",
+        },
+      ],
+    });
+    expect(body).toBe("[Image]\nDescription:\na chart");
+  });
+
   it("keeps user text once when multiple outputs exist", () => {
     const body = formatMediaUnderstandingBody({
       body: "caption here",

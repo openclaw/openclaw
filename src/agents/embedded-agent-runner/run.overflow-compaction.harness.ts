@@ -113,7 +113,6 @@ export const mockedContextEngine = {
   })),
 };
 
-export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
@@ -333,8 +332,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
   mockedBuildAgentRuntimePlan.mockReturnValue({});
-  mockedContextEngineCompact.mockReset();
-  mockedContextEngineCompact.mockResolvedValue({
+  mockedCompactDirect.mockReset();
+  mockedCompactDirect.mockResolvedValue({
     ok: false,
     compacted: false,
     reason: "nothing to compact",
@@ -585,6 +584,24 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../usage.js", () => ({
     normalizeUsage: vi.fn((usage?: unknown) =>
       usage && typeof usage === "object" ? usage : undefined,
+    ),
+    hasNonzeroUsage: vi.fn(
+      (usage?: {
+        total?: number;
+        input?: number;
+        output?: number;
+        cacheRead?: number;
+        cacheWrite?: number;
+        reasoningTokens?: number;
+      }) =>
+        [
+          usage?.total,
+          usage?.input,
+          usage?.output,
+          usage?.cacheRead,
+          usage?.cacheWrite,
+          usage?.reasoningTokens,
+        ].some((value) => (value ?? 0) > 0),
     ),
     derivePromptTokens: vi.fn(
       (usage?: { input?: number; cacheRead?: number; cacheWrite?: number }) =>

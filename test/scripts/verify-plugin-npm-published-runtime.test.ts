@@ -3,12 +3,34 @@ import { describe, expect, it } from "vitest";
 import {
   collectPluginNpmPublishedRuntimeErrors,
   findPackedPackageReadmePath,
+  parseVerifyPublishedPluginRuntimeArgs,
   parseNpmReadmeMetadata,
   readPluginNpmCommandOptions,
   readPositiveIntEnv,
   resolveNpmPackFilename,
   runPluginNpmCommand,
+  usage,
 } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+
+describe("plugin npm publish verifier args", () => {
+  it("parses help and package specs before npm calls", () => {
+    expect(parseVerifyPublishedPluginRuntimeArgs(["--help"])).toEqual({ help: true, spec: "" });
+    expect(parseVerifyPublishedPluginRuntimeArgs(["--", "@openclaw/discord@2026.5.2"])).toEqual({
+      help: false,
+      spec: "@openclaw/discord@2026.5.2",
+    });
+  });
+
+  it("rejects unknown and extra args before npm calls", () => {
+    expect(() => parseVerifyPublishedPluginRuntimeArgs([])).toThrow(usage());
+    expect(() => parseVerifyPublishedPluginRuntimeArgs(["--wat"])).toThrow(
+      "Unknown plugin npm verifier option: --wat",
+    );
+    expect(() =>
+      parseVerifyPublishedPluginRuntimeArgs(["@openclaw/discord@2026.5.2", "extra"]),
+    ).toThrow("Unexpected plugin npm verifier argument: extra");
+  });
+});
 
 describe("plugin npm publish verifier retry limits", () => {
   it("rejects loose numeric retry env values instead of parsing prefixes", () => {

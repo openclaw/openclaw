@@ -160,7 +160,7 @@ describe("buildGatewayReloadPlan", () => {
       resolveAccount: () => ({}),
     },
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
     },
   };
@@ -173,6 +173,12 @@ describe("buildGatewayReloadPlan", () => {
       pluginId: "browser",
       pluginName: "Browser",
       registration: { restartPrefixes: ["browser"] },
+      source: "test",
+    },
+    {
+      pluginId: "canvas",
+      pluginName: "Canvas",
+      registration: { restartPrefixes: ["plugins.entries.canvas"] },
       source: "test",
     },
   ];
@@ -232,6 +238,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
     expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("restarts the WhatsApp channel when selfChatMode changes (configPrefix wins over broad noop prefix)", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toContain("channels.whatsapp.selfChatMode");
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
@@ -364,6 +378,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
+  });
+
+  it("keeps restart-owned plugin entry config changes restart-backed", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.canvas.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.entries.canvas.enabled"]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("lists plugin install metadata and whole-record paths structurally", () => {

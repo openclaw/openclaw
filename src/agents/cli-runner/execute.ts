@@ -10,6 +10,7 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   emitAgentEvent,
@@ -89,7 +90,7 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
@@ -247,9 +248,7 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
 }
 
 function createCliAbortError(): Error {
-  const error = new Error("CLI run aborted");
-  error.name = "AbortError";
-  return error;
+  return createAbortError("CLI run aborted");
 }
 
 function buildCliLogArgs(params: {
@@ -378,6 +377,21 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
+  switch (reusableSession.mode) {
+    case "reuse":
+      return "reusable";
+    case "reuse-with-drift":
+      return `reusable-drift:${reusableSession.drift.reasons.join(",")}`;
+    case "invalidate":
+      return `invalidated:${reusableSession.invalidatedReason}`;
+    case "none":
+      return "none";
+  }
+  const exhaustive: never = reusableSession;
+  return exhaustive;
+}
+
 /** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
@@ -387,15 +401,9 @@ export function buildCliExecLogLine(params: {
   useResume: boolean;
   cliSessionId?: string;
   resolvedSessionId?: string;
-  reusableSessionId?: string;
-  invalidatedReason?: string;
+  reusableSession: CliReusableSession;
   hasHistoryPrompt: boolean;
 }): string {
-  const reuseState = params.reusableSessionId
-    ? "reusable"
-    : params.invalidatedReason
-      ? `invalidated:${params.invalidatedReason}`
-      : "none";
   return [
     `cli exec: provider=${params.provider}`,
     `model=${params.model}`,
@@ -404,7 +412,7 @@ export function buildCliExecLogLine(params: {
     `useResume=${params.useResume ? "true" : "false"}`,
     `session=${params.cliSessionId ? "present" : "none"}`,
     `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
-    `reuse=${reuseState}`,
+    `reuse=${formatCliSessionReuseLogState(params.reusableSession)}`,
     `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
   ].join(" ");
 }
@@ -446,13 +454,15 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
+  const resendSystemPromptForSoftResume = context.reusableCliSession.mode === "reuse-with-drift";
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isNew || resendSystemPromptForSoftResume,
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
-    systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
       ? await executeDeps.writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,
@@ -523,6 +533,7 @@ export async function executePreparedCliRun(
     imagePaths,
     promptArg: argsPrompt,
     useResume,
+    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
   const claudeOwnerKey = buildClaudeOwnerKey({
@@ -568,6 +579,7 @@ export async function executePreparedCliRun(
       if (params.lifecycleGeneration) {
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       }
+      await context.preparedBackend.beforeExecution?.();
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
@@ -662,8 +674,7 @@ export async function executePreparedCliRun(
             useResume,
             cliSessionId: cliSessionIdToUse,
             resolvedSessionId,
-            reusableSessionId: context.reusableCliSession.sessionId,
-            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            reusableSession: context.reusableCliSession,
             hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
           }),
         );
@@ -677,6 +688,7 @@ export async function executePreparedCliRun(
           : buildCliMcpCaptureKey(context);
         const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
           mode: context.backendResolved.bundleMcpMode,
+          backend,
           env: context.preparedBackend.env,
           captureKey: initialGatewayCaptureKey,
         });
@@ -1025,14 +1037,7 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          const liveSessionOwnsRunArtifacts = context.mcpDeliveryCapture !== true;
-          fallbackClaudeSkillsPluginCleanupOwned = liveSessionOwnsRunArtifacts;
-          const ownedPreparedBackendCleanup = liveSessionOwnsRunArtifacts
-            ? context.preparedBackend.cleanup
-            : undefined;
-          if (liveSessionOwnsRunArtifacts) {
-            context.preparedBackend.cleanup = undefined;
-          }
+          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -1049,15 +1054,9 @@ export async function executePreparedCliRun(
                 ? emitCliCommentaryText
                 : undefined,
             onMcpCaptureReady: beginGatewayCapture,
-            cleanup: liveSessionOwnsRunArtifacts
-              ? async () => {
-                  try {
-                    await fallbackClaudeSkillsPlugin?.cleanup();
-                  } finally {
-                    await ownedPreparedBackendCleanup?.();
-                  }
-                }
-              : async () => {},
+            cleanup: async () => {
+              await fallbackClaudeSkillsPlugin?.cleanup();
+            },
           });
           const rawText = liveResult.output.text;
           runOutput = {
@@ -1174,6 +1173,18 @@ export async function executePreparedCliRun(
           streamingParser?.finish();
           if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
             throw createCliAbortError();
+          }
+          const streamingParserErrorText =
+            outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+          if (streamingParserErrorText) {
+            throw new FailoverError(streamingParserErrorText, {
+              reason: "format",
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus("format"),
+            });
           }
 
           const stdout = stdoutParseBuffer.toString("utf8").trim();
@@ -1299,12 +1310,14 @@ export async function executePreparedCliRun(
             reason = reason ?? "unknown";
             const status = resolveFailoverStatus(reason);
             const retryCode =
-              reason === "unknown" &&
-              result.reason === "exit" &&
-              errorCandidates.length === 0 &&
-              !observedCliActivity
-                ? "cli_unknown_empty_failure"
-                : undefined;
+              reason === "context_overflow"
+                ? "cli_context_overflow"
+                : reason === "unknown" &&
+                    result.reason === "exit" &&
+                    errorCandidates.length === 0 &&
+                    !observedCliActivity
+                  ? "cli_unknown_empty_failure"
+                  : undefined;
             throw new FailoverError(err, {
               reason,
               provider: params.provider,
@@ -1345,6 +1358,7 @@ export async function executePreparedCliRun(
           if (parsed.errorText) {
             const reason =
               classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            const code = reason === "context_overflow" ? "cli_context_overflow" : undefined;
             throw new FailoverError(parsed.errorText, {
               reason,
               provider: params.provider,
@@ -1352,6 +1366,7 @@ export async function executePreparedCliRun(
               sessionId: params.sessionId,
               lane: params.lane,
               status: resolveFailoverStatus(reason),
+              code,
             });
           }
           const rawText = parsed.text;

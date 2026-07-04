@@ -24,13 +24,13 @@ where you have publisher access.
 Skills are published from a skill folder. The public page is:
 
 ```text
-https://clawhub.ai/<owner>/<slug>
+https://clawhub.ai/<owner>/skills/<slug>
 ```
 
 Example:
 
 ```text
-https://clawhub.ai/alice/review-helper
+https://clawhub.ai/alice/skills/review-helper
 ```
 
 The publish request includes the selected owner, slug, version, changelog, and

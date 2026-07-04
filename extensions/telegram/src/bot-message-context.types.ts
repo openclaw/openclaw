@@ -16,6 +16,7 @@ export type TelegramMediaRef = {
   path: string;
   contentType?: string;
   stickerMetadata?: StickerMetadata;
+  sourceMessageId?: string;
 };
 
 export type TelegramMessageContextOptions = {
@@ -25,12 +26,19 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
+  ambientTranscriptBody?: string;
   spooledReplay?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<
   MsgContext["UntrustedStructuredContext"]
 >[number];
+
+export type TelegramAmbientTranscriptWatermark = {
+  messageId: string;
+  timestampMs?: number;
+};
 
 export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -69,6 +77,8 @@ export type TelegramMessageContextSessionRuntimeOverrides = Partial<
     | "buildChannelInboundEventContext"
     | "readSessionUpdatedAt"
     | "recordInboundSession"
+    | "readAmbientTranscriptWatermark"
+    | "resolveAmbientTranscriptWatermarkKey"
     | "resolveInboundLastRouteSessionKey"
     | "resolvePinnedMainDmOwnerFromAllowlist"
     | "resolveStorePath"

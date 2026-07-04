@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -37,6 +38,7 @@ export async function fetchGeminiUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider,
       status: res.status,

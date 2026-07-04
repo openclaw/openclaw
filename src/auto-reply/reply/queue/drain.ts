@@ -66,6 +66,7 @@ type OriginRoutingMetadata = Pick<
   | "originatingTo"
   | "originatingAccountId"
   | "originatingThreadId"
+  | "originatingChatId"
   | "originatingReplyToId"
   | "originatingReplyToMode"
   | "originatingChatType"
@@ -80,6 +81,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
         item.originatingTo ||
         item.originatingAccountId ||
         item.originatingThreadId != null ||
+        item.originatingChatId ||
         item.originatingReplyToId ||
         item.originatingReplyToMode ||
         item.originatingChatType,
@@ -92,6 +94,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     originatingTo: source.originatingTo,
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
@@ -107,6 +110,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
+    JSON.stringify(run.channelContext ?? null),
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",
@@ -129,6 +133,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
@@ -309,6 +314,7 @@ type FollowupQueueSummaryState = {
     count: number;
     source: FollowupRun;
     sourceRefs: WeakSet<FollowupRun>;
+    allRoomEvents: boolean;
   }>;
   evictedSummaryCount: number;
 };
@@ -449,7 +455,14 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   const threadId = item.originatingThreadId;
   const replyToId = resolveFollowupReplyAnchor(item);
   const chatType = normalizeChatType(item.originatingChatType);
-  if (!channel && !to && !accountId && (threadId == null || threadId === "") && !replyToId) {
+  if (
+    !channel &&
+    !to &&
+    !accountId &&
+    (threadId == null || threadId === "") &&
+    !item.originatingChatId &&
+    !replyToId
+  ) {
     return chatType ? { key: JSON.stringify(["unresolved", chatType]) } : {};
   }
   if (!isRoutableChannel(channel) || !to) {
@@ -497,15 +510,27 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingTo: source.originatingTo,
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
+    ...(source.currentInboundEventKind === "room_event"
+      ? { currentInboundEventKind: "room_event" }
+      : {}),
     run: source.run,
   };
 }
 
+function resolveOverflowSummaryInboundEventKind(sources: FollowupRun[]): "room_event" | undefined {
+  return sources.length > 0 &&
+    sources.every((source) => source.currentInboundEventKind === "room_event")
+    ? "room_event"
+    : undefined;
+}
+
 async function runSyntheticOverflowSummary(params: {
   source: FollowupRun;
+  sources: FollowupRun[];
   prompt: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
 }): Promise<void> {
@@ -566,6 +591,7 @@ async function runSyntheticOverflowSummary(params: {
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
+  const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
   await params.runFollowup({
     prompt: params.prompt,
     transcriptPrompt: params.prompt,
@@ -574,6 +600,7 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     ...resolveOriginRoutingMetadata([params.source]),
+    ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
   });
 }
 
@@ -616,6 +643,7 @@ async function drainElidedOverflowSummary(params: {
     async () => {
       await runSyntheticOverflowSummary({
         source,
+        sources: entry.allRoomEvents ? [entry.source, ...retainedSources] : [],
         prompt,
         runFollowup: params.runFollowup,
       });
@@ -665,6 +693,7 @@ async function drainOverflowSummaryGroup(params: {
   await runQueueSummaryDelivery(params.queue, delivery, async () => {
     await runSyntheticOverflowSummary({
       source,
+      sources: delivery.sources,
       prompt: delivery.prompt,
       runFollowup: params.runFollowup,
     });

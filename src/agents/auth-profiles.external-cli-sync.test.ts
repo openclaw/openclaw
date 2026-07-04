@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
 
-let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
+let readExternalCliBootstrapCredential: typeof import("./auth-profiles/external-cli-sync.js").readExternalCliBootstrapCredential;
 let resolveExternalCliAuthProfiles: typeof import("./auth-profiles/external-cli-sync.js").resolveExternalCliAuthProfiles;
 let hasUsableOAuthCredential: typeof import("./auth-profiles/external-cli-sync.js").hasUsableOAuthCredential;
 let isSafeToUseExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").isSafeToUseExternalCliCredential;
@@ -121,7 +121,7 @@ describe("external cli oauth resolution", () => {
     ({
       hasUsableOAuthCredential,
       isSafeToUseExternalCliCredential,
-      readManagedExternalCliCredential,
+      readExternalCliBootstrapCredential,
       resolveExternalCliAuthProfiles,
       shouldBootstrapFromExternalCliCredential,
       shouldReplaceStoredOAuthCredential,
@@ -299,7 +299,8 @@ describe("external cli oauth resolution", () => {
       }),
     );
 
-    const credential = readManagedExternalCliCredential({
+    const credential = readExternalCliBootstrapCredential({
+      store: makeStore(),
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "openai" }),
     });
@@ -331,6 +332,77 @@ describe("external cli oauth resolution", () => {
         accountId: "acct-codex",
       },
     );
+  });
+
+  it("does not add Codex CLI as a sibling to a named managed OpenAI profile", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(
+        "openai:user@example.com",
+        makeOAuthCredential({
+          provider: "openai",
+          access: "managed-access",
+          refresh: "managed-refresh",
+          expires: Date.now() - 5_000,
+          accountId: "acct-codex",
+        }),
+      ),
+      {
+        providerIds: ["openai"],
+      },
+    );
+
+    expect(profiles).toStrictEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("does not fill an empty default slot beside a named managed OpenAI profile", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      {
+        version: 1,
+        profiles: {
+          [OPENAI_CODEX_DEFAULT_PROFILE_ID]: {
+            type: "oauth",
+            provider: "openai",
+            access: "",
+            refresh: "",
+            expires: 0,
+          },
+          "openai:user@example.com": makeOAuthCredential({
+            provider: "openai",
+            access: "managed-access",
+            refresh: "managed-refresh",
+            expires: Date.now() - 5_000,
+            accountId: "acct-codex",
+          }),
+        },
+      },
+      {
+        providerIds: ["openai"],
+        profileIds: [OPENAI_CODEX_DEFAULT_PROFILE_ID],
+      },
+    );
+
+    expect(profiles).toStrictEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {
@@ -365,7 +437,8 @@ describe("external cli oauth resolution", () => {
       makeOAuthCredential({ provider: "openai" }),
     );
 
-    const credential = readManagedExternalCliCredential({
+    const credential = readExternalCliBootstrapCredential({
+      store: makeStore(),
       profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
       credential: makeOAuthCredential({ provider: "anthropic" }),
     });

@@ -8,7 +8,6 @@ import {
   normalizeOpenAIStrictToolParameters,
   normalizeStrictOpenAIJsonSchema,
   resolveOpenAIProjectedToolsStrictToolFlag,
-  resolveOpenAIStrictToolFlagForProjection,
 } from "./openai-tool-schema.js";
 
 describe("OpenAI strict tool schema normalization", () => {
@@ -33,12 +32,6 @@ describe("OpenAI strict tool schema normalization", () => {
         additionalProperties: false,
       });
       expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-      expect(
-        resolveOpenAIStrictToolFlagForProjection(
-          projectOpenAITools([{ name: "empty", parameters: schema }]),
-          true,
-        ),
-      ).toBe(true);
     }
   });
 
@@ -63,7 +56,7 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(normalized.properties?.metadata).not.toHaveProperty("additionalProperties");
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
     expect(
-      resolveOpenAIStrictToolFlagForProjection(
+      resolveOpenAIProjectedToolsStrictToolFlag(
         projectOpenAITools([{ name: "write", parameters: schema }]),
         true,
       ),
@@ -125,7 +118,6 @@ describe("OpenAI strict tool schema normalization", () => {
         violations: ["broken.parameters is not JSON-serializable"],
       },
     ]);
-    expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(false);
   });
 
   it("keeps strict mode for emitted tools when unreadable tools are dropped", () => {
@@ -150,7 +142,6 @@ describe("OpenAI strict tool schema normalization", () => {
       },
     ]);
 
-    expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(false);
     expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
   });
 
@@ -175,7 +166,7 @@ describe("OpenAI strict tool schema normalization", () => {
     const tool = projection.tools[0];
     expect(tool).toBeDefined();
 
-    expect(resolveOpenAIStrictToolFlagForProjection(projection, true)).toBe(true);
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
     const normalized = normalizeOpenAIStrictToolParameters(tool?.parameters, true);
     expect(normalizeOpenAIStrictToolParameters(tool?.parameters, true)).toBe(normalized);
     expect(serializationCount).toBe(1);

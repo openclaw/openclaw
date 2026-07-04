@@ -1,6 +1,7 @@
 // Gateway plugin tests cover plugin loading, auto-enable, runtime registry setup,
 // request-scope injection, diagnostics, and handler dispatch integration.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -71,7 +72,6 @@ vi.mock("../channels/registry.js", () => ({
   CHAT_CHANNEL_ORDER: [],
   CHANNEL_IDS: [],
   listChatChannels: () => [],
-  listChatChannelAliases: () => [],
   getChatChannelMeta: () => null,
   normalizeChatChannelId: () => null,
   normalizeChannelId: () => null,
@@ -116,6 +116,30 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   conversationBindingResolvedHandlers: [],
   diagnostics,
 });
+
+function addLoadedPlugin(
+  registry: PluginRegistry,
+  params: {
+    id: string;
+    origin?: PluginRegistry["plugins"][number]["origin"];
+    trustedOfficialInstall?: boolean;
+  },
+): PluginRegistry {
+  registry.plugins.push(
+    createPluginRecord({
+      id: params.id,
+      name: params.id,
+      source: `/tmp/${params.id}/index.js`,
+      origin: params.origin ?? "bundled",
+      enabled: true,
+      configSchema: false,
+      ...(params.trustedOfficialInstall !== undefined
+        ? { trustedOfficialInstall: params.trustedOfficialInstall }
+        : {}),
+    }),
+  );
+  return registry;
+}
 
 function createLookUpTableForTest(params: {
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
@@ -763,6 +787,11 @@ describe("loadGatewayPlugins", () => {
         expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-legacy" });
         opts.respond(true, { messages: [{ id: "m-2" }] });
+      })
+      .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        expect(opts.req.method).toBe("sessions.get");
+        expect(opts.req.params).toEqual({ key: "s-limited", limit: 1_000 });
+        opts.respond(true, { messages: [{ id: "m-3" }] });
       });
 
     await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
@@ -770,6 +799,14 @@ describe("loadGatewayPlugins", () => {
     });
     await expect(runtime.getSession({ sessionKey: "s-legacy" })).resolves.toEqual({
       messages: [{ id: "m-2" }],
+    });
+    await expect(
+      runtime.getSessionMessages({
+        sessionKey: "s-limited",
+        limit: 9e15,
+      }),
+    ).resolves.toEqual({
+      messages: [{ id: "m-3" }],
     });
   });
 
@@ -885,6 +922,67 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedParams()).toStrictEqual({});
     expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
+  });
+
+  test("lets trusted official plugin runtime request admin scope for browser proxy", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("nodes-invoke-browser-proxy"));
+
+    const runtime = runtimeModule.createPluginRuntime({
+      allowGatewaySubagentBinding: true,
+    });
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () =>
+        runtime.nodes.invoke({
+          nodeId: "node-1",
+          command: "browser.proxy",
+          params: { method: "GET", path: "/profiles" },
+          scopes: ["operator.admin"],
+        }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      nodeId: "node-1",
+      command: "browser.proxy",
+      params: { method: "GET", path: "/profiles" },
+    });
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
+  });
+
+  test("does not let arbitrary plugin nodes runtime mint admin scope for browser proxy", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), { id: "third-party", origin: "global" }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(
+      createTestContext("nodes-invoke-browser-proxy-no-elevate"),
+    );
+
+    const runtime = runtimeModule.createPluginRuntime({
+      allowGatewaySubagentBinding: true,
+    });
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "third-party", pluginOrigin: "global" },
+      () =>
+        runtime.nodes.invoke({
+          nodeId: "node-1",
+          command: "browser.proxy",
+          params: { method: "GET", path: "/profiles" },
+          scopes: ["operator.admin"],
+        }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      nodeId: "node-1",
+      command: "browser.proxy",
+      params: { method: "GET", path: "/profiles" },
+    });
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("third-party");
   });
 
   test("forwards provider and model overrides when the request scope is authorized", async () => {

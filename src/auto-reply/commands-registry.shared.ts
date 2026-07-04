@@ -1,6 +1,7 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -28,6 +29,7 @@ type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
+  nativeProviders?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -56,6 +58,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     nativeName: command.nativeName,
     nativeAliases: command.nativeAliases
       ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
+    nativeProviders: command.nativeProviders
+      ? normalizeStringEntries(command.nativeProviders)
       : undefined,
     description: command.description,
     acceptsArgs,
@@ -262,6 +267,23 @@ export function buildBuiltinChatCommands(
           description: "Optional note for Codex feedback upload",
           type: "string",
           captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "login",
+      nativeName: "login",
+      nativeProviders: ["telegram"],
+      description: "Pair Codex login.",
+      textAlias: "/login",
+      category: "management",
+      tier: "standard",
+      args: [
+        {
+          name: "provider",
+          description: "Provider to pair",
+          type: "string",
+          choices: ["codex", "openai"],
         },
       ],
     }),
@@ -742,6 +764,23 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+      key: "name",
+      nativeName: "name",
+      description: "Name or rename the current session.",
+      textAlias: "/name",
+      acceptsArgs: true,
+      category: "session",
+      tier: "standard",
+      args: [
+        {
+          name: "title",
+          description: "New session name (omit to see a suggestion)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",
@@ -818,9 +857,20 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
-          description: "status, on, off, or default",
+          description: "on, off, auto, default, or status",
           type: "string",
-          choices: ["status", "on", "off", "default"],
+          choices: ({ cfg, provider, model }) => [
+            "on",
+            "off",
+            {
+              value: "auto",
+              label: formatFastModeAutoLabel({
+                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
+              }),
+            },
+            "default",
+            "status",
+          ],
         },
       ],
       argsMenu: "auto",

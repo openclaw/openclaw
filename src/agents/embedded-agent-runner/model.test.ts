@@ -61,6 +61,10 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
+  function isUnsupportedXaiMultiAgentModel(provider?: string, id?: string): boolean {
+    return provider === "xai" && id?.trim().toLowerCase() === "grok-4.20-multi-agent-0309";
+  }
+
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -79,6 +83,9 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
+      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
+        return true;
+      }
       return (
         (provider === "qwen" || provider === "modelstudio") &&
         id?.trim().toLowerCase() === "qwen3.6-plus" &&
@@ -92,7 +99,7 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
-      return false;
+      return isUnsupportedXaiMultiAgentModel(provider, id);
     },
     buildSuppressedBuiltInModelError: ({
       provider,
@@ -115,6 +122,9 @@ vi.mock("../model-suppression.js", () => {
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
         return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
+      }
+      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
+        return "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.";
       }
       return undefined;
     },
@@ -159,12 +169,8 @@ import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynam
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import {
-  buildInlineProviderModels,
-  resolveModel,
-  resolveModelAsync,
-  resolveModelWithRegistry,
-} from "./model.js";
+import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -2826,6 +2832,29 @@ describe("resolveModel", () => {
     );
   });
 
+  it("points runtime-bound model entries at the runtime catalog instead of provider registration", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.3-codex": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: openai/gpt-5.3-codex. Found agents.defaults.models["openai/gpt-5.3-codex"] bound to the "codex" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["openai"].models[] — registering it there will not make it usable. Confirm "gpt-5.3-codex" is still offered by the "codex" runtime and switch agents.defaults.model.primary to a currently available model (run `openclaw models list --provider openai` to list them). See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
   it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
     const cfg = {
       models: {
@@ -3448,6 +3477,27 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
       "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+    );
+  });
+
+  it("does not build a configured fallback for unsupported xAI multi-agent models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://api.x.ai/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xai", "grok-4.20-multi-agent-0309", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.",
     );
   });
 

@@ -349,6 +349,21 @@ describe("resolveNpmCommandInvocation", () => {
     });
   });
 
+  it("wraps bare Windows npm_execpath through npm.cmd", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["view", "openclaw@beta", "version"],
+        npmExecPath: "npm",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("wraps Windows npm_execpath command shims", () => {
     expect(
       resolveNpmCommandInvocation({

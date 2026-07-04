@@ -28,6 +28,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
@@ -38,6 +39,7 @@ import type {
   TuiModelChoice,
   TuiSessionList,
   TuiSessionMutationResult,
+  TuiChatSendResult,
 } from "./tui-backend.js";
 
 export type GatewayConnectionOptions = {
@@ -94,10 +96,8 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
   return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 export type GatewaySessionList = TuiSessionList;
@@ -194,9 +194,9 @@ export class GatewayChatClient implements TuiBackend {
     await this.readyPromise;
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
+  async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     const runId = opts.runId ?? randomUUID();
-    await this.client.request("chat.send", {
+    const response = await this.client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
       sessionKey: opts.sessionKey,
       ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
@@ -206,7 +206,9 @@ export class GatewayChatClient implements TuiBackend {
       timeoutMs: opts.timeoutMs,
       idempotencyKey: runId,
     });
-    return { runId };
+    const acceptedRunId = nonEmptyString(response?.runId) ?? runId;
+    const status = nonEmptyString(response?.status);
+    return status ? { runId: acceptedRunId, status } : { runId: acceptedRunId };
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {

@@ -15,12 +15,9 @@ committed `inventory/` report tree.
 This skill owns the operational workflow for:
 
 - `taxonomy.yaml`
-- `docs/maturity-scores.yaml`
-- `docs/maturity-scorecard.md`
-- `docs/taxonomy.md`
-- `docs/taxonomy-outline.md`
-- `scripts/render-maturity-docs.mjs`
-- `.github/workflows/maturity-scorecard.yml`
+- `qa/maturity-scores.yaml`
+- `docs/concepts/qa-e2e-automation.md`
+- `qa/scenarios/index.yaml`
 
 Keep person-specific, maintainer-private, Discord archive, and discrawl facts
 out of this repo. If a score needs private evidence, use the redacted
@@ -31,35 +28,57 @@ out of this repo. If a score needs private evidence, use the redacted
 - `taxonomy.yaml` is the hand-edited source of truth for surfaces, levels,
   QA profiles, categories, feature coverage IDs, docs refs, LTS overrides, and
   completeness-instruction paths.
-- `docs/maturity-scores.yaml` is the aggregate score source committed in this
-  repo. It is the only committed score data; do not add generated inventory
-  directories.
-- `docs/maturity-scorecard.md`, `docs/taxonomy.md`, and
-  `docs/taxonomy-outline.md` are deterministic docs generated from the root
-  taxonomy and aggregate score source.
-- `qa-evidence.json` artifacts provide per-run QA scorecard evidence. They can
-  enrich generated artifact docs, but they are not committed as inventory.
+- Feature `coverageIds` are ANDed proof targets, not aliases. A feature may
+  list multiple IDs when each ID proves part of one capability.
+- Coverage IDs use dotted `namespace.behavior` form, with lowercase
+  alphanumeric/dash segments. Profile, surface, and category IDs may remain
+  dashed or dotted.
+- Keep categories and feature names unique, product-shaped, and broader than raw
+  coverage IDs. Do not promote generic IDs into standalone feature names.
+- Avoid duplicate coverage-ID bundles under different feature names in one
+  category.
+- `qa/maturity-scores.yaml` is the committed aggregate source for Quality,
+  Completeness, and LTS review state.
+- `extensions/qa-lab/src/scorecard-taxonomy.ts` exports
+  `qaMaturityScoresSchema` and `readValidatedQaMaturityScoreSources`; use those
+  QA Lab utilities to validate score output.
+- Generated public docs are `docs/maturity/scorecard.md` and
+  `docs/maturity/taxonomy.md`; both come from `pnpm maturity:render`. Do not
+  hand-edit generated Markdown to change score results.
+- `qa-evidence.json` artifacts provide per-run QA scorecard evidence. Release
+  profile artifacts are the source of truth for Coverage. They can enrich
+  generated artifact docs, but they are not committed as inventory.
 
 ## Commands
 
 Run from the openclaw repo root.
 
-Render committed docs:
+Validate taxonomy YAML structure and the maturity score schema after source
+edits:
 
 ```bash
-pnpm maturity:render
+node --import tsx --input-type=module <<'NODE'
+import fs from "node:fs";
+import YAML from "yaml";
+import { readValidatedQaMaturityScoreSources } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+
+for (const file of ["taxonomy.yaml", "qa/scenarios/index.yaml"]) {
+  YAML.parse(fs.readFileSync(file, "utf8"));
+}
+readValidatedQaMaturityScoreSources();
+NODE
 ```
 
-Check generated docs are current:
+Check docs when touching docs prose:
 
 ```bash
-pnpm maturity:check
+pnpm check:docs
 ```
 
-Render an evidence-enriched docs artifact from downloaded QA artifacts:
+Run focused QA/profile checks when changing coverage IDs or profile membership:
 
 ```bash
-pnpm maturity:render -- --evidence-dir .artifacts/maturity-evidence --output-dir .artifacts/maturity-docs
+pnpm openclaw qa coverage --json
 ```
 
 ## Scoring Workflow
@@ -71,17 +90,17 @@ When asked to score or refresh a surface:
    `.agents/skills/claw-score/references/completeness/`.
 3. Gather public repo evidence from docs, source, tests, and QA scenario
    metadata.
-4. Prefer existing `qa-evidence.json` artifacts for executed proof. Do not use
-   discrawl or unredacted private archives.
-5. Update `docs/maturity-scores.yaml` only when the score change is backed by
-   public or redacted artifact evidence.
-6. Run `pnpm maturity:render`.
-7. Run `pnpm maturity:check`.
+4. Prefer existing release profile `qa-evidence.json` artifacts for executed
+   proof.
+5. Update `qa/maturity-scores.yaml` only for Quality, Completeness, and LTS
+   review state backed by public or redacted artifact evidence.
+6. Run the schema validation command from this skill.
+7. Run `pnpm check:docs` if docs prose changed, and focused QA coverage checks
+   if coverage IDs or profile membership changed.
 
 For subjective score changes, make the smallest defensible edit and leave the
-evidence path in the PR or task summary. The deterministic renderer owns
-Markdown structure; manual prose tweaks belong in taxonomy, score source, or
-the renderer rather than in generated docs.
+evidence path in the PR or task summary. Keep manual prose in current docs and
+keep score data in `qa/maturity-scores.yaml`.
 
 ## Default Completeness Process
 
@@ -127,7 +146,7 @@ Default guidance:
 
 Default Completeness bands:
 
-- `Lovable` (95-100): complete across expected workflows, variants, and
+- `Clawesome` (95-100): complete across expected workflows, variants, and
   recovery branches, with only minor polish gaps.
 - `Stable` (80-95): the expected workflow set is broadly present, with only
   bounded missing branches.
@@ -140,31 +159,28 @@ Default Completeness bands:
 
 ## Score Semantics
 
-- Coverage: public or redacted proof that the feature is exercised by docs,
-  tests, QA scenarios, live lanes, or release evidence.
+- Coverage: deterministic release validation coverage derived from the release
+  profile `qa-evidence.json.scorecard` feature fulfillment data.
 - Quality: reliability, maintainability, operator safety, and regression
   confidence for the category.
 - Completeness: how much of the intended operator-visible workflow exists for
   the category. Use the default completeness process plus any surface-specific
   variation before changing this score.
-- LTS: derived from score thresholds and `human_lts_override`; do not hand-edit
-  generated Markdown to change LTS status.
+- LTS: derived from Quality, release-evidence Coverage, and
+  `human_lts_override`; do not hand-edit generated Markdown to change LTS
+  status.
 
 Bands:
 
-- `Lovable`: 95-100
+- `Clawesome`: 95-100
 - `Stable`: 80-95
 - `Beta`: 70-80
 - `Alpha`: 50-70
 - `Experimental`: 0-50
 
-## GitHub Action
-
-The `Maturity scorecard` workflow verifies committed generated docs on PRs and
-pushes. Manual dispatch can also download QA artifacts from another workflow run
-with `source_run_id` and `artifact_pattern`, render evidence-enriched docs into
-`.artifacts/maturity-docs`, and upload them as a GitHub artifact.
+## Artifacts
 
 Do not add the maintainer repo's `docs/kevinslin/maturity-scorecard/inventory/`
-tree to openclaw. Those generated reports are intentionally replaced here by
-short-lived artifact docs and the committed aggregate scorecard pages.
+tree to openclaw. Evidence-enriched scorecard outputs belong in short-lived
+artifacts, not committed generated docs, unless this repo adds an explicit
+renderer/check workflow first.

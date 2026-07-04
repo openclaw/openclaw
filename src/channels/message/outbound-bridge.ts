@@ -30,22 +30,26 @@ export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   messageId?: string;
 };
 
+type ChannelMessageOutboundBridgeContext<TContext> = Omit<TContext, "onDeliveryResult"> & {
+  onDeliveryResult?: (result: ChannelMessageOutboundBridgeResult) => Promise<void> | void;
+};
+
 /** Legacy outbound adapter shape bridged into the channel message adapter contract. */
 export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
   };
   sendText?: (
-    ctx: ChannelMessageSendTextContext<TConfig>,
+    ctx: ChannelMessageOutboundBridgeContext<ChannelMessageSendTextContext<TConfig>>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
   sendMedia?: (
-    ctx: ChannelMessageSendMediaContext<TConfig>,
+    ctx: ChannelMessageOutboundBridgeContext<ChannelMessageSendMediaContext<TConfig>>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
   sendPayload?: (
-    ctx: ChannelMessageSendPayloadContext<TConfig>,
+    ctx: ChannelMessageOutboundBridgeContext<ChannelMessageSendPayloadContext<TConfig>>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
   sendPoll?: (
-    ctx: ChannelMessageSendPollContext<TConfig>,
+    ctx: ChannelMessageOutboundBridgeContext<ChannelMessageSendPollContext<TConfig>>,
   ) => Promise<ChannelMessageOutboundBridgeResult>;
 };
 
@@ -72,14 +76,16 @@ function resolveResultMessageId(result: ChannelMessageOutboundBridgeResult): str
   );
 }
 
+type MessageSendResultParams = {
+  kind: MessageReceiptPartKind;
+  normalizeReceiptKind?: boolean;
+  threadId?: string | number | null;
+  replyToId?: string | null;
+};
+
 function toMessageSendResult(
   result: ChannelMessageOutboundBridgeResult,
-  params: {
-    kind: MessageReceiptPartKind;
-    normalizeReceiptKind?: boolean;
-    threadId?: string | number | null;
-    replyToId?: string | null;
-  },
+  params: MessageSendResultParams,
 ): ChannelMessageSendResult {
   const receipt = result.receipt
     ? params.normalizeReceiptKind
@@ -99,6 +105,27 @@ function toMessageSendResult(
     ...(resolveResultMessageId({ ...result, receipt })
       ? {
           messageId: resolveResultMessageId({ ...result, receipt }),
+        }
+      : {}),
+  };
+}
+
+function adaptOutboundBridgeContext<
+  TContext extends {
+    onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
+  },
+>(
+  ctx: TContext,
+  resultParams: MessageSendResultParams,
+): ChannelMessageOutboundBridgeContext<TContext> {
+  const { onDeliveryResult, ...outboundCtx } = ctx;
+  return {
+    ...outboundCtx,
+    ...(onDeliveryResult
+      ? {
+          onDeliveryResult: async (result: ChannelMessageOutboundBridgeResult) => {
+            await onDeliveryResult(toMessageSendResult(result, resultParams));
+          },
         }
       : {}),
   };
@@ -131,37 +158,57 @@ export function createChannelMessageAdapterFromOutbound<TConfig = unknown>(
 ): ChannelMessageAdapterShape<TConfig> {
   const send: NonNullable<ChannelMessageAdapterShape<TConfig>["send"]> = {};
   if (params.outbound.sendText) {
-    send.text = async (ctx) =>
-      toMessageSendResult(await params.outbound.sendText!(ctx), {
+    send.text = async (ctx) => {
+      const resultParams = {
         kind: "text",
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
-      });
+      } satisfies MessageSendResultParams;
+      return toMessageSendResult(
+        await params.outbound.sendText!(adaptOutboundBridgeContext(ctx, resultParams)),
+        resultParams,
+      );
+    };
   }
   if (params.outbound.sendMedia) {
-    send.media = async (ctx) =>
-      toMessageSendResult(await params.outbound.sendMedia!(ctx), {
+    send.media = async (ctx) => {
+      const resultParams = {
         kind: ctx.audioAsVoice ? "voice" : "media",
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
-      });
+      } satisfies MessageSendResultParams;
+      return toMessageSendResult(
+        await params.outbound.sendMedia!(adaptOutboundBridgeContext(ctx, resultParams)),
+        resultParams,
+      );
+    };
   }
   if (params.outbound.sendPayload) {
-    send.payload = async (ctx) =>
-      toMessageSendResult(await params.outbound.sendPayload!(ctx), {
+    send.payload = async (ctx) => {
+      const resultParams = {
         kind: resolvePayloadReceiptKind(ctx as ChannelMessageSendPayloadContext<unknown>),
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
-      });
+      } satisfies MessageSendResultParams;
+      return toMessageSendResult(
+        await params.outbound.sendPayload!(adaptOutboundBridgeContext(ctx, resultParams)),
+        resultParams,
+      );
+    };
   }
   if (params.outbound.sendPoll) {
-    send.poll = async (ctx) =>
-      toMessageSendResult(await params.outbound.sendPoll!(ctx), {
+    send.poll = async (ctx) => {
+      const resultParams = {
         kind: "poll",
         normalizeReceiptKind: true,
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
-      });
+      } satisfies MessageSendResultParams;
+      return toMessageSendResult(
+        await params.outbound.sendPoll!(adaptOutboundBridgeContext(ctx, resultParams)),
+        resultParams,
+      );
+    };
   }
 
   return {

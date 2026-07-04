@@ -283,6 +283,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 | Provider                                | Id                               | Auth env                                             | Example model                                              |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                                   | `byteplus-plan/ark-code-latest`                            |
+| ClawRouter                              | `clawrouter`                     | `CLAWROUTER_API_KEY`                                 | `clawrouter/anthropic/claude-sonnet-4-6`                   |
 | Cohere                                  | `cohere`                         | `COHERE_API_KEY`                                     | `cohere/command-a-03-2025`                                 |
 | GitHub Copilot                          | `github-copilot`                 | `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` | -                                                          |
 | Hugging Face Inference                  | `huggingface`                    | `HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`                | `huggingface/deepseek-ai/DeepSeek-R1`                      |
@@ -333,7 +334,7 @@ Gateway model capability checks also read explicit `models.providers.<id>.models
 
 ### Moonshot AI (Kimi)
 
-Moonshot ships as a bundled provider plugin. Use the built-in provider by default, and add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
+Install `@openclaw/moonshot-provider` before onboarding. Add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`

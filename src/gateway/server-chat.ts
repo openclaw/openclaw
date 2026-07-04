@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { logError } from "../logger.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -18,6 +19,7 @@ import {
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
+import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
   ChatRunEntry,
@@ -37,6 +39,7 @@ import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
+  createChatAbortMarker,
   createChatRunRegistry,
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -44,8 +47,10 @@ export {
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 export type {
+  ChatAbortMarker,
   ChatRunEntry,
   ChatRunRegistry,
+  ChatRunRegistration,
   ChatRunState,
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -471,6 +476,9 @@ export function createAgentEventHandler({
       contextTokens: row?.contextTokens,
       estimatedCostUsd: row?.estimatedCostUsd,
       responseUsage: row?.responseUsage,
+      // Carry the row-built channel-aware effective mode so the chat snapshot
+      // matches the session-event/list projections.
+      effectiveResponseUsage: row?.effectiveResponseUsage,
       modelProvider: row?.modelProvider,
       model: row?.model,
       status: snapshotSource.status,
@@ -562,7 +570,8 @@ export function createAgentEventHandler({
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const isAborted =
-      chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
+      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
     const deliverySessionKey = sessionKey
       ? resolveSessionDeliveryKey(sessionKey, sessionAgentId)
       : undefined;
@@ -708,7 +717,10 @@ export function createAgentEventHandler({
             markPersisted();
             broadcastSessionChange();
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            logError(
+              `gateway: terminal session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
+            );
             // Persistence recovery remains tracked by the controller entry, but
             // subscribers still need a terminal projection instead of hanging.
             broadcastSessionChange(evt);
@@ -1148,7 +1160,9 @@ export function createAgentEventHandler({
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
-      chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
+      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
+      isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
+
     const restartRecoveryState = restartRecoverySessionKey
       ? resolveRestartRecoveryLifecycleState(restartRecoverySessionKey, restartRecoveryAgentId, evt)
       : undefined;
@@ -1173,6 +1187,7 @@ export function createAgentEventHandler({
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
+
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
     const agentPayload = sessionKey
@@ -1345,6 +1360,13 @@ export function createAgentEventHandler({
         evt.stream === "assistant" &&
         shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)
       ) {
+        sendAgentPayload(
+          sessionKey,
+          { ...agentPayload, ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId) },
+          { agentId: sessionAgentId, controlUiVisible: false, dropIfSlow: true },
+        );
+      }
+      if (!isControlUiVisible && isItemEvent && sessionKey && hasSessionMessageSubscribers) {
         sendAgentPayload(
           sessionKey,
           { ...agentPayload, ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId) },

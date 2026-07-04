@@ -6,6 +6,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
+import {
+  HEARTBEAT_RUN_SCOPE,
+  type ReplyOptionsWithHeartbeatRunScope,
+} from "../../infra/heartbeat-run-scope.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -32,8 +36,12 @@ type AgentRunParams = {
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  shouldEmitToolResult?: () => boolean;
+  shouldEmitToolOutput?: () => boolean;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   silentExpected?: boolean;
+  trigger?: string;
+  bootstrapContextRunKind?: string;
 };
 
 const state = vi.hoisted(() => ({
@@ -157,7 +165,7 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState;
+  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState & ReplyOptionsWithHeartbeatRunScope;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -280,6 +288,21 @@ describe("runReplyAgent heartbeat followup guard", () => {
     await run();
 
     expect(runState.admission).toEqual({ status: "owned" });
+  });
+
+  it("keeps heartbeat mechanics while isolating commitment bootstrap context", async () => {
+    const { run } = createMinimalRun({
+      opts: {
+        isHeartbeat: true,
+        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
+      },
+    });
+
+    await run();
+
+    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
+    expect((call as AgentRunParams).trigger).toBe("heartbeat");
+    expect((call as AgentRunParams).bootstrapContextRunKind).toBe("commitment-only");
   });
 
   it("runs visible turns with the session id returned by admission", async () => {
@@ -424,6 +447,11 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -441,9 +469,10 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.cleanup).not.toHaveBeenCalled();
+    active.complete();
   });
 
-  it("starts draining immediately when the active snapshot is already stale", async () => {
+  it("starts draining after enqueue when the reply lane owner is already gone", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: false },
       isActive: true,
@@ -456,9 +485,34 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the drain dormant until the reply lane owner clears", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      isRunActive: () => true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+    });
+
+    await run();
+
+    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+
+    active.complete();
+
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
   });
 
   it("drains followup queue when an unexpected exception escapes the run path", async () => {
@@ -1048,6 +1102,31 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expect(onToolResult).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("enables channel-owned tool summaries when default tool messages are suppressed", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      expect(params.shouldEmitToolResult?.()).toBe(true);
+      expect(params.shouldEmitToolOutput?.()).toBe(false);
+      await params.onToolResult?.({ text: "🛠️ `run ruby`", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: {
+        suppressDefaultToolProgressMessages: true,
+        forceToolResultProgress: true,
+        onToolResult,
+      },
+      resolvedVerboseLevel: "off",
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ `run ruby`",
+      mediaUrls: [],
+    });
   });
 
   it("preserves channelData on forwarded tool results", async () => {

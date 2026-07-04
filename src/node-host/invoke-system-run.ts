@@ -19,11 +19,9 @@ import {
   resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovals,
   resolveExecModePolicy,
-  resolveExecPolicyForMode,
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
-  type ExecMode,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
   type SkillBinTrustEntry,
@@ -31,6 +29,7 @@ import {
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -145,12 +144,6 @@ const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
 
-type LayeredExecPolicy = {
-  mode?: ExecMode;
-  security: ExecSecurity;
-  ask: ExecAsk;
-};
-
 type EffectiveSystemRunExecPolicy = {
   agentExec: ExecToolConfig | undefined;
   globalExec: ExecToolConfig | undefined;
@@ -159,29 +152,6 @@ type EffectiveSystemRunExecPolicy = {
   ask: ExecAsk;
   autoReview: boolean;
 };
-
-function hasLegacyExecPolicyOverride(exec?: ExecToolConfig): boolean {
-  return exec?.security !== undefined || exec?.ask !== undefined;
-}
-
-function applyExecPolicyLayer(base: LayeredExecPolicy, layer?: ExecToolConfig): LayeredExecPolicy {
-  if (!layer) {
-    return base;
-  }
-  if (layer.mode) {
-    return {
-      mode: layer.mode,
-      ...resolveExecPolicyForMode(layer.mode),
-    };
-  }
-  if (hasLegacyExecPolicyOverride(layer)) {
-    return {
-      security: layer.security ?? base.security,
-      ask: layer.ask ?? base.ask,
-    };
-  }
-  return base;
-}
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {

@@ -6,6 +6,18 @@ export const FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  marketplaces:
+    "Marketplace feed and local package source profile settings. Feeds provide package selection and governance metadata, while sources define the local source names that install candidates may reference.",
+  "marketplaces.feeds":
+    "Named marketplace feed profiles. The default public profile can be used as shipped, and deployments can add or override profiles to point OpenClaw at their effective feed endpoint.",
+  "marketplaces.feeds.*.url":
+    "HTTPS URL for the marketplace feed profile. Remote feed documents cannot introduce new registry domains or credentials; they only reference locally configured sources by name.",
+  "marketplaces.feeds.*.verification":
+    "Feed authenticity policy. This slice accepts only unsigned HTTPS feeds; signed verification is added when envelope enforcement is wired.",
+  "marketplaces.sources":
+    "Named package source profiles that feed entries can reference using sourceRef. Keep credentials and registry endpoints local so remote feeds cannot bootstrap trust roots.",
+  "marketplaces.sources.*.type":
+    "Package source profile type: npm, clawhub, or git. This slice validates sourceRef names only; registry and host endpoints are added when installer resolution can enforce them.",
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -27,6 +39,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
   "wizard.lastRunMode":
     'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+  "wizard.securityAcknowledgedAt":
+    "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.memoryPressureSnapshot":
@@ -152,6 +166,8 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "gateway.remote.sshHostKeyPolicy":
+    'macOS SSH host-key verification policy. "strict" requires an already trusted host key; "openssh" explicitly delegates to effective OpenSSH configuration.',
   "talk.provider": 'Active Talk provider id (for example "acme-speech").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
@@ -287,7 +303,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":
-    "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+    'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":
@@ -553,11 +569,11 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.push":
     "Push-delivery settings used by the gateway when it needs to wake or notify paired devices. Configure relay-backed APNs here for official iOS builds; direct APNs auth remains env-based for local/manual builds.",
   "gateway.push.apns":
-    "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official/TestFlight builds that register through the external push relay.",
+    "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official App Store builds that register through the external push relay.",
   "gateway.push.apns.relay":
     "External relay settings for relay-backed APNs sends. The gateway uses the hosted OpenClaw relay by default, or this custom relay for push.test, wake nudges, and reconnect wakes after a paired official iOS build publishes a relay-backed registration.",
   "gateway.push.apns.relay.baseUrl":
-    "Optional custom base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
+    "Optional custom base HTTPS URL for the external APNs relay service used by official App Store iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
   "gateway.push.apns.relay.timeoutMs":
     "Timeout in milliseconds for relay send requests from the gateway to the APNs relay (default: 10000). Increase for slower relays or networks, or lower to fail wake attempts faster.",
   "gateway.http.endpoints.chatCompletions.enabled":
@@ -692,6 +708,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable metrics signal export to the configured OpenTelemetry collector endpoint. Keep enabled for runtime health dashboards, and disable only if metric volume must be minimized.",
   "diagnostics.otel.logs":
     "Enable log signal export through OpenTelemetry in addition to local logging sinks. Use this when centralized log correlation is required across services and agents.",
+  "diagnostics.otel.logsExporter":
+    'Log export sink for diagnostics.otel.logs. Use "otlp" for the configured OTLP logs endpoint, "stdout" for one JSON record per stdout line in container log pipelines, and "both" when both sinks are required.',
   "diagnostics.otel.sampleRate":
     "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
   "diagnostics.otel.flushIntervalMs":
@@ -1496,7 +1514,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
-    "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
+    "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
@@ -1873,6 +1891,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
   "messages.usageTemplate":
     "Custom /usage full footer template, either an inline object or a JSON file path. Invalid or unavailable templates fall back to the built-in usage line.",
+  "messages.responseUsage":
+    'Default per-reply usage footer mode ("off"|"tokens"|"full") seeded into sessions that have not chosen one via /usage. Also accepts "on" as a legacy alias for "tokens". Accepts a bare mode or a per-channel map with a "default" fallback. Precedence: session value -> channel entry -> default -> off; an explicit /usage choice (including off) is persisted and overrides the default. Use /usage reset (aliases: inherit, clear, default) to clear a session override and re-inherit this configured default.',
   "messages.groupChat":
     "Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.",
   "messages.groupChat.mentionPatterns":
@@ -1962,7 +1982,7 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
-    "Map provider -> channel id -> model override (values are provider/model or aliases).",
+    "Map provider -> channel id / DM peer id -> model override (values are provider/model or aliases).",
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
@@ -1971,7 +1991,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
-    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram and WhatsApp require this to be true before lifecycle reactions are used.",
+    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used.",
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":

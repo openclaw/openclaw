@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
   resolveAgentHookChannelId,
 } from "./hook-agent-context.js";
 
@@ -88,5 +89,49 @@ describe("buildAgentHookContextChannelFields", () => {
       chatId: "1472750640760623226",
       senderId: undefined,
     });
+  });
+});
+
+describe("buildAgentHookContextIdentityFields", () => {
+  it("mirrors flat sender and chat ids into channel-owned context", () => {
+    expect(
+      buildAgentHookContextIdentityFields({
+        senderId: "open-id-1",
+        chatId: "chat-1",
+      }),
+    ).toEqual({
+      senderId: "open-id-1",
+      chatId: "chat-1",
+      channelContext: {
+        sender: { id: "open-id-1" },
+        chat: { id: "chat-1" },
+      },
+    });
+  });
+
+  it("preserves plugin-augmented channel fields while keeping id compatible", () => {
+    expect(
+      buildAgentHookContextIdentityFields({
+        senderId: "open-id-1",
+        channelContext: {
+          sender: { id: "stale-id", userId: "user-1" } as { id?: string; userId: string },
+        },
+      }),
+    ).toEqual({
+      senderId: "open-id-1",
+      channelContext: {
+        sender: { id: "open-id-1", userId: "user-1" },
+      },
+    });
+  });
+
+  it("omits identity fields for system-originated triggers", () => {
+    expect(
+      buildAgentHookContextIdentityFields({
+        trigger: "cron",
+        senderId: "open-id-1",
+        chatId: "chat-1",
+      }),
+    ).toEqual({});
   });
 });

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPackageArtifacts,
@@ -98,7 +99,22 @@ describe("package-openclaw-for-docker", () => {
     for (const flag of ["--output-dir", "--output-name", "--source-dir"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--skip-build"])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([`${flag}=`])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([`${flag}=-h`])).toThrow(`${flag} requires a value`);
+    }
+  });
+
+  it("rejects duplicate package artifact CLI options", () => {
+    const duplicateCases = [
+      ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
+      ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
+      ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
+      ["--skip-build", ["--skip-build", "--skip-build"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
     }
   });
 
@@ -119,7 +135,7 @@ describe("package-openclaw-for-docker", () => {
     );
   });
 
-  it("uses build-all as the single bounded package artifact build step", async () => {
+  it("uses build-all with declaration generation for package artifacts", async () => {
     const calls: Array<{
       command: string;
       args: string[];
@@ -129,7 +145,9 @@ describe("package-openclaw-for-docker", () => {
       timeoutMs: number | undefined;
     }> = [];
     const previousTimeout = process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS;
+    const previousSkipDts = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
     process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = "1234";
+    process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
 
     try {
       await buildPackageArtifacts("/repo", {
@@ -155,6 +173,11 @@ describe("package-openclaw-for-docker", () => {
       } else {
         process.env.OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS = previousTimeout;
       }
+      if (previousSkipDts === undefined) {
+        delete process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD;
+      } else {
+        process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = previousSkipDts;
+      }
     }
 
     expect(calls).toEqual([
@@ -163,7 +186,7 @@ describe("package-openclaw-for-docker", () => {
         args: ["scripts/build-all.mjs"],
         cwd: "/repo",
         noPnpm: "1",
-        skipDts: "1",
+        skipDts: "0",
         timeoutMs: 1234,
       },
     ]);
@@ -253,14 +276,41 @@ describe("package-openclaw-for-docker", () => {
         }),
       ).rejects.toThrow("missing packed OpenClaw tarball");
 
-      fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "");
       await expect(
         packOpenClawPackageForDocker("/repo", outputDir, {
           prepareChangelog: async () => {},
           restoreChangelog: async () => {},
-          runCaptureImpl: async () => "npm notice\n",
+          runCaptureImpl: async () => {
+            fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "");
+            return "npm notice\n";
+          },
         }),
       ).resolves.toBe(path.join(outputDir, "openclaw-2026.6.17.tgz"));
+    } finally {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores stale package tarballs before fallback scanning npm output", async () => {
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docker-pack-stale-"));
+    try {
+      fs.writeFileSync(path.join(outputDir, "openclaw-9999.1.1.tgz"), "stale");
+
+      await expect(
+        packOpenClawPackageForDocker("/repo", outputDir, {
+          prepareChangelog: async () => {},
+          restoreChangelog: async () => {},
+          runCaptureImpl: async () => {
+            fs.writeFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "current");
+            return "npm notice\n";
+          },
+        }),
+      ).resolves.toBe(path.join(outputDir, "openclaw-2026.6.17.tgz"));
+
+      expect(fs.existsSync(path.join(outputDir, "openclaw-9999.1.1.tgz"))).toBe(false);
+      expect(fs.readFileSync(path.join(outputDir, "openclaw-2026.6.17.tgz"), "utf8")).toBe(
+        "current",
+      );
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }
@@ -285,6 +335,20 @@ describe("package-openclaw-for-docker", () => {
     ).rejects.toThrow("pack failed");
 
     expect(calls).toEqual(["prepare:/repo", "pack", "restore:/repo"]);
+  });
+
+  it("clamps oversized command timers before scheduling", async () => {
+    await expect(
+      runCommandForTest(
+        process.execPath,
+        ["-e", "setTimeout(() => process.exit(0), 25);"],
+        process.cwd(),
+        {
+          killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        },
+      ),
+    ).resolves.toBe("");
   });
 
   it("kills timed-out child process groups", async () => {
@@ -317,6 +381,41 @@ describe("package-openclaw-for-docker", () => {
       childPid = await readPid(childPidPath, 2000);
       await timeoutAssertion;
       await waitForDead(childPid, 2000);
+    } finally {
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("clamps oversized kill grace before scheduling", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-grace-"));
+    const donePath = path.join(tempDir, "done");
+    const childPidPath = path.join(tempDir, "child.pid");
+    let childPid;
+    try {
+      const script = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const runPromise = runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
+        killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
+        timeoutMs: 500,
+      });
+      childPid = await readPid(childPidPath, 2000);
+
+      await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+      expect(fs.readFileSync(donePath, "utf8")).toBe("done");
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");

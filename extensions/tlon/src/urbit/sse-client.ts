@@ -5,6 +5,7 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { urbitFetch } from "./fetch.js";
 
 type UrbitSseLogger = {
@@ -153,7 +154,7 @@ export class UrbitSSEClient {
 
     try {
       if (!response.ok && response.status !== 204) {
-        const errorText = await response.text().catch(() => "");
+        const errorText = await readResponseTextLimited(response, 16 * 1024).catch(() => "");
         throw new Error(
           `Subscribe failed: ${response.status}${errorText ? ` - ${errorText}` : ""}`,
         );

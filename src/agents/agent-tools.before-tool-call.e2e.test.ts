@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 /**
  * Integration-style tests for before_tool_call behavior.
  * Covers loop detection, diagnostics, plugin approval, and skill telemetry
@@ -22,11 +23,13 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -1040,6 +1043,26 @@ describe("before_tool_call requireApproval handling", () => {
     }
   }
 
+  function registerTelegramPluginApprovalSetup(): void {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            approvalCapability: {
+              native: {},
+              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
+              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
+              describePluginApprovalSetup: () => "Configure Telegram native approval setup.",
+            },
+          },
+        },
+      ]),
+    );
+  }
+
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
@@ -1490,7 +1513,8 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Denied by user");
   });
 
-  it("blocks on timeout with default deny behavior", async () => {
+  it("blocks turn-source plugin approval timeouts with setup guidance", async () => {
+    registerTelegramPluginApprovalSetup();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Timeout test",
@@ -1498,17 +1522,30 @@ describe("before_tool_call requireApproval handling", () => {
       },
     });
 
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-3",
+      status: "accepted",
+      deliveryRoute: "turn-source",
+    });
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-3", decision: null });
 
     const result = await runBeforeToolCallHook({
       toolName: "bash",
       params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123456789",
+        turnSourceAccountId: "default",
+      },
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(result).toHaveProperty(
+      "reason",
+      "Approval timed out\n\nConfigure Telegram native approval setup.",
+    );
   });
 
   it("allows on timeout when timeoutBehavior is allow and preserves hook params", async () => {
@@ -1843,6 +1880,106 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(onResolution).toHaveBeenCalledWith("cancelled");
+  });
+
+  it("forwards turn source routing fields from ctx to plugin.approval.request", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Channel-routed approval",
+        description: "Must route to telegram",
+        pluginId: "my-plugin",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "route-id-1", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "fetch",
+      params: { url: "https://example.com" },
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-100123456789",
+        turnSourceAccountId: "acct-42",
+        turnSourceThreadId: 9001,
+      },
+    });
+
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBe("telegram");
+    expect(requestParams.turnSourceTo).toBe("-100123456789");
+    expect(requestParams.turnSourceAccountId).toBe("acct-42");
+    expect(requestParams.turnSourceThreadId).toBe(9001);
+  });
+
+  it("uses the transport channel when tool policy provider differs", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Transport routed approval",
+        description: "Must use the transport channel",
+        pluginId: "my-plugin",
+      },
+    });
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-route-"));
+    await fs.writeFile(path.join(tempDir, "note.txt"), "hello");
+    mockCallGateway.mockResolvedValueOnce({ id: "transport-route-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "transport-route-id",
+      decision: "allow-once",
+    });
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tempDir,
+      messageProvider: "discord-voice",
+      messageChannel: "discord",
+      currentChannelId: "native-channel-1",
+      currentMessagingTarget: "channel:deliverable-1",
+      agentAccountId: "acct-1",
+      currentThreadTs: "thread-1",
+    });
+    const readTool = tools.find((tool) => tool.name === "read");
+    if (!readTool) {
+      throw new Error("missing read tool");
+    }
+    await readTool.execute("tool-hook-route", { path: "note.txt" }, undefined, undefined);
+
+    const requestCall = requireGatewayCall(0);
+    expect(requestCall[0]).toBe("plugin.approval.request");
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBe("discord");
+    expect(requestParams.turnSourceTo).toBe("channel:deliverable-1");
+    expect(requestParams.turnSourceAccountId).toBe("acct-1");
+    expect(requestParams.turnSourceThreadId).toBe("thread-1");
+  });
+
+  it("omits turn source routing fields when ctx does not carry them", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route ctx",
+        description: "Local-only approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "no-route-id", decision: "allow-once" });
+
+    await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    const requestCall = requireGatewayCall(0);
+    const requestParams = requireRecord(requestCall[2], "approval request params");
+    expect(requestParams.turnSourceChannel).toBeUndefined();
+    expect(requestParams.turnSourceTo).toBeUndefined();
+    expect(requestParams.turnSourceAccountId).toBeUndefined();
+    expect(requestParams.turnSourceThreadId).toBeUndefined();
   });
 });
 

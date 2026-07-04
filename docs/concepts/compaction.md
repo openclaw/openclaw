@@ -62,7 +62,7 @@ Configure compaction under `agents.defaults.compaction` in your `openclaw.json`.
 
 ### Using a different model
 
-By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts any `provider/model-id` string:
+By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
 
 ```json
 {
@@ -75,6 +75,8 @@ By default, compaction uses the agent's primary model. Set `agents.defaults.comp
   }
 }
 ```
+
+Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
 This works with local models too, for example a second Ollama model dedicated to summarization:
 

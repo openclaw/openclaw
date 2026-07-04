@@ -7,15 +7,16 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "@openclaw/media-core/read-response-with-limit";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import {
   fetchWithSsrFGuard,
   withStrictGuardedFetchMode,
   withTrustedExplicitProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
-import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
+import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
@@ -425,7 +426,7 @@ async function readChunkWithIdleTimeout(
       (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(toLintErrorObject(err, "Non-Error rejection"));
+          reject(toErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -699,18 +700,4 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       await release();
     }
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

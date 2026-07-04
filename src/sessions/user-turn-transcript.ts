@@ -72,6 +72,7 @@ type CreateUserTurnTranscriptRecorderParams = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   errorContext?: string;
   onPersistenceError?: (error: unknown) => void;
+  onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
 };
 
 type ResolvePersistedUserTurnTextOptions = {
@@ -141,10 +142,12 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
 
 function normalizeOptionalTextArray(
   values: readonly (string | null | undefined)[] | null | undefined,
-): string[] {
-  return (
-    values?.map(normalizeOptionalText).filter((value): value is string => Boolean(value)) ?? []
-  );
+): (string | undefined)[] {
+  // Map each entry to a normalized string or undefined — do NOT compact with
+  // .filter(Boolean). The writer pads holes with "" to keep parallel Media*
+  // arrays (MediaPaths / MediaUrls / MediaTypes) index-aligned, so compaction
+  // here would shift later entries onto the wrong attachment.
+  return values?.map(normalizeOptionalText) ?? [];
 }
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
@@ -241,6 +244,9 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
     content,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.senderIsOwner === undefined
+      ? {}
+      : { __openclaw: { senderIsOwner: params.senderIsOwner } }),
     ...mediaFields,
   } as PersistedUserTurnMessage;
   return applyInputProvenanceToUserMessage(message, params.provenance) as PersistedUserTurnMessage;
@@ -268,6 +274,19 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   return marker !== undefined;
 }
 
+function userMessageHasImageContent(message: AgentMessage): boolean {
+  return (
+    isUserMessage(message) &&
+    Array.isArray(message.content) &&
+    message.content.some(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "image",
+    )
+  );
+}
+
 // Runtime messages may lack transcript metadata because channel adapters prepare
 // display text separately. Merge only safe user messages, never block markers.
 export function mergePreparedUserTurnMessageForRuntime(params: {
@@ -284,6 +303,9 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   return {
     ...(params.runtimeMessage as unknown as Record<string, unknown>),
     ...(params.preparedMessage as unknown as Record<string, unknown>),
+    ...(userMessageHasImageContent(params.runtimeMessage)
+      ? { content: params.runtimeMessage.content }
+      : {}),
   } as unknown as AgentMessage;
 }
 
@@ -315,12 +337,26 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  return idempotencyKey
-    ? ({
-        ...(nextUserMessage as unknown as Record<string, unknown>),
-        idempotencyKey,
-      } as unknown as PersistedUserTurnMessage)
-    : nextUserMessage;
+  const originalOpenClaw = (message as unknown as { __openclaw?: unknown })["__openclaw"];
+  const senderIsOwner =
+    originalOpenClaw && typeof originalOpenClaw === "object"
+      ? (originalOpenClaw as { senderIsOwner?: unknown }).senderIsOwner
+      : undefined;
+  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
+    return nextUserMessage;
+  }
+  const nextRecord = nextUserMessage as unknown as Record<string, unknown>;
+  const nextOpenClaw =
+    nextRecord["__openclaw"] && typeof nextRecord["__openclaw"] === "object"
+      ? (nextRecord["__openclaw"] as Record<string, unknown>)
+      : {};
+  return {
+    ...nextRecord,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(typeof senderIsOwner === "boolean"
+      ? { __openclaw: { ...nextOpenClaw, senderIsOwner } }
+      : {}),
+  } as unknown as PersistedUserTurnMessage;
 }
 
 export async function appendUserTurnTranscriptMessage(
@@ -477,6 +513,7 @@ export function createUserTurnTranscriptRecorder(
   let runtimePersistencePromise: Promise<void> | undefined;
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
+  let persistedMessageNotified = false;
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -516,6 +553,21 @@ export function createUserTurnTranscriptRecorder(
       })();
     }
     return await resolvedMessagePromise;
+  };
+
+  const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
+    const notificationMessage = persistedMessage ?? persistedResult?.message ?? message;
+    if (!notificationMessage || persistedMessageNotified || !params.onMessagePersisted) {
+      return;
+    }
+    persistedMessageNotified = true;
+    try {
+      void Promise.resolve(params.onMessagePersisted(notificationMessage)).catch(
+        handlePersistenceError,
+      );
+    } catch (error) {
+      handlePersistenceError(error);
+    }
   };
 
   const waitForRuntimePersistence = async () => {
@@ -581,6 +633,7 @@ export function createUserTurnTranscriptRecorder(
       if (result) {
         persisted = true;
         persistedResult = result;
+        notifyMessagePersisted(result.message);
       }
       return result;
     })();
@@ -606,6 +659,7 @@ export function createUserTurnTranscriptRecorder(
           message: persistedMessage,
         };
       }
+      notifyMessagePersisted(persistedMessage);
     },
     markBlocked: () => {
       blocked = true;

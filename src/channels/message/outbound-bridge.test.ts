@@ -1,7 +1,10 @@
 // Outbound bridge tests cover channel message handoff from core to outbound adapters.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
+import {
+  createChannelMessageAdapterFromOutbound,
+  type ChannelMessageOutboundBridgeResult,
+} from "./outbound-bridge.js";
 import type {
   ChannelMessageSendPayloadContext,
   ChannelMessageSendPollContext,
@@ -77,6 +80,35 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         replyToId: "parent-1",
       },
     ]);
+  });
+
+  it("normalizes outbound progress results before forwarding them to message callers", async () => {
+    const sendText = vi.fn(
+      async (request: {
+        onDeliveryResult?: (result: ChannelMessageOutboundBridgeResult) => Promise<void> | void;
+      }) => {
+        await request.onDeliveryResult?.({ channel: "demo", messageId: "chunk-1" });
+        return { channel: "demo", messageId: "chunk-2" };
+      },
+    );
+    const onDeliveryResult = vi.fn();
+    const adapter = createChannelMessageAdapterFromOutbound({ outbound: { sendText } });
+
+    await adapter.send?.text?.({
+      cfg,
+      to: "room-1",
+      text: "hello",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledTimes(1);
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      messageId: "chunk-1",
+      receipt: expect.objectContaining({
+        primaryPlatformMessageId: "chunk-1",
+        platformMessageIds: ["chunk-1"],
+      }),
+    });
   });
 
   it("preserves an outbound receipt instead of rebuilding it", async () => {

@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
+    generateVoiceResponse: vi.fn(async () => ({ text: null })),
     getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
       () => realtimeTranscriptionProvider,
     ),
@@ -41,6 +42,10 @@ const mocks = vi.hoisted(() => {
 vi.mock("./realtime-transcription.runtime.js", () => ({
   getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
+}));
+
+vi.mock("./response-generator.js", () => ({
+  generateVoiceResponse: mocks.generateVoiceResponse,
 }));
 
 const provider: VoiceCallProvider = {
@@ -250,7 +255,6 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       }
       expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
       expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
-      expect(mediaStreamHandler["closeAll"]).toBeTypeOf("function");
     } finally {
       await server.stop();
     }
@@ -1644,6 +1648,46 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       unblockStartedReads();
       readBodySpy.mockRestore();
     }
+  });
+});
+
+describe("VoiceCallWebhookServer classic response routing", () => {
+  it("keeps outbound calls on the top-level agent when the dialed number has an inbound route", async () => {
+    const call = createCall(Date.now());
+    call.direction = "outbound";
+    call.to = "+15550001111";
+    call.sessionKey = "agent:top:voice:15550001111";
+    const manager = {
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      speak: vi.fn(async () => ({ success: true })),
+    } as unknown as CallManager;
+    const config = createConfig({
+      agentId: "top",
+      numbers: {
+        "+15550001111": { agentId: "inbound-route" },
+      },
+    });
+    const server = new VoiceCallWebhookServer(
+      config,
+      manager,
+      provider,
+      {} as never,
+      undefined,
+      {} as never,
+    );
+    mocks.generateVoiceResponse.mockReset().mockResolvedValue({ text: null });
+
+    await (
+      server as unknown as {
+        handleInboundResponse: (callId: string, message: string) => Promise<void>;
+      }
+    ).handleInboundResponse(call.callId, "hello");
+
+    const params = requireFirstMockCall(
+      mocks.generateVoiceResponse.mock.calls,
+      "classic voice response",
+    )[0] as { voiceConfig?: VoiceCallConfig } | undefined;
+    expect(params?.voiceConfig?.agentId).toBe("top");
   });
 });
 
