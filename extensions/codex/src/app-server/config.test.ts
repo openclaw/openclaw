@@ -1,5 +1,7 @@
 // Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +15,7 @@ import {
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
@@ -520,7 +523,59 @@ describe("Codex app-server config", () => {
     expectFields(runtime.start, "runtime start", {
       command: "codex",
       commandSource: "managed",
+      homeScope: "agent",
     });
+  });
+
+  it("resolves opt-in user-home coexistence only for local stdio", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { homeScope: "user" } },
+    });
+
+    expect(runtime.start.homeScope).toBe("user");
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+            homeScope: "user",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+    );
+  });
+
+  it("resolves the native user Codex home from CODEX_HOME or the OS home", () => {
+    expect(resolveCodexAppServerUserHomeDir({ CODEX_HOME: "/tmp/custom-codex" })).toBe(
+      "/tmp/custom-codex",
+    );
+    expect(resolveCodexAppServerUserHomeDir({}, () => "/Users/tester")).toBe(
+      "/Users/tester/.codex",
+    );
+  });
+
+  it("checks shared user config before enabling model-backed approval review", async () => {
+    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-user-home-"));
+    try {
+      await fs.writeFile(
+        path.join(codexHome, "config.toml"),
+        'openai_base_url = "http://localhost:8080/v1"\n',
+      );
+
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          env: { CODEX_HOME: codexHome },
+          homeScope: "user",
+        }),
+      ).toBe(false);
+    } finally {
+      await fs.rm(codexHome, { recursive: true, force: true });
+    }
   });
 
   it("treats only explicit OpenAI model context as safe for Codex-backed auto-review", () => {
@@ -942,8 +997,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: {},
       modelProvider: "openai",
       requirementsPath: "/custom/codex/requirements.toml",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -963,8 +1018,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: { ProgramData: "D:\\ManagedData" },
       modelProvider: "openai",
       platform: "win32",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -1826,6 +1881,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         commandSource: "config",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
+        homeScope: "agent",
       },
     });
   });

@@ -519,7 +519,7 @@ export function createOpenClawCodingTools(options?: {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
-  /** Trusted sender identity bit for command/channel-action auth; does not filter model tools. */
+  /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;

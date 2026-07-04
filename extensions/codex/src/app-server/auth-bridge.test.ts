@@ -240,6 +240,26 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("uses the native user Codex home for coexistence mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-user-home-"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(root, "user-codex-home");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    const startOptions = createStartOptions({ homeScope: "user" });
+    try {
+      await expect(
+        bridgeCodexAppServerStartOptions({ startOptions, agentDir, authProfileId: null }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: { CODEX_HOME: codexHome },
+      });
+      await expect(fs.access(codexHome)).resolves.toBeUndefined();
+      await expectPathMissing(resolveCodexAppServerHomeDir(agentDir));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({
