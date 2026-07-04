@@ -185,9 +185,13 @@ describe("extended-stable plugin release artifacts", () => {
     expect(orchestrator).toContain("Candidate publication moved one or more shared selectors");
     expect(orchestrator).toContain("actions/workflows/${workflow}/runs");
     expect(orchestrator).toContain("matched multiple new runs; refusing to guess");
+    expect(orchestrator).not.toContain("run.actor?.login");
     expect(orchestrator).not.toContain("dispatch did not return an Actions run URL");
     expect(orchestrator).not.toContain("plugin-clawhub-release.yml");
     expect(orchestrator).not.toContain("windows-node-release.yml");
+
+    expect(source).toContain("10#${extended_stable_patch} < 33");
+    expect(source).not.toContain("[3-9][0-9]|[1-9][0-9]{2,}");
   });
 
   it("allows the exact extended-stable branch in the plugin publisher", () => {
