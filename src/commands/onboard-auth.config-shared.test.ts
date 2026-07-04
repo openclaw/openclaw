@@ -5,6 +5,7 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   applyAgentDefaultModelPrimary,
+  applyOnboardAuthAgentModelsAndProviders,
   applyProviderConfigWithDefaultModelPreset,
   applyProviderConfigWithModelCatalogPreset,
   applyProviderConfigWithDefaultModel,
@@ -59,6 +60,80 @@ describe("onboard auth provider config merges", () => {
     ]);
     expect(next.models?.providers?.custom?.apiKey).toBe("test-key");
     expect(next.agents?.defaults?.models).toEqual(agentModels);
+  });
+
+  it("preserves provider-level settings when applying onboarding provider patches", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          mode: "merge",
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://old.example.com/v1",
+              timeoutSeconds: 900,
+              models: [makeModel("model-a")],
+            },
+            other: {
+              api: "openai-responses",
+              baseUrl: "https://other.example.com/v1",
+              timeoutSeconds: 300,
+              models: [makeModel("other-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
+    expect(next.models?.providers?.custom?.baseUrl).toBe("https://new.example.com/v1");
+    expect(next.models?.providers?.custom?.models?.map((m) => m.id)).toEqual(["model-b"]);
+    expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
+  });
+
+  it("lets onboarding provider patches clear omitted auth fields", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          providers: {
+            custom: {
+              api: "anthropic-messages",
+              baseUrl: "https://old.example.com/v1",
+              apiKey: "stale-key",
+              auth: "api-key",
+              headers: { authorization: "stale-header" },
+              timeoutSeconds: 900,
+              models: [makeModel("model-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "anthropic-messages",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(next.models?.providers?.custom?.apiKey).toBeUndefined();
+    expect(next.models?.providers?.custom?.auth).toBeUndefined();
+    expect(next.models?.providers?.custom?.headers).toBeUndefined();
+    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
   });
 
   it("preserves existing agent model entries when adding provider models", () => {

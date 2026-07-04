@@ -258,6 +258,38 @@ export function withAgentModelAliases(
   return next;
 }
 
+function isMergeableProviderConfig(
+  value: ModelProviderConfig | undefined,
+): value is ModelProviderConfig {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function mergeOnboardProviderConfigs(
+  existingProviders: Record<string, ModelProviderConfig> | undefined,
+  patchProviders: Record<string, ModelProviderConfig>,
+): Record<string, ModelProviderConfig> {
+  const merged: Record<string, ModelProviderConfig> = { ...existingProviders };
+  for (const [providerId, providerConfig] of Object.entries(patchProviders)) {
+    const existingProvider = existingProviders?.[providerId];
+    if (!isMergeableProviderConfig(existingProvider) || !isMergeableProviderConfig(providerConfig)) {
+      merged[providerId] = providerConfig;
+      continue;
+    }
+    const nextProvider = { ...existingProvider, ...providerConfig };
+    if (!("apiKey" in providerConfig)) {
+      delete nextProvider.apiKey;
+    }
+    if (!("auth" in providerConfig)) {
+      delete nextProvider.auth;
+    }
+    if (!("headers" in providerConfig)) {
+      delete nextProvider.headers;
+    }
+    merged[providerId] = nextProvider;
+  }
+  return merged;
+}
+
 /** Write onboarding-auth model aliases and provider configs into the canonical config sections. */
 export function applyOnboardAuthAgentModelsAndProviders(
   cfg: OpenClawConfig,
@@ -270,6 +302,7 @@ export function applyOnboardAuthAgentModelsAndProviders(
     ...cfg.agents?.defaults?.models,
     ...params.agentModels,
   });
+  const mergedProviders = mergeOnboardProviderConfigs(cfg.models?.providers, params.providers);
   return {
     ...cfg,
     agents: {
@@ -280,8 +313,9 @@ export function applyOnboardAuthAgentModelsAndProviders(
       },
     },
     models: {
+      ...cfg.models,
       mode: cfg.models?.mode ?? "merge",
-      providers: params.providers,
+      providers: mergedProviders,
     },
   };
 }
