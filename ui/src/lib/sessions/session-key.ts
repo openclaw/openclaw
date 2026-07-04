@@ -22,6 +22,7 @@ export type UiSessionDefaultsHost = {
 type UiSessionDefaults = {
   defaultAgentId?: string | null;
   mainKey?: string | null;
+  mainSessionKey?: string | null;
 };
 
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -158,6 +159,88 @@ export function resolveUiGlobalAliasAgentId(
 
 export function isUiGlobalSessionKey(sessionKey: string | undefined | null): boolean {
   return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
+}
+
+function resolveUiMainAliasAgentId(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
+  const mainKey = resolveUiConfiguredMainKey(host);
+  return rest === DEFAULT_MAIN_KEY || rest === mainKey ? normalizeAgentId(parsed.agentId) : null;
+}
+
+function resolveUiCanonicalMainSessionKey(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+): string {
+  const defaults = readSessionDefaults(host);
+  return (
+    normalizeOptionalString(defaults?.mainSessionKey) ??
+    buildAgentMainSessionKey({
+      agentId: resolveUiDefaultAgentId(host),
+      mainKey: resolveUiConfiguredMainKey(host),
+    })
+  );
+}
+
+function normalizeUiSessionEventKey(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): string | null {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  const mainKey = resolveUiConfiguredMainKey(host);
+  const defaultAgentId = resolveUiDefaultAgentId(host);
+  const canonicalMain = resolveUiCanonicalMainSessionKey(host);
+  const aliases = new Set(
+    [
+      DEFAULT_MAIN_KEY,
+      mainKey,
+      canonicalMain,
+      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey: DEFAULT_MAIN_KEY }),
+      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
+    ]
+      .filter((value): value is string => Boolean(value))
+      .map(normalizeLowercaseStringOrEmpty),
+  );
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  return aliases.has(normalized) ? normalizeLowercaseStringOrEmpty(canonicalMain) : normalized;
+}
+
+export function uiSessionEventMatches(
+  host: UiSessionDefaultsHost & { sessionKey: string },
+  eventSessionKey: string | undefined | null,
+  eventAgentId?: string | null,
+): boolean {
+  const eventKey = normalizeOptionalString(eventSessionKey);
+  if (!eventKey) {
+    return true;
+  }
+  const keysMatch =
+    normalizeUiSessionEventKey(host, eventKey) ===
+    normalizeUiSessionEventKey(host, host.sessionKey);
+  const selectedAliasAgentId = resolveUiMainAliasAgentId(host, host.sessionKey);
+  const globalAliasMatches =
+    selectedAliasAgentId !== null &&
+    isUiGlobalSessionKey(eventKey) &&
+    selectedAliasAgentId === normalizeAgentId(eventAgentId ?? resolveUiDefaultAgentId(host));
+  if (!keysMatch && !globalAliasMatches) {
+    return false;
+  }
+  if (!isUiGlobalSessionKey(host.sessionKey) || !isUiGlobalSessionKey(eventKey)) {
+    return true;
+  }
+  const selectedAgentId = resolveUiSelectedGlobalAgentId(host);
+  const normalizedEventAgentId = normalizeOptionalString(eventAgentId);
+  return normalizedEventAgentId
+    ? normalizeAgentId(normalizedEventAgentId) === selectedAgentId
+    : selectedAgentId === resolveUiDefaultAgentId(host);
 }
 
 export function isUiSelectedGlobalSessionKey(sessionKey: string | undefined | null): boolean {

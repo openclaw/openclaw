@@ -4,7 +4,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
-import type { ActivityEntry, ActivityStatus } from "./data.ts";
+import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 

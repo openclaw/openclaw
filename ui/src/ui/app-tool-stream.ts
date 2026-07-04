@@ -3,15 +3,8 @@ import { stripInlineDirectiveTagsForDelivery } from "../../../src/utils/directiv
 import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../lib/format.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import {
-  buildAgentMainSessionKey,
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../lib/sessions/session-key.ts";
+import { uiSessionEventMatches } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import { updateActivityFromToolEvent, type ActivityEntry } from "../pages/activity/data.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -66,7 +59,6 @@ type ToolStreamHost = {
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
-  activityEntries?: ActivityEntry[];
   toolStreamSyncTimer: number | null;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
@@ -239,9 +231,7 @@ function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<strin
   const result = data.result;
   const details = readRecord(readRecord(result)?.details);
   const targetSessionKey = toTrimmedString(details?.sessionKey) ?? host.sessionKey;
-  if (
-    !sessionKeyMatchesHost(host, targetSessionKey, toTrimmedString(details?.agentId) ?? undefined)
-  ) {
+  if (!uiSessionEventMatches(host, targetSessionKey, toTrimmedString(details?.agentId))) {
     return;
   }
   const override = resolveSessionStatusModelOverride(result);
@@ -249,115 +239,6 @@ function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<strin
     return;
   }
   host.sessions.setModelOverride(targetSessionKey, override);
-}
-
-function readSessionDefaults(host: ToolStreamHost): SessionDefaultsSnapshot | undefined {
-  return host.hello?.snapshot?.sessionDefaults;
-}
-
-function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
-  return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
-}
-
-function resolveDefaultAgentId(host: ToolStreamHost): string {
-  const defaults = readSessionDefaults(host);
-  return normalizeAgentId(
-    toTrimmedString(host.agentsList?.defaultId) ??
-      toTrimmedString(defaults?.defaultAgentId) ??
-      DEFAULT_AGENT_ID,
-  );
-}
-
-function resolveSelectedAgentId(host: ToolStreamHost): string {
-  return normalizeAgentId(toTrimmedString(host.assistantAgentId) ?? resolveDefaultAgentId(host));
-}
-
-function agentEventScopeMatches(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  if (!isGlobalSessionKey(host.sessionKey) || !isGlobalSessionKey(payload.sessionKey)) {
-    return true;
-  }
-  const payloadAgentId = toTrimmedString(payload.agentId);
-  const selectedAgentId = resolveSelectedAgentId(host);
-  return payloadAgentId
-    ? normalizeAgentId(payloadAgentId) === selectedAgentId
-    : selectedAgentId === resolveDefaultAgentId(host);
-}
-
-function resolveAgentMainAliasAgentId(host: ToolStreamHost, value?: string): string | null {
-  const parsed = parseAgentSessionKey(value);
-  if (!parsed) {
-    return null;
-  }
-  const defaults = readSessionDefaults(host);
-  const mainKey = toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY;
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  return rest === DEFAULT_MAIN_KEY || rest === normalizeLowercaseStringOrEmpty(mainKey)
-    ? normalizeAgentId(parsed.agentId)
-    : null;
-}
-
-function selectedGlobalAliasEventMatches(
-  host: ToolStreamHost,
-  sessionKey: string,
-  agentId?: string,
-): boolean {
-  const hostAgentId = resolveAgentMainAliasAgentId(host, host.sessionKey);
-  if (!hostAgentId || !isGlobalSessionKey(sessionKey)) {
-    return false;
-  }
-  const eventAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(host));
-  return hostAgentId === eventAgentId;
-}
-
-function sessionKeyMatchesHost(
-  host: ToolStreamHost,
-  sessionKey: string,
-  agentId?: string,
-): boolean {
-  return (
-    normalizeSessionKeyForEventComparison(host, sessionKey) ===
-      normalizeSessionKeyForEventComparison(host, host.sessionKey) ||
-    selectedGlobalAliasEventMatches(host, sessionKey, agentId)
-  );
-}
-
-function resolveDefaultMainSessionKey(host: ToolStreamHost): string {
-  const defaults = readSessionDefaults(host);
-  const configuredMain = toTrimmedString(defaults?.mainSessionKey);
-  if (configuredMain) {
-    return configuredMain;
-  }
-  return buildAgentMainSessionKey({
-    agentId: toTrimmedString(defaults?.defaultAgentId) ?? DEFAULT_AGENT_ID,
-    mainKey: toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY,
-  });
-}
-
-function normalizeSessionKeyForEventComparison(
-  host: ToolStreamHost,
-  value?: string,
-): string | null {
-  const raw = toTrimmedString(value);
-  if (!raw) {
-    return null;
-  }
-  const defaults = readSessionDefaults(host);
-  const mainKey = toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY;
-  const defaultAgentId = toTrimmedString(defaults?.defaultAgentId) ?? DEFAULT_AGENT_ID;
-  const canonicalMain = resolveDefaultMainSessionKey(host);
-  const aliases = new Set(
-    [
-      DEFAULT_MAIN_KEY,
-      mainKey,
-      canonicalMain,
-      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey: DEFAULT_MAIN_KEY }),
-      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
-    ].map((entry) => normalizeLowercaseStringOrEmpty(entry)),
-  );
-  const normalizedRaw = normalizeLowercaseStringOrEmpty(raw);
-  return aliases.has(normalizedRaw)
-    ? normalizeLowercaseStringOrEmpty(canonicalMain)
-    : normalizedRaw;
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -507,19 +388,7 @@ export function handleSessionOperationEvent(
   }
   const sessionKey = toTrimmedString(payload.sessionKey);
   const agentId = toTrimmedString(payload.agentId) ?? undefined;
-  if (
-    !sessionKey ||
-    !sessionKeyMatchesHost(host, sessionKey, agentId) ||
-    !agentEventScopeMatches(host, {
-      runId: toTrimmedString(payload.operationId) ?? "",
-      seq: 0,
-      stream: "session.operation",
-      ts: typeof payload.ts === "number" ? payload.ts : Date.now(),
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      data: {},
-    })
-  ) {
+  if (!sessionKey || !uiSessionEventMatches(host, sessionKey, agentId)) {
     return;
   }
 
@@ -633,10 +502,7 @@ function resolveAcceptedSession(
   },
 ): { accepted: boolean; sessionKey?: string } {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (
-    sessionKey &&
-    !sessionKeyMatchesHost(host, sessionKey, toTrimmedString(payload.agentId) ?? undefined)
-  ) {
+  if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
     return { accepted: false };
   }
   if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
@@ -801,13 +667,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // to a client-generated UUID (via generateUUID in sendChatMessage), while
   // agent events arrive with the server's engine runId.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (
-    sessionKey &&
-    !sessionKeyMatchesHost(host, sessionKey, toTrimmedString(payload.agentId) ?? undefined)
-  ) {
-    return;
-  }
-  if (!agentEventScopeMatches(host, payload)) {
+  if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
     return;
   }
 
@@ -841,7 +701,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!toolCallId) {
     return;
   }
-  updateActivityFromToolEvent(host, { ...payload, data });
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
   const args = phase === "start" ? data.args : undefined;

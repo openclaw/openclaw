@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { ActivityEntry, ActivityStatus } from "./data.ts";
+import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import { renderActivity, type ActivityProps } from "./view.ts";
 
 function createEntry(overrides: Partial<ActivityEntry> = {}): ActivityEntry {

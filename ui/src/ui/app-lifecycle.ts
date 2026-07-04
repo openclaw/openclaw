@@ -67,12 +67,8 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
-  activityEntries: unknown[];
-  activityAutoFollow: boolean;
-  activityAtBottom: boolean;
   chatScrollFrame?: number | null;
   chatScrollTimeout?: number | null;
-  activityScrollFrame?: number | null;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   controlUiBootstrapReady?: Promise<void> | null;
   topbarObserver: ResizeObserver | null;
@@ -181,8 +177,6 @@ export function handleDisconnected(host: LifecycleHost) {
   stopWorkboardLifecycleRefresh(host);
   cancelHostAnimationFrame(host.chatScrollFrame);
   host.chatScrollFrame = null;
-  cancelHostAnimationFrame(host.activityScrollFrame);
-  host.activityScrollFrame = null;
   clearHostTimeout(host.chatScrollTimeout);
   host.chatScrollTimeout = null;
   host.realtimeTalkSession?.stop();

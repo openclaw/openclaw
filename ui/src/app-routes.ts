@@ -1,7 +1,7 @@
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
 import type { ApplicationContext } from "./app/context.ts";
-// import { page as activityPage } from "./pages/activity/route.ts";
+import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
@@ -33,6 +33,7 @@ export type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppR
 export const APP_ROUTE_TREE = [
   chatPage,
   overviewPage,
+  activityPage,
   agentsPage,
   channelsPage,
   ...configPages,

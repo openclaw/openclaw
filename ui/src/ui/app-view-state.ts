@@ -43,7 +43,6 @@ import type {
   SkillMessage,
 } from "../lib/skills/index.ts";
 // Control UI module implements app view state behavior.
-import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
 import type { ChatSendOptions } from "../pages/chat/chat-send.ts";
 import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
@@ -109,13 +108,6 @@ export type AppViewState = {
   chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
-  activityEntries: ActivityEntry[];
-  activityFilterText: string;
-  activityStatusFilters: Record<ActivityStatus, boolean>;
-  activityToolFilter: string;
-  activityExpandedIds: Set<string>;
-  activityAutoFollow: boolean;
-  activityAtBottom: boolean;
   chatStreamSegments: ChatStreamSegment[];
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -555,8 +547,6 @@ export type AppViewState = {
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;
     resetChatScroll: () => void;
-    handleActivityScroll: (event: Event) => void;
-    scheduleActivityScroll: (force?: boolean) => void;
     handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;

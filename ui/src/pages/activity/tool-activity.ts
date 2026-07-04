@@ -28,14 +28,12 @@ const ACTIVITY_STATUS_SUMMARY_LABELS: Record<ActivityStatus, string> = {
   error: "failed",
 };
 
-type ActivityHost = {
-  activityEntries?: ActivityEntry[];
-};
-
-type ToolEventPayload = {
+export type ToolActivityEvent = {
   runId: string;
   ts: number;
+  receivedAt: number;
   sessionKey?: string;
+  agentId?: string;
   data: Record<string, unknown>;
 };
 
@@ -74,6 +72,28 @@ function toTrimmedString(value: unknown): string | null {
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+export function parseToolActivityEvent(
+  payload: unknown,
+  receivedAt = Date.now(),
+): ToolActivityEvent | null {
+  const record = readRecord(payload);
+  const runId = toTrimmedString(record?.runId);
+  const data = readRecord(record?.data);
+  if (!record || record.stream !== "tool" || !runId || !data) {
+    return null;
+  }
+  const sessionKey = toTrimmedString(record.sessionKey);
+  const agentId = toTrimmedString(record.agentId);
+  return {
+    runId,
+    ts: typeof record.ts === "number" ? record.ts : receivedAt,
+    receivedAt,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(agentId ? { agentId } : {}),
+    data,
+  };
 }
 
 function extractText(value: unknown): string | null {
@@ -182,24 +202,24 @@ function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: 
   return `${toolName} ${statusLabel(status)}; ${argText}`;
 }
 
-export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEventPayload) {
-  if (!Array.isArray(host.activityEntries)) {
-    return;
-  }
+export function updateToolActivity(
+  entries: ActivityEntry[],
+  payload: ToolActivityEvent,
+): ActivityEntry[] {
   const data = payload.data ?? {};
   const toolCallId = toTrimmedString(data.toolCallId);
   if (!toolCallId) {
-    return;
+    return entries;
   }
   const toolName = toTrimmedString(data.name) ?? "tool";
   const id = `${payload.runId}:${toolCallId}`;
-  const now = Date.now();
+  const now = payload.receivedAt;
   const startedAt = typeof payload.ts === "number" ? payload.ts : now;
   const status = resolveStatus(data);
   const outputValue =
     data.phase === "update" ? data.partialResult : data.phase === "result" ? data.result : null;
   const preview = buildOutputPreview(outputValue);
-  const existing = host.activityEntries.find((entry) => entry.id === id);
+  const existing = entries.find((entry) => entry.id === id);
   const hiddenArgCount =
     data.args !== undefined ? countArgumentFields(data.args) : (existing?.hiddenArgumentCount ?? 0);
   const outputPreview = preview.text ?? existing?.outputPreview;
@@ -219,7 +239,7 @@ export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEve
     ...(outputPreview ? { outputPreview } : {}),
   };
   const next = existing
-    ? host.activityEntries.map((entry) => (entry.id === id ? nextEntry : entry))
-    : [...host.activityEntries, nextEntry];
-  host.activityEntries = next.slice(-ACTIVITY_ENTRY_LIMIT);
+    ? entries.map((entry) => (entry.id === id ? nextEntry : entry))
+    : [...entries, nextEntry];
+  return next.slice(-ACTIVITY_ENTRY_LIMIT);
 }

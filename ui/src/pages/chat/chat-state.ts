@@ -155,7 +155,6 @@ export type ChatPageHost = ChatHost &
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;
-    activityEntries: unknown[];
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     chatRunStatus: ChatProps["runStatus"];
@@ -316,9 +315,6 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatReplyTarget = null;
   state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
-  state.activityEntries = [];
-  state.activityExpandedIds = new Set();
-  state.activityAtBottom = true;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
@@ -938,7 +934,6 @@ export function createPageState(
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
-    activityEntries: [],
     ...createInitialChatRealtimeState(),
     requestUpdate,
     sessionWorkspaceState: undefined,

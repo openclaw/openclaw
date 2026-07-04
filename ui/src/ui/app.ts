@@ -77,11 +77,6 @@ import type {
   SkillMessage,
 } from "../lib/skills/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
-import {
-  handleActivityScroll as handleActivityScrollInternal,
-  scheduleActivityScroll as scheduleActivityScrollInternal,
-} from "../pages/activity/scroll.ts";
 import { removeQueuedMessage as removeQueuedMessageInternal } from "../pages/chat/chat-queue.ts";
 import {
   handleSendChat as handleSendChatInternal,
@@ -251,17 +246,6 @@ export class OpenClawApp extends LitElement {
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
   @state() chatToolMessages: unknown[] = [];
-  @state() activityEntries: ActivityEntry[] = [];
-  @state() activityFilterText = "";
-  @state() activityStatusFilters: Record<ActivityStatus, boolean> = {
-    running: true,
-    done: true,
-    error: true,
-  };
-  @state() activityToolFilter = "";
-  @state() activityExpandedIds = new Set<string>();
-  @state() activityAutoFollow = true;
-  @state() activityAtBottom = true;
   @state() chatStreamSegments: ChatStreamSegment[] = [];
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
@@ -673,7 +657,6 @@ export class OpenClawApp extends LitElement {
   chatIsProgrammaticScroll = false;
   chatProgrammaticScrollTarget = 0;
   @state() chatNewMessagesBelow = false;
-  activityScrollFrame: number | null = null;
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
   toolStreamOrder: string[] = [];
@@ -841,20 +824,6 @@ export class OpenClawApp extends LitElement {
     handleChatScrollInternal(
       this as unknown as Parameters<typeof handleChatScrollInternal>[0],
       event,
-    );
-  }
-
-  handleActivityScroll(event: Event) {
-    handleActivityScrollInternal(
-      this as unknown as Parameters<typeof handleActivityScrollInternal>[0],
-      event,
-    );
-  }
-
-  scheduleActivityScroll(force = false) {
-    scheduleActivityScrollInternal(
-      this as unknown as Parameters<typeof scheduleActivityScrollInternal>[0],
-      force,
     );
   }
 

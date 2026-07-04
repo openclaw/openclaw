@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
-import type { ActivityEntry } from "../pages/activity/data.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 
@@ -143,7 +142,6 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatStream: string | null;
   updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
-  activityEntries: ActivityEntry[];
   toolStreamById: Map<string, unknown>;
   toolStreamOrder: string[];
 };
@@ -193,7 +191,6 @@ function createHost(): TestGatewayHost {
     chatComposerProvisionalRestore: null,
     chatQueueBySession: {},
     chatToolMessages: [],
-    activityEntries: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
@@ -1517,17 +1514,6 @@ describe("connectGateway", () => {
       runId: "external-run-1",
       sessionKey: "main",
     });
-    expect(host.activityEntries).toHaveLength(1);
-    expect(host.activityEntries[0]).toMatchObject({
-      toolCallId: "session-tool-1",
-      runId: "external-run-1",
-      sessionKey: "main",
-      toolName: "exec",
-      status: "running",
-      hiddenArgumentCount: 1,
-      summary: "exec running; 1 argument hidden",
-    });
-    expect(JSON.stringify(host.activityEntries[0])).not.toContain("pwd");
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
