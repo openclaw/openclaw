@@ -1,7 +1,9 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createAgentEventAuditRecorder } from "../audit/agent-event-audit.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
+import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -54,6 +56,9 @@ export function startGatewayEventSubscriptions(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
 }) {
+  const auditRecorder = createAgentEventAuditRecorder();
+  const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
+  const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
   const getAgentEventHandler = createLazyPromise(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -218,7 +223,8 @@ export function startGatewayEventSubscriptions(params: {
     return lifecycleEventHandlerPromise;
   };
 
-  const agentUnsub = onAgentEvent((evt) => {
+  const unsubscribeAgentEvents = onAgentEvent((evt) => {
+    auditRecorder.record(evt);
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
@@ -269,6 +275,12 @@ export function startGatewayEventSubscriptions(params: {
       context: { runId: evt.runId, stream: evt.stream },
     });
   });
+  const agentUnsub = async () => {
+    unsubscribeAgentEvents();
+    unsubscribePrivateAuditEvents();
+    unsubscribeToolAuditEvents();
+    await auditRecorder.stop();
+  };
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });

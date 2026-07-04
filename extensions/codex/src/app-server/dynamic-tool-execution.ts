@@ -4,6 +4,8 @@
  */
 import {
   embeddedAgentLog,
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -29,12 +31,44 @@ export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
 export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
 const LOG_FIELD_MAX_LENGTH = 160;
+const CODEX_TIMEOUT_ABORT_REASONS = new Set([
+  "codex_startup_timeout",
+  "turn_completion_idle_timeout",
+  "turn_progress_idle_timeout",
+  "turn_terminal_idle_timeout",
+]);
 
 type DynamicToolTimeoutDetails = {
   responseMessage: string;
   consoleMessage: string;
   meta: Record<string, unknown>;
 };
+
+/** Preserves timeout provenance when an enclosing run aborts an active tool. */
+export function resolveCodexToolAbortTerminalReason(
+  signal: AbortSignal,
+): "failed" | "cancelled" | "timed_out" {
+  try {
+    const reason = signal.reason;
+    if (typeof reason === "string") {
+      if (CODEX_TIMEOUT_ABORT_REASONS.has(reason)) {
+        return "timed_out";
+      }
+      // Transport loss is a run failure, not an operator cancellation. Native
+      // and dynamic tool diagnostics share this helper and must agree with it.
+      return reason === "client_closed" ? "failed" : "cancelled";
+    }
+    if (reason && typeof reason === "object") {
+      const record = reason as { name?: unknown; reason?: unknown };
+      if (record.name === "TimeoutError" || record.reason === "timeout") {
+        return "timed_out";
+      }
+    }
+  } catch {
+    return "cancelled";
+  }
+  return "cancelled";
+}
 
 function normalizeLogField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -149,21 +183,27 @@ export async function handleDynamicToolCallWithTimeout(params: {
       );
     }
   };
-  const notifyFailedToolResult = (message: string) => {
+  const notifyFailedToolResult = (
+    message: string,
+    terminalReason: "failed" | "cancelled" | "timed_out" = "failed",
+  ) => {
     notifyAgentToolResult({
       toolName: params.call.tool,
       result: {
         content: [{ type: "text", text: message }],
-        details: { status: "failed", error: message },
+        details: { status: terminalReason, error: message },
       },
       isError: true,
     });
   };
   if (params.signal.aborted) {
     const message = "OpenClaw dynamic tool call aborted before execution.";
+    const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
     params.onFallbackSelected?.();
-    notifyFailedToolResult(message);
-    return failedDynamicToolResponse(message);
+    notifyFailedToolResult(message, terminalReason);
+    return failedDynamicToolResponse(message, {
+      terminalReason,
+    });
   }
 
   const controller = new AbortController();
@@ -172,10 +212,16 @@ export async function handleDynamicToolCallWithTimeout(params: {
   let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
   const abortFromRun = () => {
     const message = "OpenClaw dynamic tool call aborted.";
+    const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
     params.onFallbackSelected?.();
     controller.abort(params.signal.reason ?? new Error(message));
-    notifyFailedToolResult(message);
-    resolveAbort?.(failedDynamicToolResponse(message, { sideEffectEvidence: true }));
+    notifyFailedToolResult(message, terminalReason);
+    resolveAbort?.(
+      failedDynamicToolResponse(message, {
+        sideEffectEvidence: true,
+        terminalReason,
+      }),
+    );
   };
   const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
     resolveAbort = resolve;
@@ -192,9 +238,12 @@ export async function handleDynamicToolCallWithTimeout(params: {
         ...timeoutDetails.meta,
         consoleMessage: timeoutDetails.consoleMessage,
       });
-      notifyFailedToolResult(timeoutDetails.responseMessage);
+      notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
       resolve(
-        failedDynamicToolResponse(timeoutDetails.responseMessage, { sideEffectEvidence: true }),
+        failedDynamicToolResponse(timeoutDetails.responseMessage, {
+          sideEffectEvidence: true,
+          terminalReason: "timed_out",
+        }),
       );
     }, timeoutMs);
     timeout.unref?.();
@@ -215,14 +264,21 @@ export async function handleDynamicToolCallWithTimeout(params: {
       timeoutPromise,
     ]);
     if (!response.success && !didNotifyAgentToolResult) {
-      notifyFailedToolResult(readDynamicToolResponseText(response));
+      notifyFailedToolResult(
+        readDynamicToolResponseText(response),
+        response.diagnosticTerminalReason ?? "failed",
+      );
     }
     return response;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    notifyFailedToolResult(message);
+    const terminalReason = params.signal.aborted
+      ? resolveCodexToolAbortTerminalReason(params.signal)
+      : resolveToolExecutionErrorKind(error);
+    const message = formatToolExecutionErrorMessage(error, "OpenClaw dynamic tool call failed.");
+    notifyFailedToolResult(message, terminalReason);
     return failedDynamicToolResponse(message, {
       sideEffectEvidence: true,
+      terminalReason,
     });
   } finally {
     if (timeout) {
@@ -248,7 +304,10 @@ function readDynamicToolResponseText(response: CodexDynamicToolCallResponse): st
 
 function failedDynamicToolResponse(
   message: string,
-  options?: { sideEffectEvidence?: boolean },
+  options?: {
+    sideEffectEvidence?: boolean;
+    terminalReason?: "failed" | "cancelled" | "timed_out";
+  },
 ): CodexDynamicToolCallResponse {
   const response: CodexDynamicToolCallResponse = {
     contentItems: [{ type: "inputText", text: message }],
@@ -258,6 +317,11 @@ function failedDynamicToolResponse(
     configurable: true,
     enumerable: false,
     value: "error",
+  });
+  Object.defineProperty(response, "diagnosticTerminalReason", {
+    configurable: true,
+    enumerable: false,
+    value: options?.terminalReason ?? "failed",
   });
   if (options?.sideEffectEvidence === true) {
     Object.defineProperty(response, "sideEffectEvidence", {
