@@ -2591,7 +2591,64 @@ describe("update-cli", () => {
 
     expect(packageInstallCommandCall()).toBeUndefined();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
     expect(lastWriteJsonCall()).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails a stored extended-stable update before launchd cleanup when resolution fails", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: config,
+      config,
+    });
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "failed",
+      reason: "selector_query_failed",
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "explicit", explicit: true },
+    { name: "stored", explicit: false },
+  ])("rejects --tag for an $name extended-stable channel", async ({ explicit }) => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    if (!explicit) {
+      const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+        ...baseSnapshot,
+        parsed: config,
+        sourceConfig: config,
+        resolved: config,
+        runtimeConfig: config,
+        config,
+      });
+    }
+
+    await updateCommand({
+      ...(explicit ? { channel: "extended-stable" as const } : {}),
+      tag: "latest",
+      yes: true,
+    });
+
+    expect(resolveExtendedStablePackage).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -6633,6 +6690,47 @@ describe("update-cli", () => {
     });
     expect(sentinel?.payload.stats?.mode).toBe("npm");
     expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
+  });
+
+  it("writes an extended-stable selector failure to the control-plane sentinel", async () => {
+    const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
+    const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
+    const metaPath = path.join(metaDir, "meta.json");
+    await fs.writeFile(
+      metaPath,
+      JSON.stringify({
+        version: 1,
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          handoffId: "extended-stable-handoff",
+          note: "Update requested from the agent.",
+        },
+      }),
+    );
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "failed",
+      reason: "selector_missing",
+    });
+
+    await withEnvAsync(
+      {
+        [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      async () => {
+        await updateCommand({ channel: "extended-stable", yes: true, json: true });
+      },
+    );
+
+    const sentinel = await readRestartSentinel({
+      OPENCLAW_STATE_DIR: stateDir,
+    } as NodeJS.ProcessEnv);
+    expect(sentinel?.payload.status).toBe("error");
+    expect(sentinel?.payload.stats?.reason).toBe("selector_missing");
+    expect(sentinel?.payload.stats?.handoffId).toBe("extended-stable-handoff");
+    expect(sentinel?.payload.continuation).toBeUndefined();
   });
 
   it("marks the control-plane update sentinel failed when restart health verification fails", async () => {

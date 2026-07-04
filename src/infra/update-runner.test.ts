@@ -2664,6 +2664,30 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(npmGlobalInstallCommand("openclaw@latest"));
   });
 
+  it("rejects a tag override for the extended-stable global package channel", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
+    });
+
+    const result = await runWithCommand(runCommand, {
+      cwd: pkgRoot,
+      channel: "extended-stable",
+      tag: "latest",
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      mode: "npm",
+      root: pkgRoot,
+      reason: "extended-stable-tag-unsupported",
+      steps: [],
+    });
+    expect(calls).not.toContain(npmGlobalInstallCommand("openclaw@latest"));
+  });
+
   it("cleans stale npm rename dirs before global update", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");

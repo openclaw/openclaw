@@ -16,6 +16,8 @@ export type UpdateChannelSource =
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 /** Default channel for source installs where branch metadata is unavailable. */
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
+/** Machine-readable validation failure when a tag override conflicts with the exact extended-stable contract. */
+export const EXTENDED_STABLE_TAG_UNSUPPORTED_REASON = "extended-stable-tag-unsupported";
 /**
  * Env var carrying the *effective* update channel into `openclaw update finalize`
  * (e.g. the git/dev channel a source update actually ran on) without making it a

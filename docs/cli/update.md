@@ -38,7 +38,7 @@ openclaw --update
 
 - `--no-restart`: skip restarting the Gateway service after a successful update. Package-manager updates that do restart the Gateway verify the restarted service reports the expected updated version before the command succeeds.
 - `--channel <stable|extended-stable|beta|dev>`: set the update channel and persist it after core update success. Extended-stable is package-only.
-- `--tag <dist-tag|version|spec>`: override the package target for this update only. For package installs, `main` maps to `github:openclaw/openclaw#main`; GitHub/git source specs are packed into a temporary tarball before the staged global npm install.
+- `--tag <dist-tag|version|spec>`: override the package target for this update only. It cannot be combined with an effective `extended-stable` channel, whose verified exact target is mandatory. For other package installs, `main` maps to `github:openclaw/openclaw#main`; GitHub/git source specs are packed into a temporary tarball before the staged global npm install.
 - `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
 - `--json`: print machine-readable `UpdateRunResult` JSON, including
   `postUpdate.plugins.warnings` when corrupt or unloadable managed plugins need
@@ -107,8 +107,9 @@ openclaw update repair --json
 
 Options:
 
-- `--channel <stable|extended-stable|beta|dev>`: persist the update channel before repair and
-  run plugin convergence against that channel.
+- `--channel <stable|extended-stable|beta|dev>`: persist the core update channel
+  before repair. For extended-stable, plugin convergence temporarily targets
+  the stable/latest plugin line.
 - `--json`: print machine-readable finalization JSON.
 - `--timeout <seconds>`: timeout for repair steps (default `1800`).
 - `--yes`: skip confirmation prompts.
@@ -176,6 +177,10 @@ then runs plugin sync, a core-command completion refresh, and restart work. This
 keeps packaged sidecars and channel-owned plugin records aligned with the
 installed OpenClaw build while leaving full plugin-command completion rebuilds to
 explicit `openclaw completion --write-state` runs.
+
+After an extended-stable core update succeeds, post-core plugin integrity and
+convergence still run, but official plugins temporarily target the stable/latest
+line. OpenClaw does not query plugin `@extended-stable` selectors in this release.
 
 When a local managed Gateway service is installed and restart is enabled,
 package-manager and git-checkout updates stop the running service before
@@ -268,7 +273,7 @@ returns the latest sentinel.
     `openclaw doctor` runs as the final safe-update check.
   </Step>
   <Step title="Sync plugins">
-    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Extended-stable core updates temporarily target the stable/latest plugin line. Updates tracked plugin installs.
+    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates tracked plugin installs.
   </Step>
 </Steps>
 

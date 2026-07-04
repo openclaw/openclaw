@@ -24,6 +24,7 @@ import {
   channelToNpmTag,
   DEFAULT_PACKAGE_CHANNEL,
   DEV_BRANCH,
+  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   isBetaTag,
   isStableTag,
   type UpdateChannel,
@@ -1668,6 +1669,18 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
+    if (channel === "extended-stable" && opts.tag !== undefined) {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+        before: { version: beforeVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
     const installTarget = await resolveGlobalInstallTarget({
       manager: globalManager,
       runCommand,
@@ -1679,9 +1692,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       globalRoot: path.dirname(pkgRoot),
       packageName,
     });
-    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const extendedStable =
-      channel === "extended-stable" && opts.tag === undefined
+      channel === "extended-stable"
         ? await resolveExtendedStablePackage({ installKind: "package", timeoutMs })
         : null;
     if (extendedStable?.status === "failed") {

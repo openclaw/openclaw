@@ -95,7 +95,8 @@ Notes:
 - Downgrade protection: if the target version is older than your current version,
   OpenClaw prompts for confirmation (skip with `--yes`).
 - Extended-stable always uses its verified exact package target. It is not a
-  one-off alias for `--tag extended-stable`.
+  one-off alias for `--tag extended-stable`, and `--tag` cannot be combined
+  with an effective extended-stable channel.
 - `--channel beta` is different from `--tag beta`: the channel flow can fall back
   to stable/latest when beta is missing or older, while `--tag beta` targets the
   raw `beta` dist-tag for that one run.

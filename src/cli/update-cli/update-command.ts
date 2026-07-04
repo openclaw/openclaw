@@ -66,6 +66,7 @@ import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
   DEFAULT_PACKAGE_CHANNEL,
+  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   normalizeUpdateChannel,
   type UpdateChannel,
   UPDATE_EFFECTIVE_CHANNEL_ENV,
@@ -1360,12 +1361,13 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   }
 }
 
-function reportPreMutationUpdateFailure(params: {
+async function reportPreMutationUpdateFailure(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
-  reason: ExtendedStableFailureReason;
+  reason: ExtendedStableFailureReason | typeof EXTENDED_STABLE_TAG_UNSUPPORTED_REASON;
   opts: UpdateCommandOptions;
-}): void {
+  controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+}): Promise<void> {
   const result: UpdateRunResult = {
     status: "error",
     mode: params.installKind === "git" ? "git" : "unknown",
@@ -1374,6 +1376,11 @@ function reportPreMutationUpdateFailure(params: {
     steps: [],
     durationMs: 0,
   };
+  await writeControlPlaneUpdateRestartSentinelBestEffort({
+    meta: params.controlPlaneUpdateSentinelMeta,
+    result,
+    jsonMode: Boolean(params.opts.json),
+  });
   printResult(result, params.opts);
   defaultRuntime.exit(1);
 }
@@ -3371,16 +3378,16 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
-  const deferLaunchdCleanupForExtendedStable =
-    normalizeUpdateChannel(opts.channel) === "extended-stable";
   if (timeoutMs === null) {
     return;
   }
   if (opts.dryRun !== true) {
-    if (!deferLaunchdCleanupForExtendedStable) {
+    try {
+      assertConfigWriteAllowedInCurrentMode();
+    } catch (err) {
       await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+      throw err;
     }
-    assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
@@ -3486,11 +3493,12 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   }
 
   if (requestedChannel === "extended-stable" && updateStatus.installKind === "git") {
-    reportPreMutationUpdateFailure({
+    await reportPreMutationUpdateFailure({
       root,
       installKind: updateStatus.installKind,
       reason: "unsupported_git_channel",
       opts,
+      controlPlaneUpdateSentinelMeta,
     });
     return;
   }
@@ -3519,16 +3527,14 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     storedChannel ??
     (installKind === "git" ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL);
   if (selectedChannel === "extended-stable" && installKind === "git") {
-    reportPreMutationUpdateFailure({
+    await reportPreMutationUpdateFailure({
       root,
       installKind,
       reason: "unsupported_git_channel",
       opts,
+      controlPlaneUpdateSentinelMeta,
     });
     return;
-  }
-  if (opts.dryRun !== true && deferLaunchdCleanupForExtendedStable) {
-    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
   }
   const switchToGit = requestedChannel === "dev" && installKind !== "git";
   const switchToPackage =
@@ -3541,6 +3547,16 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     channel === "dev" ? process.env.OPENCLAW_UPDATE_DEV_TARGET_REF?.trim() || undefined : undefined;
 
   const explicitTag = normalizeTag(opts.tag);
+  if (channel === "extended-stable" && explicitTag) {
+    await reportPreMutationUpdateFailure({
+      root,
+      installKind: updateInstallKind,
+      reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+      opts,
+      controlPlaneUpdateSentinelMeta,
+    });
+    return;
+  }
   let tag = explicitTag ?? channelToNpmTag(channel);
   let currentVersion: string | null = null;
   let targetVersion: string | null = null;
@@ -3624,17 +3640,18 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     const npmMetadataCommand =
       packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
-    if (!explicitTag && channel === "extended-stable") {
+    if (channel === "extended-stable") {
       const extendedStable = await resolveExtendedStablePackage({
         installKind: updateInstallKind,
         timeoutMs,
       });
       if (extendedStable.status === "failed") {
-        reportPreMutationUpdateFailure({
+        await reportPreMutationUpdateFailure({
           root,
           installKind: updateInstallKind,
           reason: extendedStable.reason,
           opts,
+          controlPlaneUpdateSentinelMeta,
         });
         return;
       }
@@ -3814,6 +3831,8 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       return;
     }
   }
+
+  await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
 
   const showProgress = !opts.json && process.stdout.isTTY;
   if (!opts.json) {
