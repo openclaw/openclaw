@@ -2,6 +2,8 @@ import { consume, ContextProvider } from "@lit/context";
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { AgentsListResult } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/exec-approval.ts";
@@ -17,6 +19,8 @@ import {
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
@@ -29,7 +33,6 @@ import { selectRenderedRouteMatch } from "./router-outlet.ts";
 type ShellRouteState = {
   routeId?: RouteId;
   location?: RouteLocation;
-  data?: unknown;
 };
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
@@ -38,7 +41,6 @@ function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteSta
     ? {
         routeId: match.routeId,
         location: match.location,
-        data: match.data,
       }
     : {};
 }
@@ -48,25 +50,20 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.routeId === next.routeId &&
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
-    previous.location?.hash === next.location?.hash &&
-    previous.data === next.data
+    previous.location?.hash === next.location?.hash
   );
 }
 
-function resolveRouteAgentLabel(data: unknown): string {
-  if (!data || typeof data !== "object" || !("headerContext" in data)) {
-    return "";
-  }
-  const headerContext = data.headerContext;
-  if (
-    !headerContext ||
-    typeof headerContext !== "object" ||
-    !("agentLabel" in headerContext) ||
-    typeof headerContext.agentLabel !== "string"
-  ) {
-    return "";
-  }
-  return headerContext.agentLabel.trim();
+function resolveAgentLabel(sessionKey: string, agentsList: AgentsListResult | null): string {
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const agent = agentsList?.agents.find(
+    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === agentId,
+  );
+  return (
+    normalizeOptionalString(agent?.identity?.name) ??
+    normalizeOptionalString(agent?.name) ??
+    agentId
+  );
 }
 
 function resolveOnboardingMode(): boolean {
@@ -235,6 +232,8 @@ class OpenClawShell extends LitElement {
   @state() private recentSessionsCollapsed = false;
   @state() private navDrawerOpen = false;
   @state() private gatewayConnected = false;
+  @state() private activeSessionKey = "";
+  @state() private agentLabel = "";
   @state() private routeState: ShellRouteState = {};
   @state() private overlaySnapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
@@ -247,6 +246,9 @@ class OpenClawShell extends LitElement {
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
+  private agentsListClient: GatewayBrowserClient | null = null;
+  private sessionKeyClient: GatewayBrowserClient | null = null;
+  private stopAgentsSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
   private stopRouteSubscription: (() => void) | undefined;
@@ -272,6 +274,7 @@ class OpenClawShell extends LitElement {
     if (
       !runtime ||
       !context ||
+      this.stopAgentsSubscription ||
       this.stopGatewaySubscription ||
       this.stopNavigationSubscription ||
       this.stopRouteSubscription ||
@@ -283,15 +286,24 @@ class OpenClawShell extends LitElement {
     this.stopNavigationSubscription = context.navigation.subscribe((snapshot) => {
       this.updateNavigationPreferences(snapshot);
     });
+    this.updateGatewaySessionKey(context.gateway.snapshot);
     this.updateGatewayStatus(context.gateway.snapshot);
+    this.updateAgentLabel();
+    this.ensureAgentsList(context.gateway.snapshot);
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
+      this.updateGatewaySessionKey(snapshot);
       this.updateGatewayStatus(snapshot);
+      this.updateAgentLabel();
+      this.ensureAgentsList(snapshot);
     });
-    this.routeState = selectShellRouteState(runtime.router.getState());
+    this.stopAgentsSubscription = context.agents.subscribe(() => {
+      this.updateAgentLabel();
+    });
+    this.updateRouteState(selectShellRouteState(runtime.router.getState()));
     this.stopRouteSubscription = runtime.router.subscribeSelector(
       selectShellRouteState,
       (routeState) => {
-        this.routeState = routeState;
+        this.updateRouteState(routeState);
       },
       equalShellRouteState,
     );
@@ -303,6 +315,8 @@ class OpenClawShell extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    this.stopAgentsSubscription?.();
+    this.stopAgentsSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
     this.stopNavigationSubscription?.();
@@ -311,6 +325,8 @@ class OpenClawShell extends LitElement {
     this.stopRouteSubscription = undefined;
     this.stopOverlaySubscription?.();
     this.stopOverlaySubscription = undefined;
+    this.agentsListClient = null;
+    this.sessionKeyClient = null;
     this.navDrawerTrigger = null;
     super.disconnectedCallback();
   }
@@ -328,9 +344,7 @@ class OpenClawShell extends LitElement {
     if (options) {
       return options;
     }
-    const sessionKey =
-      new URLSearchParams(this.routeState.location?.search).get("session")?.trim() ||
-      this.context?.gateway.snapshot.sessionKey.trim();
+    const sessionKey = this.activeSessionKey.trim();
     return sessionKey ? { search: searchForSession(sessionKey) } : undefined;
   }
 
@@ -382,6 +396,20 @@ class OpenClawShell extends LitElement {
     this.commandPalette?.openPalette();
   };
 
+  private readonly handleCommandPaletteSlashCommand = (command: string) => {
+    const chatHandler = this.commandPaletteTarget?.owner.isConnected
+      ? this.commandPaletteTarget.onSlashCommand
+      : null;
+    if (chatHandler) {
+      chatHandler(command);
+      return;
+    }
+    // Keep Chat's in-place draft path fast; other routes hand the draft through navigation.
+    const search = new URLSearchParams(this.chatNavigationOptions()?.search);
+    search.set("draft", command.endsWith(" ") ? command : `${command} `);
+    this.navigate("chat", { search: `?${search.toString()}` });
+  };
+
   private readonly handleCommandPaletteTarget = (event: Event) => {
     const detail = (event as CustomEvent<CommandPaletteTargetDetail>).detail;
     if (!detail || !(detail.owner instanceof Element)) {
@@ -402,6 +430,57 @@ class OpenClawShell extends LitElement {
     this.gatewayConnected = snapshot.connected;
   };
 
+  private ensureAgentsList(snapshot: { client: GatewayBrowserClient | null; connected: boolean }) {
+    if (!snapshot.connected || !snapshot.client) {
+      this.agentsListClient = null;
+      return;
+    }
+    if (this.agentsListClient === snapshot.client) {
+      return;
+    }
+    this.agentsListClient = snapshot.client;
+    if (!this.context?.agents.state.agentsList) {
+      void this.context?.agents.ensureList();
+    }
+  }
+
+  private updateGatewaySessionKey(snapshot: {
+    client: GatewayBrowserClient | null;
+    sessionKey: string;
+  }) {
+    if (snapshot.client === this.sessionKeyClient && this.activeSessionKey) {
+      return;
+    }
+    this.sessionKeyClient = snapshot.client;
+    const sessionKey = snapshot.sessionKey.trim();
+    if (sessionKey) {
+      this.activeSessionKey = sessionKey;
+    }
+  }
+
+  private updateRouteState(routeState: ShellRouteState) {
+    this.routeState = routeState;
+    if (routeState.routeId !== "chat") {
+      return;
+    }
+    const sessionKey = new URLSearchParams(routeState.location?.search).get("session")?.trim();
+    if (sessionKey) {
+      this.activeSessionKey = sessionKey;
+      this.updateAgentLabel();
+    }
+  }
+
+  private updateAgentLabel() {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    this.agentLabel = resolveAgentLabel(
+      this.activeSessionKey || context.gateway.snapshot.sessionKey,
+      context.agents.state.agentsList,
+    );
+  }
+
   private readonly updateNavigationPreferences = (
     snapshot: ApplicationRuntime["context"]["navigation"]["snapshot"],
   ) => {
@@ -419,14 +498,10 @@ class OpenClawShell extends LitElement {
     const activeRoute = this.routeState.routeId ?? "chat";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     const navCollapsed = this.navCollapsed && !navDrawerOpen;
-    const onSlashCommand = this.commandPaletteTarget?.owner.isConnected
-      ? this.commandPaletteTarget.onSlashCommand
-      : undefined;
-    const agentLabel = resolveRouteAgentLabel(this.routeState.data);
     return html`
       <openclaw-command-palette
         .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
-        .onSlashCommand=${onSlashCommand ?? undefined}
+        .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
@@ -446,7 +521,7 @@ class OpenClawShell extends LitElement {
         <openclaw-app-topbar
           .routeId=${activeRoute}
           .basePath=${context.basePath}
-          .agentLabel=${agentLabel}
+          .agentLabel=${this.agentLabel}
           .overviewHref=${pathForRoute("overview", context.basePath)}
           .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
@@ -462,7 +537,7 @@ class OpenClawShell extends LitElement {
             .basePath=${context.basePath}
             .activeRouteId=${activeRoute}
             .enabledRouteIds=${APP_ROUTE_IDS}
-            .routeLocation=${this.routeState.location}
+            .sessionKey=${this.activeSessionKey}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
             .navGroupsCollapsed=${this.navGroupsCollapsed}

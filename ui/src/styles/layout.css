@@ -1051,6 +1051,7 @@
 }
 
 .sidebar--collapsed .sidebar-new-session {
+  justify-content: center;
   width: 44px;
   min-height: 44px;
   padding: 0;

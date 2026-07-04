@@ -32,6 +32,7 @@ export class InstancesPage extends LitElement {
   @state() private loading = false;
   @state() private entries: PresenceEntry[] = [];
   @state() private error: string | null = null;
+  @state() private status: string | null = null;
   @state() private hostsRevealed = false;
 
   private client: GatewayBrowserClient | null = null;
@@ -74,6 +75,7 @@ export class InstancesPage extends LitElement {
       this.invalidateRequest();
       this.entries = [];
       this.error = null;
+      this.status = null;
     }
     if (!snapshot.connected || !snapshot.client) {
       this.invalidateRequest();
@@ -94,6 +96,7 @@ export class InstancesPage extends LitElement {
     this.invalidateRequest();
     this.entries = entries;
     this.error = null;
+    this.status = entries.length === 0 ? "No instances yet." : null;
   }
 
   private invalidateRequest() {
@@ -116,18 +119,26 @@ export class InstancesPage extends LitElement {
     const requestId = ++this.requestId;
     this.loading = true;
     this.error = null;
+    this.status = null;
     try {
-      const response = await client.request<PresenceEntry[]>("system-presence", {});
+      const response = await client.request("system-presence", {});
       if (!this.isCurrentRequest(requestId, client)) {
         return;
       }
-      this.entries = response;
+      if (Array.isArray(response)) {
+        this.entries = response as PresenceEntry[];
+        this.status = response.length === 0 ? "No instances yet." : null;
+      } else {
+        this.entries = [];
+        this.status = "No presence payload.";
+      }
     } catch (error) {
       if (!this.isCurrentRequest(requestId, client)) {
         return;
       }
       if (isMissingOperatorReadScopeError(error)) {
         this.entries = [];
+        this.status = null;
         this.error = formatMissingOperatorReadScopeMessage("instance presence");
       } else {
         this.error = String(error);
@@ -151,6 +162,7 @@ export class InstancesPage extends LitElement {
         loading: this.loading,
         entries: this.entries,
         lastError: this.error,
+        statusMessage: this.status,
         hostsRevealed: this.hostsRevealed,
         onRefresh: () => void this.loadPresence(),
         onToggleHosts: () => {

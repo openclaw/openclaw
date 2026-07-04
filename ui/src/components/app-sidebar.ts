@@ -25,6 +25,11 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  resolvePreferredSessionForAgent,
+  resolveSessionAgentFilterOptions,
+} from "../lib/sessions/session-options.ts";
 import { icons } from "./icons.ts";
 
 type ProviderQuotaPillRenderer = typeof import("./provider-quota-pill.ts").renderProviderQuotaPill;
@@ -38,6 +43,17 @@ type SidebarRecentSession = {
   hasActiveRun: boolean;
 };
 
+function shouldHandleNavigationClick(event: MouseEvent): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
 export class AppSidebar extends LitElement {
   override createRenderRoot() {
     return this;
@@ -48,7 +64,7 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
-  @property({ attribute: false }) routeLocation?: RouteLocation;
+  @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) navGroupsCollapsed: Record<string, boolean> = {};
   @property({ attribute: false }) recentSessionsCollapsed = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
@@ -71,8 +87,10 @@ export class AppSidebar extends LitElement {
   @state() private providerQuotaPillRenderer: ProviderQuotaPillRenderer | null = null;
 
   private stopSessionsSubscription: (() => void) | undefined;
+  private stopAgentsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
+  private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   private modelAuthClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
@@ -88,6 +106,8 @@ export class AppSidebar extends LitElement {
   override disconnectedCallback() {
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
+    this.stopAgentsSubscription?.();
+    this.stopAgentsSubscription = undefined;
     this.stopAgentSelectionSubscription?.();
     this.stopAgentSelectionSubscription = undefined;
     this.stopGatewaySubscription?.();
@@ -105,19 +125,23 @@ export class AppSidebar extends LitElement {
     if (
       !context ||
       this.stopSessionsSubscription ||
+      this.stopAgentsSubscription ||
       this.stopAgentSelectionSubscription ||
       this.stopGatewaySubscription
     ) {
       return;
     }
+    this.updateModelAuthStatus(context.gateway.snapshot);
     this.updateSessions(context.sessions.state);
     this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
       this.updateSessions(snapshot);
     });
+    this.stopAgentsSubscription = context.agents.subscribe(() => {
+      this.requestUpdate();
+    });
     this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
       this.requestUpdate();
     });
-    this.updateModelAuthStatus(context.gateway.snapshot);
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
       this.updateModelAuthStatus(snapshot);
       this.requestUpdate();
@@ -136,6 +160,9 @@ export class AppSidebar extends LitElement {
     this.sessionsResult = snapshot.result;
     this.sessionsAgentId = snapshot.agentId;
     this.sessionsLoading = snapshot.loading;
+    if (snapshot.result && snapshot.agentId) {
+      this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+    }
   };
 
   private updateModelAuthStatus(snapshot: {
@@ -146,6 +173,7 @@ export class AppSidebar extends LitElement {
     if (client === this.modelAuthClient) {
       return;
     }
+    this.sessionRowsByAgent = {};
     this.modelAuthClient = client;
     this.modelAuthStatusResult = null;
     if (!client) {
@@ -178,11 +206,7 @@ export class AppSidebar extends LitElement {
   }
 
   private getRouteSessionKey(): string {
-    const routeSessionKey =
-      this.activeRouteId === "chat"
-        ? new URLSearchParams(this.routeLocation?.search).get("session")?.trim()
-        : "";
-    return routeSessionKey || this.context?.gateway.snapshot.sessionKey.trim() || "";
+    return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
   private getSessionNavigationState() {
@@ -196,20 +220,27 @@ export class AppSidebar extends LitElement {
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
     });
-    const recentSessions = navigation.recentSessions.map((row) => ({
+    const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
-      meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
+      meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.currentSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
-    }));
+    });
+    const activeSession = navigation.selectedSession
+      ? toSidebarSession(navigation.selectedSession)
+      : null;
+    const recentSessions = navigation.recentSessions
+      .slice(activeSession ? 1 : 0)
+      .map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
       defaultAgentId: navigation.defaultAgentId,
+      activeSession,
       recentSessions,
       newSessionDisabled,
       newSessionTitle: !this.connected
@@ -224,6 +255,30 @@ export class AppSidebar extends LitElement {
     this.onNavigate?.("chat", {
       search: searchForSession(sessionKey),
     });
+  };
+
+  private readonly selectAgent = (agentId: string) => {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const { routeSessionKey, selectedAgentId } = this.getSessionNavigationState();
+    const nextAgentId = normalizeAgentId(agentId);
+    if (nextAgentId === normalizeAgentId(selectedAgentId)) {
+      return;
+    }
+    const nextSessionKey = resolvePreferredSessionForAgent(
+      {
+        agentsList: context.agents.state.agentsList,
+        chatAgentSessionRowsByAgent: this.sessionRowsByAgent,
+        sessionsResult: this.sessionsResult,
+        sessionsResultAgentId: this.sessionsAgentId,
+        sessionKey: routeSessionKey,
+      },
+      nextAgentId,
+    );
+    context.agentSelection.set(nextAgentId);
+    this.selectSession(nextSessionKey);
   };
 
   private readonly createSession = async () => {
@@ -298,14 +353,7 @@ export class AppSidebar extends LitElement {
         @pointerleave=${this.cancelPreload}
         @touchstart=${(event: TouchEvent) => this.preloadRoute(routeId, event, true)}
         @click=${(event: MouseEvent) => {
-          if (
-            event.defaultPrevented ||
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          ) {
+          if (!shouldHandleNavigationClick(event)) {
             return;
           }
           event.preventDefault();
@@ -336,25 +384,20 @@ export class AppSidebar extends LitElement {
         href=${session.href}
         class="sidebar-recent-session ${session.active ? "sidebar-recent-session--active" : ""}"
         data-session-key=${session.key}
+        title=${`${session.label} · ${session.key}`}
         @click=${(event: MouseEvent) => {
-          if (
-            event.defaultPrevented ||
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          ) {
+          if (!shouldHandleNavigationClick(event)) {
             return;
           }
           event.preventDefault();
           this.selectSession(session.key);
         }}
       >
-        <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
         <span class="sidebar-recent-session__body">
           <span class="sidebar-recent-session__name">${session.label}</span>
-          <span class="sidebar-recent-session__meta">${session.meta}</span>
+          ${session.meta
+            ? html`<span class="sidebar-recent-session__meta">${session.meta}</span>`
+            : nothing}
         </span>
         ${session.hasActiveRun
           ? html`<span
@@ -372,6 +415,7 @@ export class AppSidebar extends LitElement {
       routeSessionKey,
       selectedAgentId,
       defaultAgentId,
+      activeSession,
       recentSessions,
       newSessionDisabled,
       newSessionTitle,
@@ -399,23 +443,7 @@ export class AppSidebar extends LitElement {
               >${newSessionButton}</openclaw-tooltip
             >`
           : newSessionButton}
-        <div
-          class="sidebar-session-select ${this.collapsed
-            ? "sidebar-session-select--collapsed"
-            : ""}"
-        >
-          <openclaw-session-picker
-            .sessions=${context?.sessions}
-            .sessionsResult=${this.sessionsResult}
-            .currentSessionKey=${routeSessionKey}
-            .agentId=${selectedAgentId}
-            .defaultAgentId=${defaultAgentId}
-            .connected=${this.connected}
-            .compact=${this.collapsed}
-            .onSelectSession=${this.selectSession}
-          ></openclaw-session-picker>
-        </div>
-        ${this.collapsed || recentSessions.length === 0
+        ${this.collapsed
           ? nothing
           : html`
               <div
@@ -424,23 +452,115 @@ export class AppSidebar extends LitElement {
                   : ""}"
                 aria-label=${t("overview.cards.recentSessions")}
               >
-                <button
-                  class="sidebar-recent-sessions__label"
-                  type="button"
-                  aria-expanded=${String(!this.recentSessionsCollapsed)}
-                  @click=${() => this.onToggleRecentSessions?.()}
-                >
-                  <span class="sidebar-recent-sessions__label-text"
-                    >${t("usage.sessions.recentShort")}</span
+                <div class="sidebar-recent-sessions__head">
+                  <button
+                    class="sidebar-recent-sessions__label"
+                    type="button"
+                    aria-expanded=${String(!this.recentSessionsCollapsed)}
+                    @click=${() => this.onToggleRecentSessions?.()}
                   >
-                  <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-                </button>
-                <div class="sidebar-recent-sessions__list">
-                  ${recentSessions.map((session) => this.renderRecentSession(session))}
+                    <span class="sidebar-recent-sessions__label-text"
+                      >${t("usage.sessions.recentShort")}</span
+                    >
+                    <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+                  </button>
+                  <openclaw-session-picker
+                    .sessions=${context?.sessions}
+                    .sessionsResult=${this.sessionsResult}
+                    .currentSessionKey=${routeSessionKey}
+                    .agentId=${selectedAgentId}
+                    .defaultAgentId=${defaultAgentId}
+                    .connected=${this.connected}
+                    .onSelectSession=${this.selectSession}
+                  ></openclaw-session-picker>
                 </div>
+                ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
+                ${activeSession
+                  ? this.renderRecentSession(activeSession)
+                  : this.renderChatFallback()}
+                ${recentSessions.length === 0
+                  ? nothing
+                  : html`
+                      <div class="sidebar-recent-sessions__list">
+                        ${recentSessions.map((session) => this.renderRecentSession(session))}
+                      </div>
+                    `}
+                <a
+                  href=${pathForRoute("sessions", this.basePath)}
+                  class="sidebar-recent-sessions__all"
+                  @click=${(event: MouseEvent) => {
+                    if (!shouldHandleNavigationClick(event)) {
+                      return;
+                    }
+                    event.preventDefault();
+                    this.onNavigate?.("sessions");
+                  }}
+                >
+                  <span>${t("chat.sidebar.allSessions")}</span>
+                  <span class="sidebar-recent-sessions__all-icon" aria-hidden="true"
+                    >${icons.chevronRight}</span
+                  >
+                </a>
               </div>
             `}
       </section>
+    `;
+  }
+
+  private renderAgentFilter(sessionKey: string, selectedAgentId: string) {
+    const options = resolveSessionAgentFilterOptions({
+      agentsList: this.context?.agents.state.agentsList,
+      sessionsResult: this.sessionsResult,
+      sessionsResultAgentId: this.sessionsAgentId,
+      sessionKey,
+    });
+    if (options.length <= 1) {
+      return nothing;
+    }
+    const selectedLabel =
+      options.find((option) => option.id === selectedAgentId)?.label ?? selectedAgentId;
+    return html`
+      <div class="sidebar-agent-filter">
+        <label class="field chat-controls__session chat-controls__agent">
+          <select
+            data-chat-agent-filter="true"
+            aria-label=${t("chat.selectors.agentFilter")}
+            title=${selectedLabel}
+            .value=${selectedAgentId}
+            ?disabled=${!this.connected}
+            @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
+          >
+            ${options.map(
+              (option) =>
+                html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
+                  ${option.label}
+                </option>`,
+            )}
+          </select>
+        </label>
+      </div>
+    `;
+  }
+
+  private renderChatFallback() {
+    return html`
+      <a
+        href=${pathForRoute("chat", this.basePath)}
+        class="sidebar-recent-session ${this.activeRouteId === "chat"
+          ? "sidebar-recent-session--active"
+          : ""}"
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.onNavigate?.("chat");
+        }}
+      >
+        <span class="sidebar-recent-session__body">
+          <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
+        </span>
+      </a>
     `;
   }
 
@@ -468,7 +588,6 @@ export class AppSidebar extends LitElement {
                       alt="OpenClaw"
                     />
                     <span class="sidebar-brand__copy">
-                      <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
                       <span class="sidebar-brand__title">OpenClaw</span>
                     </span>
                   `}
@@ -489,29 +608,33 @@ export class AppSidebar extends LitElement {
           <div class="sidebar-shell__body">
             ${this.renderSessions()}
             <nav class="sidebar-nav">
-              ${SIDEBAR_SECTIONS.map((group) => {
-                const isGroupCollapsed = this.navGroupsCollapsed[group.label] ?? false;
-                const showItems = this.collapsed || !isGroupCollapsed;
-                return html`
-                  <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                    ${!this.collapsed
-                      ? html`
-                          <button
-                            class="nav-section__label"
-                            @click=${() => this.onToggleGroup?.(group.label)}
-                            aria-expanded=${showItems}
-                          >
-                            <span class="nav-section__label-text">${t(`nav.${group.label}`)}</span>
-                            <span class="nav-section__chevron"> ${icons.chevronDown} </span>
-                          </button>
-                        `
-                      : nothing}
-                    <div class="nav-section__items">
-                      ${group.routes.map((routeId) => this.renderRoute(routeId))}
-                    </div>
-                  </section>
-                `;
-              })}
+              ${SIDEBAR_SECTIONS.filter((group) => this.collapsed || group.label !== "chat").map(
+                (group) => {
+                  const isGroupCollapsed = this.navGroupsCollapsed[group.label] ?? false;
+                  const showItems = this.collapsed || !isGroupCollapsed;
+                  return html`
+                    <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
+                      ${!this.collapsed
+                        ? html`
+                            <button
+                              class="nav-section__label"
+                              @click=${() => this.onToggleGroup?.(group.label)}
+                              aria-expanded=${showItems}
+                            >
+                              <span class="nav-section__label-text"
+                                >${t(`nav.${group.label}`)}</span
+                              >
+                              <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+                            </button>
+                          `
+                        : nothing}
+                      <div class="nav-section__items">
+                        ${group.routes.map((routeId) => this.renderRoute(routeId))}
+                      </div>
+                    </section>
+                  `;
+                },
+              )}
             </nav>
           </div>
           <div class="sidebar-shell__footer">

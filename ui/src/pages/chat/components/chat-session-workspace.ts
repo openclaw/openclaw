@@ -4,6 +4,7 @@ import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../.
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import {
   scopedAgentParamsForSession,
   type SessionCapability,
@@ -418,7 +419,7 @@ export function createSessionWorkspaceProps(state: SessionWorkspaceHost): Sessio
       loadWorkspace(state, workspace, true);
     },
     onCopyPath: (path) => {
-      void globalThis.navigator?.clipboard?.writeText?.(path);
+      void copyToClipboard(path);
     },
     onOpenFile: (path) => openFile(state, workspace, path),
     onSearch: (search) => {

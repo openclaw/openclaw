@@ -10,6 +10,7 @@ export type InstancesProps = {
   loading: boolean;
   entries: PresenceEntry[];
   lastError: string | null;
+  statusMessage: string | null;
   hostsRevealed: boolean;
   onRefresh: () => void;
   onToggleHosts: () => void;
@@ -46,6 +47,9 @@ export function renderInstances(props: InstancesProps) {
       </div>
       ${props.lastError
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
+        : nothing}
+      ${props.statusMessage
+        ? html`<div class="callout" style="margin-top: 12px;">${props.statusMessage}</div>`
         : nothing}
       <div class="list" style="margin-top: 16px;">
         ${props.entries.length === 0

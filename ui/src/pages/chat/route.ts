@@ -2,7 +2,6 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, notFound } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
 
 function sessionKeyFromLocation(location: RouteLocation): string | undefined {
   const sessionKey = new URLSearchParams(location.search).get("session")?.trim();
@@ -27,9 +26,6 @@ export const page = definePage({
     return {
       sessionKey,
       draft: draftFromLocation(location),
-      headerContext: {
-        agentLabel: resolveAgentIdFromSessionKey(sessionKey),
-      },
     };
   },
   component: () =>

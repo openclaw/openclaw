@@ -20,7 +20,6 @@ export class SessionPicker extends LitElement {
   @property({ attribute: false }) agentId = "main";
   @property({ attribute: false }) defaultAgentId = "main";
   @property({ attribute: false }) connected = false;
-  @property({ attribute: false }) compact = false;
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
 
   @state() private open = false;
@@ -96,6 +95,9 @@ export class SessionPicker extends LitElement {
     this.open = true;
     if (!this.result) {
       this.result = this.sessionsResult;
+      if (!this.result) {
+        void this.loadPage();
+      }
     }
   }
 
@@ -336,7 +338,7 @@ export class SessionPicker extends LitElement {
                     data-chat-session-search-clear="true"
                     type="button"
                     aria-label=${t("chat.selectors.clearSessionSearch")}
-                    @click=${this.clearSearch}
+                    @click=${() => this.clearSearch()}
                   >
                     ${icons.x}
                   </button>
@@ -373,9 +375,7 @@ export class SessionPicker extends LitElement {
                   type="button"
                   @click=${() => {
                     this.close({ restoreFocus: true });
-                    if (!selected) {
-                      this.onSelectSession?.(row.key);
-                    }
+                    this.onSelectSession?.(row.key);
                   }}
                 >
                   <span class="chat-session-picker__option-main">
@@ -415,47 +415,24 @@ export class SessionPicker extends LitElement {
   }
 
   override render() {
-    const selected = this.result?.sessions.find((row) => row.key === this.currentSessionKey);
-    const selectedLabel = resolveSessionDisplayName(this.currentSessionKey, selected);
+    const label = t("chat.selectors.sessionSearch");
     return html`
-      <div
-        class="chat-controls__session-row chat-controls__session-row--session-switcher chat-controls__session-row--single-agent ${this
-          .compact
-          ? "chat-controls__session-row--compact"
-          : ""}"
-      >
-        <div class="chat-controls__session chat-controls__session-picker">
-          <button
-            class="chat-controls__session-trigger"
-            data-chat-session-select="true"
-            type="button"
-            aria-label=${t("chat.selectors.session")}
-            aria-haspopup="dialog"
-            aria-expanded=${this.open ? "true" : "false"}
-            aria-controls=${SESSION_PICKER_ID}
-            ?disabled=${!this.connected}
-            @click=${(event: MouseEvent) => this.toggle(event.currentTarget as HTMLElement)}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                this.openFromTrigger(event.currentTarget as HTMLElement);
-              }
-            }}
-          >
-            ${this.compact
-              ? html`<span class="chat-controls__session-trigger-compact-icon" aria-hidden="true"
-                  >${icons.messageSquare}</span
-                >`
-              : nothing}
-            <span class="chat-controls__session-trigger-label">${selectedLabel}</span>
-            <span class="chat-controls__session-trigger-icon" aria-hidden="true"
-              >${icons.chevronDown}</span
-            >
-          </button>
-          ${this.renderPicker()}
-        </div>
+      <div class="sidebar-session-search">
+        <button
+          class="sidebar-session-search__button"
+          type="button"
+          title=${label}
+          aria-label=${label}
+          aria-haspopup="dialog"
+          aria-expanded=${this.open ? "true" : "false"}
+          aria-controls=${SESSION_PICKER_ID}
+          ?disabled=${!this.connected}
+          @click=${(event: MouseEvent) => this.toggle(event.currentTarget as HTMLElement)}
+        >
+          ${icons.search}
+        </button>
+        ${this.renderPicker()}
       </div>
-      <div class="chat-controls__session-notice" role="status" aria-live="polite"></div>
     `;
   }
 }
