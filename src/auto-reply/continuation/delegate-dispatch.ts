@@ -43,7 +43,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   annotateQueuedDelegatesInheritedPolicy,
-  clearQueuedDelegatesChainTokensFold,
+  clearRecoverableDelegatesChainTokensFold,
   consumePendingDelegates,
   finalizeStagedPostCompactionDelegates,
   listPendingDelegateSessionKeysForRecovery,
@@ -201,7 +201,7 @@ function armHedgeTimer(
             await params.persistChainState(result.chainState);
           }
           if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
-            clearQueuedDelegatesChainTokensFold(sessionKey);
+            clearRecoverableDelegatesChainTokensFold(sessionKey);
           }
         }
       })
@@ -647,6 +647,9 @@ export async function dispatchToolDelegates(params: {
         log.warn(
           `[continuation:delegate-terminal-chain-persist-failed] error=${message} session=${sessionKey} task=${delegate.task.slice(0, 80)}`,
         );
+        if (chainStatePersistedBeforeTerminalCommit && appliedChainTokensFold > 0) {
+          clearRecoverableDelegatesChainTokensFold(sessionKey);
+        }
         throw err;
       }
       const message = err instanceof Error ? err.message : String(err);
@@ -806,7 +809,7 @@ export async function recoverPendingContinuationDelegates(
         await persistRecoveredChainState(result.chainState);
       }
       if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
-        clearQueuedDelegatesChainTokensFold(sessionKey);
+        clearRecoverableDelegatesChainTokensFold(sessionKey);
       }
     }
   }

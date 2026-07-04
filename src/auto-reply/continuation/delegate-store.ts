@@ -752,9 +752,9 @@ export function annotateQueuedDelegatesChainTokensFold(
  * basis has been persisted to the child entry. Without this, later hedges reload
  * the already-folded entry and add the same fold again (#1158).
  */
-export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number {
+function clearDelegatesChainTokensFold(flows: readonly TaskFlowRecord[]): number {
   let cleared = 0;
-  for (const flow of listQueuedPendingFlows(sessionKey)) {
+  for (const flow of flows) {
     const state = decodeDelegateState(flow);
     if (!state?.chainTokensFold) {
       continue;
@@ -773,6 +773,16 @@ export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number 
     }
   }
   return cleared;
+}
+
+export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number {
+  return clearDelegatesChainTokensFold(listQueuedPendingFlows(sessionKey));
+}
+
+export function clearRecoverableDelegatesChainTokensFold(sessionKey: string): number {
+  return clearDelegatesChainTokensFold(
+    listTaskFlowsForOwnerKey(sessionKey).filter(isRecoverablePendingFlow),
+  );
 }
 
 /**
