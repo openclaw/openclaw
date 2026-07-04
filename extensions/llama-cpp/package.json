@@ -7,11 +7,14 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "optionalDependencies": {
-    "node-llama-cpp": "3.18.1"
+  "dependencies": {
+    "node-llama-cpp": "^3.19.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "config": {
+    "nodeLlamaCppPostinstall": "ignoreFailedBuild"
   },
   "openclaw": {
     "extensions": [
