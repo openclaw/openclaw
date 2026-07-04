@@ -119,14 +119,18 @@ async function persistChainStateBeforeTerminalCommit(
   },
   delegate: PendingContinuationDelegate,
   chainState: ChainState,
-  options: { markPlannedChainState?: boolean } = {},
+  options: { markPlannedChainState?: boolean; markerKind?: "advanced" | "terminal" } = {},
 ): Promise<PendingContinuationDelegate> {
   if (!params.persistBeforeTerminalCommit || !params.persistChainState) {
     return delegate;
   }
   try {
     const plannedDelegate = options.markPlannedChainState
-      ? markPendingDelegateChainStatePersistPlanned(delegate, chainState)
+      ? markPendingDelegateChainStatePersistPlanned(
+          delegate,
+          chainState,
+          options.markerKind ?? "advanced",
+        )
       : delegate;
     await params.persistChainState(chainState);
     return plannedDelegate;
@@ -427,7 +431,7 @@ export async function dispatchToolDelegates(params: {
   const persistTerminalChainState = async (
     delegate: PendingContinuationDelegate,
     nextState: ChainState,
-    options: { markPlannedChainState?: boolean } = {},
+    options: { markPlannedChainState?: boolean; markerKind?: "advanced" | "terminal" } = {},
   ): Promise<PendingContinuationDelegate> => {
     const updatedDelegate = await persistChainStateBeforeTerminalCommit(
       params,
@@ -451,6 +455,7 @@ export async function dispatchToolDelegates(params: {
       terminalChainStateForDelegate(dropped),
       {
         markPlannedChainState: appliedChainTokensFold > 0,
+        markerKind: "terminal",
       },
     );
     markDelegateFailed(failedDelegate, summary);
@@ -489,6 +494,7 @@ export async function dispatchToolDelegates(params: {
         terminalChainStateForDelegate(delegate),
         {
           markPlannedChainState: appliedChainTokensFold > 0,
+          markerKind: "terminal",
         },
       );
       markDelegateFailed(failedDelegate, summary);
@@ -513,9 +519,13 @@ export async function dispatchToolDelegates(params: {
       continue;
     }
 
+    const persistedChainStateKind = delegate.persistedChainStateKind ?? "advanced";
     const budgetChainState: ChainState = delegate.persistedChainState
       ? {
-          currentChainCount: Math.max(0, delegate.persistedChainState.currentChainCount - 1),
+          currentChainCount:
+            persistedChainStateKind === "advanced"
+              ? Math.max(0, delegate.persistedChainState.currentChainCount - 1)
+              : delegate.persistedChainState.currentChainCount,
           chainStartedAt: delegate.persistedChainState.chainStartedAt,
           accumulatedChainTokens: delegate.persistedChainState.accumulatedChainTokens,
           ...(delegate.persistedChainState.chainId
@@ -547,6 +557,7 @@ export async function dispatchToolDelegates(params: {
         terminalChainStateForDelegate(delegate),
         {
           markPlannedChainState: appliedChainTokensFold > 0,
+          markerKind: "terminal",
         },
       );
       markDelegateFailed(failedDelegate, summary);
@@ -561,7 +572,10 @@ export async function dispatchToolDelegates(params: {
       continue;
     }
 
-    const nextHop = delegate.persistedChainState?.currentChainCount ?? currentChainCount + 1;
+    const nextHop =
+      delegate.persistedChainState && persistedChainStateKind === "advanced"
+        ? delegate.persistedChainState.currentChainCount
+        : currentChainCount + 1;
     const delegateAccumulatedTokens =
       delegate.persistedChainState?.accumulatedChainTokens ?? currentAccumulatedTokens;
     const dispatchChainId =
@@ -630,7 +644,7 @@ export async function dispatchToolDelegates(params: {
         const acceptedDelegate = await persistTerminalChainState(
           delegate,
           plannedTerminalChainState,
-          { markPlannedChainState: true },
+          { markPlannedChainState: true, markerKind: "advanced" },
         );
         markPendingDelegateSpawnAccepted(acceptedDelegate, childSessionKey);
         dispatchSpan.setStatus("OK");
@@ -676,7 +690,7 @@ export async function dispatchToolDelegates(params: {
         const acceptedDelegate = await persistTerminalChainState(
           delegate,
           plannedTerminalChainState,
-          { markPlannedChainState: true },
+          { markPlannedChainState: true, markerKind: "advanced" },
         );
         if (acceptedChildSessionKey) {
           markPendingDelegateSpawnAccepted(acceptedDelegate, acceptedChildSessionKey);
@@ -692,7 +706,7 @@ export async function dispatchToolDelegates(params: {
         const failedDelegate = await persistTerminalChainState(
           delegate,
           terminalChainStateForDelegate(delegate),
-          { markPlannedChainState: appliedChainTokensFold > 0 },
+          { markPlannedChainState: appliedChainTokensFold > 0, markerKind: "terminal" },
         );
         markDelegateFailed(failedDelegate, summary);
         dispatchSpan.setStatus("ERROR", reasonText);
@@ -728,6 +742,7 @@ export async function dispatchToolDelegates(params: {
         terminalChainStateForDelegate(delegate),
         {
           markPlannedChainState: appliedChainTokensFold > 0,
+          markerKind: "terminal",
         },
       );
       markDelegateFailed(failedDelegate, summary);

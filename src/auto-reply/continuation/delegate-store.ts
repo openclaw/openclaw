@@ -100,6 +100,7 @@ const PendingDelegateStateSchema = z
         chainId: z.string().min(1).optional(),
       })
       .optional(),
+    persistedChainStateKind: z.enum(["advanced", "terminal"]).optional(),
     // Durable inherited policy for default-mode delayed delegates queued under
     // a silent/silent-wake parent chain. Recovery cannot reconstruct this from
     // the session key alone, so it must ride the TaskFlow row (#1158).
@@ -193,6 +194,9 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
       ? { chainTokensFold: delegate.chainTokensFold }
       : {}),
     ...(delegate.persistedChainState ? { persistedChainState: delegate.persistedChainState } : {}),
+    ...(delegate.persistedChainStateKind
+      ? { persistedChainStateKind: delegate.persistedChainStateKind }
+      : {}),
     ...(delegate.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(delegate.inheritedWake ? { inheritedWake: true } : {}),
     ...(delegate.spawnRequesterSessionKey
@@ -463,6 +467,9 @@ function flowToDelegate(
     ...(state.model ? { model: state.model } : {}),
     ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
     ...(state.persistedChainState ? { persistedChainState: state.persistedChainState } : {}),
+    ...(state.persistedChainStateKind
+      ? { persistedChainStateKind: state.persistedChainStateKind }
+      : {}),
     ...(state.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(state.inheritedWake ? { inheritedWake: true } : {}),
     ...(state.spawnRequesterSessionKey
@@ -677,9 +684,10 @@ export function markPendingDelegateFailed(
 export function markPendingDelegateChainStatePersistPlanned(
   delegate: Pick<
     PendingContinuationDelegate,
-    "flowId" | "expectedRevision" | "task" | "persistedChainState"
+    "flowId" | "expectedRevision" | "task" | "persistedChainState" | "persistedChainStateKind"
   >,
   chainState: ChainState,
+  kind: "advanced" | "terminal" = "advanced",
 ): PendingContinuationDelegate {
   if (!delegate.flowId || delegate.expectedRevision === undefined) {
     log.warn(
@@ -689,6 +697,9 @@ export function markPendingDelegateChainStatePersistPlanned(
       task: delegate.task,
       ...(delegate.persistedChainState
         ? { persistedChainState: delegate.persistedChainState }
+        : {}),
+      ...(delegate.persistedChainStateKind
+        ? { persistedChainStateKind: delegate.persistedChainStateKind }
         : {}),
     };
   }
@@ -700,6 +711,7 @@ export function markPendingDelegateChainStatePersistPlanned(
   const nextState: PendingDelegateState = {
     ...stateWithoutFold,
     persistedChainState: chainState,
+    persistedChainStateKind: kind,
   };
   const planned = updateFlowRecordByIdExpectedRevision({
     flowId: delegate.flowId,

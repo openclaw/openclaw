@@ -94,6 +94,7 @@ export type PendingContinuationDelegate = {
    * this marker instead of advancing the same delegate a second time.
    */
   persistedChainState?: ChainState;
+  persistedChainStateKind?: "advanced" | "terminal";
   /**
    * Durable inherited return policy from a silent/silent-wake parent chain.
    * Used for default-mode delayed delegates that survive process restart before
