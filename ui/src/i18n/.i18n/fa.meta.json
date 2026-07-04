@@ -1,27 +1,11 @@
 {
-  "fallbackKeys": [
-    "nodes.pairing.adminRequired",
-    "nodes.pairing.button",
-    "nodes.pairing.copySetupCode",
-    "nodes.pairing.failed",
-    "nodes.pairing.generating",
-    "nodes.pairing.help",
-    "nodes.pairing.manageDevices",
-    "nodes.pairing.newCode",
-    "nodes.pairing.pending",
-    "nodes.pairing.qrAlt",
-    "nodes.pairing.qrUnavailable",
-    "nodes.pairing.showSetupCode",
-    "nodes.pairing.subtitle",
-    "nodes.pairing.title",
-    "nodes.pairing.waiting"
-  ],
-  "generatedAt": "2026-07-04T10:00:48.341Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-04T16:50:00.820Z",
   "locale": "fa",
-  "model": "claude-opus-4-8",
-  "provider": "anthropic",
+  "model": "gpt-5.5",
+  "provider": "openai",
   "sourceHash": "f7d983d7920c1ebc509fef5fff4f67b35c78a17e6c35b204d8d04aa60e92c809",
   "totalKeys": 1438,
-  "translatedKeys": 1423,
+  "translatedKeys": 1438,
   "workflow": 1
 }
