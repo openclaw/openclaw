@@ -286,6 +286,7 @@ extension SettingsProTab {
     }
 
     func openGatewayQRScanner() {
+        self.scannerResultHandoff.beginScan()
         self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.setupStatusText = "Opening QR scanner..."
@@ -293,20 +294,13 @@ extension SettingsProTab {
     }
 
     func queueScannedResult(_ result: QRScannerResult) {
-        self.pendingScannerResult = result
+        self.scannerResultHandoff.queue(result)
         self.setupStatusText = "QR loaded. Closing scanner..."
         self.showQRScanner = false
     }
 
     func processQueuedScannerResult() {
-        guard self.pendingScannerResult != nil else { return }
-        self.pendingScannerResultTask?.cancel()
-        self.pendingScannerResultTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: QRScannerView.dismissalSettlingNanoseconds)
-            guard !Task.isCancelled, !self.showQRScanner else { return }
-            guard let result = self.pendingScannerResult else { return }
-            self.pendingScannerResult = nil
-
+        self.scannerResultHandoff.processAfterDismissal { result in
             switch result {
             case let .gatewayLink(link):
                 self.handleScannedGatewayLink(link)

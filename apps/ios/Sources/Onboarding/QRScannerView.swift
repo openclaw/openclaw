@@ -2,17 +2,61 @@ import OpenClawKit
 import SwiftUI
 import VisionKit
 
-enum QRScannerResult {
+enum QRScannerResult: Equatable {
     case gatewayLink(GatewayConnectDeepLink)
     case setupCode(String)
 }
 
-struct QRScannerView: UIViewControllerRepresentable {
-    /// Older physical devices can still be unwinding VisionKit/SwiftUI presentation
-    /// state when the sheet's onDismiss callback fires. Pairing may immediately show
-    /// TLS trust UI, so leave a longer buffer than the animation duration.
-    static let dismissalSettlingNanoseconds: UInt64 = 1_200_000_000
+@MainActor
+final class QRScannerResultHandoff {
+    /// SwiftUI's onDismiss can precede VisionKit's AV capture teardown. Delay
+    /// pairing UI briefly so it cannot race the scanner's camera shutdown.
+    static let defaultSettlingNanoseconds: UInt64 = 1_200_000_000
 
+    private let settlingNanoseconds: UInt64
+    private var pendingResult: QRScannerResult?
+    private var deliveryTask: Task<Void, Never>?
+
+    init(settlingNanoseconds: UInt64 = QRScannerResultHandoff.defaultSettlingNanoseconds) {
+        self.settlingNanoseconds = settlingNanoseconds
+    }
+
+    func beginScan() {
+        self.cancel()
+    }
+
+    func queue(_ result: QRScannerResult) {
+        self.pendingResult = result
+    }
+
+    @discardableResult
+    func processAfterDismissal(
+        _ process: @escaping @MainActor (QRScannerResult) -> Void) -> Task<Void, Never>?
+    {
+        guard let result = self.pendingResult else { return nil }
+        self.pendingResult = nil
+        self.deliveryTask?.cancel()
+        let settlingNanoseconds = self.settlingNanoseconds
+        let task = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: settlingNanoseconds)
+            } catch {
+                return
+            }
+            process(result)
+        }
+        self.deliveryTask = task
+        return task
+    }
+
+    func cancel() {
+        self.deliveryTask?.cancel()
+        self.deliveryTask = nil
+        self.pendingResult = nil
+    }
+}
+
+struct QRScannerView: UIViewControllerRepresentable {
     let onResult: (QRScannerResult) -> Void
     let onError: (String) -> Void
     let onDismiss: () -> Void
@@ -92,8 +136,8 @@ struct QRScannerView: UIViewControllerRepresentable {
 
         private func deliver(_ result: QRScannerResult, scanner: DataScannerViewController) {
             self.handled = true
-            // VisionKit recommends stopping the scanner before dismissal. Pairing can
-            // present UIKit alerts, so camera teardown must start before that handoff.
+            // DataScannerViewController has no teardown-completion callback. Stop capture
+            // before owners dismiss the sheet and later present pairing UI.
             scanner.stopScanning()
             Task { @MainActor in
                 self.parent.onResult(result)

@@ -785,7 +785,7 @@ struct RootTabsSourceGuardTests {
             to: "func dataScanner(_: DataScannerViewController, didRemove")
         let stopScanning = try #require(scannerDelivery.range(of: "scanner.stopScanning()"))
         let deliverResult = try #require(scannerDelivery.range(of: "self.parent.onResult(result)"))
-        #expect(scannerSource.contains("static let dismissalSettlingNanoseconds: UInt64 = 1_200_000_000"))
+        #expect(scannerSource.contains("static let defaultSettlingNanoseconds: UInt64 = 1_200_000_000"))
         let activeProblemToast = try Self.extract(
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
@@ -903,6 +903,7 @@ struct RootTabsSourceGuardTests {
         #expect(onboardingOnDismiss.lowerBound < onboardingProcessing.lowerBound)
         #expect(onboardingProcessing.lowerBound < onboardingContent.lowerBound)
         #expect(!onboardingSource.contains(".onChange(of: self.showQRScanner)"))
+        #expect(onboardingSource.matches(of: /self\.showQRScanner = true/).count == 1)
         #expect(actionsSource
             .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }

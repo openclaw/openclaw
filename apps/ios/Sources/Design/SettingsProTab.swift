@@ -43,8 +43,7 @@ struct SettingsProTab: View {
     @State var setupStatusText: String?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
-    @State var pendingScannerResult: QRScannerResult?
-    @State var pendingScannerResultTask: Task<Void, Never>?
+    @State var scannerResultHandoff = QRScannerResultHandoff()
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
@@ -143,8 +142,7 @@ struct SettingsProTab: View {
                 self.notifyRouteChange()
             }
             .onDisappear {
-                self.pendingScannerResultTask?.cancel()
-                self.pendingScannerResultTask = nil
+                self.scannerResultHandoff.cancel()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
