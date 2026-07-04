@@ -139,11 +139,18 @@ jobs:
               echo "Extended-stable release orchestration requires publish_openclaw_npm=true." >&2
               exit 1
             fi
-            if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]{4})\.([1-9][0-9]*)\.([3-9][0-9]|[1-9][0-9]{2,})$ ]]; then
+            if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]{4})\.([1-9][0-9]*)\.([1-9][0-9]*)$ ]]; then
               echo "Extended-stable publish requires a final vYYYY.M.P tag with patch 33 or above." >&2
               exit 1
             fi
-            expected_extended_stable_ref="refs/heads/extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
+            extended_stable_year="${BASH_REMATCH[1]}"
+            extended_stable_month="${BASH_REMATCH[2]}"
+            extended_stable_patch="${BASH_REMATCH[3]}"
+            if (( 10#${extended_stable_patch} < 33 )); then
+              echo "Extended-stable publish requires patch 33 or above; got ${extended_stable_patch}." >&2
+              exit 1
+            fi
+            expected_extended_stable_ref="refs/heads/extended-stable/${extended_stable_year}.${extended_stable_month}.33"
             if [[ "${WORKFLOW_REF}" != "${expected_extended_stable_ref}" ]]; then
               echo "Extended-stable publish must run from ${expected_extended_stable_ref}; got ${WORKFLOW_REF}." >&2
               exit 1

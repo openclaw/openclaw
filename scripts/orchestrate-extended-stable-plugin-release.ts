@@ -29,7 +29,6 @@ type Run = {
   path: string;
   html_url: string;
   created_at: string;
-  actor?: { login?: string };
 };
 
 type Artifact = {
@@ -117,8 +116,7 @@ async function dispatchWorkflow(
         createdAt >= dispatchStartedAt &&
         run.event === "workflow_dispatch" &&
         run.head_branch === ref &&
-        (expectedHeadSha === undefined || run.head_sha === expectedHeadSha) &&
-        (!process.env.GITHUB_ACTOR || run.actor?.login === process.env.GITHUB_ACTOR)
+        (expectedHeadSha === undefined || run.head_sha === expectedHeadSha)
       );
     });
     if (matches.length > 1) {
