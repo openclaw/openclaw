@@ -645,28 +645,31 @@ describe("hedge timer ref/handle cleanup", () => {
     );
   });
 
-  it("finalizes hedge-fired accepted rows before a chain-state persist failure can rearm them", async () => {
-    const sessionKey = "session-hedge-finalize-before-persist-fail";
-    enqueuePendingDelegate(sessionKey, {
-      task: "spawn once despite persist failure",
-      delayMs: 30_000,
-    });
-    const flowId = [...mockFlows.values()].find((flow) => flow.ownerKey === sessionKey)?.flowId;
-    expect(flowId).toBeDefined();
-    const persistChainState = vi.fn(async () => {
-      throw new Error("session store write failed");
+  it("retries hedge accepted-row persistence before later delegates can use a stale chain basis", async () => {
+    const sessionKey = "session-hedge-retry-persist-before-next";
+    enqueuePendingDelegate(sessionKey, { task: "first hop", delayMs: 30_000 });
+    enqueuePendingDelegate(sessionKey, { task: "second hop", delayMs: 60_000 });
+    const flowIds = [...mockFlows.values()]
+      .filter((flow) => flow.ownerKey === sessionKey)
+      .map((flow) => flow.flowId as string);
+    expect(flowIds).toHaveLength(2);
+    let persisted = { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 0 };
+    let persistAttempts = 0;
+    const persistChainState = vi.fn(async (next: typeof persisted) => {
+      persistAttempts++;
+      if (persistAttempts === 1) {
+        throw new Error("session store write failed");
+      }
+      persisted = { ...next };
     });
 
     await dispatchToolDelegates({
       sessionKey,
       chainState: { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 0 },
       ctx: { sessionKey },
-      maxChainLength: 10,
-      loadFreshChainState: () => ({
-        currentChainCount: 0,
-        chainStartedAt: 123,
-        accumulatedChainTokens: 0,
-      }),
+      maxChainLength: 1,
+      config: continuationConfig({ maxChainLength: 1 }),
+      loadFreshChainState: () => ({ ...persisted }),
       persistChainState,
     });
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
@@ -676,10 +679,23 @@ describe("hedge timer ref/handle cleanup", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    expect(persistChainState).toHaveBeenCalledWith(
-      expect.objectContaining({ currentChainCount: 1, chainStartedAt: 123 }),
+    expect(mockFlows.get(flowIds[0])).toMatchObject({ status: "running" });
+
+    const digest = crypto.createHash("sha256").update(flowIds[0]).digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(persisted.currentChainCount).toBe(1);
+    expect(mockFlows.get(flowIds[0])).toMatchObject({ status: "succeeded" });
+    expect(mockFlows.get(flowIds[1])).toMatchObject({ status: "failed" });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("chain-capped"),
+      expect.objectContaining({ sessionKey }),
     );
-    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "succeeded" });
   });
 
   it("advances + persists chain state across sequential hedge fires for multiple delayed delegates (#1158)", async () => {
