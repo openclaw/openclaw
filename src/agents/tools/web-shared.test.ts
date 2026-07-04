@@ -147,15 +147,12 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("truncates text-only fallback responses at byte boundaries when maxBytes is set", async () => {
-    // Foreign Response without a body stream (no getReader) — the .text()
-    // fallback path must still honor maxBytes at byte-level granularity.
-    // Use multi-byte UTF-8: "中" = 3 bytes, "🔥" = 4 bytes.
-    // 50 x's (50 bytes) + "中文" (6 bytes) + "🔥" (4 bytes) + 50 y's (50 bytes)
-    const longText = "x".repeat(50) + "中文🔥" + "y".repeat(50);
-    const bytes = new TextEncoder().encode(longText);
-    const CAP = 53; // lands at clean boundary after 50 x's + "中" (3 bytes)
-    expect(bytes.byteLength).toBeGreaterThan(CAP);
+  it("refuses to call unbounded .text() when maxBytes is set", async () => {
+    // Foreign Response without a body stream or arrayBuffer — the only way
+    // to read is .text() which buffers the full body before any check.
+    // When maxBytes is set the caller expects bounded memory, so we must
+    // fail-closed rather than call .text() unbounded.
+    const longText = "x".repeat(10_000);
     const response = {
       body: null as unknown,
       headers: new Headers(),
@@ -164,17 +161,13 @@ describe("readResponseText", () => {
       },
     } as unknown as Response;
 
-    // With maxBytes → byte-truncated
-    const capped = await readResponseText(response, { maxBytes: CAP });
+    // With maxBytes → rejected (no bounded byte source available)
+    const capped = await readResponseText(response, { maxBytes: 100 });
     expect(capped.truncated).toBe(true);
-    expect(capped.bytesRead).toBe(CAP);
-    // Verify truncation is byte-accurate: decode the expected prefix
-    const expected = new TextDecoder().decode(bytes.slice(0, CAP));
-    expect(capped.text).toBe(expected);
-    // Verify truncation preserves valid UTF-8 (no replacement characters)
-    expect(capped.text).not.toContain("�");
+    expect(capped.bytesRead).toBe(0);
+    expect(capped.text).toBe("");
 
-    // Without maxBytes → passes through (regression)
+    // Without maxBytes → .text() is safe (caller accepts full allocation)
     const noCapResponse = {
       body: null as unknown,
       headers: new Headers(),
@@ -185,6 +178,6 @@ describe("readResponseText", () => {
     const full = await readResponseText(noCapResponse);
     expect(full.text).toBe(longText);
     expect(full.truncated).toBe(false);
-    expect(full.bytesRead).toBe(bytes.byteLength);
+    expect(full.bytesRead).toBe(new TextEncoder().encode(longText).byteLength);
   });
 });
