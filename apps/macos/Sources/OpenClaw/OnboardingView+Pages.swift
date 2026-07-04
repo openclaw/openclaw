@@ -16,7 +16,7 @@ extension OnboardingView {
         case 2:
             self.cliPage()
         case 3:
-            self.wizardPage()
+            self.crestodianSetupPage()
         case 5:
             self.permissionsPage()
         case 8:
@@ -593,18 +593,26 @@ extension OnboardingView {
     }
 
     func permissionsPage() -> some View {
-        self.onboardingPage {
-            Text("Grant permissions")
-                .font(.largeTitle.weight(.semibold))
-            Text("These macOS permissions let OpenClaw automate apps and capture context on this Mac.")
+        // Fixed layout (no ScrollView): sorted by importance and sized so all
+        // permissions stay visible at once — no scrollbars during onboarding.
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Grant permissions")
+                    .font(.largeTitle.weight(.semibold))
+                if self.isRequesting {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            Text("These macOS permissions let OpenClaw automate apps and capture context on this Mac. Status updates automatically.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 8, padding: 12) {
-                ForEach(Capability.allCases, id: \.self) { cap in
+            self.onboardingCard(spacing: 4, padding: 12) {
+                ForEach(Capability.importanceOrdered, id: \.self) { cap in
                     PermissionRow(
                         capability: cap,
                         status: self.permissionMonitor.status[cap] ?? false,
@@ -613,24 +621,10 @@ extension OnboardingView {
                         Task { await self.request(cap) }
                     }
                 }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.refreshPerms() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Refresh status")
-                    if self.isRequesting {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                .padding(.top, 4)
             }
         }
+        .padding(.horizontal, 28)
+        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     func cliPage() -> some View {
@@ -787,7 +781,8 @@ extension OnboardingView {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "This is a dedicated onboarding chat. Your agent will introduce itself, " +
-                    "learn who you are, and help you connect WhatsApp or Telegram if you want.")
+                    "learn who you are, and help you connect Discord, Slack, Telegram, WhatsApp, " +
+                    "or another channel if you want.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -833,7 +828,7 @@ extension OnboardingView {
                     subtitle: "Click the OpenClaw menu bar icon for quick chat and status.",
                     systemImage: "bubble.left.and.bubble.right")
                 self.featureActionRow(
-                    title: "Connect WhatsApp or Telegram",
+                    title: "Connect Discord, Slack, Telegram, WhatsApp, …",
                     subtitle: "Open Settings → Channels to link channels and monitor status.",
                     systemImage: "link",
                     buttonTitle: "Open Settings → Channels")

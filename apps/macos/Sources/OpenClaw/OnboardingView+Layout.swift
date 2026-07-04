@@ -51,15 +51,10 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
-        .onChange(of: onboardingWizard.isComplete) { _, newValue in
-            guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
-            self.handleNext()
-        }
         .onDisappear {
             self.onboardingVisible = false
             self.stopPermissionMonitoring()
             self.stopDiscovery()
-            Task { await self.onboardingWizard.cancelIfRunning() }
         }
         .task {
             await self.refreshPerms()
@@ -91,7 +86,6 @@ extension OnboardingView {
 
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
-        let wizardLockIndex = wizardPageOrderIndex
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
@@ -124,8 +118,6 @@ extension OnboardingView {
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
-                    let isWizardLocked = wizardLockIndex != nil && !self.onboardingWizard
-                        .isComplete && index > (wizardLockIndex ?? 0)
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -134,8 +126,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked)
-                    .opacity(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked ? 0.3 : 1)
+                    .disabled(isInstallLocked || isConnectionLocked || isCLILocked)
+                    .opacity(isInstallLocked || isConnectionLocked || isCLILocked ? 0.3 : 1)
                 }
             }
 
