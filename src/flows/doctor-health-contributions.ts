@@ -12,7 +12,7 @@ import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-resul
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthFinding } from "./health-checks.js";
+import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
@@ -46,6 +46,7 @@ export type DoctorHealthFlowContext = {
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
+  repairEffects?: HealthRepairEffect[];
 };
 
 type DoctorHealthContribution = FlowContribution & {
@@ -1229,27 +1230,38 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
-      ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
-      return;
-    }
     const legacyParentVersionOverride = isLegacyParentWritableUpdateDoctorPass(
       ctx.env ?? process.env,
     )
       ? ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion
       : undefined;
+    const writeOptions = {
+      allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+      skipPluginValidation:
+        ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+      preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+      ...(legacyParentVersionOverride
+        ? { lastTouchedVersionOverride: legacyParentVersionOverride }
+        : {}),
+    };
+    if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
+      ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
+      return;
+    }
+    if (ctx.options.dryRun === true) {
+      const preview = buildConfigWriteDryRunPreview({
+        ctx,
+        updateDoctorRun,
+        writeOptions,
+      });
+      ctx.runtime.log(preview.message);
+      ctx.repairEffects = [...(ctx.repairEffects ?? []), preview.effect];
+      return;
+    }
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
-      writeOptions: {
-        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-        skipPluginValidation:
-          ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-        preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
-        ...(legacyParentVersionOverride
-          ? { lastTouchedVersionOverride: legacyParentVersionOverride }
-          : {}),
-      },
+      writeOptions,
     });
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
@@ -1267,6 +1279,78 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!ctx.prompter.shouldRepair) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
+}
+
+function buildConfigWriteDryRunPreview(params: {
+  ctx: DoctorHealthFlowContext;
+  updateDoctorRun: boolean;
+  writeOptions: {
+    allowConfigSizeDrop: boolean;
+    skipPluginValidation: boolean;
+    preservedLegacyRootKeys?: readonly string[];
+    lastTouchedVersionOverride?: string;
+  };
+}): { message: string; effect: HealthRepairEffect } {
+  const changedTopLevelKeys = collectChangedTopLevelConfigKeys(
+    params.ctx.cfgForPersistence,
+    params.ctx.cfg,
+  );
+  const reasons: string[] = [];
+  if (params.ctx.configResult.shouldWriteConfig === true) {
+    reasons.push("doctor config repair requested a write");
+  }
+  if (JSON.stringify(params.ctx.cfg) !== JSON.stringify(params.ctx.cfgForPersistence)) {
+    reasons.push("doctor config changed during health checks");
+  }
+  if (reasons.length === 0) {
+    reasons.push("doctor config write requested");
+  }
+
+  const lines = [
+    `Would write Doctor config changes to ${params.ctx.configPath}.`,
+    `- reason: ${reasons.join("; ")}`,
+  ];
+  if (changedTopLevelKeys.length > 0) {
+    lines.push(`- changed top-level keys: ${changedTopLevelKeys.join(", ")}`);
+  }
+  lines.push("- backup: standard config backup may be written");
+  if (params.updateDoctorRun) {
+    lines.push(`- update backup: ${params.ctx.configPath}.pre-update may be referenced`);
+  }
+  lines.push(
+    `- write options: allowConfigSizeDrop=${String(
+      params.writeOptions.allowConfigSizeDrop,
+    )}, skipPluginValidation=${String(params.writeOptions.skipPluginValidation)}`,
+  );
+  if ((params.writeOptions.preservedLegacyRootKeys?.length ?? 0) > 0) {
+    lines.push(
+      `- preserved legacy root keys: ${params.writeOptions.preservedLegacyRootKeys?.join(", ")}`,
+    );
+  }
+  if (params.writeOptions.lastTouchedVersionOverride) {
+    lines.push("- lastTouchedVersion: preserved from source config during update");
+  }
+  return {
+    message: lines.join("\n"),
+    effect: {
+      kind: "config",
+      action: "would-write-config",
+      target: params.ctx.configPath,
+      dryRunSafe: true,
+    },
+  };
+}
+
+function collectChangedTopLevelConfigKeys(before: unknown, after: unknown): string[] {
+  if (!isPlainObject(before) || !isPlainObject(after)) {
+    return [];
+  }
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
