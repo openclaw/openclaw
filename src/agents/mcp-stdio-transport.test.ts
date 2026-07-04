@@ -204,4 +204,18 @@ describe("OpenClawStdioClientTransport", () => {
       "write after end",
     );
   });
+
+  it("suppresses stderr pipe errors to prevent unhandled error crash", async () => {
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+
+    const transport = new OpenClawStdioClientTransport({ command: "npx", stderr: "pipe" });
+    const started = transport.start();
+    child.emit("spawn");
+    await started;
+
+    // Emitting an error on the piped stderr stream must not crash.
+    // The noop handler added before pipe() suppresses the error.
+    expect(() => child.stderr?.emit("error", new Error("simulated pipe error"))).not.toThrow();
+  });
 });
