@@ -165,6 +165,11 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (!hasTerminalLifecycle) {
     return undefined;
   }
+  if (params.entry.status === "done") {
+    // Successful main runs stay reusable; updatedAt can lag healthy transcript writes.
+    // Interrupted/endedAt-only rows still use this guard for recovery rollover.
+    return undefined;
+  }
   if (params.entry.status === "failed") {
     // Failed rows with a present transcript stay reusable for retry/recovery.
     // Callers already rotate failed rows when the transcript is missing.

@@ -149,20 +149,25 @@ describe("agent session resolution", () => {
     });
   });
 
-  it("rotates stale terminal main sessions whose transcript is newer than the registry", async () => {
+  it("rotates interrupted terminal main sessions whose transcript is newer than the registry", async () => {
     const scenarios = [
       {
         label: "canonical main",
         mainKey: "main",
         sessionKey: "agent:main:main",
-        status: "done" as const,
+        status: "killed" as const,
       },
-      { label: "raw main alias", mainKey: "main", sessionKey: "main", status: "done" as const },
+      {
+        label: "raw main alias",
+        mainKey: "main",
+        sessionKey: "main",
+        status: "killed" as const,
+      },
       {
         label: "custom main alias",
         mainKey: "work",
         sessionKey: "agent:main:main",
-        status: "done" as const,
+        status: "killed" as const,
       },
       { label: "endedAt-only main", mainKey: "main", sessionKey: "agent:main:main" },
     ];
