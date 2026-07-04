@@ -121,6 +121,7 @@ function createReplyOperation(): ReplyOperation {
     result: null,
     setPhase: vi.fn(),
     updateSessionId: vi.fn(),
+    hasOwnedSessionId: vi.fn(() => false),
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     retainFailureUntilComplete: vi.fn(),
