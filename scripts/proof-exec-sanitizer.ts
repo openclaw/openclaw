@@ -44,7 +44,7 @@ async function main() {
   console.log(`NUL escaped: ${aggregated.includes("\\x00")}`);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });
