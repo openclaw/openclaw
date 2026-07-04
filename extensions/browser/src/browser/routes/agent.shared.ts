@@ -147,7 +147,10 @@ export async function withRouteTabContext<T>(
     return undefined;
   }
   try {
-    const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
+    const tab = await profileCtx.ensureTabAvailable(params.targetId, {
+      allowPlaywrightFallback: true,
+    });
     if (params.enforceCurrentUrlAllowed) {
       await assertBrowserNavigationResultAllowed({
         url: tab.url,

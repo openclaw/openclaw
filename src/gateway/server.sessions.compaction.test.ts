@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -29,6 +30,26 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 
 type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
+
+function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
+  const header = JSON.stringify({
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
+  const entries = Array.from({ length: Math.max(0, totalLines - 1) }, (_, index) =>
+    JSON.stringify({
+      type: "message",
+      id: `entry-${index}`,
+      parentId: index === 0 ? null : `entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`,
+      message: { role: "user", content: `line-${index}`, timestamp: index },
+    }),
+  );
+  return [header, ...entries];
+}
 
 function compactionCheckpointEntry(
   fixture: CheckpointFixture,
@@ -606,76 +627,243 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
   ws.close();
 });
 
-test("sessions.patch preserves nested model ids under provider overrides", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      "agent:main:main": sessionStoreEntry("sess-main"),
-    }),
-    "utf-8",
+test("sessions.compact maxLines truncates the transcript on disk and archives the original to .bak", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    kept?: number;
+    archived?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+
+  // Active transcript stays reopenable: header + 49 newest entries.
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+  expect(JSON.parse(truncated[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+  expect(JSON.parse(truncated[1] ?? "{}")).toMatchObject({ id: "entry-450", parentId: null });
+  expect(JSON.parse(truncated.at(-1) ?? "{}")).toMatchObject({
+    id: "entry-498",
+    message: { content: "line-498" },
+  });
+
+  // Original 500 lines preserved verbatim in the .bak archive.
+  const archivedPath = compacted.payload?.archived;
+  if (!archivedPath) {
+    throw new Error("expected archived transcript path");
+  }
+  const archived = (await fs.readFile(archivedPath, "utf-8")).trim().split("\n");
+  expect(archived).toHaveLength(500);
+  expect(JSON.parse(archived[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+
+  // No active run present, so the interrupt guard short-circuits without aborting.
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines interrupts an active run before truncating, matching the LLM compact path", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Simulate an embedded agent run actively appending to this session transcript.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  // Regression for the ClawSweeper finding: the maxLines truncate branch must
+  // run the same active-run interrupt guard as the LLM-summarize branch *before*
+  // archiving and overwriting the transcript, so an active runner cannot keep
+  // appending to the file being truncated (the data-loss mode tracked by #72765).
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  // The guard ran first; truncation still completed deterministically afterwards.
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when truncation is a no-op", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 10);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.kept).toBe(10);
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when no transcript exists", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    reason?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.reason).toBe("no transcript");
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines aborts without truncating when an active run cannot be interrupted", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 500 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
   );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
 
-  await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
-    const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    const cfg = {
-      session: { store: storePath, mainKey: "main" },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-test-a" },
+  const { ws } = await openClient();
+  // Active embedded run that fails to end within the interrupt window.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", false);
+
+  const compacted = await rpcReq<{ ok: boolean }>(ws, "sessions.compact", {
+    key: "main",
+    maxLines: 50,
+  });
+
+  // Order proof: the guard ran first and failed, so the RPC errors out *before*
+  // any archive/truncate. If the guard ran after truncation, the transcript
+  // would already be 50 lines here. It is still 500 with no .bak, proving the
+  // interrupt happens before the destructive tail-read/archive/write.
+  expect(compacted.ok).toBe(false);
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  const untouched = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(untouched).toHaveLength(500);
+  const dirEntries = await fs.readdir(dir);
+  expect(dirEntries.some((name) => name.includes(".bak"))).toBe(false);
+  expect(storePath).toBeTruthy();
+
+  ws.close();
+});
+
+test("sessions.patch preserves nested model ids under provider overrides", async () => {
+  await withTempDir({ prefix: "openclaw-gw-sessions-nested-" }, async (dir) => {
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": sessionStoreEntry("sess-main"),
+      }),
+      "utf-8",
+    );
+
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
+      const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      const cfg = {
+        session: { store: storePath, mainKey: "main" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-a" },
+          },
+          list: [{ id: "main", default: true, workspace: dir }],
         },
-        list: [{ id: "main", default: true, workspace: dir }],
-      },
-    };
-    const configPath = path.join(dir, "openclaw.json");
-    await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), "utf-8");
+      };
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), "utf-8");
 
-    await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-      const started = await startConnectedServerWithClient();
-      const { server, ws } = started;
-      try {
-        agentDiscoveryMock.enabled = true;
-        agentDiscoveryMock.models = [
-          { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
-        ];
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        const started = await startConnectedServerWithClient();
+        const { server, ws } = started;
+        try {
+          agentDiscoveryMock.enabled = true;
+          agentDiscoveryMock.models = [
+            { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+          ];
 
-        const patched = await rpcReq<{
-          ok: true;
-          entry: {
-            modelOverride?: string;
-            providerOverride?: string;
-            model?: string;
-            modelProvider?: string;
-          };
-          resolved?: { model?: string; modelProvider?: string };
-        }>(ws, "sessions.patch", {
-          key: "agent:main:main",
-          model: "nvidia/moonshotai/kimi-k2.5",
-        });
-        expect(patched.ok).toBe(true);
-        expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
-        expect(patched.payload?.entry.providerOverride).toBe("nvidia");
-        expect(patched.payload?.entry.model).toBeUndefined();
-        expect(patched.payload?.entry.modelProvider).toBeUndefined();
-        expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
-        expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+          const patched = await rpcReq<{
+            ok: true;
+            entry: {
+              modelOverride?: string;
+              providerOverride?: string;
+              model?: string;
+              modelProvider?: string;
+            };
+            resolved?: { model?: string; modelProvider?: string };
+          }>(ws, "sessions.patch", {
+            key: "agent:main:main",
+            model: "nvidia/moonshotai/kimi-k2.5",
+          });
+          expect(patched.ok).toBe(true);
+          expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+          expect(patched.payload?.entry.providerOverride).toBe("nvidia");
+          expect(patched.payload?.entry.model).toBeUndefined();
+          expect(patched.payload?.entry.modelProvider).toBeUndefined();
+          expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
+          expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
 
-        const listed = await rpcReq<{
-          sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
-        }>(ws, "sessions.list", {});
-        expect(listed.ok).toBe(true);
-        const mainSession = listed.payload?.sessions.find(
-          (session) => session.key === "agent:main:main",
-        );
-        expect(mainSession?.modelProvider).toBe("nvidia");
-        expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
-      } finally {
-        ws.close();
-        await server.close();
-      }
+          const listed = await rpcReq<{
+            sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+          }>(ws, "sessions.list", {});
+          expect(listed.ok).toBe(true);
+          const mainSession = listed.payload?.sessions.find(
+            (session) => session.key === "agent:main:main",
+          );
+          expect(mainSession?.modelProvider).toBe("nvidia");
+          expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+        } finally {
+          ws.close();
+          await server.close();
+        }
+      });
     });
   });
 });

@@ -29,6 +29,7 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { enabled: false },
+      allowSymlinkTargetWrites: false,
       approvalPolicy: "pending",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -320,6 +321,17 @@ different visible skill set per agent.
   defaults — they do not merge. Set to `[]` to expose no skills for that agent.
 </ParamField>
 
+<Warning>
+  Agent skill allowlists are a visibility and loading filter for OpenClaw skill
+  discovery, prompts, slash-command discovery, sandbox sync, and skill
+  snapshots. They are not a shell-time authorization boundary. If an agent can
+  run host `exec`, that shell can still run external clients or read host files
+  that are visible to the execution user, including MCP client registries such
+  as `~/.openclaw/skills/config/mcporter.json`. For per-agent MCP isolation,
+  combine skill allowlists with sandbox/OS-user isolation, deny or tightly
+  allowlist host exec, and prefer per-agent credentials at the MCP server.
+</Warning>
+
 ## Workshop (`skills.workshop`)
 
 <ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">
@@ -331,6 +343,13 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.approvalPolicy" type='"pending" | "auto"' default='"pending"'>
   `pending` requires operator approval before agent-initiated apply, reject, or
   quarantine. `auto` allows those actions without approval.
+</ParamField>
+
+<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
+  Allow Skill Workshop apply to write through workspace skill symlinks whose
+  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep this
+  disabled unless generated proposal applies should mutate that shared skill
+  root.
 </ParamField>
 
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
@@ -364,6 +383,23 @@ To allow an intentional symlink layout, declare the trusted target:
 With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills` is
 accepted after realpath resolution. `extraDirs` scans the sibling repo directly;
 `allowSymlinkTargets` preserves the symlinked path for existing layouts.
+
+Skill Workshop apply does not write through those symlinks by default. To let
+Workshop apply mutate skills under already-trusted symlink targets, opt in
+separately:
+
+```json5
+{
+  skills: {
+    load: {
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+    workshop: {
+      allowSymlinkTargetWrites: true,
+    },
+  },
+}
+```
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks (per-skill `SKILL.md` containment still

@@ -31,7 +31,12 @@ export function getInvalidPersistedCronJobReason(
   }
   const scheduleRecord = schedule as Record<string, unknown>;
   const scheduleKind = scheduleRecord.kind;
-  if (scheduleKind !== "at" && scheduleKind !== "every" && scheduleKind !== "cron") {
+  if (
+    scheduleKind !== "at" &&
+    scheduleKind !== "every" &&
+    scheduleKind !== "cron" &&
+    scheduleKind !== "on-exit"
+  ) {
     return "invalid-schedule";
   }
   if (scheduleKind === "at") {
@@ -49,6 +54,12 @@ export function getInvalidPersistedCronJobReason(
   if (scheduleKind === "cron") {
     const expr = scheduleRecord.expr;
     if (typeof expr !== "string" || expr.trim().length === 0) {
+      return "invalid-schedule";
+    }
+  }
+  if (scheduleKind === "on-exit") {
+    const command = scheduleRecord.command;
+    if (typeof command !== "string" || command.trim().length === 0) {
       return "invalid-schedule";
     }
   }

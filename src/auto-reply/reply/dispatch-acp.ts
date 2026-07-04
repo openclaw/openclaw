@@ -10,9 +10,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -22,6 +24,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
+import {
+  stripExtractedFileImageMetadata,
+  type ExtractedFileImage,
+} from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
@@ -41,12 +47,46 @@ import {
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-manager.runtime.js"),
 );
+
+type OrderedAcpAttachment = {
+  attachment: AcpTurnAttachment;
+  sourceIndex?: number;
+  sequence: number;
+};
+
+function appendOrderedAcpAttachments(params: {
+  entries: OrderedAcpAttachment[];
+  attachments: AcpTurnAttachment[];
+  sourceIndexes?: number[];
+}) {
+  for (const [index, attachment] of params.attachments.entries()) {
+    params.entries.push({
+      attachment,
+      sourceIndex: params.sourceIndexes?.[index],
+      sequence: params.entries.length,
+    });
+  }
+}
+
+function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAttachment[] {
+  return entries
+    .toSorted((left, right) => {
+      if (left.sourceIndex !== undefined && right.sourceIndex !== undefined) {
+        return left.sourceIndex - right.sourceIndex || left.sequence - right.sequence;
+      }
+      if (left.sourceIndex !== undefined || right.sourceIndex !== undefined) {
+        return left.sequence - right.sequence;
+      }
+      return left.sequence - right.sequence;
+    })
+    .map((entry) => entry.attachment);
+}
 const dispatchAcpSessionRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-session.runtime.js"),
 );
@@ -370,6 +410,7 @@ export async function tryDispatchAcpReply(params: {
   sessionKey?: string;
   toolsAllow?: string[];
   images?: Array<{ data: string; mimeType: string }>;
+  extractedFileImages?: ExtractedFileImage[];
   abortSignal?: AbortSignal;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
@@ -382,6 +423,7 @@ export async function tryDispatchAcpReply(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  originatingChatType?: ChatType;
   shouldSendToolSummaries: boolean;
   shouldSendToolSummariesNow?: () => boolean;
   bypassForCommand: boolean;
@@ -440,6 +482,7 @@ export async function tryDispatchAcpReply(params: {
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
+    originatingChatType: params.originatingChatType,
     onReplyStart: params.onReplyStart,
     abortSignal: params.abortSignal,
     runId: params.runId,
@@ -537,16 +580,20 @@ export async function tryDispatchAcpReply(params: {
     if (agentPolicyError) {
       throw agentPolicyError;
     }
-    if (hasInboundMedia(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
+    let extractedFileImages = params.extractedFileImages ?? [];
+    if (hasInboundMediaForUnderstanding(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
         const { applyMediaUnderstanding } = await loadAgentTurnMediaRuntime();
-        await applyMediaUnderstanding({
+        const mediaResult = await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
           agentId: acpAgentId,
           agentDir: resolveAgentDir(params.cfg, acpAgentId),
           workspaceDir: resolveAgentWorkspaceDir(params.cfg, acpAgentId),
         });
+        if (mediaResult.extractedFileImages.length > 0) {
+          extractedFileImages = [...extractedFileImages, ...mediaResult.extractedFileImages];
+        }
       } catch (err) {
         logVerbose(
           `dispatch-acp: media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
@@ -558,24 +605,47 @@ export async function tryDispatchAcpReply(params: {
     const resolvedTurnAttachments = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
+      includeAttachmentIndexes: true,
     });
     const mediaAttachments = resolvedTurnAttachments.attachments;
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
+    const extractedAttachments = resolveInlineAgentImageAttachments(
+      extractedFileImages.map(stripExtractedFileImageMetadata),
+    );
     const mediaAttachmentsAreOnlyRecentHistory =
       mediaAttachments.length > 0 &&
       mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
-    const attachments =
+    const useMediaAttachments =
       mediaAttachments.length > 0 &&
-      !(mediaAttachmentsAreOnlyRecentHistory && inlineAttachments.length > 0)
-        ? mediaAttachments
-        : inlineAttachments;
-    const turnPromptText =
-      attachments === mediaAttachments
-        ? appendRecentHistoryImageContext({
-            promptText,
-            images: resolvedTurnAttachments.recentHistoryImages,
-          })
-        : promptText;
+      !(
+        mediaAttachmentsAreOnlyRecentHistory &&
+        (inlineAttachments.length > 0 || extractedAttachments.length > 0)
+      );
+    const attachmentEntries: OrderedAcpAttachment[] = [];
+    if (useMediaAttachments) {
+      appendOrderedAcpAttachments({
+        entries: attachmentEntries,
+        attachments: mediaAttachments,
+        sourceIndexes: resolvedTurnAttachments.attachmentIndexes,
+      });
+    } else {
+      appendOrderedAcpAttachments({
+        entries: attachmentEntries,
+        attachments: inlineAttachments,
+      });
+    }
+    appendOrderedAcpAttachments({
+      entries: attachmentEntries,
+      attachments: extractedAttachments,
+      sourceIndexes: extractedFileImages.map((image) => image.attachmentIndex),
+    });
+    const attachments = resolveMergedAcpAttachments(attachmentEntries);
+    const turnPromptText = useMediaAttachments
+      ? appendRecentHistoryImageContext({
+          promptText,
+          images: resolvedTurnAttachments.recentHistoryImages,
+        })
+      : promptText;
     if (!turnPromptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);

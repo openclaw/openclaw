@@ -495,6 +495,44 @@ describe("tui session actions", () => {
     expect(listSessions).not.toHaveBeenCalled();
   });
 
+  it("renders a fresh session total as 0 (not '?') when totalTokensFresh is set", async () => {
+    const listSessions = vi.fn().mockResolvedValue({ sessions: [] });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-fresh",
+      sessionInfo: {
+        key: "agent:main:fresh",
+        sessionId: "session-fresh",
+        model: "session-model",
+        modelProvider: "openai",
+        // The gateway strips the fresh 0 via resolvePositiveNumber but still
+        // flags it fresh, so the footer must show 0 rather than "?". (#93798)
+        totalTokensFresh: true,
+        updatedAt: 60,
+      },
+      messages: [],
+    });
+    const state = createBaseState({
+      historyLoaded: true,
+      sessionInfo: {
+        totalTokens: 3,
+        updatedAt: 500,
+      },
+    });
+
+    const { setSession } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await setSession("agent:main:fresh");
+
+    expect(state.sessionInfo.totalTokens).toBe(0);
+    expect(state.sessionInfo.totalTokensFresh).toBe(true);
+  });
+
   it("restores an in-flight run reported by chat.history on switch-back", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-bg",
@@ -1205,6 +1243,26 @@ describe("tui session actions", () => {
       { text: "persisted", timestamp: 2_000 },
     ]);
     expect(chatLog.restorePendingUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "reply" }] }],
+    });
+    const requestRender = vi.fn();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory,
+      } as unknown as TuiBackend,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
+    });
+
+    await runLoadHistory();
+
+    expect(requestRender).toHaveBeenCalledWith(true);
   });
 
   it("hydrates session info from chat history without listing sessions", async () => {

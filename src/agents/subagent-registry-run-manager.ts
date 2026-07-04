@@ -147,6 +147,8 @@ export type RegisterSubagentRunParams = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
+  agentId?: string;
+  requesterAgentId?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -180,6 +182,7 @@ export function createSubagentRunManager(params: {
   stopSweeper(): void;
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
+  clearPendingLifecycleTimeout(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   resolveSubagentSessionCompletion(args: {
@@ -264,6 +267,8 @@ export function createSubagentRunManager(params: {
         waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
+        params.clearPendingLifecycleError(runId);
+        params.clearPendingLifecycleTimeout(runId);
         if (
           markSubagentRunPausedAfterYield({
             entry,
@@ -516,6 +521,7 @@ export function createSubagentRunManager(params: {
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
     transcriptFile?: string;
+    task?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -565,9 +571,24 @@ export function createSubagentRunManager(params: {
       ) ?? 0;
 
     const sourceCompletion = ensureCompletionState(source);
+    // Prefer the caller-supplied task (the text actually dispatched to the
+    // child session during steer/wake/orphan-resume) over the previous run's
+    // stale `task`. Falling back to the prior task preserves behavior for any
+    // caller that does not pass a replacement message. The orphan-session
+    // recovery flow (`recoverOrphanedSubagentSessions` ->
+    // `resumeOrphanedSession` / `buildResumeMessage` in
+    // `subagent-orphan-recovery.ts`) rewraps the persisted `task` into the
+    // `[Subagent Task]` block after a gateway restart; using stale text would
+    // silently re-run the original instruction and lose the user's steer
+    // update.
+    const nextTask =
+      typeof replaceParams.task === "string" && replaceParams.task.length > 0
+        ? replaceParams.task
+        : source.task;
     const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
+      task: nextTask,
       createdAt: now,
       startedAt: now,
       sessionStartedAt,
@@ -687,6 +708,8 @@ export function createSubagentRunManager(params: {
         runId,
         label: registerParams.label,
         task: registerParams.task,
+        agentId: registerParams.agentId,
+        requesterAgentId: registerParams.requesterAgentId,
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
         startedAt: now,

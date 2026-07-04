@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createWindowsOutputDecoder,
   decodeWindowsOutputBuffer,
+  decodeWindowsTextFileBuffer,
   parseWindowsCodePage,
 } from "./windows-encoding.js";
 
@@ -35,6 +36,35 @@ describe("windows output encoding", () => {
         windowsEncoding: "gbk",
       }),
     ).toBe("测试");
+  });
+
+  it("decodes legacy text files with the Windows system encoding", () => {
+    const raw = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
+
+    expect(
+      decodeWindowsTextFileBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "gbk",
+      }),
+    ).toBe("你好");
+  });
+
+  it("supports common Windows system codepage decoder labels", () => {
+    for (const encoding of [
+      "windows-874",
+      "windows-1250",
+      "windows-1251",
+      "windows-1252",
+      "windows-1253",
+      "windows-1254",
+      "windows-1255",
+      "windows-1256",
+      "windows-1257",
+      "windows-1258",
+    ]) {
+      expect(() => new TextDecoder(encoding)).not.toThrow();
+    }
   });
 
   it("keeps multibyte Windows codepage characters intact across chunk boundaries", () => {
@@ -70,6 +100,18 @@ describe("windows output encoding", () => {
     expect(decoder.decode(raw.subarray(0, 1))).toBe("");
     expect(decoder.decode(raw.subarray(1, 3))).toBe("测");
     expect(decoder.decode(raw.subarray(3))).toBe("试");
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("keeps split UTF-8 output intact on POSIX", () => {
+    const decoder = createWindowsOutputDecoder({ platform: "linux" });
+    const raw = Buffer.from(JSON.stringify({ text: "hello 世" }), "utf8");
+    const splitIndex = raw.indexOf(Buffer.from("世", "utf8")[0]);
+
+    expect(decoder.decode(raw.subarray(0, splitIndex + 1))).toBe(
+      raw.subarray(0, splitIndex).toString("utf8"),
+    );
+    expect(decoder.decode(raw.subarray(splitIndex + 1))).toBe('世"}');
     expect(decoder.flush()).toBe("");
   });
 });

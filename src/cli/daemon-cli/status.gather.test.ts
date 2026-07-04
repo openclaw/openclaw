@@ -7,7 +7,7 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortConnections } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
@@ -59,9 +59,18 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
+const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
+  applies: false,
+  severity: "info" as const,
+  code: "windows_firewall_not_applicable",
+  message: "Windows LAN firewall diagnostics do not apply.",
+  details: [],
+}));
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => Promise<{ status: string; detail?: string }>
+>(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -74,7 +83,7 @@ const serviceReadCommand = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<{
     programArguments: string[];
     environment?: Record<string, string>;
-  }>
+  } | null>
 >(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
@@ -85,6 +94,10 @@ const serviceReadCommand = vi.fn<
 const resolveGatewayBindHost = vi.fn(
   async (_bindMode?: string, _customBindHost?: string) => "0.0.0.0",
 );
+const resolveAdvertisedControlUiLinks = vi.fn(async (_opts?: unknown) => ({
+  httpUrl: "https://10.211.55.3:19001/",
+  wsUrl: "wss://10.211.55.3:19001",
+}));
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
 const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
 const resolveStateDir = vi.fn(
@@ -183,6 +196,10 @@ vi.mock("../../gateway/net.js", () => ({
     resolveGatewayBindHost(bindMode, customBindHost),
 }));
 
+vi.mock("../../gateway/control-ui-links.js", () => ({
+  resolveAdvertisedControlUiLinks: (opts?: unknown) => resolveAdvertisedControlUiLinks(opts),
+}));
+
 vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -212,6 +229,10 @@ vi.mock("../../infra/tailnet.js", () => ({
 
 vi.mock("../../infra/tls/gateway.js", () => ({
   loadGatewayTlsRuntime: (cfg: unknown) => loadGatewayTlsRuntime(cfg),
+}));
+
+vi.mock("../../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: (opts: unknown) => inspectWindowsGatewayFirewall(opts),
 }));
 
 vi.mock("./probe.js", () => ({
@@ -250,13 +271,18 @@ describe("gatherDaemonStatus", () => {
       "DAEMON_GATEWAY_TOKEN",
       "DAEMON_GATEWAY_PASSWORD",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli/openclaw.json";
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.DAEMON_GATEWAY_TOKEN;
-    delete process.env.DAEMON_GATEWAY_PASSWORD;
+    setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-cli");
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-cli/openclaw.json");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
+    deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     callGatewayStatusProbe.mockClear();
+    resolveAdvertisedControlUiLinks.mockClear();
+    resolveAdvertisedControlUiLinks.mockResolvedValue({
+      httpUrl: "https://10.211.55.3:19001/",
+      wsUrl: "wss://10.211.55.3:19001",
+    });
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
@@ -266,6 +292,14 @@ describe("gatherDaemonStatus", () => {
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortConnections.mockClear();
+    inspectWindowsGatewayFirewall.mockClear();
+    inspectWindowsGatewayFirewall.mockResolvedValue({
+      applies: false,
+      severity: "info",
+      code: "windows_firewall_not_applicable",
+      message: "Windows LAN firewall diagnostics do not apply.",
+      details: [],
+    });
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
@@ -306,6 +340,10 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.tlsFingerprint).toBe("sha256:11:22:33:44");
     expect(probeInput.token).toBe("daemon-token");
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.controlUiLinks).toEqual({
+      httpUrl: "https://10.211.55.3:19001/",
+      wsUrl: "wss://10.211.55.3:19001",
+    });
     expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
@@ -316,6 +354,31 @@ describe("gatherDaemonStatus", () => {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
     }
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+  });
+
+  it("includes Windows firewall diagnostics during deep LAN gateway status", async () => {
+    inspectWindowsGatewayFirewall.mockResolvedValueOnce({
+      applies: true,
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", mode: "quick", port: 19001 }),
+    );
+    expect(status.gateway?.windowsFirewall).toMatchObject({
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+    });
   });
 
   it("falls back to probe version when server metadata is unavailable", async () => {
@@ -488,6 +551,29 @@ describe("gatherDaemonStatus", () => {
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
+  it("keeps gateway status read-only when service management is unsupported", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.command).toBeNull();
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+  });
+
   it("surfaces recent service restart handoffs only during deep status", async () => {
     readGatewayRestartHandoffSync.mockReturnValueOnce({
       kind: "gateway-supervisor-restart-handoff",
@@ -611,6 +697,7 @@ describe("gatherDaemonStatus", () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
+        bind: "lan",
         remote: { url: "wss://gateway.example" },
       },
     };
@@ -622,6 +709,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
     expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(status.connections).toBeUndefined();
     expect(status.pluginVersionDrift).toBeUndefined();
@@ -640,8 +728,8 @@ describe("gatherDaemonStatus", () => {
         },
       }),
     );
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
@@ -682,8 +770,8 @@ describe("gatherDaemonStatus", () => {
         },
       }),
     );
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     cliLoadedConfig = {
       gateway: {
         bind: "loopback",
@@ -731,7 +819,7 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password"; // pragma: allowlist secret
+    setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
 
     await gatherDaemonStatus({
       rpc: {},
@@ -760,7 +848,7 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.DAEMON_GATEWAY_TOKEN = "daemon-secretref-token";
+    setTestEnvValue("DAEMON_GATEWAY_TOKEN", "daemon-secretref-token");
 
     await gatherDaemonStatus({
       rpc: {},
@@ -984,8 +1072,8 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password"; // pragma: allowlist secret
+    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "env-token");
+    setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
 
     await gatherDaemonStatus({
       rpc: {},

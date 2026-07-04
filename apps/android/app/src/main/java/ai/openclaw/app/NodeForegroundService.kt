@@ -36,21 +36,20 @@ class NodeForegroundService : Service() {
       stopSelf()
       return
     }
-    // Split connection and capture flows before combining so notification text
+    // Keep the connection tuple atomic, then split connection and capture work so notification text
     // can update without restarting runtime-owned connection work.
     notificationJob =
       scope.launch {
         combine(
           combine(
-            runtime.statusText,
+            runtime.gatewayConnectionDisplay,
             runtime.serverName,
-            runtime.isConnected,
             runtime.voiceCaptureMode,
-          ) { status, server, connected, mode ->
+          ) { connection, server, mode ->
             VoiceNotificationBase(
-              status = status,
+              status = connection.statusText,
               server = server,
-              connected = connected,
+              connected = connection.isConnected,
               mode = mode,
             )
           },
@@ -223,10 +222,11 @@ class NodeForegroundService : Service() {
 
 internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
   val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-  return if (mode == VoiceCaptureMode.TalkMode) {
-    base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-  } else {
-    base
+  return when (mode) {
+    VoiceCaptureMode.Off -> base
+    VoiceCaptureMode.ManualMic,
+    VoiceCaptureMode.TalkMode,
+    -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
   }
 }
 

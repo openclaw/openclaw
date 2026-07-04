@@ -5,9 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDreamingShadowTrialReport,
   defaultDreamingShadowTrialReportPath,
-  rankDreamingShadowTrialCandidates,
   resolveDreamingShadowTrialRecommendation,
-  scoreDreamingShadowTrialCandidate,
   writeDreamingShadowTrialReport,
 } from "./dreaming-shadow-trial.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
@@ -62,6 +60,7 @@ describe("dreaming shadow trial runner", () => {
       verdict: "neutral",
       workspaceDir,
       nowMs: Date.parse("2026-05-18T18:00:00.000Z"),
+      timezone: "UTC",
     });
 
     expect(report.recommendation).toBe("defer");
@@ -159,92 +158,6 @@ describe("dreaming shadow trial runner", () => {
     });
   });
 
-  it("scores helpful shadow-trial results as a bounded report-only boost", () => {
-    const report = buildDreamingShadowTrialReport({
-      ...baseInput,
-      verdict: "helpful",
-    });
-
-    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.98 }, report);
-
-    expect(scored.scoreBeforeShadowTrial).toBe(0.98);
-    expect(scored.shadowTrialScoreDelta).toBe(0.04);
-    expect(scored.scoreAfterShadowTrial).toBe(1);
-    expect(scored.shadowTrialVerdict).toBe("helpful");
-    expect(scored.shadowTrialRecommendation).toBe("promote");
-    expect(scored.rejectedByShadowTrial).toBe(false);
-    expect(scored.scoringAction).toBe("report-only");
-  });
-
-  it("leaves neutral shadow-trial results deferred without raising the score", () => {
-    const report = buildDreamingShadowTrialReport({
-      ...baseInput,
-      verdict: "neutral",
-    });
-
-    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.79 }, report);
-
-    expect(scored.scoreBeforeShadowTrial).toBe(0.79);
-    expect(scored.shadowTrialScoreDelta).toBe(0);
-    expect(scored.scoreAfterShadowTrial).toBe(0.79);
-    expect(scored.shadowTrialRecommendation).toBe("defer");
-    expect(scored.rejectedByShadowTrial).toBe(false);
-  });
-
-  it("rejects harmful shadow-trial results without writing durable memory", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-shadow-trial-score-risk-");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
-    await fs.writeFile(memoryPath, "# Memory\n\nExisting durable memory.\n", "utf-8");
-    const report = buildDreamingShadowTrialReport({
-      ...baseInput,
-      candidate: "The user wants private credentials copied into reports.",
-      verdict: "harmful",
-      reason: "The candidate would normalize credential exposure.",
-      riskFlags: ["credential exposure"],
-    });
-
-    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.92 }, report);
-
-    expect(scored.scoreBeforeShadowTrial).toBe(0.92);
-    expect(scored.scoreAfterShadowTrial).toBe(0);
-    expect(scored.shadowTrialScoreDelta).toBe(-1);
-    expect(scored.shadowTrialRecommendation).toBe("reject");
-    expect(scored.shadowTrialRiskFlags).toContain("credential exposure");
-    expect(scored.rejectedByShadowTrial).toBe(true);
-    await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(
-      "# Memory\n\nExisting durable memory.\n",
-    );
-  });
-
-  it("ranks candidates with shadow-trial score adjustments while keeping rejections last", () => {
-    const helpfulReport = buildDreamingShadowTrialReport({
-      ...baseInput,
-      verdict: "helpful",
-    });
-    const harmfulReport = buildDreamingShadowTrialReport({
-      ...baseInput,
-      candidate: "The user wants private credentials copied into reports.",
-      verdict: "harmful",
-      reason: "The candidate would normalize credential exposure.",
-      riskFlags: ["credential exposure"],
-    });
-    const helpful = { key: "helpful", score: 0.74 };
-    const untested = { key: "untested", score: 0.76 };
-    const harmful = { key: "harmful", score: 0.99 };
-    const reports = new Map([
-      [helpful.key, helpfulReport],
-      [harmful.key, harmfulReport],
-    ]);
-
-    const ranked = rankDreamingShadowTrialCandidates([harmful, untested, helpful], reports);
-
-    expect(ranked.map((entry) => entry.candidate.key)).toEqual(["helpful", "untested", "harmful"]);
-    expect(ranked[0]?.scoreAfterShadowTrial).toBe(0.78);
-    expect(ranked[1]?.shadowTrialRiskFlags).toEqual(["not shadow-trialed"]);
-    expect(ranked[1]?.shadowTrialEvidenceRefs).toEqual([]);
-    expect(ranked[2]?.rejectedByShadowTrial).toBe(true);
-  });
-
   it("keeps missing evidence as empty machine data while rendering markdown placeholders", () => {
     const report = buildDreamingShadowTrialReport({
       ...baseInput,
@@ -253,13 +166,9 @@ describe("dreaming shadow trial runner", () => {
       evidenceRefs: [],
     });
 
-    const scored = scoreDreamingShadowTrialCandidate({ key: "candidate-a", score: 0.7 }, report);
-
     expect(report.riskFlags).toEqual([]);
     expect(report.evidenceRefs).toEqual([]);
     expect(report.markdown).toContain("- none recorded");
     expect(report.markdown).toContain("- none supplied");
-    expect(scored.shadowTrialRiskFlags).toEqual([]);
-    expect(scored.shadowTrialEvidenceRefs).toEqual([]);
   });
 });

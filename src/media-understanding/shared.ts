@@ -41,8 +41,6 @@ export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
-const MAX_ERROR_CHARS = 300;
-const MAX_ERROR_RESPONSE_BYTES = 4096;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
@@ -326,7 +324,19 @@ function sanitizeAuditContext(auditContext: string | undefined): string | undefi
   return cleaned.slice(0, MAX_AUDIT_CONTEXT_CHARS);
 }
 
-export function resolveProviderHttpRequestConfig(params: {
+type ResolvedProviderHttpRequestConfig = {
+  baseUrl: string;
+  allowPrivateNetwork: boolean;
+  headers: Headers;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  requestConfig: ResolvedProviderRequestConfig;
+};
+
+type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
+  trustConfiguredBaseUrlOrigin: boolean;
+};
+
+function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
   baseUrl?: string;
   defaultBaseUrl: string;
   allowPrivateNetwork?: boolean;
@@ -337,13 +347,7 @@ export function resolveProviderHttpRequestConfig(params: {
   api?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-}): {
-  baseUrl: string;
-  allowPrivateNetwork: boolean;
-  headers: Headers;
-  dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
-} {
+}): ResolvedProviderHttpRequestConfigWithOriginTrust {
   const requestConfig = resolveProviderRequestPolicyConfig({
     provider: params.provider ?? "",
     baseUrl: params.baseUrl,
@@ -370,7 +374,30 @@ export function resolveProviderHttpRequestConfig(params: {
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
     requestConfig,
+    trustConfiguredBaseUrlOrigin:
+      !requestConfig.privateNetworkExplicitlyDenied &&
+      (requestConfig.policy.endpointClass === "custom" ||
+        requestConfig.policy.endpointClass === "local"),
   };
+}
+
+export function resolveProviderHttpRequestConfig(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfig {
+  const resolved = resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
+  return {
+    baseUrl: resolved.baseUrl,
+    allowPrivateNetwork: resolved.allowPrivateNetwork,
+    headers: resolved.headers,
+    dispatcherPolicy: resolved.dispatcherPolicy,
+    requestConfig: resolved.requestConfig,
+  };
+}
+
+export function resolveProviderHttpRequestConfigWithOriginTrust(
+  params: Parameters<typeof resolveProviderHttpRequestConfigWithOriginTrustInternal>[0],
+): ResolvedProviderHttpRequestConfigWithOriginTrust {
+  return resolveProviderHttpRequestConfigWithOriginTrustInternal(params);
 }
 
 /**
@@ -647,62 +674,6 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
     retryStage: params.retryStage,
     retry: params.retry,
   });
-}
-
-export async function readErrorResponse(res: Response): Promise<string | undefined> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try {
-    if (!res.body) {
-      return undefined;
-    }
-    reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let sawBytes = false;
-    while (total < MAX_ERROR_RESPONSE_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.length === 0) {
-        continue;
-      }
-      sawBytes = true;
-      const remaining = MAX_ERROR_RESPONSE_BYTES - total;
-      const chunk = value.length <= remaining ? value : value.subarray(0, remaining);
-      chunks.push(chunk);
-      total += chunk.length;
-      if (chunk.length < value.length) {
-        break;
-      }
-    }
-    if (!sawBytes) {
-      return undefined;
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    const text = new TextDecoder().decode(bytes);
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) {
-      return undefined;
-    }
-    if (collapsed.length <= MAX_ERROR_CHARS) {
-      return collapsed;
-    }
-    return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
-  } catch {
-    return undefined;
-  } finally {
-    try {
-      await reader?.cancel();
-    } catch {
-      // Ignore stream-cancel failures while reporting the original HTTP error.
-    }
-  }
 }
 
 export function requireTranscriptionText(

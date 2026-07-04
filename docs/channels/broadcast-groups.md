@@ -20,6 +20,8 @@ Current scope: **WhatsApp only** (web channel).
 
 Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
 
+The live WhatsApp QA lane includes `whatsapp-broadcast-group-fanout`, which verifies that one mentioned group message can produce distinct visible replies from two configured agents.
+
 ## Use cases
 
 <AccordionGroup>
@@ -161,17 +163,20 @@ Control how agents process messages:
   <Step title="Incoming message arrives">
     A WhatsApp group or DM message arrives.
   </Step>
-  <Step title="Broadcast check">
-    System checks if peer ID is in `broadcast`.
+  <Step title="Route and admission">
+    OpenClaw applies channel allowlists, group activation rules, and configured ACP binding ownership.
   </Step>
-  <Step title="If in broadcast list">
+  <Step title="Broadcast check">
+    If no configured ACP binding owns the route, OpenClaw checks whether the peer ID is in `broadcast`.
+  </Step>
+  <Step title="If broadcast applies">
     - All listed agents process the message.
     - Each agent has its own session key and isolated context.
     - Agents process in parallel (default) or sequentially.
 
   </Step>
-  <Step title="If not in broadcast list">
-    Normal routing applies (first matching binding).
+  <Step title="If broadcast does not apply">
+    OpenClaw dispatches the ordinary route or the configured ACP session route selected during routing.
   </Step>
 </Steps>
 
@@ -322,7 +327,7 @@ Broadcast groups work alongside existing routing:
 - `GROUP_B`: agent1 AND agent2 respond (broadcast).
 
 <Note>
-**Precedence:** `broadcast` takes priority over `bindings`.
+**Precedence:** `broadcast` takes priority over ordinary route bindings. Configured ACP bindings (`bindings[].type="acp"`) are exclusive: when one matches, OpenClaw dispatches to the configured ACP session instead of fan-out broadcast.
 </Note>
 
 ## Troubleshooting
@@ -343,9 +348,9 @@ Broadcast groups work alongside existing routing:
 
   </Accordion>
   <Accordion title="Only one agent responding">
-    **Cause:** Peer ID might be in `bindings` but not `broadcast`.
+    **Cause:** Peer ID might be in ordinary route bindings but not `broadcast`, or it might match an exclusive configured ACP binding.
 
-    **Fix:** Add to broadcast config or remove from bindings.
+    **Fix:** Add ordinary route-bound peers to broadcast config, or remove/change the configured ACP binding if fan-out broadcast is desired.
 
   </Accordion>
   <Accordion title="Performance issues">

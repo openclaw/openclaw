@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
@@ -17,11 +18,9 @@ import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
-type RuntimeProviderModule = typeof import("./src/runtime-provider.js");
 
 type MemoryToolOptions = {
   config?: OpenClawConfig;
@@ -29,20 +28,14 @@ type MemoryToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  oneShotCliRun?: boolean;
 };
 
-let memoryToolsModulePromise: Promise<MemoryToolsModule> | undefined;
-let runtimeProviderModulePromise: Promise<RuntimeProviderModule> | undefined;
+const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
 
-function loadMemoryToolsModule(): Promise<MemoryToolsModule> {
-  memoryToolsModulePromise ??= import("./src/tools.js");
-  return memoryToolsModulePromise;
-}
-
-function loadRuntimeProviderModule(): Promise<RuntimeProviderModule> {
-  runtimeProviderModulePromise ??= import("./src/runtime-provider.js");
-  return runtimeProviderModulePromise;
-}
+const loadRuntimeProviderModule = createLazyRuntimeModule(
+  () => import("./src/runtime-provider.js"),
+);
 
 function getToolConfig(options: MemoryToolOptions): OpenClawConfig | undefined {
   return options.getConfig?.() ?? options.config;
@@ -154,6 +147,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
+    oneShotCliRun: ctx.oneShotCliRun,
   };
 }
 
@@ -183,7 +177,6 @@ export default definePluginEntry({
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options),
     );
-    registerBuiltInMemoryEmbeddingProviders(api);
     registerShortTermPromotionDreaming(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,
@@ -209,6 +202,7 @@ export default definePluginEntry({
       name: "dreaming",
       description: "Enable or disable memory dreaming.",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const { handleDreamingCommand } = await import("./src/dreaming-command.js");
         return await handleDreamingCommand(api, ctx);

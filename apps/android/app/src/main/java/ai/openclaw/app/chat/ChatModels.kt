@@ -40,7 +40,23 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val displayName: String? = null,
+  val totalTokens: Long? = null,
+  val totalTokensFresh: Boolean? = null,
+  val contextTokens: Long? = null,
+  val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
 )
+
+/**
+ * Slash command metadata exposed by the gateway for text-surface chat clients.
+ */
+data class ChatCommandEntry(
+  val name: String,
+  val description: String,
+  val category: String? = null,
+  val textAliases: List<String> = emptyList(),
+  val acceptsArgs: Boolean = false,
+)
+
 
 /**
  * Snapshot of one chat session, including optional thinking level selected on the gateway.
@@ -50,6 +66,7 @@ data class ChatHistory(
   val sessionId: String?,
   val thinkingLevel: String?,
   val messages: List<ChatMessage>,
+  val sessionInfo: ChatSessionEntry? = null,
 )
 
 /**

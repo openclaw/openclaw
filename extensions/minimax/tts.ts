@@ -1,6 +1,9 @@
 // Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -83,6 +86,8 @@ export async function minimaxTTS(params: {
         body: JSON.stringify({
           model,
           text,
+          stream: false,
+          output_format: "hex",
           voice_setting: {
             voice_id: voiceId,
             speed,
@@ -103,7 +108,23 @@ export async function minimaxTTS(params: {
     try {
       await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
-      const body = (await response.json()) as { data?: { audio?: string } };
+      const body = await readProviderJsonResponse<{
+        data?: { audio?: string };
+        base_resp?: { status_code?: number; status_msg?: string };
+      }>(response, "minimax.tts");
+
+      // Check base_resp for envelope errors (HTTP 200 with non-zero status_code).
+      // Other MiniMax providers (image, video, music, web-search) already check this.
+      // Without this check, quota/billing errors with placeholder audio are silently accepted.
+      if (
+        body.base_resp &&
+        typeof body.base_resp.status_code === "number" &&
+        body.base_resp.status_code !== 0
+      ) {
+        const msg = body.base_resp.status_msg ?? "unknown error";
+        throw new Error(`MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`);
+      }
+
       const hexAudio = body?.data?.audio;
       if (!hexAudio) {
         throw new Error("MiniMax TTS API returned no audio data");

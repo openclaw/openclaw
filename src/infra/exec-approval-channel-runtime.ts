@@ -3,6 +3,7 @@ import { readConnectErrorDetailCode } from "../../packages/gateway-protocol/src/
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
+import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
@@ -425,6 +426,11 @@ export function createExecApprovalChannelRuntime<
     handleExpired,
 
     async request<T = unknown>(method: string, params: Record<string, unknown>): Promise<T> {
+      if (!isApprovalMethod(method)) {
+        throw new Error(
+          `${adapter.label}: operator approvals runtime cannot dispatch ${method}; use a write-capable gateway client`,
+        );
+      }
       if (!gatewayClient) {
         throw new Error(`${adapter.label}: gateway client not connected`);
       }

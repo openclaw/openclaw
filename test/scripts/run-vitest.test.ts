@@ -7,12 +7,14 @@ import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   installVitestNoOutputWatchdog,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveDirectNodeVitestArgs,
   resolveExplicitTestFileNoPassArgs,
   resolveImplicitVitestArgs,
+  resolveLinkedSourceBundledPluginsEnv,
   resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
@@ -24,10 +26,39 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
+  spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
 } from "../../scripts/run-vitest.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+
+function createRunVitestFs(params: { nodeModulesSymlink: boolean; bundledPlugin: boolean }) {
+  return {
+    existsSync: (filePath: string) => {
+      const normalized = filePath.replaceAll("\\", "/");
+      return (
+        normalized === "/repo/extensions" ||
+        (params.bundledPlugin &&
+          (normalized === "/repo/extensions/codex/package.json" ||
+            normalized === "/repo/extensions/codex/openclaw.plugin.json"))
+      );
+    },
+    lstatSync: (filePath: string) => {
+      if (filePath.replaceAll("\\", "/") !== "/repo/node_modules") {
+        throw new Error(`unexpected lstat path: ${filePath}`);
+      }
+      return {
+        isSymbolicLink: () => params.nodeModulesSymlink,
+      };
+    },
+    readdirSync: (filePath: string) => {
+      if (filePath.replaceAll("\\", "/") !== "/repo/extensions") {
+        throw new Error(`unexpected readdir path: ${filePath}`);
+      }
+      return params.bundledPlugin ? [{ name: "codex", isDirectory: () => true }] : [];
+    },
+  };
+}
 
 describe("scripts/run-vitest", () => {
   it("adds --no-maglev to vitest child processes by default", () => {
@@ -180,6 +211,15 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
+  it("routes explicit Docker helper tests through the Docker tooling config", () => {
+    expect(resolveImplicitVitestArgs(["run", "test/scripts/docker-build-helper.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/scripts/docker-build-helper.test.ts",
+    ]);
+  });
+
   it("keeps tooling-excluded explicit tests on existing routing", () => {
     const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
@@ -252,6 +292,19 @@ describe("scripts/run-vitest", () => {
       file,
       "--reporter=verbose",
     ]);
+  });
+
+  it("delegates bare explicit directories and globs to the project router", () => {
+    expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
+    expect(
+      resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
+    ).toEqual(["test/scripts", "--reporter=verbose"]);
+    expect(resolveTestProjectsDelegationArgs(["test/scripts/*.test.ts"])).toEqual([
+      "test/scripts/*.test.ts",
+    ]);
+    expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -416,6 +469,12 @@ describe("scripts/run-vitest", () => {
     expect(
       resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }),
     ).toBeNull();
+    expect(
+      resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "1e3" }),
+    ).toBeNull();
+    expect(
+      resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500ms" }),
+    ).toBeNull();
   });
 
   it("defaults direct non-watch runs to the stall watchdog", () => {
@@ -464,6 +523,7 @@ describe("scripts/run-vitest", () => {
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
     const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    const extraLongTimeout = String(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
@@ -476,6 +536,17 @@ describe("scripts/run-vitest", () => {
         PATH: "/usr/bin",
         OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+      });
+    }
+    for (const configArg of [
+      "--config=test/vitest/vitest.contracts-plugin.config.ts",
+      "--config=test/vitest/vitest.infra.config.ts",
+      "--config=test/vitest/vitest.gateway-core.config.ts",
+    ]) {
+      expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
+        PATH: "/usr/bin",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: extraLongTimeout,
       });
     }
     expect(
@@ -506,6 +577,27 @@ describe("scripts/run-vitest", () => {
         "/repo/test/vitest/vitest.full-core-contracts.config.ts",
       ]),
     ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.contracts-plugin.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.infra.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.gateway-core.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });
 
   it("does not default implicit interactive runs to the stall watchdog", () => {
@@ -522,6 +614,45 @@ describe("scripts/run-vitest", () => {
     ).toEqual({
       PATH: "/usr/bin",
     });
+  });
+
+  it("points symlinked source worktree Vitest runs at local bundled plugins", () => {
+    expect(
+      resolveLinkedSourceBundledPluginsEnv(
+        { PATH: "/usr/bin", PWD: "/repo" },
+        {
+          baseDir: "/repo",
+          fsImpl: createRunVitestFs({ nodeModulesSymlink: true, bundledPlugin: true }),
+        },
+      ),
+    ).toEqual({
+      OPENCLAW_BUNDLED_PLUGINS_DIR: nodePath.join("/repo", "extensions"),
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    });
+  });
+
+  it("keeps explicit bundled plugin env ahead of symlinked worktree defaults", () => {
+    expect(
+      resolveLinkedSourceBundledPluginsEnv(
+        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/custom/extensions", PATH: "/usr/bin", PWD: "/repo" },
+        {
+          baseDir: "/repo",
+          fsImpl: createRunVitestFs({ nodeModulesSymlink: true, bundledPlugin: true }),
+        },
+      ),
+    ).toEqual({});
+  });
+
+  it("does not add bundled plugin env for normal dependency installs", () => {
+    expect(
+      resolveLinkedSourceBundledPluginsEnv(
+        { PATH: "/usr/bin", PWD: "/repo" },
+        {
+          baseDir: "/repo",
+          fsImpl: createRunVitestFs({ nodeModulesSymlink: false, bundledPlugin: true }),
+        },
+      ),
+    ).toEqual({});
   });
 
   it("does not default explicit watch runs to the stall watchdog", () => {
@@ -586,14 +717,21 @@ describe("scripts/run-vitest", () => {
       os.tmpdir(),
       `openclaw-run-vitest-delegated-child-${process.pid}-${Date.now()}.pid`,
     );
+    const descendantPidPath = nodePath.join(
+      os.tmpdir(),
+      `openclaw-run-vitest-delegated-descendant-${process.pid}-${Date.now()}.pid`,
+    );
 
     fs.writeFileSync(
       fixturePath,
       [
+        'import { spawn } from "node:child_process";',
         'import fs from "node:fs";',
         'import { it } from "vitest";',
         'it("waits for wrapper termination", async () => {',
+        '  const child = spawn(process.execPath, ["-e", "process.on(\\\'SIGTERM\\\', () => {}); setInterval(() => {}, 1000);"], { stdio: "ignore" });',
         "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_CHILD_PID!, String(process.pid));",
+        "  fs.writeFileSync(process.env.OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID!, String(child.pid));",
         "  await new Promise(() => {});",
         "});",
         "",
@@ -607,24 +745,31 @@ describe("scripts/run-vitest", () => {
         env: {
           ...process.env,
           OPENCLAW_DELEGATED_SIGNAL_CHILD_PID: childPidPath,
+          OPENCLAW_DELEGATED_SIGNAL_DESCENDANT_PID: descendantPidPath,
         },
         stdio: "ignore",
       },
     );
     let childPid = 0;
+    let descendantPid = 0;
 
     try {
       await waitFor(() => fs.existsSync(childPidPath), 10_000);
+      await waitFor(() => fs.existsSync(descendantPidPath), 10_000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
+      expect(Number.isInteger(descendantPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
 
       expect(runner.pid).toBeGreaterThan(0);
       process.kill(runner.pid!, "SIGTERM");
       const result = await waitForClose(runner);
 
-      expect(result).toEqual({ code: 143, signal: null });
+      expect(result).toEqual({ code: null, signal: "SIGTERM" });
       await waitFor(() => !isProcessAlive(childPid), 5_000);
+      await waitFor(() => !isProcessAlive(descendantPid), 5_000);
     } finally {
       if (runner.pid && isProcessAlive(runner.pid)) {
         process.kill(runner.pid, "SIGKILL");
@@ -632,8 +777,12 @@ describe("scripts/run-vitest", () => {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
       fs.rmSync(fixturePath, { force: true });
       fs.rmSync(childPidPath, { force: true });
+      fs.rmSync(descendantPidPath, { force: true });
     }
   });
 
@@ -648,6 +797,26 @@ describe("scripts/run-vitest", () => {
       detached: false,
       stdio: ["inherit", "pipe", "pipe"],
     });
+  });
+
+  posixIt("terminates a silent Vitest child through the watchdog", async () => {
+    const watched = spawnWatchedVitestProcess({
+      pnpmArgs: ["exec", "node", "-e", "setInterval(() => {}, 1000)"],
+      spawnParams: {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+      env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "100" },
+    });
+
+    try {
+      expect(await waitForClose(watched.child)).toEqual({ code: null, signal: "SIGTERM" });
+    } finally {
+      watched.teardown();
+      if (watched.child.pid && isProcessAlive(watched.child.pid)) {
+        process.kill(-watched.child.pid, "SIGKILL");
+      }
+    }
   });
 
   it("reenables local check policy for local Vitest children", () => {
@@ -718,6 +887,25 @@ describe("scripts/run-vitest", () => {
     });
   });
 
+  it("does not truncate malformed native worker budgets", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+          OPENCLAW_VITEST_MAX_WORKERS: "8x",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toEqual({
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      OPENCLAW_VITEST_MAX_WORKERS: "8x",
+      PATH: "/usr/bin",
+      RAYON_NUM_THREADS: "1",
+      TOKIO_WORKER_THREADS: "1",
+    });
+  });
+
   it("suppresses rolldown plugin timing noise while keeping other stderr intact", () => {
     expect(
       shouldSuppressVitestStderrLine(
@@ -771,6 +959,36 @@ describe("scripts/run-vitest", () => {
       );
 
       teardown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps force-kill scheduled when output arrives after the idle timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const stdout = new EventEmitter();
+      const timeoutSpy = vi.fn();
+      const forceKillSpy = vi.fn();
+
+      installVitestNoOutputWatchdog({
+        streams: [stdout],
+        timeoutMs: 1000,
+        forceKillAfterMs: 5000,
+        onTimeout: timeoutSpy,
+        onForceKill: forceKillSpy,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      vi.advanceTimersByTime(1000);
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+
+      stdout.emit("data", "too late");
+      vi.advanceTimersByTime(5000);
+
+      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+      expect(forceKillSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

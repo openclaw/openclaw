@@ -46,6 +46,16 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).not.toContain("button");
   });
 
+  it("keeps named branches with refs and drops empty branches when compact", () => {
+    const aria = ['- list "Menu":', '  - button "Save"', '- list "Empty":', "  - generic"].join(
+      "\n",
+    );
+
+    const res = buildRoleSnapshotFromAriaSnapshot(aria, { compact: true });
+
+    expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
+  });
+
   it("computes stats", () => {
     const aria = ['- button "OK"', '- button "Cancel"'].join("\n");
     const res = buildRoleSnapshotFromAriaSnapshot(aria);

@@ -7,9 +7,13 @@ import {
 import { resolveCliRuntimeModelBackendBinding } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
+import {
+  modelKey,
+  normalizeProviderId,
+  type ModelAliasIndex,
+} from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -99,6 +103,7 @@ export async function persistInlineDirectives(params: {
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   markLiveSwitchPending?: boolean;
+  modelCatalog?: ModelCatalogEntry[];
   thinkingCatalog?: ModelCatalogEntry[];
 }): Promise<{
   provider: string;
@@ -258,7 +263,7 @@ export async function persistInlineDirectives(params: {
         defaultModel,
         aliasIndex,
         allowedModelKeys,
-        allowedModelCatalog: [],
+        allowedModelCatalog: params.modelCatalog ?? [],
         provider,
       });
       if (modelResolution.modelSelection) {
@@ -359,9 +364,7 @@ export async function persistInlineDirectives(params: {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
+        await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
       }
       if (modelDirective && modelUpdated) {
         triggerSessionPatchHook({
@@ -381,6 +384,9 @@ export async function persistInlineDirectives(params: {
     }
   }
 
+  const selectedCatalogEntry = params.modelCatalog?.find(
+    (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
+  );
   return {
     provider,
     model,
@@ -400,6 +406,8 @@ export async function persistInlineDirectives(params: {
         config: cfg,
       }),
       model,
+      modelContextWindow: selectedCatalogEntry?.contextWindow,
+      modelContextTokens: selectedCatalogEntry?.contextTokens,
     }),
   };
 }

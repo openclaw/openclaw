@@ -23,6 +23,7 @@ import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./disc
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
 import {
+  isLatestAdaptiveBedrockModelRef,
   isOpus47OrNewerBedrockModelRef,
   resolveBedrockNativeThinkingLevelMap,
   resolveBedrockClaudeThinkingProfile,
@@ -253,27 +254,7 @@ type BedrockControlPlane = {
   }) => Promise<BedrockGetInferenceProfileResponse>;
 };
 
-type BedrockControlPlaneFactory = (region: string | undefined) => BedrockControlPlane;
-
-let bedrockControlPlaneOverride: BedrockControlPlaneFactory | undefined;
-
-/** Reset app-profile prompt-cache eligibility state for tests. */
-export function resetBedrockAppProfileCacheEligibilityForTest(): void {
-  appProfileTraitsCache.clear();
-}
-
-/** Override Bedrock app-profile control-plane checks for tests. */
-export function setBedrockAppProfileControlPlaneForTest(
-  controlPlane: BedrockControlPlaneFactory | undefined,
-): void {
-  bedrockControlPlaneOverride = controlPlane;
-  resetBedrockAppProfileCacheEligibilityForTest();
-}
-
 async function createBedrockControlPlane(region: string | undefined): Promise<BedrockControlPlane> {
-  if (bedrockControlPlaneOverride) {
-    return bedrockControlPlaneOverride(region);
-  }
   await refreshAwsSharedConfigCacheForBedrock();
   const { BedrockClient, GetInferenceProfileCommand } = await import("@aws-sdk/client-bedrock");
   const client = new BedrockClient(region ? { region } : {});
@@ -596,8 +577,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
-      const shouldOmitTemperature = opus47OrNewer || fable5;
+      const shouldOmitTemperature =
+        opus47OrNewer || fable5 || isLatestAdaptiveBedrockModelRef(modelId, model?.params);
       const shouldPatchMaxThinking = supportsNativeMax && thinkingLevel === "max";
+      const shouldPatchPayload = shouldOmitTemperature || shouldPatchMaxThinking;
 
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
@@ -627,13 +610,17 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
             context,
             withAwsCredentialRefreshOnPayload({
               ...merged,
-              ...(shouldPatchMaxThinking
+              ...(shouldPatchPayload
                 ? {
                     onPayload: (payload: unknown, payloadModel: unknown) => {
                       if (payload && typeof payload === "object") {
                         const payloadRecord = payload as Record<string, unknown>;
-                        patchMaxThinkingEffort(payloadRecord);
-                        omitUnsupportedClaudePayloadTemperature(payloadRecord);
+                        if (shouldPatchMaxThinking) {
+                          patchMaxThinkingEffort(payloadRecord);
+                        }
+                        if (shouldOmitTemperature) {
+                          omitUnsupportedClaudePayloadTemperature(payloadRecord);
+                        }
                       }
                       return originalOnPayload?.(payload, payloadModel);
                     },

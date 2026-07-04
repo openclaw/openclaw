@@ -297,6 +297,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
     "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
+    "mcp/openclaw-tools-serve": "src/mcp/openclaw-tools-serve.ts",
   };
 }
 
@@ -342,19 +343,15 @@ function buildAgentCoreDistEntries(): Record<string, string> {
     "harness/messages": "packages/agent-core/src/harness/messages.ts",
     "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
     "harness/session": "packages/agent-core/src/harness/session/session.ts",
-    "harness/session/jsonl-repo": "packages/agent-core/src/harness/session/jsonl-repo.ts",
     "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
-    "harness/session/memory-repo": "packages/agent-core/src/harness/session/memory-repo.ts",
     "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
-    "harness/session/repo-utils": "packages/agent-core/src/harness/session/repo-utils.ts",
     "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
     "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
     "harness/branch-summarization":
       "packages/agent-core/src/harness/compaction/branch-summarization.ts",
-    "harness/prompt-templates": "packages/agent-core/src/harness/prompt-templates.ts",
+    "harness/prompt-template-arguments":
+      "packages/agent-core/src/harness/prompt-template-arguments.ts",
     "harness/skills": "packages/agent-core/src/harness/skills.ts",
-    "harness/system-prompt": "packages/agent-core/src/harness/system-prompt.ts",
-    "harness/utils/shell-output": "packages/agent-core/src/harness/utils/shell-output.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
 }
@@ -390,6 +387,7 @@ function buildNetPolicyDistEntries(): Record<string, string> {
     ip: "packages/net-policy/src/ip.ts",
     ipv4: "packages/net-policy/src/ipv4.ts",
     "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-protocol": "packages/net-policy/src/url-protocol.ts",
     "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
   };
 }
@@ -437,6 +435,7 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
 function buildNormalizationCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/normalization-core/src/index.ts",
+    "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
     "number-coercion": "packages/normalization-core/src/number-coercion.ts",
     "record-coerce": "packages/normalization-core/src/record-coerce.ts",
     "string-coerce": "packages/normalization-core/src/string-coerce.ts",

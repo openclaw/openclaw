@@ -218,6 +218,37 @@ describe("openclaw channel mcp server", () => {
         ).toBe(true);
       });
 
+      test("clamps direct bridge session limits to the public MCP windows", async () => {
+        const sessionKey = "agent:main:main";
+        const gatewayRequest = vi.fn(async (method: string) => {
+          if (method === "sessions.list") {
+            return { sessions: [] };
+          }
+          if (method === "sessions.get") {
+            return { messages: [] };
+          }
+          throw new Error(`unexpected gateway method ${method}`);
+        });
+        const bridge = new OpenClawChannelBridge({} as never, {
+          claudeChannelMode: "off",
+          verbose: false,
+        });
+        attachReadyGateway(bridge, gatewayRequest);
+
+        await bridge.listConversations({ limit: 10_000 });
+        await bridge.readMessages(sessionKey, 10_000);
+
+        expect(gatewayRequest).toHaveBeenNthCalledWith(
+          1,
+          "sessions.list",
+          expect.objectContaining({ limit: 500 }),
+        );
+        expect(gatewayRequest).toHaveBeenNthCalledWith(2, "sessions.get", {
+          key: sessionKey,
+          limit: 200,
+        });
+      });
+
       test("serializes conversation and message payloads into MCP primary content", async () => {
         const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
         try {
@@ -293,6 +324,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-1",
@@ -327,6 +359,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
+            senderIsOwner: true,
             lastChannel: "imessage",
             lastTo: "+15551234567",
             messageId: "msg-user-2",

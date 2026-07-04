@@ -27,12 +27,17 @@ internal data class NotificationForwardingPolicy(
   val quietEnd: String,
   val maxEventsPerMinute: Int,
   val sessionKey: String?,
+  val selfPackageName: String = "",
 )
 
 /** Applies the operator-configured package allow/block list after trimming input. */
 internal fun NotificationForwardingPolicy.allowsPackage(packageName: String): Boolean {
   val normalized = packageName.trim()
   if (normalized.isEmpty()) {
+    return false
+  }
+  val self = selfPackageName.trim()
+  if (self.isNotEmpty() && normalized == self) {
     return false
   }
   return when (mode) {

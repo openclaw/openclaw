@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupCliBackend: () => undefined,
@@ -187,6 +187,39 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("removes null workspace values from agents.list entries", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          { id: "main", workspace: null as unknown as string },
+          { id: "beta", workspace: "/beta" },
+          { id: "gamma" },
+        ],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([
+      { id: "main" },
+      { id: "beta", workspace: "/beta" },
+      { id: "gamma" },
+    ]);
+    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+  });
+
+  it("does not alter agents.list when no workspace is null", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([
+      { id: "main", workspace: "/main" },
+      { id: "beta" },
+    ]);
+    expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
+  });
+
   it("removes bindings for missing configured agents", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
@@ -358,7 +391,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
+  it("preserves inherited WhatsApp access policy when seeding accounts.default", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
         whatsapp: {
@@ -387,10 +420,145 @@ describe("normalizeCompatibilityConfigValues", () => {
       groupPolicy: "open",
       groupAllowFrom: [],
     });
+    expect(res.config.channels?.whatsapp?.accounts?.work).toEqual({
+      enabled: true,
+      authDir: "/tmp/wa-work",
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
+    });
     expect(res.changes).toContain(
       "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
     );
   });
+
+  it.each(["discord", "slack", "telegram", "signal", "imessage", "irc"])(
+    "preserves inherited %s access policy when seeding accounts.default",
+    (channelId) => {
+      const res = normalizeCompatibilityConfigValues({
+        channels: {
+          [channelId]: {
+            dmPolicy: "allowlist",
+            allowFrom: ["sender-1"],
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["group-sender-1"],
+            accounts: {
+              work: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig);
+      const channel = (res.config.channels as Record<string, { accounts?: Record<string, unknown> }>)?.[
+        channelId
+      ];
+
+      expect(channel?.accounts?.default).toEqual({
+        dmPolicy: "allowlist",
+        allowFrom: ["sender-1"],
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group-sender-1"],
+      });
+      expect(channel?.accounts?.work).toEqual({
+        enabled: true,
+        dmPolicy: "allowlist",
+        allowFrom: ["sender-1"],
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group-sender-1"],
+      });
+    },
+  );
+
+  it("keeps named-account access policy overrides when seeding accounts.default", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        discord: {
+          dmPolicy: "allowlist",
+          allowFrom: ["top-dm"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["top-group"],
+          accounts: {
+            work: {
+              token: "work-token",
+              allowFrom: ["work-dm"],
+              groupPolicy: "disabled",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.channels?.discord?.accounts?.work).toEqual({
+      token: "work-token",
+      dmPolicy: "allowlist",
+      allowFrom: ["work-dm"],
+      groupPolicy: "disabled",
+      groupAllowFrom: ["top-group"],
+    });
+  });
+
+  it("preserves inherited Mattermost access policy when seeding accounts.default", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        mattermost: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          allowFrom: ["*"],
+          groupAllowFrom: ["*"],
+          accounts: {
+            tony: {
+              name: "Tony",
+              enabled: true,
+              botToken: "tony-token",
+              groups: {
+                tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
+              },
+            },
+            research: {
+              name: "Research",
+              enabled: true,
+              botToken: "research-token",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.mattermost?.dmPolicy).toBeUndefined();
+    expect(res.config.channels?.mattermost?.allowFrom).toBeUndefined();
+    expect(res.config.channels?.mattermost?.groupPolicy).toBeUndefined();
+    expect(res.config.channels?.mattermost?.groupAllowFrom).toBeUndefined();
+    expect(res.config.channels?.mattermost?.accounts?.default).toEqual({
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+    });
+    expect(res.config.channels?.mattermost?.accounts?.tony).toEqual({
+      name: "Tony",
+      enabled: true,
+      botToken: "tony-token",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+      groups: {
+        tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
+      },
+    });
+    expect(res.config.channels?.mattermost?.accounts?.research).toEqual({
+      name: "Research",
+      enabled: true,
+      botToken: "research-token",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+    });
+  });
+
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {

@@ -238,6 +238,30 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBeUndefined();
   });
 
+  test("persists responseUsage=off (does not clear)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, responseUsage: "off" },
+      }),
+    );
+    // Explicit off must persist so a configured messages.responseUsage default
+    // cannot re-enable the footer the user turned off.
+    expect(entry.responseUsage).toBe("off");
+  });
+
+  test("clears responseUsage when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, responseUsage: null },
+      }),
+    );
+    expect(entry.responseUsage).toBeUndefined();
+  });
+
   test("persists reasoningLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -318,6 +342,20 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.fastMode).toBeUndefined();
+  });
+
+  test("sets fastMode to auto", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {} as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: "auto" },
+      }),
+    );
+
+    expect(entry.fastMode).toBe("auto");
   });
 
   test("persists verboseLevel=full", async () => {

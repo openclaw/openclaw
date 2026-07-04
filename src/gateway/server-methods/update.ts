@@ -2,12 +2,16 @@
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateUpdateRunParams,
   validateUpdateStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
@@ -20,6 +24,11 @@ import {
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
+import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
+import {
+  foldPostCoreFinalizeIntoResult,
+  runPostCoreFinalizeAfterGatewayUpdate,
+} from "../../infra/update-post-core-finalize.js";
 import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
@@ -29,6 +38,7 @@ import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-pl
 import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,
+  refreshLatestUpdateRestartSentinel,
 } from "../server-restart-sentinel.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -51,6 +61,21 @@ function tryResolveProcessCwd(): string | undefined {
   }
 }
 
+async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig)
+      : snapshot.sourceConfig,
+  };
+}
+
 function resolveManagedServiceHandoffRestartDelayMs(
   restartDelayMs: number | undefined,
   supervisor: ReturnType<typeof detectRespawnSupervisor>,
@@ -66,13 +91,50 @@ function resolveManagedServiceHandoffRestartDelayMs(
   );
 }
 
+function hasManagedServiceHandoffContext(
+  env: NodeJS.ProcessEnv,
+  supervisor: ReturnType<typeof detectRespawnSupervisor>,
+): boolean {
+  if (supervisor === "launchd") {
+    return Boolean(
+      env.OPENCLAW_LAUNCHD_LABEL?.trim() ||
+      env.LAUNCH_JOB_LABEL?.trim() ||
+      env.LAUNCH_JOB_NAME?.trim() ||
+      env.XPC_SERVICE_NAME?.trim(),
+    );
+  }
+  if (supervisor === "systemd") {
+    // Ambient systemd markers only prove that a service manager started this
+    // process. The detached CLI needs the durable unit name to stop the same
+    // gateway before mutating the install root.
+    return Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
+  }
+  if (supervisor === "schtasks") {
+    return Boolean(
+      env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+      (env.OPENCLAW_SERVICE_MARKER?.trim() === GATEWAY_SERVICE_MARKER &&
+        env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND),
+    );
+  }
+  return false;
+}
+
 export const updateHandlers: GatewayRequestHandlers = {
-  "update.status": async ({ params, respond }) => {
+  "update.status": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    let sentinel: RestartSentinelPayload | null;
+    try {
+      sentinel = await refreshLatestUpdateRestartSentinel();
+    } catch (err) {
+      context?.logGateway?.warn(
+        `update.status sentinel refresh failed: ${formatUpdateRunErrorMessage(err)}`,
+      );
+      sentinel = getLatestUpdateRestartSentinel();
+    }
     respond(true, {
-      sentinel: getLatestUpdateRestartSentinel(),
+      sentinel,
     });
   },
   "update.run": async ({ params, respond, client, context }) => {
@@ -129,6 +191,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         argv1: process.argv[1],
       });
       supervisor = detectRespawnSupervisor(process.env, process.platform);
+      const hasHandoffContext = supervisor
+        ? hasManagedServiceHandoffContext(process.env, supervisor)
+        : false;
+      const requiresManagedServiceHandoff =
+        installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
       if (!isRestartEnabled(config) && !supervisor) {
         // Package updates need a restart path to finish safely. Dev/git installs
         // can report the disabled restart directly, but global installs must not
@@ -145,22 +212,25 @@ export const updateHandlers: GatewayRequestHandlers = {
           steps: [],
           durationMs: 0,
         };
-      } else if (installSurface.kind === "global") {
+      } else if (requiresManagedServiceHandoff) {
+        const handoffChannel =
+          installSurface.kind === "git" ? undefined : (configChannel ?? undefined);
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
-          channel: configChannel ?? undefined,
+          ...(handoffChannel ? { channel: handoffChannel } : {}),
         });
-        if (supervisor) {
+        if (supervisor && hasHandoffContext) {
           try {
             const startedAt = Date.now();
             const handoffId = randomUUID();
             sentinelMeta.handoffId = handoffId;
             // Managed services update from a detached helper so the running
-            // gateway does not replace its own package while still serving RPCs.
+            // gateway does not replace its own package or git-built dist tree
+            // while still serving RPCs.
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
-              channel: configChannel ?? undefined,
+              ...(handoffChannel ? { channel: handoffChannel } : {}),
               restartDelayMs,
               meta: sentinelMeta,
               handoffId,
@@ -224,12 +294,36 @@ export const updateHandlers: GatewayRequestHandlers = {
           };
         }
       } else {
+        const preUpdateConfig =
+          installSurface.kind === "git"
+            ? await readPreUpdateConfigForPostCoreFinalize().catch((err: unknown) => {
+                context?.logGateway?.warn(
+                  `update.run could not capture pre-update config ${formatControlPlaneActor(actor)} error=${formatUpdateRunErrorMessage(err)}`,
+                );
+                return undefined;
+              })
+            : undefined;
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
         });
+        // The CLI `openclaw update` resumes post-core plugin convergence after a
+        // git/source core update; the RPC path did not, leaving official managed
+        // plugins stale on the new core. Run the finalizer here to match.
+        const finalizeOutcome = await runPostCoreFinalizeAfterGatewayUpdate({
+          result,
+          channel: configChannel ?? undefined,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          ...(preUpdateConfig ? { preUpdateConfig } : {}),
+        });
+        if (finalizeOutcome.status === "error") {
+          context?.logGateway?.warn(
+            `update.run post-core plugin finalize failed ${formatControlPlaneActor(actor)} reason=${finalizeOutcome.reason}`,
+          );
+        }
+        result = foldPostCoreFinalizeIntoResult(result, finalizeOutcome);
       }
     } catch {
       result = {
@@ -246,12 +340,13 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPath: string | null;
+    let sentinelPersisted: boolean;
     try {
-      sentinelPath = await writeRestartSentinel(payload);
+      await writeRestartSentinel(payload);
+      sentinelPersisted = true;
       recordLatestUpdateRestartSentinel(payload);
     } catch {
-      sentinelPath = null;
+      sentinelPersisted = false;
     }
 
     // Only restart the gateway when the update actually succeeded.
@@ -297,7 +392,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         ...(handoff ? { handoff } : {}),
         restart,
         sentinel: {
-          path: sentinelPath,
+          persisted: sentinelPersisted,
           payload,
         },
       },

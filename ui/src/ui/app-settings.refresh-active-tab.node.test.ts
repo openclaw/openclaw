@@ -1,20 +1,8 @@
-// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { createDeferred } from "../../../src/test-utils/deferred.js";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
-
-function createDeferred<T = void>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
   return await Promise.race([
@@ -53,8 +41,11 @@ const mocks = vi.hoisted(() => ({
   loadPresenceMock: vi.fn(async () => {}),
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
+  reconcileSkillsAgentIdMock: vi.fn(),
   loadUsageMock: vi.fn(async () => {}),
   loadWorkboardMock: vi.fn(async () => {}),
+  stopWorkboardLifecycleRefreshMock: vi.fn(),
+  stopWorkboardPollingMock: vi.fn(),
   startDebugPollingMock: vi.fn(),
   startLogsPollingMock: vi.fn(),
   startNodesPollingMock: vi.fn(),
@@ -65,6 +56,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./app-chat.ts", () => ({
   refreshChat: mocks.refreshChatMock,
+  createChatSessionsLoadOverrides: () => ({
+    activeMinutes: 0,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+  }),
+  scopedAgentListParamsForSession: () => ({}),
 }));
 vi.mock("./app-polling.ts", () => ({
   startDebugPolling: mocks.startDebugPollingMock,
@@ -136,12 +135,15 @@ vi.mock("./controllers/sessions.ts", () => ({
 }));
 vi.mock("./controllers/skills.ts", () => ({
   loadSkills: mocks.loadSkillsMock,
+  reconcileSkillsAgentId: mocks.reconcileSkillsAgentIdMock,
 }));
 vi.mock("./controllers/usage.ts", () => ({
   loadUsage: mocks.loadUsageMock,
 }));
 vi.mock("./controllers/workboard.ts", () => ({
   loadWorkboard: mocks.loadWorkboardMock,
+  stopWorkboardLifecycleRefresh: mocks.stopWorkboardLifecycleRefreshMock,
+  stopWorkboardPolling: mocks.stopWorkboardPollingMock,
 }));
 
 import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
@@ -166,8 +168,10 @@ function createHost() {
     cronRunsScope: "all",
     cronRunsJobId: null as string | null,
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
+    sessionsResult: null as { sessions: unknown[] } | null,
     sessionKey: "main",
     selectedAgentId: null as string | null,
+    hello: null as { auth?: { role?: string; scopes?: string[] } } | null,
     settings: {},
     basePath: "",
   };
@@ -356,13 +360,52 @@ describe("refreshActiveTab", () => {
       client: host.client,
       force: true,
       requestUpdate: host.requestUpdate,
+      refreshDiagnostics: true,
     });
   });
 
-  it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
+  it("keeps read-only Workboard tab preload on the read refresh path", async () => {
+    const host = createHost();
+    host.tab = "workboard";
+    host.hello = { auth: { role: "operator", scopes: ["operator.read"] } };
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadWorkboardMock).toHaveBeenCalledWith({
+      host,
+      client: host.client,
+      force: true,
+      requestUpdate: host.requestUpdate,
+      refreshDiagnostics: false,
+    });
+  });
+
+  it("loads agents before rendering the Skills tab agent selector", async () => {
+    const host = createHost();
+    host.tab = "skills";
+    const calls: string[] = [];
+    mocks.loadAgentsMock.mockImplementationOnce(async () => {
+      calls.push("agents");
+    });
+    mocks.reconcileSkillsAgentIdMock.mockImplementationOnce(() => {
+      calls.push("reconcile");
+    });
+    mocks.loadSkillsMock.mockImplementationOnce(async () => {
+      calls.push("skills");
+    });
+
+    await refreshActiveTab(host as never);
+
+    expect(calls).toEqual(["agents", "reconcile", "skills"]);
+    expect(mocks.loadAgentsMock).toHaveBeenCalledWith(host);
+    expect(mocks.reconcileSkillsAgentIdMock).toHaveBeenCalledWith(host, host.agentsList);
+    expect(mocks.loadSkillsMock).toHaveBeenCalledWith(host);
+  });
+
+  it("starts node polling and stops inactive tab pollers on tab changes", () => {
     vi.useFakeTimers();
     const host = createHost();
-    host.tab = "overview";
+    host.tab = "workboard";
     const pendingReload = vi.fn();
     host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
 
@@ -372,6 +415,8 @@ describe("refreshActiveTab", () => {
     expect(mocks.startNodesPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
     expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopWorkboardPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopWorkboardLifecycleRefreshMock).toHaveBeenCalledWith(host);
     vi.advanceTimersByTime(1_000);
     expect(pendingReload).not.toHaveBeenCalled();
 
@@ -539,6 +584,29 @@ describe("refreshActiveTab", () => {
     expect(mocks.refreshChatMock).toHaveBeenCalledOnce();
     expect(mocks.loadModelAuthStatusStateMock).toHaveBeenCalledWith(host);
     expect(mocks.scheduleChatScrollMock).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates the sidebar session list on chat startup as a background load", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionsResult = { sessions: [] };
+
+    await refreshActiveTab(host as never, { chatStartup: true });
+
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(
+      host,
+      expect.objectContaining({ backgroundHydrate: true }),
+    );
+  });
+
+  it("skips the sidebar session hydration on plain chat refreshes with data", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionsResult = { sessions: [] };
+
+    await refreshActiveTab(host as never);
+
+    expect(mocks.loadSessionsMock).not.toHaveBeenCalled();
   });
 
   it("does not wait for quota status before scrolling the chat tab", async () => {

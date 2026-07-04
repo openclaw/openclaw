@@ -17,7 +17,7 @@ protocol TalkRealtimeWebRTCSessionDelegate: AnyObject {
 
 @MainActor
 final class TalkRealtimeWebRTCSession: NSObject {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "TalkRealtimeWebRTC")
+    private static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "TalkRealtimeWebRTC")
     private static let consultToolName = "openclaw_agent_consult"
     private static let controlToolName = "openclaw_agent_control"
     private static let defaultOfferURL = "https://api.openai.com/v1/realtime/calls"
@@ -50,6 +50,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var loggedFirstAssistantSignal = false
     private var assistantAudioActive = false
     private var assistantAudioFinishTask: Task<Void, Never>?
+    private var ownsAudioSessionActivation = false
 
     private struct ToolBuffer {
         var name: String
@@ -61,7 +62,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
         let runId: String?
         let status: String?
         let startedAt: Double?
-        let endedAt: Double?
         let error: String?
         let stopReason: String?
         let timeoutPhase: String?
@@ -118,7 +118,8 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.session = session
 
         self.trace("configure audio session start")
-        try Self.configureAudioSession()
+        try Self.configureAudioSession(activate: true)
+        self.ownsAudioSessionActivation = true
         self.trace("configure audio session done")
         RTCInitializeSSL()
         let factory = RTCPeerConnectionFactory(
@@ -172,12 +173,34 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.peerConnection?.close()
         self.peerConnection = nil
         self.factory = nil
+        self.releaseAudioSessionActivation()
         self.session = nil
         self.assistantAudioActive = false
         self.assistantAudioFinishTask?.cancel()
         self.assistantAudioFinishTask = nil
         if shouldNotify {
             self.delegate?.realtimeSessionDidFinish(self)
+        }
+    }
+
+    func applyAudioRoutePreferenceChanged() throws {
+        try Self.configureAudioSession(activate: false)
+        self.trace("audio route preference reapplied")
+    }
+
+    private func releaseAudioSessionActivation() {
+        guard self.ownsAudioSessionActivation else { return }
+        self.ownsAudioSessionActivation = false
+
+        // Balance only the activation this session owns. WebRTC may hold its own
+        // activation while the peer connection is alive.
+        let session = RTCAudioSession.sharedInstance()
+        session.lockForConfiguration()
+        defer { session.unlockForConfiguration() }
+        do {
+            try session.setActive(false)
+        } catch {
+            self.trace("audio session deactivate failed error=\(error.localizedDescription)")
         }
     }
 
@@ -194,11 +217,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private func trace(_ message: String) {
         GatewayDiagnostics.log("talk.timeline realtime +\(self.elapsedMs())ms \(message)")
         Self.logger.info("timeline +\(self.elapsedMs(), privacy: .public)ms \(message, privacy: .public)")
-    }
-
-    func cancelResponse() {
-        self.sendRealtimeEvent(["type": "response.cancel"])
-        self.cancelActiveToolCalls()
     }
 
     private func cancelActiveToolCalls() {
@@ -379,6 +397,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
             self.handleToolDone(event)
         case "error":
             self.delegate?.realtimeSession(self, didChangeStatus: "Realtime error")
+            if event.isMaximumDurationError {
+                // The provider's hard limit is terminal before transport state catches up.
+                // Finish explicitly so TalkModeManager rotates the session exactly once.
+                self.stop()
+            }
         default:
             break
         }
@@ -900,14 +923,12 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
-    private static func configureAudioSession() throws {
+    private static func configureAudioSession(activate: Bool) throws {
+        let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let config = RTCAudioSessionConfiguration.webRTC()
         config.category = AVAudioSession.Category.playAndRecord.rawValue
         config.mode = AVAudioSession.Mode.default.rawValue
-        config.categoryOptions = [
-            .allowBluetoothHFP,
-            .defaultToSpeaker,
-        ]
+        config.categoryOptions = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         config.sampleRate = 48000
         config.ioBufferDuration = 0.01
         RTCAudioSessionConfiguration.setWebRTC(config)
@@ -917,8 +938,15 @@ final class TalkRealtimeWebRTCSession: NSObject {
         defer { session.unlockForConfiguration() }
 
         session.ignoresPreferredAttributeConfigurationErrors = true
-        try session.setConfiguration(config, active: true)
-        try? session.overrideOutputAudioPort(.speaker)
+        if activate {
+            try session.setConfiguration(config, active: true)
+        } else {
+            try session.setConfiguration(config)
+        }
+        let shouldForceSpeaker = TalkAudioRoute.shouldForceSpeaker(
+            preferenceEnabled: forceSpeaker,
+            outputPortTypes: session.currentRoute.outputs.map(\.portType))
+        try? session.overrideOutputAudioPort(shouldForceSpeaker ? .speaker : .none)
     }
 }
 
@@ -969,10 +997,16 @@ extension TalkRealtimeWebRTCSession: RTCDataChannelDelegate {
     nonisolated func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         Task { @MainActor in
             guard !self.stopped else { return }
-            if dataChannel.readyState == .open {
+            switch dataChannel.readyState {
+            case .open:
                 if !self.assistantAudioActive {
                     self.delegate?.realtimeSession(self, didChangeStatus: "Listening")
                 }
+            case .closed:
+                self.delegate?.realtimeSession(self, didChangeStatus: "Realtime disconnected")
+                self.stop()
+            default:
+                break
             }
         }
     }

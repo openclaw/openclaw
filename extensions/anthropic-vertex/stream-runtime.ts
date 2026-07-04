@@ -1,6 +1,6 @@
 /**
  * Anthropic Vertex stream runtime. It constructs Vertex SDK clients and adapts
- * OpenClaw stream options into Anthropic Messages payload policy.
+ * OpenClaw stream options for the shared Anthropic Messages transport.
  */
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -18,10 +18,6 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  applyAnthropicPayloadPolicyToParams,
-  resolveAnthropicPayloadPolicy,
-} from "openclaw/plugin-sdk/provider-stream-shared";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
 
 type AnthropicVertexTransportOptions = ProviderStreamOptions & {
@@ -58,8 +54,12 @@ function isClaudeFable5Model(modelId: string): boolean {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
+function isClaudeMythos5Model(modelId: string): boolean {
+  return /(?:^|-)claude-mythos-5(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
+}
+
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return supportsClaudeAdaptiveThinking({ id: modelId });
+  return supportsClaudeAdaptiveThinking({ id: modelId }) || isClaudeMythos5Model(modelId);
 }
 
 function mapAnthropicAdaptiveEffort(
@@ -82,10 +82,13 @@ function mapAnthropicAdaptiveEffort(
     high: "high",
     xhigh: isClaudeFable5Model(modelId)
       ? "xhigh"
-      : isClaudeOpus47OrNewerModel(modelId)
+      : isClaudeOpus47OrNewerModel(modelId) || isClaudeMythos5Model(modelId)
         ? "xhigh"
         : "high",
-    max: supportsClaudeNativeMaxEffort({ id: modelId }) ? "max" : "high",
+    max:
+      supportsClaudeNativeMaxEffort({ id: modelId }) || isClaudeMythos5Model(modelId)
+        ? "max"
+        : "high",
   };
   return effortMap[resolvedReasoning] ?? "high";
 }
@@ -113,36 +116,6 @@ function resolveAnthropicVertexMaxTokens(params: {
   return requested ?? modelMax;
 }
 
-function createAnthropicVertexOnPayload(params: {
-  model: { api: string; baseUrl?: string; provider: string };
-  cacheRetention: ProviderStreamOptions["cacheRetention"] | undefined;
-  onPayload: ProviderStreamOptions["onPayload"] | undefined;
-}): NonNullable<ProviderStreamOptions["onPayload"]> {
-  const policy = resolveAnthropicPayloadPolicy({
-    provider: params.model.provider,
-    api: params.model.api,
-    baseUrl: params.model.baseUrl,
-    cacheRetention: params.cacheRetention,
-    enableCacheControl: true,
-  });
-
-  function applyPolicy(payload: unknown): unknown {
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
-    }
-    return payload;
-  }
-
-  return async (payload, model) => {
-    const shapedPayload = applyPolicy(payload);
-    const nextPayload = await params.onPayload?.(shapedPayload, model);
-    if (nextPayload === undefined || nextPayload === shapedPayload) {
-      return shapedPayload;
-    }
-    return applyPolicy(nextPayload);
-  };
-}
-
 /**
  * Create a StreamFn that routes through OpenClaw's generic model stream with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
@@ -162,8 +135,11 @@ export function createAnthropicVertexStreamFn(
   });
 
   return (model, context, options) => {
-    const transportModel = model as Model<"anthropic-messages"> & {
-      api: string;
+    // Simple completions use a synthetic registry API to select this plugin.
+    // The shared Anthropic transport must receive its canonical API or it recurses.
+    const transportModel = (
+      model.api === "anthropic-messages" ? model : { ...model, api: "anthropic-messages" as const }
+    ) as Model<"anthropic-messages"> & {
       baseUrl?: string;
       provider: string;
     };
@@ -173,11 +149,16 @@ export function createAnthropicVertexStreamFn(
     });
     const contractModelId = resolveClaudeModelIdentity(model);
     const fable5 = isClaudeFable5Model(contractModelId);
-    const reasoning = options?.reasoning as ModelThinkingLevel | undefined;
+    const mandatoryAdaptiveThinking = fable5 || isClaudeMythos5Model(contractModelId);
+    const reasoning =
+      (options?.reasoning as ModelThinkingLevel | undefined) ??
+      (mandatoryAdaptiveThinking ? "high" : undefined);
     const adaptiveThinking =
-      fable5 || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
+      mandatoryAdaptiveThinking || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
     const temperature =
-      adaptiveThinking || isClaudeOpus47OrNewerModel(contractModelId)
+      adaptiveThinking ||
+      isClaudeOpus47OrNewerModel(contractModelId) ||
+      isClaudeMythos5Model(contractModelId)
         ? undefined
         : options?.temperature;
     const opts: AnthropicVertexTransportOptions = {
@@ -188,11 +169,10 @@ export function createAnthropicVertexStreamFn(
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,
       headers: options?.headers,
-      onPayload: createAnthropicVertexOnPayload({
-        model: transportModel,
-        cacheRetention: options?.cacheRetention,
-        onPayload: options?.onPayload,
-      }),
+      // The shared anthropic-messages transport already splits the system prompt
+      // cache boundary and budgets all cache_control markers; re-applying the
+      // payload policy here marked the uncached suffix and breached the 4-marker cap.
+      onPayload: options?.onPayload,
       maxRetryDelayMs: options?.maxRetryDelayMs,
       metadata: options?.metadata,
     };

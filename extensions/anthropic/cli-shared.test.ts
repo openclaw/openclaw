@@ -10,6 +10,15 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+const CLAUDE_CLI_DISALLOWED_TOOLS =
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
+
+function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
+  const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
+  expect(disallowedIndex).toBeGreaterThanOrEqual(0);
+  expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
+}
+
 describe("normalizeClaudePermissionArgs", () => {
   it("leaves args alone when they omit permission flags", () => {
     expect(
@@ -149,6 +158,61 @@ describe("resolveClaudeCliExecutionArgs", () => {
         baseArgs: ["-p", "--effort", "low", "--effort=high"],
       }),
     ).toEqual(["-p", "--effort", "max"]);
+  });
+
+  it("forces isolated no-tool one-shot args for side-question execution", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        thinkingLevel: "max",
+        useResume: true,
+        executionMode: "side-question",
+        baseArgs: [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--allowedTools=mcp__openclaw__*",
+          "--allowedTools",
+          "Read",
+          "Grep",
+          "--permission-mode",
+          "bypassPermissions",
+          "--session-id=abc",
+          "--resume",
+          "old-session",
+          "--resume-session-at",
+          "old-message",
+          "--resume-session-at=old-message-equals",
+          "--mcp-config",
+          "/tmp/side-question-mcp.json",
+          "--bare",
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--max-turns",
+          "4",
+          "--effort",
+          "high",
+        ],
+      }),
+    ).toEqual([
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--safe-mode",
+      "--tools",
+      "",
+      "--disallowedTools",
+      "mcp__*",
+      "--strict-mcp-config",
+      "--no-session-persistence",
+      "--max-turns",
+      "1",
+      "--permission-mode",
+      "default",
+    ]);
   });
 });
 
@@ -301,8 +365,10 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.input).toBe("stdin");
     expect(backend.config.args).toContain("--setting-sources");
     expect(backend.config.args).toContain("user");
+    expectDefaultDisallowedTools(backend.config.args);
     expect(backend.config.resumeArgs).toContain("--setting-sources");
     expect(backend.config.resumeArgs).toContain("user");
+    expectDefaultDisallowedTools(backend.config.resumeArgs);
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
     expect(backend.config.clearEnv).toContain("ANTHROPIC_API_TOKEN");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
@@ -318,5 +384,12 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
+  });
+
+  it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expectDefaultDisallowedTools(backend.config.args);
+    expectDefaultDisallowedTools(backend.config.resumeArgs);
   });
 });

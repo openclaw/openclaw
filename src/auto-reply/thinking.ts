@@ -1,9 +1,6 @@
-import {
-  CLAUDE_FABLE_5_THINKING_PROFILE,
-  resolveClaudeFable5ModelIdentity,
-} from "@openclaw/llm-core";
 // Thinking/reasoning level catalog helpers for auto-reply model controls.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveClaudeThinkingProfile } from "../plugins/provider-claude-thinking.js";
 import {
   BASE_THINKING_LEVELS,
   normalizeThinkLevel,
@@ -12,28 +9,28 @@ import {
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
-  formatXHighModelHint,
   isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
-  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
+  resolveEffectiveResponseUsage,
+  resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
-  resolveElevatedMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
-  ElevatedMode,
+  FastMode,
   NoticeLevel,
   ReasoningLevel,
+  ResponseUsageDefaultConfig,
+  ResponseUsageInput,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
-  UsageDisplayLevel,
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
@@ -201,15 +198,18 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     context: providerContext,
   });
-  const fableProfile =
-    context.api === "anthropic-messages" &&
-    resolveClaudeFable5ModelIdentity({
-      id: context.modelId,
-      params: context.params,
-    })
-      ? CLAUDE_FABLE_5_THINKING_PROFILE
+  // Any anthropic-messages catalog row routes through the canonical Claude
+  // resolver: Claude families get the proper profile (incl. xhigh/adaptive/max);
+  // non-Claude models on the anthropic-messages transport collapse to the Claude
+  // base set, deliberately bypassing the later compat-driven xhigh upgrade —
+  // anthropic-messages does not carry a generic xhigh contract.
+  const anthropicMessagesProfile =
+    context.api === "anthropic-messages"
+      ? resolveClaudeThinkingProfile(context.modelId, context.params, {
+          includeNativeMax: true,
+        })
       : undefined;
-  const pluginProfile = providerProfile ?? fableProfile;
+  const pluginProfile = providerProfile ?? anthropicMessagesProfile;
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
     if (
@@ -257,12 +257,6 @@ export function resolveThinkingProfile(params: {
   return profile;
 }
 
-/** Return whether provider/model exposes only off/on thinking controls. */
-export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
-  const profile = resolveThinkingProfile({ provider, model });
-  return profile.levels.length === 2 && profile.levels.some((level) => level.label === "on");
-}
-
 function supportsThinkingLevel(
   provider: string | null | undefined,
   model: string | null | undefined,
@@ -272,11 +266,6 @@ function supportsThinkingLevel(
   return resolveThinkingProfile({ provider, model, catalog }).levels.some(
     (entry) => entry.id === level,
   );
-}
-
-/** Return whether provider/model supports the xhigh thinking level. */
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  return supportsThinkingLevel(provider, model, "xhigh");
 }
 
 /** List thinking level ids supported by provider/model. */
@@ -338,24 +327,6 @@ export function resolveThinkingDefaultForModel(params: {
     return "off";
   }
   return resolveSupportedThinkingLevelFromProfile(profile, "medium");
-}
-
-/** Resolve the highest non-off thinking level supported by provider/model. */
-export function resolveLargestSupportedThinkingLevel(
-  provider?: string | null,
-  model?: string | null,
-): ThinkLevel {
-  const profile = resolveThinkingProfile({ provider, model });
-  let bestLevel: ResolvedThinkingProfile["levels"][number] | undefined;
-  for (const level of profile.levels) {
-    if (level.id === "off") {
-      continue;
-    }
-    if (!bestLevel || level.rank > bestLevel.rank) {
-      bestLevel = level;
-    }
-  }
-  return bestLevel?.id ?? "off";
 }
 
 /** Return whether a specific thinking level is supported by provider/model. */

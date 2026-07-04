@@ -235,43 +235,6 @@ export function resolveRelativeBundledPluginPublicModuleId(params: {
   return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
 }
 
-export function resolveRelativeExtensionPublicModuleId(params: {
-  fromModuleUrl: string;
-  dirName: string;
-  artifactBasename: string;
-}): string {
-  const fromFilePath = fileURLToPath(params.fromModuleUrl);
-  const targetPath = resolveVitestSourceModulePath(
-    path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions", params.dirName, params.artifactBasename),
-  );
-  const relativePath = path
-    .relative(path.dirname(fromFilePath), targetPath)
-    .replaceAll(path.sep, "/");
-  return relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
-}
-
-export function resolveRelativeWorkspacePackagePublicModuleId(params: {
-  fromModuleUrl: string;
-  packageName: string;
-  artifactBasename: string;
-}): string {
-  const fromFilePath = fileURLToPath(params.fromModuleUrl);
-  const targetPath = resolveVitestSourceModulePath(
-    path.resolve(
-      resolveWorkspacePackageDir(params.packageName),
-      normalizeBundledPluginArtifactSubpath(params.artifactBasename),
-    ),
-  );
-  const relativePath = path
-    .relative(path.dirname(fromFilePath), targetPath)
-    .replaceAll(path.sep, "/");
-  const normalizedRelativePath = relativePath.startsWith(".") ? relativePath : `./${relativePath}`;
-  if (path.resolve(path.dirname(fromFilePath), normalizedRelativePath) !== targetPath) {
-    return pathToFileURL(targetPath).href;
-  }
-  return normalizedRelativePath;
-}
-
 export function resolveWorkspacePackagePublicModuleUrl(params: {
   packageName: string;
   artifactBasename: string;

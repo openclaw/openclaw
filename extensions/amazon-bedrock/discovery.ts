@@ -157,6 +157,13 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
   return undefined;
 }
 
+function isKnownClaudeMythosPreviewModelId(modelId: string): boolean {
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  return [modelId, stripped].some((candidate) =>
+    /(?:^|[/.:])anthropic\.claude-mythos-preview(?:$|[-.:/])/i.test(candidate),
+  );
+}
+
 function resolveKnownThinkingLevelMap(
   modelId: string,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
@@ -322,6 +329,9 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
   if (summary.responseStreamingSupported !== true) {
     return false;
   }
+  if (isKnownClaudeMythosPreviewModelId(summary.modelId)) {
+    return false;
+  }
   if (!includesTextModalities(summary.outputModalities)) {
     return false;
   }
@@ -454,6 +464,9 @@ function resolveInferenceProfiles(
 
     // Look up the underlying foundation model to inherit its capabilities.
     const baseModelId = resolveBaseModelId(profile);
+    if (isKnownClaudeMythosPreviewModelId(baseModelId ?? profile.inferenceProfileId)) {
+      continue;
+    }
     const baseModel = baseModelId
       ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
       : undefined;

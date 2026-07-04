@@ -24,7 +24,12 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
+import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -32,7 +37,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
+import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -49,13 +54,18 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import type {
+  InternalGetReplyOptions as BaseInternalGetReplyOptions,
+  ReplySessionBinding,
+} from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
+import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
   resolveStoredModelOverride,
@@ -63,6 +73,11 @@ import {
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+
+type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  extractedFileImages?: ExtractedFileImage[];
+};
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
   const stripped = stripHeartbeatToken(text, {
@@ -176,51 +191,33 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
-}): Promise<boolean> {
-  if (!hasInboundMedia(params.ctx)) {
-    return false;
+}): Promise<ApplyMediaUnderstandingResult | undefined> {
+  if (!hasInboundMediaForUnderstanding(params.ctx)) {
+    return undefined;
   }
   try {
     const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
-    await applyMediaUnderstanding(params);
-    return true;
+    return await applyMediaUnderstanding(params);
   } catch (err) {
     mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
-    return false;
+    return undefined;
   }
 }
 
-async function stageRemoteInboundMediaBeforeUnderstandingIfNeeded(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  workspaceDir: string;
-}): Promise<boolean> {
-  if (
-    !params.sessionKey ||
-    params.ctx.MediaStaged ||
-    !normalizeOptionalString(params.ctx.MediaRemoteHost) ||
-    !hasInboundMedia(params.ctx)
-  ) {
-    return false;
+function withExtractedFileImages(
+  opts: RuntimeInternalGetReplyOptions | undefined,
+  extractedFileImages: ExtractedFileImage[] | undefined,
+): RuntimeInternalGetReplyOptions | undefined {
+  if (!extractedFileImages || extractedFileImages.length === 0) {
+    return opts;
   }
-
-  const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-  const result = await stageSandboxMedia({
-    ctx: params.ctx,
-    sessionCtx: params.ctx,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  if (result.staged.size > 0) {
-    params.ctx.MediaStaged = true;
-    return true;
-  }
-  return false;
+  return {
+    ...opts,
+    extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
+  };
 }
 
 async function applyLinkUnderstandingIfNeeded(params: {
@@ -283,7 +280,7 @@ export async function getReplyFromConfig(
         agentId: resolveSessionAgentId({
           sessionKey: resolvedAgentSessionKey,
           config: cfg,
-          agentId: finalized.AgentId,
+          fallbackAgentId: finalized.AgentId,
         }),
       };
     },
@@ -324,7 +321,13 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+  const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
+  let extractedFileImages: ExtractedFileImage[] | undefined;
   const agentCfg = cfg.agents?.defaults;
+  const agentEntry = resolveAgentConfig(cfg, agentId);
+  const configuredThinkingDefault =
+    normalizeThinkLevel(agentEntry?.thinkingDefault) ??
+    normalizeThinkLevel(agentCfg?.thinkingDefault);
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
     "reply.resolve_default_model",
@@ -381,6 +384,7 @@ export async function getReplyFromConfig(
       onReplyStart: opts?.onReplyStart,
       onCleanup: opts?.onTypingCleanup,
       typingIntervalSeconds,
+      keepalive: opts?.typingKeepalive ?? true,
       silentToken: SILENT_REPLY_TOKEN,
       log: defaultRuntime.log,
     });
@@ -431,7 +435,7 @@ export async function getReplyFromConfig(
     hasInboundMedia(finalized)
   ) {
     await traceGetReplyPhase("reply.stage_remote_media_pre_understanding", () =>
-      stageRemoteInboundMediaBeforeUnderstandingIfNeeded({
+      stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
         sessionKey: agentSessionKey,
@@ -439,8 +443,8 @@ export async function getReplyFromConfig(
       }),
     );
   }
-  if (!isFastTestEnv && hasInboundMedia(finalized)) {
-    await traceGetReplyPhase("reply.apply_media_understanding", () =>
+  if (!isFastTestEnv && hasInboundMediaForUnderstanding(finalized)) {
+    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
@@ -450,6 +454,9 @@ export async function getReplyFromConfig(
         activeModel: { provider, model },
       }),
     );
+    if (mediaResult?.extractedFileImages.length) {
+      extractedFileImages = mediaResult.extractedFileImages;
+    }
   }
   if (!isFastTestEnv && hasLinkCandidate(finalized)) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>
@@ -479,11 +486,14 @@ export async function getReplyFromConfig(
           ctx: finalized,
           cfg,
           commandAuthorized,
+          requestedSessionId: internalResolvedOpts?.requestedSessionId,
+          resumeRequestedSession: internalResolvedOpts?.resumeRequestedSession,
         }),
       );
   const {
     sessionCtx,
     sessionEntry,
+    sessionEntryHandle,
     previousSessionEntry,
     sessionStore,
     sessionKey,
@@ -500,6 +510,11 @@ export async function getReplyFromConfig(
   } = sessionState;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
+  internalResolvedOpts?.onSessionPrepared?.({
+    sessionKey,
+    sessionId,
+    storePath,
+  });
 
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
@@ -519,17 +534,15 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
         sessionEntry.pendingFinalDeliveryLastError = undefined;
         sessionEntry.pendingFinalDeliveryContext = undefined;
+        sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
         }
         if (sessionKey && storePath) {
-          const { applySessionStoreEntryPatch } = await import("../../config/sessions.js");
-          await applySessionStoreEntryPatch({
-            storePath,
-            sessionKey,
-            skipMaintenance: true,
-            takeCacheOwnership: true,
-            patch: {
+          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+          await updateSessionEntry(
+            { storePath, sessionKey },
+            () => ({
               pendingFinalDelivery: undefined,
               pendingFinalDeliveryText: undefined,
               pendingFinalDeliveryCreatedAt: undefined,
@@ -537,8 +550,12 @@ export async function getReplyFromConfig(
               pendingFinalDeliveryAttemptCount: undefined,
               pendingFinalDeliveryLastError: undefined,
               pendingFinalDeliveryContext: undefined,
+            }),
+            {
+              skipMaintenance: true,
+              takeCacheOwnership: true,
             },
-          });
+          );
         }
       }
     }
@@ -554,6 +571,7 @@ export async function getReplyFromConfig(
       sessionCtx,
       ctx: finalized,
       sessionEntry,
+      sessionEntryHandle,
       sessionStore,
       sessionKey,
       storePath,
@@ -580,6 +598,14 @@ export async function getReplyFromConfig(
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
+        directUserIds: [
+          sessionEntry.origin?.nativeDirectUserId,
+          sessionEntry.origin?.from,
+          sessionEntry.origin?.to,
+          finalized.OriginatingTo,
+          finalized.From,
+          finalized.SenderId,
+        ],
       })
     : null;
   const resolvedChannelModelOverride =
@@ -710,13 +736,14 @@ export async function getReplyFromConfig(
         perMessageQueueMode: undefined,
         perMessageQueueOptions: undefined,
         typing,
-        opts: resolvedOpts,
+        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
         defaultModel,
         timeoutMs,
         isNewSession,
         resetTriggered,
         systemSent,
         sessionEntry,
+        sessionEntryHandle,
         sessionStore,
         sessionKey,
         sessionId,
@@ -758,7 +785,7 @@ export async function getReplyFromConfig(
       model,
       hasResolvedHeartbeatModelOverride,
       typing,
-      opts: resolvedOpts,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       skillFilter: mergedSkillFilter,
     }),
   );
@@ -775,6 +802,10 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
+    resolvedFastMode,
+    resolvedFastModeAutoOnSeconds,
+    resolvedFastModeOverride,
+    resolvedFastModeAutoOnSecondsOverride,
     resolvedVerboseLevel,
     resolvedElevatedLevel,
     execOverrides,
@@ -832,7 +863,7 @@ export async function getReplyFromConfig(
       sessionScope,
       workspaceDir,
       isGroup,
-      opts: resolvedOpts,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       typing,
       allowTextCommands,
       inlineStatusRequested,
@@ -898,15 +929,18 @@ export async function getReplyFromConfig(
       hasResolvedHeartbeatModelOverride,
       isHeartbeat: opts?.isHeartbeat === true,
     });
-    const hasExplicitThinkLevel =
-      resolvedOpts?.thinkingLevelOverride !== undefined ||
+    const thinkingLevelOverride = normalizeThinkLevel(resolvedOpts?.thinkingLevelOverride);
+    const hasTurnOrSessionThinkLevel =
+      thinkingLevelOverride !== undefined ||
       directives.thinkLevel !== undefined ||
-      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined) ||
-      agentCfg?.thinkingDefault !== undefined;
-    if (!hasExplicitThinkLevel) {
+      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined);
+    const hasExplicitThinkLevel =
+      hasTurnOrSessionThinkLevel ||
+      configuredThinkingDefault !== undefined ||
+      runModelState.hasConfiguredThinkingDefault === true;
+    if (!hasTurnOrSessionThinkLevel) {
       resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
     }
-    const agentEntry = resolveAgentConfig(cfg, agentId);
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
     const canUseReasoningState =
       command.isAuthorizedSender ||
@@ -919,8 +953,12 @@ export async function getReplyFromConfig(
       (rawSessionReasoningLevel != null && !canUseReasoningState) ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
-    if (!hasExplicitReasoningLevel && resolvedThinkLevel === "off") {
-      resolvedReasoningLevel = await runModelState.resolveDefaultReasoningLevel();
+    if (!hasExplicitReasoningLevel) {
+      const thinkingActive = resolvedThinkLevel !== "off";
+      resolvedReasoningLevel =
+        thinkingActive || hasExplicitThinkLevel
+          ? "off"
+          : await runModelState.resolveDefaultReasoningLevel();
     }
   }
 
@@ -934,6 +972,10 @@ export async function getReplyFromConfig(
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
       });
+      const hookChatId =
+        normalizeOptionalString(sessionCtx.NativeChannelId) ??
+        normalizeOptionalString(sessionCtx.ChatId);
+      const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
           { cleanedBody },
@@ -942,12 +984,19 @@ export async function getReplyFromConfig(
             sessionKey: agentSessionKey,
             sessionId,
             workspaceDir,
-            trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+            trigger: hookTrigger,
             ...buildAgentHookContextChannelFields({
               sessionKey: agentSessionKey,
               messageProvider: hookMessageProvider,
               currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
+              senderId: sessionCtx.SenderId ?? ctx.SenderId,
+            }),
+            ...buildAgentHookContextIdentityFields({
+              trigger: hookTrigger,
+              senderId: sessionCtx.SenderId,
+              chatId: hookChatId,
+              channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
             }),
           },
         ),
@@ -997,6 +1046,10 @@ export async function getReplyFromConfig(
       directives,
       defaultActivation,
       resolvedThinkLevel,
+      resolvedFastMode,
+      resolvedFastModeAutoOnSeconds,
+      resolvedFastModeOverride,
+      resolvedFastModeAutoOnSecondsOverride,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,
@@ -1012,7 +1065,7 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
-      opts: resolvedOpts,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       defaultModel,
       timeoutMs,
       isNewSession,

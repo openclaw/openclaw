@@ -2,6 +2,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -25,6 +26,7 @@ import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
 } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
@@ -45,9 +47,6 @@ const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
 const MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY = "__voice_call_no_remote__";
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 const TRANSCRIPT_LOG_MAX_CHARS = 200;
-
-type RealtimeTranscriptionRuntime = typeof import("./realtime-transcription.runtime.js");
-type ResponseGeneratorModule = typeof import("./response-generator.js");
 type Logger = {
   info: (message: string) => void;
   warn: (message: string) => void;
@@ -55,18 +54,13 @@ type Logger = {
   debug?: (message: string) => void;
 };
 
-let realtimeTranscriptionRuntimePromise: Promise<RealtimeTranscriptionRuntime> | undefined;
-let responseGeneratorModulePromise: Promise<ResponseGeneratorModule> | undefined;
+const loadRealtimeTranscriptionRuntime = createLazyRuntimeModule(
+  () => import("./realtime-transcription.runtime.js"),
+);
 
-function loadRealtimeTranscriptionRuntime(): Promise<RealtimeTranscriptionRuntime> {
-  realtimeTranscriptionRuntimePromise ??= import("./realtime-transcription.runtime.js");
-  return realtimeTranscriptionRuntimePromise;
-}
-
-function loadResponseGeneratorModule(): Promise<ResponseGeneratorModule> {
-  responseGeneratorModulePromise ??= import("./response-generator.js");
-  return responseGeneratorModulePromise;
-}
+const loadResponseGeneratorModule = createLazyRuntimeModule(
+  () => import("./response-generator.js"),
+);
 
 type WebhookHeaderGateResult =
   | { ok: true }
@@ -916,7 +910,18 @@ export class VoiceCallWebhookServer {
     try {
       const pathname = buildRequestUrl(req.url).pathname;
       const pattern = this.realtimeHandler?.getStreamPathPattern();
-      return Boolean(pattern && pathname.startsWith(pattern));
+      if (!pattern) {
+        return false;
+      }
+      const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
+      const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
+      if (normalizedPattern === "/") {
+        return true;
+      }
+      return (
+        normalizedPathname === normalizedPattern ||
+        normalizedPathname.startsWith(`${normalizedPattern}/`)
+      );
     } catch {
       return false;
     }
@@ -1020,8 +1025,7 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
-      const numberRouteKey =
-        typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+      const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
       const result = await generateVoiceResponse({

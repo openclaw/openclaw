@@ -6,7 +6,7 @@ on:
     - cron: "0 8 * * 1"
 
 concurrency:
-  group: codeql-macos-critical-security-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.sha }}
+  group: codeql-macos-critical-security-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || format('ref-{0}', github.ref) }}
   cancel-in-progress: false
 
 env:

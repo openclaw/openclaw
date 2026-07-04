@@ -5,10 +5,31 @@ import path from "node:path";
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
+  canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
+  publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
     run: () => Promise<T> | T,
-    options?: { publishOwnedWrite?: boolean },
+    options?: OwnedSessionTranscriptWriteOptions<T>,
   ) => Promise<T>;
+};
+
+export type OwnedSessionTranscriptWriteOptions<T> = {
+  publishOwnedWrite?: boolean;
+  resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[];
+  resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[];
+};
+
+export type OwnedSessionTranscriptPublishedEntry =
+  | { kind: "id"; id: string }
+  | { kind: "header"; serialized: string }
+  | { kind: "serialized"; serialized: string };
+
+export type OwnedSessionTranscriptCacheSnapshot = {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
 };
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
@@ -84,13 +105,39 @@ export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
   return context.withSessionWriteLock;
 }
 
+export function canAdvanceOwnedSessionEntryCache(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  snapshot: OwnedSessionTranscriptCacheSnapshot;
+}): boolean {
+  const context = ownedTranscriptWriteContext.getStore();
+  return Boolean(
+    context &&
+    contextMatches({ context, ...params }) &&
+    context.publishSessionFileSnapshot &&
+    context.canAdvanceSessionEntryCache?.(params.snapshot),
+  );
+}
+
+export function publishOwnedSessionFileSnapshot(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  snapshot: OwnedSessionTranscriptCacheSnapshot;
+}): boolean | undefined {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (!context || !contextMatches({ context, ...params }) || !context.publishSessionFileSnapshot) {
+    return undefined;
+  }
+  return context.publishSessionFileSnapshot(params.snapshot);
+}
+
 async function runWithOwnedSessionTranscriptWriteContext<T>(
   params: {
     sessionFile?: string;
     sessionKey?: string;
   },
   run: () => Promise<T> | T,
-  options?: { publishOwnedWrite?: boolean },
+  options?: OwnedSessionTranscriptWriteOptions<T>,
 ): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {

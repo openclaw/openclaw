@@ -30,6 +30,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -71,6 +72,7 @@ import {
   slackConfigAdapter,
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
+import { slackContextTargetsMatch } from "./targets.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
@@ -159,7 +161,7 @@ function getTokenForOperation(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
-  const userToken = normalizeOptionalString(account.config.userToken);
+  const userToken = normalizeOptionalString(account.userToken);
   const botToken = normalizeOptionalString(account.botToken);
   const allowUserWrites = account.config.userTokenReadOnly === false;
   if (operation === "read") {
@@ -173,12 +175,6 @@ function getTokenForOperation(
 
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
-let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
-let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
-let slackProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
-let slackMonitorModulePromise: Promise<typeof import("./monitor.js")> | undefined;
-let slackDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
-
 const loadSlackDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
 );
@@ -187,30 +183,15 @@ const loadSlackResolveChannelsModule = createLazyRuntimeModule(
 );
 const loadSlackResolveUsersModule = createLazyRuntimeModule(() => import("./resolve-users.js"));
 
-async function loadSlackActionRuntime() {
-  slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
-  return await slackActionRuntimePromise;
-}
+const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
-async function loadSlackSendRuntime() {
-  slackSendRuntimePromise ??= import("./send.runtime.js");
-  return await slackSendRuntimePromise;
-}
+const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
 
-async function loadSlackProbeModule() {
-  slackProbeModulePromise ??= import("./probe.js");
-  return await slackProbeModulePromise;
-}
+const loadSlackProbeModule = createLazyRuntimeModule(() => import("./probe.js"));
 
-async function loadSlackMonitorModule() {
-  slackMonitorModulePromise ??= import("./monitor.js");
-  return await slackMonitorModulePromise;
-}
+const loadSlackMonitorModule = createLazyRuntimeModule(() => import("./monitor.js"));
 
-async function loadSlackDirectoryLiveModule() {
-  slackDirectoryLiveModulePromise ??= import("./directory-live.js");
-  return await slackDirectoryLiveModulePromise;
-}
+const loadSlackDirectoryLiveModule = createLazyRuntimeModule(() => import("./directory-live.js"));
 
 async function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
@@ -413,7 +394,7 @@ const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver(
 const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
-    normalizeOptionalString(account.config.userToken) ?? normalizeOptionalString(account.botToken),
+    normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
   resolveNames: async ({ token, entries }) =>
     (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
@@ -422,6 +403,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   normalizePayload: ({ payload, cfg, accountId }) =>
     isSlackInteractiveRepliesEnabled({ cfg, accountId })
       ? compileSlackInteractiveReplies(payload)
@@ -645,7 +627,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (kind === "group") {
           return resolveTargetsWithOptionalToken({
             token:
-              normalizeOptionalString(account.config.userToken) ??
+              normalizeOptionalString(account.userToken) ??
               normalizeOptionalString(account.botToken),
             inputs,
             missingTokenNote: "missing Slack token",
@@ -660,8 +642,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
-            normalizeOptionalString(account.config.userToken) ??
-            normalizeOptionalString(account.botToken),
+            normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs: inputsLocal }) =>
@@ -712,7 +693,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         const lines = [];
         const details: Record<string, unknown> = {};
         const botToken = account.botToken?.trim();
-        const userToken = account.config.userToken?.trim();
+        const userToken = account.userToken?.trim();
         const { fetchSlackScopes } = await loadSlackScopesModule();
         const botScopes: SlackScopesResultShape = botToken
           ? await fetchSlackScopes(botToken, timeoutMs)
@@ -728,16 +709,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
-        const configured =
-          (mode === "http"
+        const credentialConfigured =
+          mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [
                 "botTokenStatus",
                 "signingSecretStatus",
               ])
-            : resolveConfiguredFromRequiredCredentialStatuses(account, [
-                "botTokenStatus",
-                "appTokenStatus",
-              ])) ?? isSlackPluginAccountConfigured(account);
+            : mode === "socket"
+              ? resolveConfiguredFromRequiredCredentialStatuses(account, [
+                  "botTokenStatus",
+                  "appTokenStatus",
+                ])
+              : undefined;
+        const configured = credentialConfigured ?? isSlackPluginAccountConfigured(account);
         return {
           accountId: account.accountId,
           name: account.name,
@@ -796,6 +780,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   },
   security: slackSecurityAdapter,
   threading: {
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      slackContextTargetsMatch(target, toolContext),
     scopedAccountReplyToMode: {
       resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
       resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
@@ -811,10 +797,21 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId }) => ({
-      replyToId: resolveSlackThreadTsValue({ replyToId, threadId }),
-      threadId: null,
-    }),
+    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+      const allowedReplyToId = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
+      // Slack's thread_ts identifies the root. Only known inherited replies may let
+      // that root replace a child timestamp; explicit and unknown callers stay reply-first.
+      const preferThreadId = replyToIsExplicit === false;
+      const resolvedReplyToId = resolveSlackThreadTsValue({
+        replyToId: preferThreadId ? threadId : allowedReplyToId,
+        threadId: preferThreadId ? allowedReplyToId : threadId,
+      });
+      return {
+        replyToId:
+          replyDelivery?.replyToMode === "off" && !resolvedReplyToId ? null : resolvedReplyToId,
+        threadId: null,
+      };
+    },
   },
   outbound: slackChannelOutbound,
 });

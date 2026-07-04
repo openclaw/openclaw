@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -175,7 +176,7 @@ describe("runReplyAgent runtime config", () => {
     enqueueFollowupRunMock.mockReset();
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
-    resolveReplyToModeMock.mockReturnValue("default");
+    resolveReplyToModeMock.mockReturnValue("all");
     createReplyToModeFilterForChannelMock.mockReturnValue((payload: unknown) => payload);
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
     runPreflightCompactionIfNeededMock.mockRejectedValue(sentinelError);
@@ -251,12 +252,17 @@ describe("runReplyAgent runtime config", () => {
       shouldFollowup: false,
       isActive: false,
     });
+    let observedReplyOperation: { freezeAbort: () => void } | undefined;
     replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only" };
     runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
     runMemoryFlushIfNeededMock.mockImplementation(
       async (params: {
+        replyOperation: { freezeAbort: () => void };
         onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
       }) => {
+        vi.spyOn(params.replyOperation, "freezeAbort");
+        observedReplyOperation = params.replyOperation;
+        expect(params.replyOperation.freezeAbort).not.toHaveBeenCalled();
         params.onVisibleErrorPayloads?.([
           {
             text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
@@ -269,6 +275,10 @@ describe("runReplyAgent runtime config", () => {
 
     const result = await runReplyAgent(replyParams);
 
+    if (!observedReplyOperation) {
+      throw new Error("expected memory flush reply operation");
+    }
+    expect(observedReplyOperation.freezeAbort).toHaveBeenCalledTimes(1);
     if (!result || Array.isArray(result)) {
       throw new Error("expected a single memory-flush error reply payload");
     }
@@ -284,7 +294,33 @@ describe("runReplyAgent runtime config", () => {
     });
     expect(getReplyPayloadMetadata(result)).toEqual({
       deliverDespiteSourceReplySuppression: true,
+      replyDelivery: {
+        chatType: "direct",
+        replyToMode: "all",
+      },
+      replyDeliverySource: {
+        channel: "telegram",
+        accountId: "default",
+      },
     });
+  });
+
+  it("does not start the main turn after cancellation during memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: { replyOperation: { abortByUser: () => boolean } }) => {
+        expect(params.replyOperation.abortByUser()).toBe(true);
+        return undefined;
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toMatchObject({ text: SILENT_REPLY_TOKEN });
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {

@@ -108,6 +108,19 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
       },
       commands: whatsappCommandPolicy,
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) => {
+          const normalized = normalizeWhatsAppTarget(conversationId);
+          return normalized ? { conversationId: normalized } : null;
+        },
+        matchInboundConversation: ({ compiledBinding, conversationId }) => {
+          const normalizedConversationId = normalizeWhatsAppTarget(conversationId);
+          if (normalizedConversationId === compiledBinding.conversationId) {
+            return { conversationId: compiledBinding.conversationId, matchPriority: 2 };
+          }
+          return null;
+        },
+      },
       agentPrompt: {
         reactionGuidance: ({ cfg, accountId }) => {
           const level = resolveWhatsAppAgentReactionGuidance({
@@ -214,6 +227,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           lastInboundAt: null,
           lastMessageAt: null,
           lastEventAt: null,
+          busy: false,
+          lastRunActivityAt: null,
           healthState: "stopped",
         }),
         collectStatusIssues: collectWhatsAppStatusIssues,
@@ -269,6 +284,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             lastInboundAt: snapshot.lastInboundAt ?? snapshot.lastMessageAt ?? null,
             lastMessageAt: snapshot.lastMessageAt ?? null,
             lastEventAt: snapshot.lastEventAt ?? null,
+            busy: snapshot.busy ?? false,
+            lastRunActivityAt: snapshot.lastRunActivityAt ?? null,
             lastError: snapshot.lastError ?? null,
             healthState: snapshot.healthState ?? undefined,
           };
@@ -295,6 +312,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               lastInboundAt: runtime?.lastInboundAt ?? runtime?.lastMessageAt ?? null,
               lastMessageAt: runtime?.lastMessageAt ?? null,
               lastEventAt: runtime?.lastEventAt ?? null,
+              busy: runtime?.busy ?? false,
+              lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
               healthState: runtime?.healthState ?? undefined,
               dmPolicy: account.dmPolicy,
               allowFrom: account.allowFrom,

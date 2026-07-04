@@ -37,6 +37,7 @@ import {
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
+  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -244,6 +245,22 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
+const IMAGE_BLOCK_CHARS = 4800;
+
+function countContentBlockChars(
+  content: Array<{ type: string; content?: unknown; text?: string }>,
+): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "image") {
+      chars += IMAGE_BLOCK_CHARS;
+    } else {
+      chars += getCompactionContentBlockText(block).length;
+    }
+  }
+  return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
@@ -257,11 +274,7 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof content === "string") {
         chars = content.length;
       } else if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-        }
+        chars = countContentBlockChars(content);
       }
       return Math.ceil(chars / 4);
     }
@@ -283,14 +296,7 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof harnessMessage.content === "string") {
         chars = harnessMessage.content.length;
       } else {
-        for (const block of harnessMessage.content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-          if (block.type === "image") {
-            chars += 4800;
-          }
-        }
+        chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
@@ -404,6 +410,7 @@ export function findCutPoint(
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
+      cutIndex = cutPoints[cutPoints.length - 1];
       for (const cutPoint of cutPoints) {
         if (cutPoint >= i) {
           cutIndex = cutPoint;

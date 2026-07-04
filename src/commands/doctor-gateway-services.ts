@@ -33,6 +33,7 @@ import {
   uninstallLegacySystemdUnits,
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -51,6 +52,7 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
@@ -229,6 +231,45 @@ async function filterInactiveExtraGatewayServices(
     }
   }
   return activeOrLegacy;
+}
+
+export async function detectExtraGatewayServiceIssues(
+  options: Pick<DoctorOptions, "deep"> = {},
+): Promise<readonly ExtraGatewayService[]> {
+  const detectedExtraServices = await findExtraGatewayServices(process.env, {
+    deep: options.deep,
+  });
+  return await filterInactiveExtraGatewayServices(detectedExtraServices);
+}
+
+export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService): HealthFinding {
+  return {
+    checkId: GATEWAY_SERVICES_EXTRA_CHECK_ID,
+    severity: service.legacy === true ? "warning" : "info",
+    message: `Other gateway-like service detected: ${service.label} (${service.scope}, ${service.detail})`,
+    source: service.platform,
+    target: service.label,
+    fixHint:
+      service.legacy === true
+        ? "Run openclaw doctor --fix to remove legacy gateway services."
+        : "Run a single gateway per machine unless this extra gateway is intentional.",
+  };
+}
+
+export function extraGatewayServiceToRepairEffects(
+  service: ExtraGatewayService,
+): readonly HealthRepairEffect[] {
+  if (service.legacy !== true) {
+    return [];
+  }
+  return [
+    {
+      kind: "service",
+      action: "would-remove-legacy-gateway-service",
+      target: service.label,
+      dryRunSafe: false,
+    },
+  ];
 }
 
 async function cleanupLegacyLaunchdService(params: {
@@ -640,6 +681,7 @@ export async function maybeRepairGatewayServiceConfig(
     await (updateRepairMode ? service.stage : service.install)({
       env: serviceInstallEnv,
       stdout: process.stdout,
+      warn: (message) => note(message, "Gateway"),
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
@@ -658,10 +700,7 @@ export async function maybeScanExtraGatewayServices(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const detectedExtraServices = await findExtraGatewayServices(process.env, {
-    deep: options.deep,
-  });
-  const extraServices = await filterInactiveExtraGatewayServices(detectedExtraServices);
+  const extraServices = await detectExtraGatewayServiceIssues(options);
   if (extraServices.length === 0) {
     return;
   }

@@ -1,12 +1,9 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
-    @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
-    let initialRoute: AgentRoute?
     let directRoute: AgentRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
@@ -15,7 +12,6 @@ struct AgentProTab: View {
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
-    @State var overviewRefreshNonce: Int = 0
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""
@@ -83,31 +79,30 @@ struct AgentProTab: View {
             case .ready: "Ready"
             }
         }
+
+        var systemImage: String {
+            switch self {
+            case .all: "person.2"
+            case .online: "antenna.radiowaves.left.and.right"
+            case .ready: "checkmark.circle"
+            }
+        }
     }
 
     enum AgentLayout {
-        static let cardRadius: CGFloat = 12
+        static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
-        static let rowMinHeight: CGFloat = 104
         static let metricTileHeight: CGFloat = 94
-        static let actionButtonSize: CGFloat = 34
     }
 
     enum AgentRosterState: Equatable {
         case online
         case ready
 
-        var title: String {
-            switch self {
-            case .online: "Online"
-            case .ready: "Ready"
-            }
-        }
-
         var color: Color {
             switch self {
             case .online: OpenClawBrand.ok
-            case .ready: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
+            case .ready: OpenClawBrand.info
             }
         }
     }
@@ -127,13 +122,11 @@ struct AgentProTab: View {
     }
 
     init(
-        initialRoute: AgentRoute? = nil,
         directRoute: AgentRoute? = nil,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String = "Agents",
         openSettings: (() -> Void)? = nil)
     {
-        self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
@@ -184,22 +177,12 @@ struct AgentProTab: View {
                 self.destination(for: route)
             }
         }
-        .onAppear {
-            self.applyInitialRouteIfNeeded()
-        }
     }
 
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                route != .agents && self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
-    }
-
-    private func applyInitialRouteIfNeeded() {
-        guard self.directRoute == nil else { return }
-        guard let initialRoute else { return }
-        guard self.navigationPath != [initialRoute] else { return }
-        self.navigationPath = [initialRoute]
     }
 }

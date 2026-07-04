@@ -2,6 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 export { isSafeChannelEnvVarTriggerName } from "./channel-env-var-names.js";
 
 type ChannelEnvVarLookupParams = {
@@ -12,27 +13,6 @@ type ChannelEnvVarLookupParams = {
   /** Env snapshot used by metadata loading; defaults to process env. */
   env?: NodeJS.ProcessEnv;
 };
-
-function appendUniqueEnvVarCandidates(
-  target: Record<string, string[]>,
-  channelId: string,
-  keys: readonly string[],
-) {
-  const normalizedChannelId = channelId.trim();
-  if (!normalizedChannelId || keys.length === 0) {
-    return;
-  }
-  const bucket = (target[normalizedChannelId] ??= []);
-  const seen = new Set(bucket);
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || seen.has(normalizedKey)) {
-      continue;
-    }
-    seen.add(normalizedKey);
-    bucket.push(normalizedKey);
-  }
-}
 
 /**
  * Resolves plugin-declared channel environment variable names keyed by channel id.

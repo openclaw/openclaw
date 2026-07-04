@@ -58,13 +58,6 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze
   ),
 ) as Record<string, ChatChannelId>;
 
-/**
- * Lists configured built-in chat channel aliases.
- */
-export function listChatChannelAliases(): string[] {
-  return Object.keys(CHAT_CHANNEL_ALIASES);
-}
-
 function listRuntimeBundledChatChannelEntries(): BundledChatChannelEntry[] {
   // Generated metadata is the hot-path source. The runtime catalog fallback covers
   // dynamically registered bundled metadata without repeated catalog reads.

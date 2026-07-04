@@ -254,6 +254,8 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
+  /** macOS SSH host-key policy. Defaults to strict; openssh delegates to effective SSH config. */
+  sshHostKeyPolicy?: "strict" | "openssh";
 };
 
 /** Gateway config reload strategy for managed installs. */

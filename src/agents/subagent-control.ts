@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import type { ClearSessionQueueResult } from "../auto-reply/reply/queue.js";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -50,19 +50,21 @@ const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
-type UpdateSessionStore = typeof updateSessionStore;
+type PatchSessionEntry = typeof patchSessionEntry;
 type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
+type IsEmbeddedAgentRunActive = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
   callGateway,
-  updateSessionStore,
+  patchSessionEntry,
 };
 
 let subagentControlDeps: {
   callGateway: GatewayCaller;
-  updateSessionStore: UpdateSessionStore;
+  patchSessionEntry: PatchSessionEntry;
   abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
+  isEmbeddedAgentRunActive?: IsEmbeddedAgentRunActive;
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
 
@@ -76,11 +78,17 @@ function loadSubagentControlRuntime() {
 
 async function resolveSubagentControlRuntime(): Promise<{
   abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
+  isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
   clearSessionQueues: ClearSessionQueues;
 }> {
-  if (subagentControlDeps.abortEmbeddedAgentRun && subagentControlDeps.clearSessionQueues) {
+  if (
+    subagentControlDeps.abortEmbeddedAgentRun &&
+    subagentControlDeps.isEmbeddedAgentRunActive &&
+    subagentControlDeps.clearSessionQueues
+  ) {
     return {
       abortEmbeddedAgentRun: subagentControlDeps.abortEmbeddedAgentRun,
+      isEmbeddedAgentRunActive: subagentControlDeps.isEmbeddedAgentRunActive,
       clearSessionQueues: subagentControlDeps.clearSessionQueues,
     };
   }
@@ -88,6 +96,8 @@ async function resolveSubagentControlRuntime(): Promise<{
   return {
     abortEmbeddedAgentRun:
       subagentControlDeps.abortEmbeddedAgentRun ?? runtime.abortEmbeddedAgentRun,
+    isEmbeddedAgentRunActive:
+      subagentControlDeps.isEmbeddedAgentRunActive ?? runtime.isEmbeddedAgentRunActive,
     clearSessionQueues: subagentControlDeps.clearSessionQueues ?? runtime.clearSessionQueues,
   };
 }
@@ -130,6 +140,14 @@ export function resolveSubagentController(params: {
   };
 }
 
+function isSubagentRunVisibleToSession(entry: SubagentRunRecord, sessionKey: string): boolean {
+  const controllerKey = entry.controllerSessionKey?.trim();
+  const requesterKey = entry.requesterSessionKey.trim();
+  // Completion routing can target a different session than control ownership.
+  // Both owners may read the run, while ensureControllerOwnsRun still gates mutations.
+  return controllerKey === sessionKey || requesterKey === sessionKey;
+}
+
 /** Lists latest child runs controlled by a session key. */
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
   const key = controllerSessionKey.trim();
@@ -139,11 +157,9 @@ export function listControlledSubagentRuns(controllerSessionKey: string): Subage
 
   const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
   const latestByChildSessionKey = buildLatestSubagentRunIndex(snapshot).latestByChildSessionKey;
-  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) => {
-    const latestControllerSessionKey =
-      entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
-    return latestControllerSessionKey === key;
-  });
+  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) =>
+    isSubagentRunVisibleToSession(entry, key),
+  );
   return sortSubagentRuns(filtered);
 }
 
@@ -178,6 +194,7 @@ async function killSubagentRun(params: {
   });
   const sessionId = resolved.entry?.sessionId;
   const runtime = await resolveSubagentControlRuntime();
+  const active = sessionId ? runtime.isEmbeddedAgentRunActive(sessionId) : false;
   const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
   const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
@@ -185,17 +202,20 @@ async function killSubagentRun(params: {
       `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
+  if (active && !aborted) {
+    return { killed: false, sessionId };
+  }
   if (resolved.entry) {
     try {
-      await subagentControlDeps.updateSessionStore(resolved.storePath, (store) => {
-        const current = store[childSessionKey];
-        if (!current) {
-          return;
-        }
-        current.abortedLastRun = true;
-        current.updatedAt = Date.now();
-        store[childSessionKey] = current;
-      });
+      await subagentControlDeps.patchSessionEntry(
+        { storePath: resolved.storePath, sessionKey: childSessionKey },
+        (current) => ({
+          ...current,
+          abortedLastRun: true,
+          updatedAt: Date.now(),
+        }),
+        { replaceEntry: true },
+      );
     } catch (error) {
       logVerbose(
         `subagents control kill: failed to persist abortedLastRun for ${childSessionKey}: ${formatErrorMessage(error)}`,
@@ -542,12 +562,22 @@ export async function steerControlledSubagentRun(params: {
       ? targetSession.entry.sessionId.trim()
       : undefined;
   const restartSessionId = sessionId ? crypto.randomUUID() : undefined;
+  const runtime = await resolveSubagentControlRuntime();
 
   if (sessionId) {
-    const runtime = await resolveSubagentControlRuntime();
-    runtime.abortEmbeddedAgentRun(sessionId);
+    const active = runtime.isEmbeddedAgentRunActive(sessionId);
+    const aborted = runtime.abortEmbeddedAgentRun(sessionId);
+    if (active && !aborted) {
+      clearSubagentRunSteerRestart(params.entry.runId);
+      return {
+        status: "error",
+        runId: params.entry.runId,
+        sessionKey: params.entry.childSessionKey,
+        sessionId,
+        error: "Subagent reply is already finalizing and can no longer be restarted.",
+      };
+    }
   }
-  const runtime = await resolveSubagentControlRuntime();
   const cleared = runtime.clearSessionQueues([params.entry.childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
@@ -605,6 +635,11 @@ export async function steerControlledSubagentRun(params: {
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
+    // Preserve the steered instruction so that restart redispatch rewraps the
+    // new message rather than the stale pre-steer task. Persisting the older
+    // task would cause `recoverOrphanedSubagentSessions` to re-issue the
+    // original instruction after a crash, silently dropping the user's steer.
+    task: params.message,
   });
   if (!replaced) {
     clearSubagentRunSteerRestart(params.entry.runId);
@@ -660,8 +695,11 @@ export async function sendControlledSubagentMessage(params: {
   const targetSessionKey = params.entry.childSessionKey;
   const parsed = parseAgentSessionKey(targetSessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-  const store = loadSessionStore(storePath);
-  const targetSessionEntry = store[targetSessionKey];
+  const targetSessionEntry = loadSessionEntry({
+    storePath,
+    sessionKey: targetSessionKey,
+    clone: false,
+  });
   const targetSessionId =
     typeof targetSessionEntry?.sessionId === "string" && targetSessionEntry.sessionId.trim()
       ? targetSessionEntry.sessionId.trim()
@@ -724,8 +762,9 @@ export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       callGateway: GatewayCaller;
-      updateSessionStore: UpdateSessionStore;
+      patchSessionEntry: PatchSessionEntry;
       abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
+      isEmbeddedAgentRunActive: IsEmbeddedAgentRunActive;
       clearSessionQueues: ClearSessionQueues;
     }>,
   ) {

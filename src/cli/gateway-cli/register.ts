@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -108,13 +109,15 @@ async function runGatewayCommand(
   label?: string,
   opts?: { json?: boolean },
 ) {
-  // JSON mode preserves structured gateway transport errors for automation callers.
+  // JSON mode preserves structured gateway errors for automation callers.
   try {
     await action();
   } catch (err) {
     if (opts?.json) {
-      const { formatGatewayTransportErrorJson } = await import("../../gateway/call.js");
-      const payload = formatGatewayTransportErrorJson(err);
+      const { formatGatewayClientRequestErrorJson, formatGatewayTransportErrorJson } =
+        await import("../../gateway/call.js");
+      const payload =
+        formatGatewayClientRequestErrorJson(err) ?? formatGatewayTransportErrorJson(err);
       if (payload) {
         defaultRuntime.writeJson(payload);
         defaultRuntime.exit(1);
@@ -140,6 +143,19 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   return fallback;
 }
 
+function parseGatewayRpcTimeoutOption(raw: unknown, fallback = 10_000): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
 function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
   opts: T,
   command?: Command,
@@ -150,6 +166,34 @@ function resolveGatewayRpcOptions<T extends { token?: string; password?: string 
     ...opts,
     token: opts.token ?? parentToken,
     password: opts.password ?? parentPassword,
+  };
+}
+
+async function resolveGatewayRpcOptionsWithLocalPort(
+  opts: GatewayRpcOpts & { port?: unknown },
+  command?: Command,
+): Promise<GatewayRpcOpts> {
+  const rpcOpts = resolveGatewayRpcOptions(opts, command);
+  const port = parseGatewayPortOption(opts.port ?? inheritOptionFromParent(command, "port"));
+  if (port === undefined) {
+    return rpcOpts;
+  }
+  if (typeof opts.url === "string" && opts.url.trim()) {
+    throw new Error("Use either --url or --port, not both.");
+  }
+  const { readBestEffortConfig } = await loadConfigModule();
+  const config = await readBestEffortConfig();
+  return {
+    ...rpcOpts,
+    localPortOverride: port,
+    config: {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        mode: "local",
+        port,
+      },
+    },
   };
 }
 
@@ -486,20 +530,24 @@ export function registerGatewayCli(program: Command) {
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, rpcOpts, params);
-          if (rpcOpts.json) {
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const params = JSON.parse(String(opts.params ?? "{}"));
+            const result = await callGatewayCli(method, rpcOpts, params);
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
+            const rich = isRich();
+            defaultRuntime.log(
+              `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
+            );
             defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          defaultRuntime.log(
-            `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
-          );
-          defaultRuntime.writeJson(result);
-        }, "Gateway call failed");
+          },
+          "Gateway call failed",
+          { json: Boolean(opts.json) },
+        );
       }),
   );
 
@@ -508,21 +556,37 @@ export function registerGatewayCli(program: Command) {
       .command("usage-cost")
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
+      .option("--agent <id>", "Scope the cost summary to a specific agent id")
+      .option("--all-agents", "Aggregate the cost summary across all agents", false)
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const days = parseDaysOption(opts.days);
-          const result = await callGatewayCli("usage.cost", rpcOpts, { days });
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          const summary = result as CostUsageSummary;
-          for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
-            defaultRuntime.log(line);
-          }
-        }, "Gateway usage cost failed");
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const days = parseDaysOption(opts.days);
+            const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
+            // The gateway honors agentScope only when no agentId is set, so reject the
+            // ambiguous combination here instead of silently dropping --all-agents.
+            if (agentId && opts.allAgents) {
+              throw new Error("Use --agent or --all-agents, not both");
+            }
+            const result = await callGatewayCli("usage.cost", rpcOpts, {
+              days,
+              ...(agentId ? { agentId } : {}),
+              ...(opts.allAgents ? { agentScope: "all" } : {}),
+            });
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
+            const rich = isRich();
+            const summary = result as CostUsageSummary;
+            for (const line of await renderCostUsageSummaryAsync(summary, days, rich)) {
+              defaultRuntime.log(line);
+            }
+          },
+          "Gateway usage cost failed",
+          { json: Boolean(opts.json) },
+        );
       }),
   );
 
@@ -530,21 +594,42 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("health")
       .description("Fetch Gateway health")
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
-            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
-              loadGatewayHealthModule(),
-              loadHealthStyleModule(),
-            ]);
-            const result = await callGatewayCli("health", rpcOpts);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
+            const [
+              { emitReachableGatewayAuthDiagnostic, formatHealthChannelLines },
+              { styleHealthChannelLine },
+            ] = await Promise.all([loadGatewayHealthModule(), loadHealthStyleModule()]);
+            let result: unknown;
+            try {
+              result = await callGatewayCli("health", rpcOpts);
+            } catch (error) {
+              const { readBestEffortConfig } = await loadConfigModule();
+              const handled = await emitReachableGatewayAuthDiagnostic({
+                error,
+                config: rpcOpts.config ?? (await readBestEffortConfig()),
+                runtime: defaultRuntime,
+                timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
+                token: rpcOpts.token,
+                password: rpcOpts.password,
+                localPortOverride: rpcOpts.localPortOverride,
+                json: Boolean(rpcOpts.json),
+              });
+              if (handled) {
+                return;
+              }
+              throw error;
+            }
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;
             }
             const rich = isRich();
-            const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
+            const obj: Record<string, unknown> =
+              result && typeof result === "object" ? (result as Record<string, unknown>) : {};
             const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
             defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
             defaultRuntime.log(
@@ -576,71 +661,78 @@ export function registerGatewayCli(program: Command) {
       .option("--export", "Write a shareable support diagnostics export", false)
       .option("--output <path>", "Diagnostics export output .zip path")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const { normalizeDiagnosticStabilityQuery, selectDiagnosticStabilitySnapshot } =
-            await import("../../logging/diagnostic-stability.js");
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const query = normalizeDiagnosticStabilityQuery(
-            {
-              limit: opts.limit,
-              sinceSeq: opts.sinceSeq,
-              type: opts.type,
-            },
-            { defaultLimit: 25 },
-          );
-          const bundleTarget = normalizeStabilityBundleTarget(opts.bundle);
-          if (opts.export) {
-            await writeSupportExportFromCli({
-              json: rpcOpts.json,
-              output: opts.output,
-              stabilityBundle: bundleTarget ?? "latest",
-              rpc: rpcOpts,
-            });
-            return;
-          }
-          if (bundleTarget) {
-            const result = await readStabilityBundleTarget(bundleTarget);
-            if (result.status !== "found") {
-              throw new Error(formatBundleError(result));
-            }
-            const snapshot = selectDiagnosticStabilitySnapshot(result.bundle.snapshot, query);
-            if (rpcOpts.json) {
-              defaultRuntime.writeJson({
-                path: result.path,
-                mtimeMs: result.mtimeMs,
-                bundle: {
-                  ...result.bundle,
-                  snapshot,
-                },
+        await runGatewayCommand(
+          async () => {
+            const { normalizeDiagnosticStabilityQuery, selectDiagnosticStabilitySnapshot } =
+              await import("../../logging/diagnostic-stability.js");
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const query = normalizeDiagnosticStabilityQuery(
+              {
+                limit: opts.limit,
+                sinceSeq: opts.sinceSeq,
+                type: opts.type,
+              },
+              { defaultLimit: 25 },
+            );
+            const bundleTarget = normalizeStabilityBundleTarget(opts.bundle);
+            if (opts.export) {
+              await writeSupportExportFromCli({
+                json: rpcOpts.json,
+                output: opts.output,
+                stabilityBundle: bundleTarget ?? "latest",
+                rpc: rpcOpts,
               });
               return;
             }
+            if (bundleTarget) {
+              const result = await readStabilityBundleTarget(bundleTarget);
+              if (result.status !== "found") {
+                throw new Error(formatBundleError(result));
+              }
+              const snapshot = selectDiagnosticStabilitySnapshot(result.bundle.snapshot, query);
+              if (rpcOpts.json) {
+                defaultRuntime.writeJson({
+                  path: result.path,
+                  mtimeMs: result.mtimeMs,
+                  bundle: {
+                    ...result.bundle,
+                    snapshot,
+                  },
+                });
+                return;
+              }
+              const rich = isRich();
+              for (const line of renderStabilityBundleSummary({
+                bundle: result.bundle,
+                path: result.path,
+                rich,
+                snapshot,
+              })) {
+                defaultRuntime.log(line);
+              }
+              return;
+            }
+
+            const result = await callGatewayCli("diagnostics.stability", rpcOpts, {
+              limit: query.limit,
+              ...(query.type ? { type: query.type } : {}),
+              ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
+            });
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
+            }
             const rich = isRich();
-            for (const line of renderStabilityBundleSummary({
-              bundle: result.bundle,
-              path: result.path,
+            for (const line of renderStabilitySummary(
+              result as DiagnosticStabilitySnapshot,
               rich,
-              snapshot,
-            })) {
+            )) {
               defaultRuntime.log(line);
             }
-            return;
-          }
-
-          const result = await callGatewayCli("diagnostics.stability", rpcOpts, {
-            limit: query.limit,
-            ...(query.type ? { type: query.type } : {}),
-            ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
-          });
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          for (const line of renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich)) {
-            defaultRuntime.log(line);
-          }
-        }, "Gateway stability failed");
+          },
+          "Gateway stability failed",
+          { json: Boolean(opts.json) },
+        );
       }),
   );
 
@@ -679,6 +771,7 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--port <port>", "Local Gateway port")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
@@ -690,7 +783,13 @@ export function registerGatewayCli(program: Command) {
       await runGatewayCommand(async () => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
         const { gatewayStatusCommand } = await loadGatewayStatusModule();
-        await gatewayStatusCommand(rpcOpts, defaultRuntime);
+        await gatewayStatusCommand(
+          {
+            ...rpcOpts,
+            port: opts.port ?? inheritOptionFromParent(command, "port"),
+          },
+          defaultRuntime,
+        );
       });
     });
 

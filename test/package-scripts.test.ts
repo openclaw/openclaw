@@ -125,6 +125,23 @@ describe("package scripts", () => {
     );
   });
 
+  it("gives the plugin SDK usage scan enough heap for repository-wide analysis", () => {
+    expect(readPackageJson().scripts["plugin-sdk:usage"]).toBe(
+      "node --max-old-space-size=8192 --import tsx scripts/analyze-plugin-sdk-usage.ts",
+    );
+  });
+
+  it("restores plugin SDK root alias before strict smoke export checks", () => {
+    const script = readPackageJson().scripts["build:plugin-sdk:strict-smoke"];
+    const tsdownIndex = script.indexOf("node scripts/tsdown-build.mjs");
+    const copyRootAliasIndex = script.indexOf("node scripts/copy-plugin-sdk-root-alias.mjs");
+    const checkExportsIndex = script.indexOf("node scripts/check-plugin-sdk-exports.mjs");
+
+    expect(tsdownIndex).toBeGreaterThanOrEqual(0);
+    expect(copyRootAliasIndex).toBeGreaterThan(tsdownIndex);
+    expect(copyRootAliasIndex).toBeLessThan(checkExportsIndex);
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });

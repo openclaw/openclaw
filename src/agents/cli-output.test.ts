@@ -5,11 +5,144 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  parseCliOutput,
+  supportsCliJsonlToolEvents,
+  type CliToolResultDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
+describe("supportsCliJsonlToolEvents", () => {
+  it.each([
+    ["Claude provider", { command: "claude", output: "jsonl" as const }, "claude-cli", true],
+    [
+      "explicit Claude dialect",
+      { command: "custom", output: "jsonl" as const, jsonlDialect: "claude-stream-json" as const },
+      "custom-cli",
+      true,
+    ],
+    ["Gemini provider", { command: "gemini", output: "jsonl" as const }, "google-gemini-cli", true],
+    [
+      "explicit Gemini dialect",
+      { command: "custom", output: "jsonl" as const, jsonlDialect: "gemini-stream-json" as const },
+      "custom-cli",
+      true,
+    ],
+    ["generic JSONL", { command: "custom", output: "jsonl" as const }, "custom-cli", false],
+  ])("%s: %s", (_name, backend, providerId, expected) => {
+    expect(supportsCliJsonlToolEvents({ backend, providerId })).toBe(expected);
+  });
+});
+
 describe("parseCliJson", () => {
+  it("classifies Claude is_error JSON results as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        result: 'API Error: 400 {"error":{"message":"Bad request"}}',
+      }),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "Bad request",
+    });
+  });
+
+  it("classifies generic is_error JSON results as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        is_error: true,
+        result: "429 rate limit exceeded",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "429 rate limit exceeded",
+    });
+  });
+
+  it("keeps successful JSON result message payloads as assistant text", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        message: "done",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("does not classify null JSON result error fields as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        error: null,
+        message: "done",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
+  it("classifies JSON status error result payloads as provider errors", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        type: "result",
+        status: "error",
+        result: "rate limit",
+      }),
+      {
+        command: "custom",
+        output: "json",
+      },
+      "custom-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "rate limit",
+    });
+  });
+
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
     const result = parseCliJson(
       [
@@ -287,6 +420,250 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("parses Gemini stream-json message and result events", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "init",
+          timestamp: "2026-06-16T19:36:46.000Z",
+          session_id: "gemini-session-123",
+          model: "gemini-3.1-pro-preview",
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          role: "assistant",
+          content: "Gemini says ",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          role: "assistant",
+          content: "hello",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "success",
+          stats: {
+            total_tokens: 21,
+            input_tokens: 13,
+            output_tokens: 5,
+            cached: 8,
+            input: 5,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "Gemini says hello",
+      sessionId: "gemini-session-123",
+      usage: {
+        input: 5,
+        output: 5,
+        cacheRead: 8,
+        cacheWrite: undefined,
+        total: 21,
+      },
+    });
+  });
+
+  it("keeps Gemini tool-only stream-json output structured instead of raw JSONL", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "init",
+          timestamp: "2026-06-16T19:36:46.000Z",
+          session_id: "gemini-session-123",
+          model: "gemini-3.1-pro-preview",
+        }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          tool_name: "mcp_openclaw_create_goal",
+          tool_id: "tool-1",
+          parameters: { objective: "Update files" },
+        }),
+        JSON.stringify({
+          type: "tool_result",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          tool_id: "tool-1",
+          status: "success",
+          output: "created",
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "success",
+          stats: { total_tokens: 2, input_tokens: 1, output_tokens: 1 },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "gemini-session-123",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 2,
+      },
+    });
+  });
+
+  it("parses Gemini stream-json result errors as provider errors", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          role: "assistant",
+          content: "partial output",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          error: { message: "Gemini stream failed" },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "Gemini stream failed",
+    });
+  });
+
+  it("keeps detailed Gemini stream-json error events over generic result errors", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "error",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          severity: "error",
+          message: "Invalid stream payload",
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          stats: { total_tokens: 1 },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: {
+        input: undefined,
+        output: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 1,
+      },
+      errorText: "Invalid stream payload",
+    });
+  });
+
+  it("keeps detailed Gemini stream-json result errors over generic error events", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "error",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          severity: "error",
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          error: { message: "Final Gemini failure" },
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result?.errorText).toBe("Final Gemini failure");
+  });
+
+  it("does not treat Gemini stream-json warning events as provider errors", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "error",
+          timestamp: "2026-06-16T19:36:46.000Z",
+          severity: "warning",
+          message: "Loop detected, stopping execution",
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          role: "assistant",
+          content: "final output",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "success",
+        }),
+      ].join("\n"),
+      {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      "google-gemini-cli",
+    );
+
+    expect(result).toEqual({
+      text: "final output",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
   it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
     const result = parseCliJsonl(
       [
@@ -484,6 +861,103 @@ describe("parseCliJsonl", () => {
 
     expect(result).toBe(message);
   });
+
+  it("classifies Claude is_error stream-json results as provider errors", () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    const result = parseCliJsonl(
+      jsonl,
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-api-error",
+      usage: undefined,
+      errorText: message,
+    });
+  });
+
+  it("uses Claude error subtypes when result text is absent", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "error_max_turns",
+        session_id: "session-max-turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-max-turns",
+      usage: undefined,
+      errorText: "Claude CLI result subtype error_max_turns.",
+    });
+  });
+});
+
+describe("parseCliOutput", () => {
+  it("uses streamed Claude assistant text when the result envelope is missing", () => {
+    const raw = [
+      JSON.stringify({ type: "init", session_id: "session-stream-missing-result" }),
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          delta: { type: "text_delta", text: "partial answer" },
+        },
+      }),
+    ].join("\n");
+
+    const result = parseCliOutput({
+      raw,
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "partial answer",
+      sessionId: "session-stream-missing-result",
+      usage: undefined,
+    });
+  });
+
+  it("fails stream-json output without result or assistant text instead of returning raw JSONL", () => {
+    const raw = JSON.stringify({ type: "init", session_id: "session-empty" });
+
+    const result = parseCliOutput({
+      raw,
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "session-empty",
+      usage: undefined,
+      errorText: "CLI stream-json output ended without a result event.",
+    });
+  });
 });
 
 describe("createCliJsonlStreamingParser", () => {
@@ -517,6 +991,256 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+
+  it("uses streamed Claude assistant text when no result envelope arrives", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-stream-no-result" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "streamed answer" },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "streamed answer",
+      sessionId: "session-stream-no-result",
+      usage: undefined,
+    });
+  });
+
+  it("reports an output-limit error and ignores later chunks", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        reliability: { outputLimits: { maxTurnRawChars: 1024 } },
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push("x".repeat(1025));
+    parser.push(`${JSON.stringify({ type: "result", result: "late" })}\n`);
+    parser.finish();
+
+    expect(parser.getErrorText()).toBe(
+      "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
+    );
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "CLI JSONL output exceeded 1024 characters; refusing to parse output.",
+    });
+  });
+
+  it("streams Gemini message deltas and tool events", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const starts: CliToolUseStartDelta[] = [];
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "google-gemini-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "init",
+          timestamp: "2026-06-16T19:36:46.000Z",
+          session_id: "gemini-session-stream",
+          model: "gemini-3.1-pro-preview",
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          role: "assistant",
+          content: "Checking tools. ",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "tool_use",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          tool_name: "mcp_openclaw_create_goal",
+          tool_id: "tool-1",
+          parameters: { objective: "Update files" },
+        }),
+        JSON.stringify({
+          type: "tool_result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          tool_id: "tool-1",
+          status: "success",
+          output: "created",
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:50.000Z",
+          role: "assistant",
+          content: "Done.",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:51.000Z",
+          status: "success",
+          stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      {
+        text: "Checking tools. ",
+        delta: "Checking tools. ",
+        sessionId: "gemini-session-stream",
+        usage: undefined,
+      },
+      {
+        text: "Checking tools. Done.",
+        delta: "Done.",
+        sessionId: "gemini-session-stream",
+        usage: undefined,
+      },
+    ]);
+    expect(starts).toEqual([
+      {
+        toolCallId: "tool-1",
+        name: "mcp_openclaw_create_goal",
+        args: { objective: "Update files" },
+      },
+    ]);
+    expect(results).toEqual([
+      { toolCallId: "tool-1", name: "mcp_openclaw_create_goal", isError: false, result: "created" },
+    ]);
+    expect(parser.getOutput()).toEqual({
+      text: "Checking tools. Done.",
+      sessionId: "gemini-session-stream",
+      usage: {
+        input: 4,
+        output: 5,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 9,
+      },
+    });
+  });
+
+  it("streams Gemini result errors as provider errors", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      providerId: "google-gemini-cli",
+      onAssistantDelta: (delta) => deltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-06-16T19:36:47.000Z",
+          role: "assistant",
+          content: "partial output",
+          delta: true,
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          error: { message: "Gemini stream failed" },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      {
+        text: "partial output",
+        delta: "partial output",
+        sessionId: undefined,
+        usage: undefined,
+      },
+    ]);
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "Gemini stream failed",
+    });
+  });
+
+  it("streams detailed Gemini error events over generic result errors", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "gemini",
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+      },
+      providerId: "google-gemini-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "error",
+          timestamp: "2026-06-16T19:36:48.000Z",
+          severity: "error",
+          message: "Invalid stream payload",
+        }),
+        JSON.stringify({
+          type: "result",
+          timestamp: "2026-06-16T19:36:49.000Z",
+          status: "error",
+          stats: { total_tokens: 1 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: {
+        input: undefined,
+        output: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 1,
+      },
+      errorText: "Invalid stream payload",
+    });
   });
 
   it("ignores cumulative usage from result events to avoid cache_read inflation", () => {
@@ -905,7 +1629,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -954,7 +1677,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -990,7 +1712,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([{ text: "Final answer.", delta: "Final answer." }]);
   });
 
-  it("drops Claude commentary text when classification is enabled without delivery", () => {
+  it("keeps pre-tool text in assistant deltas when no commentary consumer is wired", () => {
     const deltas: Array<{ text: string; delta: string }> = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
@@ -1000,7 +1722,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: (delta) => deltas.push({ text: delta.text, delta: delta.delta }),
     });
 
@@ -1026,7 +1747,9 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(deltas).toEqual([]);
+    expect(deltas).toEqual([
+      { text: "Let me inspect the repo.", delta: "Let me inspect the repo." },
+    ]);
   });
 
   it("does not fire onCommentaryText when no text precedes tool_use", () => {
@@ -1039,7 +1762,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: () => undefined,
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -1072,7 +1794,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: () => undefined,
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
@@ -1120,7 +1841,6 @@ describe("createCliJsonlStreamingParser", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      classifyCommentaryText: true,
       onAssistantDelta: () => undefined,
       onCommentaryText: (text) => commentaryTexts.push(text),
     });

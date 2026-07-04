@@ -1,11 +1,13 @@
 // Assertions for upgrade-survivor E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 
 const command = process.argv[2];
 const SCENARIOS = new Set([
   "base",
+  "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
   "channel-post-core-restore",
@@ -123,9 +125,16 @@ function seedLegacySessionMetadata(stateDir) {
       lastTo: "CUPGRADE",
     },
   });
-  write(path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`), '{"type":"main"}\n');
-  write(path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`), '{"type":"direct"}\n');
-  write(path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`), '{"type":"group"}\n');
+  for (const sessionId of [
+    LEGACY_SESSION_MAIN_ID,
+    LEGACY_SESSION_DIRECT_ID,
+    LEGACY_SESSION_GROUP_ID,
+  ]) {
+    write(
+      path.join(legacySessionsDir, `${sessionId}.jsonl`),
+      `${JSON.stringify({ type: "session", id: sessionId })}\n`,
+    );
+  }
 }
 
 function getScenario() {
@@ -304,6 +313,16 @@ function assertConfigSurvived() {
     }
   }
 
+  if (hasCoverage(coverage) && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
+    const pluginAllow = config.plugins?.allow ?? [];
+    assert(pluginAllow.includes("acpx"), "ACPX plugin allow entry missing");
+    assert(config.plugins?.entries?.acpx?.enabled === true, "ACPX plugin entry changed");
+    assert(
+      config.plugins?.entries?.acpx?.config?.openClawToolsMcpBridge === true,
+      "ACPX OpenClaw tools bridge config changed",
+    );
+  }
+
   if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "configured install discord allow entry missing");
@@ -474,8 +493,7 @@ function assertSessionMetadataMigrated(stateDir) {
     );
   }
 
-  assert(fs.existsSync(targetStorePath), `agent session store missing: ${targetStorePath}`);
-  const store = readJson(targetStorePath);
+  const store = readMigratedSessionStore(stateDir, targetStorePath);
   const main = store["agent:main:main"];
   const direct = store["agent:main:+15551234567"];
   const group = store["agent:main:slack:channel:cupgrade"];
@@ -502,6 +520,33 @@ function assertSessionMetadataMigrated(stateDir) {
     main.skillsSnapshot?.resolvedSkills === undefined,
     "heavy resolvedSkills cache was persisted into migrated session metadata",
   );
+}
+
+function readMigratedSessionStore(stateDir, targetStorePath) {
+  if (fs.existsSync(targetStorePath)) {
+    return readJson(targetStorePath);
+  }
+
+  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  assert(fs.existsSync(dbPath), `agent session store missing: ${targetStorePath} or ${dbPath}`);
+
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const rows = db
+      .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
+      .all("session_entries");
+    const store = {};
+    for (const row of rows) {
+      if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
+        continue;
+      }
+      store[row.key] = JSON.parse(row.value_json);
+    }
+    return store;
+  } finally {
+    db?.close();
+  }
 }
 
 function readInstalledPluginIndex() {

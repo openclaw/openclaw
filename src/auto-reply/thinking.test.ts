@@ -25,6 +25,8 @@ const {
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
   resolveThinkingDefaultForModel,
+  resolveMessagesResponseUsageDefault,
+  resolveEffectiveResponseUsage,
 } = await import("./thinking.js");
 
 beforeEach(() => {
@@ -310,6 +312,133 @@ describe("listThinkingLevels", () => {
         catalog,
       }),
     ).toBe("high");
+  });
+
+  it("exposes Claude Opus xhigh on custom anthropic-messages providers without a plugin profile", () => {
+    // Regression for openclaw#91975: a renamed provider serving Claude Opus over
+    // anthropic-messages used to fall back to a base profile (no xhigh) and silently
+    // clamp `--thinking xhigh` to `off`.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "adaptive",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("xhigh");
+  });
+
+  it("does not invent xhigh for non-Claude models on anthropic-messages routes", () => {
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("intentionally suppresses compat-driven xhigh for non-Claude anthropic-messages rows", () => {
+    // Even when the catalog explicitly advertises xhigh via compat, a non-Claude
+    // model on the anthropic-messages transport stays on the Claude base set.
+    // The transport itself doesn't carry a generic xhigh contract — only Claude
+    // families do — so the catalog signal is intentionally suppressed here.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).not.toContain(
+      "xhigh",
+    );
+  });
+
+  it("does not infer the Claude profile without an anthropic-messages catalog row", () => {
+    // Same provider id, but the catalog row says openai-completions — must NOT
+    // grant Claude levels to a non-Anthropic transport.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "openai-completions",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("matches native Anthropic max parity for adaptive Claude on custom anthropic-messages providers", () => {
+    // Adaptive Claude families (e.g. claude-sonnet-4-6) take the adaptive-default
+    // branch in resolveClaudeThinkingProfile, which only exposes `max` when
+    // includeNativeMax is set. The fallback must pass the same option the
+    // bundled anthropic plugin uses, otherwise custom providers silently lose
+    // `max` parity with the native Anthropic policy.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-sonnet-4-6", catalog)).toContain("max");
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-sonnet-4-6",
+        level: "max",
+        catalog,
+      }),
+    ).toBe(true);
   });
 
   it("preserves provider-specific profiles for Fable Messages routes", () => {
@@ -641,6 +770,27 @@ describe("resolveThinkingDefaultForModel", () => {
       }),
     ).toBe("off");
   });
+
+  it("respects provider-declared 'off' default for reasoning-capable models", () => {
+    // Providers like Ollama declare defaultLevel:"off" even for reasoning=true models
+    // because thinking must be explicitly opted in, not activated by the global default.
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "ollama"
+        ? {
+            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+            defaultLevel: "off",
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "ollama",
+        model: "gemma4",
+        catalog: [{ provider: "ollama", id: "gemma4", reasoning: true }],
+      }),
+    ).toBe("off");
+  });
 });
 
 describe("normalizeReasoningLevel", () => {
@@ -657,5 +807,73 @@ describe("normalizeReasoningLevel", () => {
   it("accepts stream", () => {
     expect(normalizeReasoningLevel("stream")).toBe("stream");
     expect(normalizeReasoningLevel("streaming")).toBe("stream");
+  });
+});
+
+describe("resolveMessagesResponseUsageDefault", () => {
+  it("returns undefined when unset (preserves off-by-default behavior)", () => {
+    expect(resolveMessagesResponseUsageDefault(undefined)).toBeUndefined();
+    expect(resolveMessagesResponseUsageDefault(undefined, "discord")).toBeUndefined();
+  });
+
+  it("returns a bare string default for any channel", () => {
+    expect(resolveMessagesResponseUsageDefault("full")).toBe("full");
+    expect(resolveMessagesResponseUsageDefault("full", "telegram")).toBe("full");
+  });
+
+  it("resolves the channel entry from a map", () => {
+    const cfg = { default: "off", discord: "full", telegram: "tokens" } as const;
+    expect(resolveMessagesResponseUsageDefault(cfg, "discord")).toBe("full");
+    expect(resolveMessagesResponseUsageDefault(cfg, "telegram")).toBe("tokens");
+  });
+
+  it("falls back to default for an unmapped channel", () => {
+    const cfg = { default: "tokens", discord: "full" } as const;
+    expect(resolveMessagesResponseUsageDefault(cfg, "whatsapp")).toBe("tokens");
+  });
+
+  it("returns undefined for a map with neither the channel nor a default", () => {
+    expect(resolveMessagesResponseUsageDefault({ discord: "full" }, "telegram")).toBeUndefined();
+  });
+});
+
+describe("resolveEffectiveResponseUsage", () => {
+  it("returns off when session is unset and no config is provided", () => {
+    expect(resolveEffectiveResponseUsage(undefined, undefined)).toBe("off");
+    expect(resolveEffectiveResponseUsage(null, undefined)).toBe("off");
+  });
+
+  it("applies config default when session is unset", () => {
+    expect(resolveEffectiveResponseUsage(undefined, "tokens")).toBe("tokens");
+    expect(resolveEffectiveResponseUsage(undefined, "full")).toBe("full");
+  });
+
+  it("applies per-channel config entry when session is unset", () => {
+    const cfg = { default: "off", discord: "full", telegram: "tokens" } as const;
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "discord")).toBe("full");
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "telegram")).toBe("tokens");
+    // Unknown channel falls back to config default
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "whatsapp")).toBe("off");
+  });
+
+  it("session explicit off overrides any config default", () => {
+    // Explicit "off" is stored and wins — non-off config default cannot re-enable it.
+    expect(resolveEffectiveResponseUsage("off", "tokens")).toBe("off");
+    expect(resolveEffectiveResponseUsage("off", "full")).toBe("off");
+    expect(resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord")).toBe("off");
+  });
+
+  it("session explicit on value overrides config default", () => {
+    expect(resolveEffectiveResponseUsage("tokens", "full")).toBe("tokens");
+    expect(resolveEffectiveResponseUsage("full", "off")).toBe("full");
+  });
+
+  it("unset (undefined/null) falls through to config; explicit off does not", () => {
+    // These two are distinct states:
+    // - undefined = unset/inherit → gets config default
+    // - "off"     = explicit off  → stays off
+    const cfg = "tokens" as const;
+    expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
+    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off");        // explicit off persists
   });
 });

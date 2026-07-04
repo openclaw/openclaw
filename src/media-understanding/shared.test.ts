@@ -1,5 +1,5 @@
 // Shared provider helper tests cover deadlines, guarded fetch policy, HTTP
-// config, multipart transcription, and error response parsing.
+// config, and multipart transcription.
 import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
@@ -40,9 +40,9 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
-  readErrorResponse,
-  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+  resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "./shared.js";
 
@@ -538,6 +538,30 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
+  it("keeps configured-origin trust eligibility internal to core callers", () => {
+    const custom = resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: "https://models.internal/v1",
+      defaultBaseUrl: "https://api.example.com/v1",
+      provider: "example",
+    });
+    const deniedLocal = resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: "http://127.0.0.1:11434/v1",
+      defaultBaseUrl: "https://api.example.com/v1",
+      provider: "example",
+      request: { allowPrivateNetwork: false },
+    });
+
+    expect(custom.trustConfiguredBaseUrlOrigin).toBe(true);
+    expect(deniedLocal.trustConfiguredBaseUrlOrigin).toBe(false);
+    expect(
+      resolveProviderHttpRequestConfig({
+        baseUrl: "https://models.internal/v1",
+        defaultBaseUrl: "https://api.example.com/v1",
+        provider: "example",
+      }),
+    ).not.toHaveProperty("trustConfiguredBaseUrlOrigin");
+  });
+
   it("surfaces dispatcher policy for explicit proxy and mTLS transport overrides", () => {
     const resolved = resolveProviderHttpRequestConfig({
       baseUrl: "https://api.deepgram.com/v1",
@@ -579,32 +603,6 @@ describe("resolveProviderHttpRequestConfig", () => {
         defaultBaseUrl: "   ",
       }),
     ).toThrow("Missing baseUrl");
-  });
-});
-
-describe("readErrorResponse", () => {
-  it("caps streamed error bodies instead of buffering the whole response", async () => {
-    const encoder = new TextEncoder();
-    let reads = 0;
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          reads += 1;
-          controller.enqueue(encoder.encode("a".repeat(2048)));
-          if (reads >= 10) {
-            controller.close();
-          }
-        },
-      }),
-      {
-        status: 500,
-      },
-    );
-
-    const detail = await readErrorResponse(response);
-
-    expect(detail).toBe(`${"a".repeat(300)}…`);
-    expect(reads).toBe(2);
   });
 });
 

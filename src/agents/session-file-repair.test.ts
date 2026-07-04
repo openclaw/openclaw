@@ -6,11 +6,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  BLANK_USER_FALLBACK_TEXT,
-  CORRUPTED_IMAGE_FALLBACK_TEXT,
-  repairSessionFileIfNeeded,
-} from "./session-file-repair.js";
+import { repairSessionFileIfNeeded } from "./session-file-repair.js";
+
+const BLANK_USER_FALLBACK_TEXT = "(continue)";
+const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 function buildSessionHeaderAndMessage() {
   const header = {
@@ -31,6 +30,17 @@ function buildSessionHeaderAndMessage() {
 }
 
 const tempDirs: string[] = [];
+
+async function readTrustedSnapshot(file: string) {
+  const stat = await fs.stat(file, { bigint: true });
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+  };
+}
 
 async function createTempSessionPath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-repair-"));
@@ -76,6 +86,7 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
+    expect(result.validatedSnapshot).toEqual(await readTrustedSnapshot(file));
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired
@@ -134,6 +145,143 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(false);
     expect(result.droppedLines).toBe(0);
+  });
+
+  it("validates only trusted appended entries after a clean repair pass", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    await fs.writeFile(file, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`, "utf-8");
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+    try {
+      const initial = await repairSessionFileIfNeeded({ sessionFile: file });
+      expect(parseCount).toBe(2);
+      expect(initial.validatedSnapshot).toEqual(await readTrustedSnapshot(file));
+
+      parseCount = 0;
+      await fs.appendFile(
+        file,
+        `${JSON.stringify({
+          type: "message",
+          id: "msg-2",
+          parentId: message.id,
+          timestamp: new Date().toISOString(),
+          message: { role: "assistant", content: "hello back" },
+        })}\n`,
+        "utf-8",
+      );
+      const trustedSnapshot = await readTrustedSnapshot(file);
+      const result = await repairSessionFileIfNeeded({
+        sessionFile: file,
+        trustedSnapshot,
+      });
+
+      expect(result).toMatchObject({ repaired: false, droppedLines: 0 });
+      expect(result.validatedSnapshot).toEqual(trustedSnapshot);
+      expect(parseCount).toBe(1);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  it("falls back to full repair when a trusted append needs rewriting", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    await fs.writeFile(file, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`, "utf-8");
+    await repairSessionFileIfNeeded({ sessionFile: file });
+    await fs.appendFile(
+      file,
+      `${JSON.stringify({
+        type: "message",
+        id: "msg-2",
+        parentId: message.id,
+        timestamp: new Date().toISOString(),
+        message: { role: "assistant", content: [], stopReason: "error" },
+      })}\n`,
+      "utf-8",
+    );
+    const trustedSnapshot = await readTrustedSnapshot(file);
+
+    const result = await repairSessionFileIfNeeded({
+      sessionFile: file,
+      trustedSnapshot,
+    });
+
+    expect(result).toMatchObject({ repaired: true, rewrittenAssistantMessages: 1 });
+    expect(await fs.readFile(file, "utf-8")).toContain(
+      "[assistant turn failed before producing content]",
+    );
+  });
+
+  it("rejects incremental repair when the trusted fingerprint becomes stale", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+    await repairSessionFileIfNeeded({ sessionFile: file });
+    const trustedSnapshot = await readTrustedSnapshot(file);
+
+    const invalidMessage = {
+      ...message,
+      message: { role: null, content: "invalid prefix replacement" },
+    };
+    const appendedMessage = {
+      ...message,
+      id: "msg-2",
+      parentId: message.id,
+      message: { role: "assistant", content: "valid tail" },
+    };
+    await fs.writeFile(
+      file,
+      `${JSON.stringify(header)}\n${JSON.stringify(invalidMessage)}\n${JSON.stringify(appendedMessage)}\n`,
+      "utf-8",
+    );
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, trustedSnapshot });
+
+    expect(result).toMatchObject({ repaired: true, droppedLines: 1 });
+  });
+
+  it("does not retain oversized tool-result ID indexes", async () => {
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const entries = Array.from({ length: 4_097 }, (_, index) => ({
+      type: "message",
+      id: `result-${index}`,
+      parentId: index > 0 ? `result-${index - 1}` : null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: `call-${index}`,
+        toolName: "test",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    }));
+    await fs.writeFile(
+      file,
+      `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf-8",
+    );
+    await repairSessionFileIfNeeded({ sessionFile: file });
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = function countedParse(...args: Parameters<typeof JSON.parse>) {
+      parseCount += 1;
+      return originalParse.apply(originalParse, args);
+    } as typeof JSON.parse;
+    try {
+      await repairSessionFileIfNeeded({ sessionFile: file });
+      expect(parseCount).toBe(entries.length + 1);
+    } finally {
+      JSON.parse = originalParse;
+    }
   });
 
   it("warns and skips repair when the session header is invalid", async () => {
@@ -706,6 +854,66 @@ describe("repairSessionFileIfNeeded", () => {
     expect(inserted.message.role).toBe("toolResult");
     expect(inserted.message.toolCallId).toBe("call_process|fc_1");
     expect(inserted.message.toolName).toBe("process");
+    expect(inserted.message.isError).toBe(true);
+    expect(inserted.message.content[0].text).toBe("aborted");
+    expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
+  });
+
+  it("inserts missing Responses message-tool results before delivery mirrors", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-message-tool",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "oca",
+        model: "gpt-5.5",
+        api: "openai-responses",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_message|fc_message",
+            name: "message",
+            arguments: { action: "send", message: "visible reply" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    };
+    const deliveryMirror = {
+      type: "message",
+      id: "msg-delivery-mirror",
+      parentId: "msg-asst-message-tool",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: "openai-responses",
+        content: [{ type: "text", text: "visible reply" }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(deliveryMirror)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.insertedToolResults).toBe(1);
+    await expectNoRetainedBackup(file, result);
+
+    const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
+    expect(lines).toHaveLength(5);
+    const inserted = JSON.parse(lines[3]);
+    expect(inserted.type).toBe("message");
+    expect(inserted.parentId).toBe("msg-asst-message-tool");
+    expect(inserted.message.role).toBe("toolResult");
+    expect(inserted.message.toolCallId).toBe("call_message|fc_message");
+    expect(inserted.message.toolName).toBe("message");
     expect(inserted.message.isError).toBe(true);
     expect(inserted.message.content[0].text).toBe("aborted");
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);

@@ -1,7 +1,7 @@
 // Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import {
@@ -26,10 +26,10 @@ const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
 const linkedSessionName = "Implementation session";
 
-let browser: Browser;
 let server: ControlUiE2eServer;
 
 type RecordedPage = {
+  browser: Browser;
   context: BrowserContext;
   page: Page;
   rawVideoDir: string;
@@ -49,6 +49,27 @@ function requireRecord(value: unknown): Record<string, unknown> {
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
   return requireRecord(request.params);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function workboardField(scope: Page | Locator, label: string) {
+  return scope.locator(".workboard-field").filter({
+    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
+  });
+}
+
+async function chooseWorkboardSelectOption(
+  scope: Page | Locator,
+  label: string,
+  optionLabel: string,
+): Promise<void> {
+  const field = workboardField(scope, label);
+  expect(await field.count()).toBe(1);
+  await field.locator(".workboard-select__trigger").click();
+  await field.getByRole("option", { exact: true, name: optionLabel }).click();
 }
 
 async function waitForRequests(
@@ -194,18 +215,29 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
   await rm(rawVideoDir, { force: true, recursive: true });
   await mkdir(rawVideoDir, { recursive: true });
-  const context = await browser.newContext({
-    locale: "en-US",
-    recordVideo: {
-      dir: rawVideoDir,
-      size: viewport,
-    },
-    serviceWorkers: "block",
-    viewport,
-  });
-  const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
-  return { context, page, rawVideoDir };
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  let context: BrowserContext | undefined;
+  let page: Page | undefined;
+  try {
+    context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: {
+        dir: rawVideoDir,
+        size: viewport,
+      },
+      serviceWorkers: "block",
+      viewport,
+    });
+    page = await context.newPage();
+    page.setDefaultTimeout(10_000);
+    return { browser, context, page, rawVideoDir };
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await context?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    await rm(rawVideoDir, { force: true, recursive: true });
+    throw error;
+  }
 }
 
 async function captureScreenshot(
@@ -234,6 +266,7 @@ async function closeRecordedPage(
     await copyFile(rawVideoPath, videoPath);
     artifacts.videos.push(videoPath);
   } finally {
+    await recorded.browser.close().catch(() => {});
     await rm(recorded.rawVideoDir, { force: true, recursive: true });
   }
 }
@@ -246,11 +279,9 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       );
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 
   afterAll(async () => {
-    await browser?.close();
     await server?.close();
   });
 
@@ -294,20 +325,40 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
     });
 
     const writable = await newRecordedPage("workboard-writable");
-    const writableGateway = await installMockGateway(writable.page, {
-      methodResponses: {
-        "config.get": workboardConfigSnapshot(),
-        "sessions.list": sessionsListResponse([sessionRow()]),
-        "tasks.list": { nextCursor: null, tasks: [] },
-        "workboard.cards.list": cardsListResponse([]),
-      },
-    });
-
     try {
+      const writableGateway = await installMockGateway(writable.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([sessionRow()]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([]),
+        },
+      });
       const response = await writable.page.goto(`${server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
+
+      const prioritySelect = writable.page
+        .locator(".workboard-toolbar__filters .workboard-select")
+        .nth(1);
+      const priorityTrigger = prioritySelect.locator(".workboard-select__trigger");
+      await priorityTrigger.focus();
+      await writable.page.keyboard.press("ArrowDown");
+      expect(await writable.page.locator(":focus").textContent()).toContain("All priorities");
+      await writable.page.keyboard.press("ArrowDown");
+      expect(await writable.page.locator(":focus").textContent()).toContain("Low");
+      await writable.page.keyboard.press("End");
+      expect(await writable.page.locator(":focus").textContent()).toContain("Urgent");
+      await writable.page.keyboard.press("h");
+      expect(await writable.page.locator(":focus").textContent()).toContain("High");
+      await writable.page.keyboard.press("Enter");
+      expect(await prioritySelect.getAttribute("open")).toBeNull();
+      await writable.page.keyboard.press("Home");
+      await writable.page.keyboard.press("Enter");
+      expect(await prioritySelect.locator(".workboard-select__value").textContent()).toBe(
+        "All priorities",
+      );
 
       await writableGateway.deferNext("workboard.cards.create");
       await writable.page
@@ -317,7 +368,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
       await createDialog.getByLabel("Title").fill(createdCard.title);
       await createDialog.getByLabel("Notes").fill(createdCard.notes ?? "");
-      await createDialog.getByLabel("Session").selectOption(linkedSessionKey);
+      await chooseWorkboardSelectOption(createDialog, "Session", linkedSessionName);
       await createDialog.getByLabel("Labels").fill("ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog");
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
@@ -340,12 +391,12 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
 
       await writableGateway.deferNext("workboard.cards.update");
       await cardInColumn(writable.page, "Todo", createdCard.title)
-        .locator('button[title="Edit card"]')
+        .locator('button[aria-label="Edit card"]')
         .click();
       const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
       await editDialog.getByLabel("Title").fill(editedCard.title);
       await editDialog.getByLabel("Notes").fill(editedCard.notes ?? "");
-      await editDialog.getByLabel("Priority").selectOption("high");
+      await chooseWorkboardSelectOption(editDialog, "Priority", "High");
       await editDialog.getByLabel("Labels").fill("ui, proof, e2e");
       const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
       await editDialog.getByRole("button", { name: /^Save$/u }).click();
@@ -447,19 +498,18 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
     }
 
     const readOnly = await newRecordedPage("workboard-read-only");
-    const readOnlyGateway = await installMockGateway(readOnly.page, {
-      methodResponses: {
-        connect: readOnlyConnectResponse(),
-        "config.get": workboardConfigSnapshot(),
-        "sessions.list": sessionsListResponse([
-          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
-        ]),
-        "tasks.list": { nextCursor: null, tasks: [] },
-        "workboard.cards.list": cardsListResponse([runningCard]),
-      },
-    });
-
     try {
+      const readOnlyGateway = await installMockGateway(readOnly.page, {
+        methodResponses: {
+          connect: readOnlyConnectResponse(),
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([
+            sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
+          ]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([runningCard]),
+        },
+      });
       const response = await readOnly.page.goto(`${server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor({
@@ -492,5 +542,58 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       `${JSON.stringify(artifacts, null, 2)}\n`,
       "utf-8",
     );
+  });
+
+  it("keeps card titles visible when a column overflows its height", async () => {
+    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const crowdedColumnCardCount = 8;
+    const overflowTitle = (index: number) =>
+      `Overflowing backlog card ${index + 1} with a long title that wraps onto two lines`;
+    const crowdedCards = Array.from({ length: crowdedColumnCardCount }, (_, index) =>
+      card({
+        id: `overflow-card-${index + 1}`,
+        notes: "Acceptance: title stays visible while the column scrolls.",
+        position: 1000 + index,
+        status: "todo",
+        title: overflowTitle(index),
+        updatedAt: baseTime + index,
+      }),
+    );
+
+    const recorded = await newRecordedPage("workboard-overflow");
+    try {
+      await installMockGateway(recorded.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([sessionRow()]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse(crowdedCards),
+        },
+      });
+      // Constrain the height so the Todo column must overflow its visible area.
+      await recorded.page.setViewportSize({ height: 720, width: 1400 });
+      const response = await recorded.page.goto(`${server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      const column = statusColumn(recorded.page, "Todo");
+      await column.waitFor({ state: "visible" });
+      await cardInColumn(recorded.page, "Todo", overflowTitle(0)).waitFor({ state: "visible" });
+      await captureScreenshot(recorded.page, artifacts, "09-overflow-column");
+
+      const titleHeights = await column
+        .locator(".workboard-card h3")
+        .evaluateAll((titles) => titles.map((title) => title.getBoundingClientRect().height));
+      expect(titleHeights).toHaveLength(crowdedColumnCardCount);
+      for (const height of titleHeights) {
+        // Squeezed implicit grid rows previously collapsed the line-clamped title to 0px.
+        expect(height).toBeGreaterThan(0);
+      }
+
+      const columnScrolls = await column
+        .locator(".workboard-column__cards")
+        .evaluate((cards) => cards.scrollHeight > cards.clientHeight + 1);
+      expect(columnScrolls).toBe(true);
+    } finally {
+      await closeRecordedPage(recorded, artifacts, "workboard-overflow");
+    }
   });
 });

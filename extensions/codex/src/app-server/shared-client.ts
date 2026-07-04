@@ -2,14 +2,16 @@
  * Owns shared and isolated Codex app-server client startup, auth application,
  * lease tracking, and teardown.
  */
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
+  refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
-import { CodexAppServerClient } from "./client.js";
+import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
   resolveCodexAppServerRuntimeOptions,
@@ -113,26 +115,41 @@ type CodexAppServerClientOptions = {
   abandonSignal?: AbortSignal;
 };
 
+type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
+  authProfileStore?: AuthProfileStore;
+};
+
 type ResolvedCodexAppServerClientStartContext = {
   agentDir: string;
   usesNativeAuth: boolean;
   authProfileId: string | undefined;
+  authProfileStore: AuthProfileStore | undefined;
   startOptions: CodexAppServerStartOptions;
 };
 
 async function resolveCodexAppServerClientStartContext(
-  options?: CodexAppServerClientOptions,
+  options?: IsolatedCodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
   const requestedAuthProfileId =
     options?.authProfileId === null ? undefined : options?.authProfileId;
+  const authProfileStore =
+    !usesNativeAuth && options?.authProfileStore
+      ? resolveCodexAppServerAuthProfileStore({
+          agentDir,
+          authProfileId: requestedAuthProfileId,
+          authProfileStore: options.authProfileStore,
+          config: options.config,
+        })
+      : options?.authProfileStore;
   const authProfileId = usesNativeAuth
     ? undefined
     : resolveCodexAppServerAuthProfileIdForAgent({
         authProfileId: requestedAuthProfileId,
         agentDir,
         config: options?.config,
+        ...(authProfileStore ? { authProfileStore } : {}),
       });
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
@@ -142,8 +159,9 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
+    ...(authProfileStore ? { authProfileStore } : {}),
   });
-  return { agentDir, usesNativeAuth, authProfileId, startOptions };
+  return { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions };
 }
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
@@ -224,27 +242,23 @@ async function acquireSharedCodexAppServerClient(
   const sharedPromise =
     entry.promise ??
     (entry.promise = (async () => {
-      const client = CodexAppServerClient.start(startOptions);
+      const client = await startInitializedCodexAppServerClient({
+        startOptions,
+        agentDir,
+        authProfileId: usesNativeAuth ? null : authProfileId,
+        config: options?.config,
+        onStartedClient: (startedClient) => {
+          entry.client = startedClient;
+          startedClient.setActiveSharedLeaseCountProviderForUnscopedNotifications(
+            () => entry.activeLeases,
+          );
+          options?.onStartedClient?.(startedClient);
+        },
+      });
       entry.client = client;
-      options?.onStartedClient?.(client);
       client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
-      try {
-        await client.initialize();
-        await applyCodexAppServerAuthProfile({
-          client,
-          agentDir,
-          authProfileId: usesNativeAuth ? null : authProfileId,
-          startOptions,
-          config: options?.config,
-        });
-        return client;
-      } catch (error) {
-        // Startup failures happen before callers own the shared client, so close
-        // the child here instead of leaving a rejected daemon attached to stdio.
-        client.close();
-        throw error;
-      }
+      return client;
     })());
   try {
     const client = await withTimeout(
@@ -269,27 +283,114 @@ async function acquireSharedCodexAppServerClient(
 
 /** Starts a non-shared Codex app-server client owned entirely by the caller. */
 export async function createIsolatedCodexAppServerClient(
-  options?: CodexAppServerClientOptions,
+  options?: IsolatedCodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
-  const { agentDir, usesNativeAuth, authProfileId, startOptions } =
+  const { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
-  const client = CodexAppServerClient.start(startOptions);
-  const initialize = client.initialize();
-  try {
-    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
-    await applyCodexAppServerAuthProfile({
-      client,
-      agentDir,
-      authProfileId: usesNativeAuth ? null : authProfileId,
-      startOptions,
-      config: options?.config,
-    });
-    return client;
-  } catch (error) {
-    client.close();
-    void initialize.catch(() => undefined);
-    throw error;
+  return await startInitializedCodexAppServerClient({
+    startOptions,
+    agentDir,
+    authProfileId: usesNativeAuth ? null : authProfileId,
+    authProfileStore,
+    config: options?.config,
+    timeoutMs: options?.timeoutMs,
+    onStartedClient: options?.onStartedClient,
+  });
+}
+
+async function startInitializedCodexAppServerClient(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+  authProfileId: string | null | undefined;
+  authProfileStore?: AuthProfileStore;
+  config?: CodexAppServerClientOptions["config"];
+  timeoutMs?: number;
+  onStartedClient?: (client: CodexAppServerClient) => void;
+}): Promise<CodexAppServerClient> {
+  const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
+  for (let index = 0; index < startOptionsCandidates.length; index += 1) {
+    const startOptions = startOptionsCandidates[index];
+    const client = CodexAppServerClient.start(startOptions);
+    params.onStartedClient?.(client);
+    const initialize = client.initialize();
+    try {
+      await withTimeout(initialize, params.timeoutMs ?? 0, "codex app-server initialize timed out");
+    } catch (error) {
+      client.close();
+      void initialize.catch(() => undefined);
+      if (shouldTryManagedFallbackStartOption(error, startOptions, index, startOptionsCandidates)) {
+        continue;
+      }
+      throw error;
+    }
+
+    if (params.authProfileId) {
+      // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
+      // available whether the profile came from a scoped store or persisted state.
+      client.addRequestHandler(async (request) => {
+        if (request.method !== "account/chatgptAuthTokens/refresh") {
+          return undefined;
+        }
+        return await refreshCodexAppServerAuthTokens({
+          agentDir: params.agentDir,
+          authProfileId: params.authProfileId!,
+          ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+          config: params.config,
+        });
+      });
+    }
+
+    try {
+      await applyCodexAppServerAuthProfile({
+        client,
+        agentDir: params.agentDir,
+        authProfileId: params.authProfileId,
+        startOptions,
+        config: params.config,
+        ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+      });
+      return client;
+    } catch (error) {
+      client.close();
+      throw error;
+    }
   }
+  throw new Error("Managed Codex app-server fallback candidates were exhausted.");
+}
+
+function resolveManagedFallbackStartOptions(
+  startOptions: CodexAppServerStartOptions,
+): CodexAppServerStartOptions[] {
+  const commands = [startOptions.command, ...(startOptions.managedFallbackCommandPaths ?? [])];
+  const candidates: CodexAppServerStartOptions[] = [];
+  for (let index = 0; index < commands.length; index += 1) {
+    const command = commands[index];
+    const managedFallbackCommandPaths = commands.slice(index + 1);
+    const candidate = {
+      ...startOptions,
+      command,
+    };
+    if (managedFallbackCommandPaths.length === 0) {
+      delete candidate.managedFallbackCommandPaths;
+    } else {
+      candidate.managedFallbackCommandPaths = managedFallbackCommandPaths;
+    }
+    candidates.push(candidate);
+  }
+  return candidates;
+}
+
+function shouldTryManagedFallbackStartOption(
+  error: unknown,
+  startOptions: CodexAppServerStartOptions,
+  index: number,
+  startOptionsCandidates: readonly CodexAppServerStartOptions[],
+): boolean {
+  return (
+    startOptions.commandSource === "resolved-managed" &&
+    index < startOptionsCandidates.length - 1 &&
+    isUnsupportedCodexAppServerVersionError(error)
+  );
 }
 
 /** Clears and closes all shared clients for deterministic tests. */

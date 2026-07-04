@@ -14,6 +14,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -22,6 +23,7 @@ import {
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
+import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeApiVirtualFiles,
   createCodeModeNamespaceRuntime,
@@ -150,7 +152,9 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let activeRunReservations = 0;
-let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
+const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
+  cacheRejections: true,
+});
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
@@ -287,37 +291,8 @@ function reserveActiveRunSlot(): () => void {
   };
 }
 
-function toJsonSafe(value: unknown): unknown {
-  if (value === undefined) {
-    return null;
-  }
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
-  } catch {
-    if (value instanceof Error) {
-      return { name: value.name, message: value.message };
-    }
-    if (value === null) {
-      return null;
-    }
-    switch (typeof value) {
-      case "string":
-      case "number":
-      case "boolean":
-        return value;
-      case "bigint":
-      case "symbol":
-      case "function":
-        return String(value);
-      default:
-        return Object.prototype.toString.call(value);
-    }
-  }
-}
-
 function jsonByteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(toJsonSafe(value)) ?? "null", "utf8");
+  return Buffer.byteLength(JSON.stringify(toCodeModeJsonSafe(value)) ?? "null", "utf8");
 }
 
 class CodeModeLimitError extends ToolInputError {
@@ -333,11 +308,22 @@ class CodeModeLimitError extends ToolInputError {
   }
 }
 
+function isRuntimeInterruptedError(error: unknown): boolean {
+  return errorMessage(error) === "interrupted";
+}
+
 function codeModeFailureCode(error: unknown): CodeModeFailureCode {
   if (error instanceof CodeModeLimitError) {
     return error.code;
   }
+  if (isRuntimeInterruptedError(error)) {
+    return "timeout";
+  }
   return error instanceof ToolInputError ? "invalid_input" : "internal_error";
+}
+
+function codeModeFailureMessage(error: unknown): string {
+  return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
 }
 
 function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
@@ -455,8 +441,7 @@ async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
     return typescriptRuntimeForTest;
   }
-  typescriptRuntimePromise ??= import("typescript");
-  return await typescriptRuntimePromise;
+  return await typescriptRuntimeLoader.load();
 }
 
 async function prepareSource(input: {
@@ -533,7 +518,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("describe id must be a string.");
         }
-        value = await params.runtime.describe(id, { includeMcp: false });
+        value = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         break;
       }
       case "call": {
@@ -541,7 +529,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        const described = await params.runtime.describe(id, { includeMcp: false });
+        const described = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
@@ -600,7 +591,7 @@ async function runBridgeRequest(params: {
         break;
       }
     }
-    return { id: params.request.id, ok: true, value: toJsonSafe(value) };
+    return { id: params.request.id, ok: true, value: toCodeModeJsonSafe(value) };
   } catch (error) {
     return { id: params.request.id, ok: false, error: errorMessage(error) };
   }
@@ -634,22 +625,24 @@ function failedCodeModeWorkerResult(
   };
 }
 
-function isQuickJsInterruptedWorkerError(error: unknown): boolean {
-  return String(error) === "interrupted";
-}
-
-function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+function normalizeCodeModeTimeoutResult<
+  T extends { status: string; code?: unknown; error?: unknown },
+>(result: T): T {
   if (
     result.status === "failed" &&
     result.code === "timeout" &&
-    isQuickJsInterruptedWorkerError(result.error)
+    !String(result.error).includes("timeout exceeded")
   ) {
     return {
       ...result,
       error: "code mode timeout exceeded",
-    };
+    } as T;
   }
   return result;
+}
+
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  return normalizeCodeModeTimeoutResult(result);
 }
 
 async function runCodeModeWorker(
@@ -657,10 +650,15 @@ async function runCodeModeWorker(
   timeoutMs: number,
   workerUrl?: URL,
 ): Promise<CodeModeWorkerResult> {
+  const resolvedWorkerUrl = workerUrl ?? codeModeWorkerUrl();
+  const sourceWorkerExecArgv = resolvedWorkerUrl.pathname.endsWith(".ts")
+    ? ["--import", "tsx"]
+    : undefined;
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl ?? codeModeWorkerUrl(), {
+    worker = new Worker(resolvedWorkerUrl, {
       workerData,
+      execArgv: sourceWorkerExecArgv,
     });
   } catch (error) {
     return failedCodeModeWorkerResult(error, "runtime_unavailable");
@@ -878,7 +876,7 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -912,7 +910,7 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -1117,7 +1115,7 @@ async function runWait(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: state.output,
       telemetry: telemetry(state.runtime),
@@ -1158,14 +1156,16 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     ) => {
       const input = readCode(args);
       return jsonResult(
-        await runExec({
-          toolCallId,
-          ctx,
-          code: input.code,
-          language: input.language,
-          signal,
-          onUpdate,
-        }),
+        normalizeCodeModeTimeoutResult(
+          await runExec({
+            toolCallId,
+            ctx,
+            code: input.code,
+            language: input.language,
+            signal,
+            onUpdate,
+          }),
+        ),
       );
     },
   } as AnyAgentTool);
@@ -1183,13 +1183,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
-        await runWait({
-          toolCallId,
-          ctx,
-          runId: readRunId(args),
-          signal,
-          onUpdate,
-        }),
+        normalizeCodeModeTimeoutResult(
+          await runWait({
+            toolCallId,
+            ctx,
+            runId: readRunId(args),
+            signal,
+            onUpdate,
+          }),
+        ),
       ),
   } as AnyAgentTool);
   return [execTool, waitTool];
@@ -1274,7 +1276,8 @@ export const testing = {
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
-  getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
+    typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },

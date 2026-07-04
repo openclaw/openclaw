@@ -1,7 +1,11 @@
 // Control UI module implements app settings behavior.
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { t } from "../i18n/index.ts";
-import { refreshChat } from "./app-chat.ts";
+import {
+  createChatSessionsLoadOverrides,
+  refreshChat,
+  scopedAgentListParamsForSession,
+} from "./app-chat.ts";
 import {
   startLogsPolling,
   startNodesPolling,
@@ -57,10 +61,14 @@ import {
   loadSkillWorkshopProposals,
   type SkillWorkshopState,
 } from "./controllers/skill-workshop.ts";
-import { loadSkills, type SkillsState } from "./controllers/skills.ts";
+import { loadSkills, reconcileSkillsAgentId, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
-import { loadWorkboard } from "./controllers/workboard.ts";
-import { resolveCronJobLastRunStatus } from "./cron-status.ts";
+import {
+  loadWorkboard,
+  stopWorkboardLifecycleRefresh,
+  stopWorkboardPolling,
+} from "./controllers/workboard.ts";
+import { isCronJobActiveFailure } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
@@ -450,6 +458,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
             client: app.client,
             force: true,
             requestUpdate: host.requestUpdate,
+            refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
           }),
         ]);
         break;
@@ -469,6 +478,8 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadCron(host);
         break;
       case "skills":
+        await loadAgents(app);
+        reconcileSkillsAgentId(app, app.agentsList);
         await loadSkills(app);
         break;
       case "skillWorkshop":
@@ -492,6 +503,9 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         ]);
         break;
       case "chat": {
+        // Captured before refreshChat, which seeds a one-row sessionsResult
+        // via applyChatHistorySessionInfo and would mask the missing list.
+        const hadSessionsResult = Boolean(app.sessionsResult);
         try {
           await refreshChat(host as unknown as Parameters<typeof refreshChat>[0], {
             awaitHistory: opts?.chatStartup === true,
@@ -503,6 +517,18 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
           );
         } finally {
           void loadModelAuthStatusState(app).catch(() => undefined);
+          // The sidebar session list is the chat entry point; hydrate the full
+          // list on chat startup and on first entry from tabs that never load
+          // sessions. Uses the chat picker's recency-free overrides so an old
+          // open session is not filtered out of its own list; backgroundHydrate
+          // keeps New Session enabled and the live run state untouched.
+          if (opts?.chatStartup === true || !hadSessionsResult) {
+            void loadSessions(app, {
+              ...createChatSessionsLoadOverrides(app),
+              ...scopedAgentListParamsForSession(app, app.sessionKey),
+              backgroundHydrate: true,
+            }).catch(() => undefined);
+          }
         }
         break;
       }
@@ -709,6 +735,12 @@ function applyTabSelection(
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
   );
+  if (next !== "workboard") {
+    stopWorkboardPolling(host as unknown as Parameters<typeof stopWorkboardPolling>[0]);
+    stopWorkboardLifecycleRefresh(
+      host as unknown as Parameters<typeof stopWorkboardLifecycleRefresh>[0],
+    );
+  }
 
   if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);
@@ -928,7 +960,7 @@ function buildAttentionItems(host: SettingsAppHost) {
   }
 
   const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => resolveCronJobLastRunStatus(j) === "error");
+  const failedCron = cronJobs.filter(isCronJobActiveFailure);
   if (failedCron.length > 0) {
     items.push({
       severity: "error",

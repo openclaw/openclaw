@@ -19,6 +19,7 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -29,6 +30,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -37,7 +39,11 @@ import {
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+  sanitizeToolCallIdsForCloudCodeAssist,
+} from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
   providerRequiresSignedThinking,
@@ -171,71 +177,6 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
-function parseMessageTimestamp(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
-function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
-  let latestCompactionSummaryIndex = -1;
-  let latestCompactionTimestamp: number | null = null;
-  for (let i = 0; i < messages.length; i += 1) {
-    const entry = messages[i];
-    if (entry?.role !== "compactionSummary") {
-      continue;
-    }
-    latestCompactionSummaryIndex = i;
-    latestCompactionTimestamp = parseMessageTimestamp(
-      (entry as { timestamp?: unknown }).timestamp ?? null,
-    );
-  }
-  if (latestCompactionSummaryIndex === -1) {
-    return messages;
-  }
-
-  const out = [...messages];
-  let touched = false;
-  for (let i = 0; i < out.length; i += 1) {
-    const candidate = out[i] as
-      | (AgentMessage & { usage?: unknown; timestamp?: unknown })
-      | undefined;
-    if (!candidate || candidate.role !== "assistant") {
-      continue;
-    }
-    if (!candidate.usage || typeof candidate.usage !== "object") {
-      continue;
-    }
-
-    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
-    const staleByTimestamp =
-      latestCompactionTimestamp !== null &&
-      messageTimestamp !== null &&
-      messageTimestamp <= latestCompactionTimestamp;
-    const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
-    if (!staleByTimestamp && !staleByLegacyOrdering) {
-      continue;
-    }
-
-    // session runtime expects assistant usage to always be present during context
-    // accounting. Keep stale snapshots structurally valid, but zeroed out.
-    const candidateRecord = candidate as unknown as Record<string, unknown>;
-    out[i] = {
-      ...candidateRecord,
-      usage: makeZeroUsageSnapshot(),
-    } as unknown as AgentMessage;
-    touched = true;
-  }
-  return touched ? out : messages;
-}
-
 function sanitizeUserReplayContent(message: AgentMessage): AgentMessage | null {
   if (!message || message.role !== "user") {
     return message;
@@ -361,12 +302,19 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     if (Array.isArray(replayContent)) {
       const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
       if (normalized !== assistantMessage) {
-        if (normalized) {
-          out.push(normalized);
-        }
         touched = true;
-        continue;
+        if (!normalized) {
+          continue;
+        }
+        assistantMessage = normalized as AssistantReplayMessage;
+        replayContent = assistantMessage.content;
       }
+    }
+    if (isReasoningOnlyLengthAssistantTurn(assistantMessage)) {
+      // Token-limited thinking is incomplete provider state. Replaying it can
+      // resend a partial signature, while visible text or tool calls remain useful.
+      touched = true;
+      continue;
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
       // An assistant turn can legitimately end with `content: []` — for
@@ -644,6 +592,78 @@ function isSameModelSnapshot(a: ModelSnapshotEntry, b: ModelSnapshotEntry): bool
   );
 }
 
+function formatOpenAIResponsesReplayInvariantError(params: {
+  reason: "dangling_tool_call" | "orphan_tool_result";
+  toolCallId?: string;
+  messageIndex: number;
+}): Error {
+  const toolCallId = params.toolCallId ? ` toolCallId=${params.toolCallId}` : "";
+  return new Error(
+    `invalid_replay_transcript: OpenAI Responses replay contains ${params.reason}${toolCallId} at message index ${params.messageIndex}`,
+  );
+}
+
+function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): AgentMessage[] {
+  const pending = new Map<string, { messageIndex: number }>();
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    const role = (message as { role?: unknown } | undefined)?.role;
+
+    if (pending.size > 0 && role !== "toolResult") {
+      const [toolCallId, meta] = pending.entries().next().value as [
+        string,
+        { messageIndex: number },
+      ];
+      throw formatOpenAIResponsesReplayInvariantError({
+        reason: "dangling_tool_call",
+        toolCallId,
+        messageIndex: meta.messageIndex,
+      });
+    }
+
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    if (role === "toolResult") {
+      const toolCallId = extractToolResultId(
+        message as Extract<AgentMessage, { role: "toolResult" }>,
+      );
+      if (!toolCallId || !pending.has(toolCallId)) {
+        throw formatOpenAIResponsesReplayInvariantError({
+          reason: "orphan_tool_result",
+          ...(toolCallId ? { toolCallId } : {}),
+          messageIndex: i,
+        });
+      }
+      pending.delete(toolCallId);
+      continue;
+    }
+
+    if (role !== "assistant") {
+      continue;
+    }
+
+    for (const toolCall of extractToolCallsFromAssistant(
+      message as Extract<AgentMessage, { role: "assistant" }>,
+    )) {
+      pending.set(toolCall.id, { messageIndex: i });
+    }
+  }
+
+  if (pending.size > 0) {
+    const [toolCallId, meta] = pending.entries().next().value as [string, { messageIndex: number }];
+    throw formatOpenAIResponsesReplayInvariantError({
+      reason: "dangling_tool_call",
+      toolCallId,
+      messageIndex: meta.messageIndex,
+    });
+  }
+
+  return messages;
+}
+
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -705,6 +725,7 @@ export async function sanitizeSessionHistory(params: {
       sanitizeToolCallIds:
         policy.sanitizeToolCallIds && !allowProviderOwnedThinkingReplay && !isOpenAIResponsesApi,
       toolCallIdMode: policy.toolCallIdMode,
+      duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
@@ -769,6 +790,7 @@ export async function sanitizeSessionHistory(params: {
     policy.sanitizeToolCallIds && policy.toolCallIdMode
       ? sanitizeToolCallIdsForCloudCodeAssist(openAISafeToolCalls, policy.toolCallIdMode, {
           preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: policy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: allowProviderOwnedThinkingReplay,
           allowedToolNames: params.allowedToolNames,
         })
@@ -803,6 +825,19 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  const responsesProviderRepaired =
+    isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
+          erroredAssistantResultPolicy: "drop",
+          // Provider replay hooks run after the core repair pipeline and may
+          // rewrite history. Keep the final Responses invariant guarded by the
+          // same Codex-compatible repair instead of failing on hook output.
+          missingToolResultText: "aborted",
+        })
+      : sanitizedWithProvider;
+  const responsesInvariantChecked = isOpenAIResponsesApi
+    ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
+    : responsesProviderRepaired;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -814,7 +849,7 @@ export async function sanitizeSessionHistory(params: {
   }
 
   if (!policy.applyGoogleTurnOrdering) {
-    return sanitizedWithProvider;
+    return responsesInvariantChecked;
   }
 
   // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
@@ -823,7 +858,10 @@ export async function sanitizeSessionHistory(params: {
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  return sanitizeGoogleTurnOrdering(sanitizedWithProvider);
+  const googleOrdered = sanitizeGoogleTurnOrdering(responsesInvariantChecked);
+  return isOpenAIResponsesApi
+    ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
+    : googleOrdered;
 }
 
 /**
