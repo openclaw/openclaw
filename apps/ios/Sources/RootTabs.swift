@@ -900,6 +900,10 @@ struct RootTabs: View {
                     },
                     onClose: {
                         self.showOnboarding = false
+                    },
+                    onComplete: {
+                        self.selectSidebarDestination(.chat)
+                        self.showOnboarding = false
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)

@@ -3,19 +3,34 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
-private func chatTextMessage(role: String, text: String, timestamp: Double, contentId: String? = nil) -> AnyCodable {
+private func chatTextMessage(
+    role: String,
+    text: String,
+    timestamp: Double,
+    contentId: String? = nil,
+    idempotencyKey: String? = nil) -> AnyCodable
+{
     var content: [String: Any] = ["type": "text", "text": text]
     if let contentId {
         content["id"] = contentId
     }
-    return AnyCodable([
+    var message: [String: Any] = [
         "role": role,
         "content": [content],
         "timestamp": timestamp,
-    ])
+    ]
+    if let idempotencyKey {
+        message["__openclaw"] = ["idempotencyKey": idempotencyKey]
+    }
+    return AnyCodable(message)
 }
 
-private func chatTextModelMessage(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
+private func chatTextModelMessage(
+    role: String,
+    text: String,
+    timestamp: Double,
+    idempotencyKey: String? = nil) -> OpenClawChatMessage
+{
     OpenClawChatMessage(
         role: role,
         content: [
@@ -26,7 +41,8 @@ private func chatTextModelMessage(role: String, text: String, timestamp: Double)
                 fileName: nil,
                 content: nil),
         ],
-        timestamp: timestamp)
+        timestamp: timestamp,
+        idempotencyKey: idempotencyKey)
 }
 
 private func chatErrorMessage(role: String, errorMessage: String, timestamp: Double) -> AnyCodable {
@@ -39,8 +55,8 @@ private func chatErrorMessage(role: String, errorMessage: String, timestamp: Dou
     ])
 }
 
-fileprivate extension Array where Element == OpenClawChatMessage {
-    func containsUserText(_ text: String) -> Bool {
+extension [OpenClawChatMessage] {
+    fileprivate func containsUserText(_ text: String) -> Bool {
         self.contains { message in
             message.role == "user" &&
                 message.content.contains { $0.text == text }
@@ -142,6 +158,7 @@ private func makeViewModel(
     modelResponses: [[OpenClawChatModelChoice]] = [],
     commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+    historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
     setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
     resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -149,6 +166,7 @@ private func makeViewModel(
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
     sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
+    sendMessageStatus: String = "ok",
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
@@ -162,6 +180,7 @@ private func makeViewModel(
         modelResponses: modelResponses,
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
+        historyResponseHook: historyResponseHook,
         setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
         resetSessionHook: resetSessionHook,
@@ -169,6 +188,7 @@ private func makeViewModel(
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook,
         sendMessageHook: sendMessageHook,
+        sendMessageStatus: sendMessageStatus,
         waitForRunCompletionHook: waitForRunCompletionHook,
         healthResponses: healthResponses)
     let vm = await MainActor.run {
@@ -315,14 +335,17 @@ private final class CallbackBox {
 
 private actor AsyncGate {
     private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
 
     func wait() async {
+        guard !self.isOpen else { return }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }
 
     func open() {
+        self.isOpen = true
         self.continuation?.resume()
         self.continuation = nil
     }
@@ -392,6 +415,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let modelResponses: [[OpenClawChatModelChoice]]
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
+    private let historyResponseHook:
+        (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)?
     private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
     private let createSessionHook: (@Sendable (String, String?) async throws -> Void)?
     private let resetSessionHook: (@Sendable (String) async throws -> Void)?
@@ -399,6 +424,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
     private let sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)?
+    private let sendMessageStatus: String
     private let waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)?
     private let healthResponses: [Bool]
 
@@ -411,6 +437,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         modelResponses: [[OpenClawChatModelChoice]] = [],
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
+        historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
         setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
         resetSessionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -418,6 +445,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
         sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
+        sendMessageStatus: String = "ok",
         waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
         healthResponses: [Bool] = [true])
     {
@@ -426,6 +454,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.modelResponses = modelResponses
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
+        self.historyResponseHook = historyResponseHook
         self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
         self.resetSessionHook = resetSessionHook
@@ -433,6 +462,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
         self.sendMessageHook = sendMessageHook
+        self.sendMessageStatus = sendMessageStatus
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -471,6 +501,12 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         if let requestHistoryHook {
             try await requestHistoryHook(sessionKey)
         }
+        if let historyResponseHook {
+            let sentRunIds = await self.sentRunIds()
+            if let response = try await historyResponseHook(sessionKey, idx, sentRunIds) {
+                return response
+            }
+        }
         if idx < self.historyResponses.count {
             return self.historyResponses[idx]
         }
@@ -495,7 +531,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         if let sendMessageHook {
             return try await sendMessageHook(idempotencyKey)
         }
-        return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
+        return OpenClawChatSendResponse(runId: idempotencyKey, status: self.sendMessageStatus)
     }
 
     func abortRun(sessionKey _: String, runId: String) async throws {
@@ -623,6 +659,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.patchedThinkingLevels
     }
 
+    func healthCallCount() async -> Int {
+        await self.state.healthCallCount
+    }
+
     func resetSessionKeys() async -> [String] {
         await self.state.resetSessionKeys
     }
@@ -728,6 +768,27 @@ extension TestChatTransportState {
 }
 
 struct ChatViewModelTests {
+    @Test func `keeps distinct idempotent user turns with identical timestamps and content`() async throws {
+        let history = historyPayload(
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same words",
+                    timestamp: 1,
+                    idempotencyKey: "client-a:user"),
+                chatTextMessage(
+                    role: "user",
+                    text: "same words",
+                    timestamp: 1,
+                    idempotencyKey: "client-b:user"),
+            ])
+        let (_, vm) = await makeViewModel(historyResponses: [history])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        #expect(await MainActor.run { vm.messages.count } == 2)
+    }
+
     @Test func `timeline revision advances when visible history changes`() async throws {
         let history = historyPayload(
             sessionId: "revision-session",
@@ -840,7 +901,9 @@ struct ChatViewModelTests {
                     timestamp: Date().timeIntervalSince1970 * 1000),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
@@ -876,7 +939,9 @@ struct ChatViewModelTests {
     @Test func `renders final chat event message when history is stale`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -919,7 +984,8 @@ struct ChatViewModelTests {
                 if count == 2 {
                     await finalRefreshGate.wait()
                 }
-            })
+            },
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -980,7 +1046,8 @@ struct ChatViewModelTests {
                 if count == 2 {
                     await finalRefreshGate.wait()
                 }
-            })
+            },
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -1090,6 +1157,7 @@ struct ChatViewModelTests {
             ])
         let (transport, vm) = await makeViewModel(
             historyResponses: [history1, history2, history3],
+            sendMessageStatus: "pending",
             waitForRunCompletionHook: { _, _ in true })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
@@ -1124,7 +1192,9 @@ struct ChatViewModelTests {
                     text: "completed from lifecycle",
                     timestamp: now + 60000),
             ])
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2, history3])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2, history3],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -1151,7 +1221,9 @@ struct ChatViewModelTests {
     @Test func `pending run blocks second main send`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "first")
@@ -1173,7 +1245,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.input } == "second")
     }
 
-    @Test func terminalOkSendAckClearsPendingRunWithoutWaitingForCompletion() async throws {
+    @Test func `terminal ok send ack clears pending run without waiting for completion`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
         let (transport, vm) = await makeViewModel(historyResponses: [history, history])
@@ -1189,7 +1261,742 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.messages.containsUserText("cached") })
     }
 
-    @Test func terminalTimeoutSendAckSurfacesErrorAndAllowsNextSend() async throws {
+    @Test func `rekeys optimistic user message when gateway reuses active run`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let responseGate = AsyncGate()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: sessionId)],
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "same active request",
+                            timestamp: now + 5000,
+                            idempotencyKey: "\(remoteRunId):user"),
+                    ])
+            },
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        await responseGate.open()
+
+        try await waitUntil("reused run adopts one canonical user row") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" }) == 1 &&
+                    vm.messages.contains(where: { message in
+                        message.id == optimisticID &&
+                            message.timestamp == now + 5000 &&
+                            message.idempotencyKey == "\(remoteRunId):user"
+                    })
+            }
+        }
+    }
+
+    @Test func `reused run preserves canonical event received before acknowledgement`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let responseGate = AsyncGate()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionId: sessionId),
+                historyPayload(sessionId: sessionId, messages: []),
+            ],
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        let canonicalTimestamp = now + 5000
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "canonical active request",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: canonicalTimestamp,
+                        idempotencyKey: "\(remoteRunId):user"),
+                    messageId: "srv-reused-run-user",
+                    messageSeq: 1)))
+        try await waitUntil("canonical event arrives before send acknowledgement") {
+            await MainActor.run { vm.messages.count(where: { $0.role == "user" }) == 2 }
+        }
+        await responseGate.open()
+
+        try await waitUntil("reused run preserves canonical event data") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" }) == 1 &&
+                    vm.messages.contains(where: { message in
+                        message.id == optimisticID &&
+                            message.content.first?.text == "canonical active request" &&
+                            message.timestamp == canonicalTimestamp &&
+                            message.idempotencyKey == "\(remoteRunId):user"
+                    })
+            }
+        }
+    }
+
+    @Test func `reused run final stays scoped to surviving canonical user turn`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let activeUser = chatTextMessage(
+            role: "user",
+            text: "same active request",
+            timestamp: now + 1,
+            idempotencyKey: "\(remoteRunId):user")
+        let activeReply = chatTextMessage(
+            role: "assistant",
+            text: "active reply",
+            timestamp: now + 2,
+            idempotencyKey: remoteRunId)
+        let newerUser = chatTextMessage(
+            role: "user",
+            text: "newer request from another client",
+            timestamp: now + 3,
+            idempotencyKey: "other-client-run:user")
+        let initialHistory = historyPayload(sessionId: sessionId, messages: [activeUser])
+        let canonicalHistory = historyPayload(
+            sessionId: sessionId,
+            messages: [activeUser, activeReply, newerUser])
+        let responseGate = AsyncGate()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [initialHistory, canonicalHistory, canonicalHistory],
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "assistant",
+                        text: "active reply",
+                        timestamp: now + 2,
+                        idempotencyKey: remoteRunId),
+                    messageId: "srv-active-reply",
+                    messageSeq: 2)))
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "user",
+                        text: "newer request from another client",
+                        timestamp: now + 3,
+                        idempotencyKey: "other-client-run:user"),
+                    messageId: "srv-newer-user",
+                    messageSeq: 3)))
+        try await waitUntil("newer user arrives before reused-run acknowledgement") {
+            await MainActor.run { vm.messages.containsUserText("newer request from another client") }
+        }
+        await responseGate.open()
+        try await waitUntil("reused run collapses onto earlier canonical user") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 1
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: activeReply,
+                    errorMessage: nil)))
+
+        try await waitUntil("reused final does not duplicate earlier canonical reply") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages
+                    .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) == 1
+            }
+        }
+    }
+
+    @Test func `newer identical reply does not suppress reused run final`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let responseGate = AsyncGate()
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same active request",
+                    timestamp: now - 3000,
+                    idempotencyKey: "\(remoteRunId):user"),
+                chatTextMessage(
+                    role: "user",
+                    text: "newer request from another client",
+                    timestamp: now - 2000,
+                    idempotencyKey: "other-client-run:user"),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "OK",
+                    timestamp: now - 1000),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 3 {
+                    await finalRefreshGate.wait()
+                }
+            },
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        try await waitUntil("duplicate request is optimistic") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 2
+            }
+        }
+        await responseGate.open()
+        try await waitUntil("duplicate request collapses onto older active user") {
+            guard await historyCount.current() >= 2 else { return false }
+            return await MainActor.run {
+                vm.messages.count(where: {
+                    $0.role == "user" && $0.content.first?.text == "same active request"
+                }) == 1
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "OK",
+                        timestamp: now + 4,
+                        idempotencyKey: remoteRunId),
+                    errorMessage: nil)))
+
+        try await waitUntil("reused final remains distinct from newer turn reply") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.count(where: { $0.role == "assistant" && $0.content.first?.text == "OK" }) == 2
+            }
+        }
+        await finalRefreshGate.release()
+    }
+
+    @Test func `correlated reply after metadata free steering suppresses reused final duplicate`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let responseGate = AsyncGate()
+        let history = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same active request",
+                    timestamp: now - 3000,
+                    idempotencyKey: "\(remoteRunId):user"),
+                chatTextMessage(
+                    role: "user",
+                    text: "steer the active run",
+                    timestamp: now - 2000),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "steered reply",
+                    timestamp: now - 1000,
+                    idempotencyKey: remoteRunId),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        try await waitUntil("steered duplicate request is optimistic") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" && $0.content.first?.text == "same active request" }) == 2
+            }
+        }
+        await responseGate.open()
+        try await waitUntil("steered duplicate request collapses onto active user") {
+            await MainActor.run {
+                vm.messages.count(where: {
+                    $0.role == "user" && $0.content.first?.text == "same active request"
+                }) == 1
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "steered reply",
+                        timestamp: now + 1,
+                        idempotencyKey: remoteRunId),
+                    errorMessage: nil)))
+
+        try await waitUntil("steering row remains inside reused run scope") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.count(where: {
+                        $0.role == "assistant" && $0.content.first?.text == "steered reply"
+                    }) == 1
+            }
+        }
+    }
+
+    @Test func `canonical projected reply after steering adopts reused provisional final`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same active request",
+                    timestamp: now - 1000,
+                    idempotencyKey: "\(remoteRunId):user"),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 3 {
+                    await finalRefreshGate.wait()
+                }
+            },
+            sendMessageHook: { _ in
+                OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        try await waitUntil("steering adoption send refresh completes") {
+            await historyCount.current() >= 2
+        }
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "steered reply",
+                        timestamp: now + 1,
+                        idempotencyKey: remoteRunId),
+                    errorMessage: nil)))
+        try await waitUntil("provisional reply precedes steering row") {
+            await MainActor.run {
+                vm.messages.contains { $0.role == "assistant" && $0.content.first?.text == "steered reply" }
+            }
+        }
+        let provisionalID = try await MainActor.run {
+            try #require(vm.messages.first(where: {
+                $0.role == "assistant" && $0.content.first?.text == "steered reply"
+            })?.id)
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "user",
+                        text: "steer the active run",
+                        timestamp: now + 2),
+                    messageId: "srv-steering-user",
+                    messageSeq: 2)))
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "assistant",
+                        text: "canonical steered reply",
+                        timestamp: now + 3,
+                        idempotencyKey: remoteRunId),
+                    messageId: "srv-steered-reply",
+                    messageSeq: 3)))
+
+        try await waitUntil("canonical reply after steering adopts provisional row") {
+            await MainActor.run {
+                guard vm.messages.count(where: { $0.role == "assistant" }) == 1,
+                      let reply = vm.messages.first(where: { $0.id == provisionalID }),
+                      reply.content.first?.text == "canonical steered reply",
+                      reply.timestamp == now + 3,
+                      let steeringIndex = vm.messages.firstIndex(where: {
+                          $0.role == "user" && $0.content.first?.text == "steer the active run"
+                      }),
+                      let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID })
+                else {
+                    return false
+                }
+                return steeringIndex < replyIndex
+            }
+        }
+        await finalRefreshGate.release()
+    }
+
+    @Test func `metadata free channel turn does not adopt reused provisional final`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same active request",
+                    timestamp: now - 1000,
+                    idempotencyKey: "\(remoteRunId):user"),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 3 {
+                    await finalRefreshGate.wait()
+                }
+            },
+            sendMessageHook: { _ in
+                OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        try await waitUntil("channel boundary send refresh completes") {
+            await historyCount.current() >= 2
+        }
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "same reply",
+                        timestamp: now + 1,
+                        idempotencyKey: remoteRunId),
+                    errorMessage: nil)))
+        try await waitUntil("reused provisional reply is visible") {
+            await MainActor.run {
+                vm.messages.contains { $0.role == "assistant" && $0.content.first?.text == "same reply" }
+            }
+        }
+        let provisionalID = try await MainActor.run {
+            try #require(vm.messages.first(where: {
+                $0.role == "assistant" && $0.content.first?.text == "same reply"
+            })?.id)
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "user",
+                        text: "independent channel request",
+                        timestamp: now + 2),
+                    messageId: "srv-channel-user",
+                    messageSeq: 2)))
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "assistant",
+                        text: "same reply",
+                        timestamp: now + 3),
+                    messageId: "srv-channel-reply",
+                    messageSeq: 3)))
+
+        try await waitUntil("independent channel reply remains distinct") {
+            await MainActor.run {
+                let replies = vm.messages.filter {
+                    $0.role == "assistant" && $0.content.first?.text == "same reply"
+                }
+                guard replies.count == 2, replies.first?.id == provisionalID else { return false }
+                guard let userIndex = vm.messages.firstIndex(where: {
+                    $0.role == "user" && $0.content.first?.text == "independent channel request"
+                }),
+                    let canonicalIndex = vm.messages.firstIndex(where: { $0.id == replies[1].id })
+                else {
+                    return false
+                }
+                return userIndex < canonicalIndex
+            }
+        }
+        await finalRefreshGate.release()
+    }
+
+    @Test func `late transformed canonical user keeps reused run final scope`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let responseGate = AsyncGate()
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let emptyHistory = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [emptyHistory, emptyHistory],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 3 {
+                    await finalRefreshGate.wait()
+                }
+            },
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        await responseGate.open()
+        try await waitUntil("optimistic user adopts reused run identity") {
+            await MainActor.run {
+                vm.messages.contains(where: { message in
+                    message.role == "user" && message.idempotencyKey == "\(remoteRunId):user"
+                })
+            }
+        }
+        try await waitUntil("post-ack history refresh completes") {
+            await historyCount.current() >= 2
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "user",
+                        text: "canonical redacted request",
+                        timestamp: now + 1,
+                        idempotencyKey: "\(remoteRunId):user"),
+                    messageId: "srv-transformed-user",
+                    messageSeq: 1)))
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "assistant",
+                        text: "active reply",
+                        timestamp: now + 2,
+                        idempotencyKey: remoteRunId),
+                    messageId: "srv-active-reply",
+                    messageSeq: 2)))
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "user",
+                        text: "newer request from another client",
+                        timestamp: now + 3,
+                        idempotencyKey: "other-client-run:user"),
+                    messageId: "srv-newer-user",
+                    messageSeq: 3)))
+        try await waitUntil("canonical user transformation and newer turn arrive") {
+            await MainActor.run {
+                vm.messages.containsUserText("canonical redacted request") &&
+                    vm.messages.containsUserText("newer request from another client")
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "active reply",
+                        timestamp: now + 4,
+                        idempotencyKey: remoteRunId),
+                    errorMessage: nil)))
+
+        try await waitUntil("late canonical adoption does not duplicate reused final") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages
+                    .count(where: { $0.role == "assistant" && $0.content.first?.text == "active reply" }) == 1
+            }
+        }
+        await finalRefreshGate.release()
+    }
+
+    @Test func `history reconciled early final stays in canonical order after delayed event`() async throws {
+        let sessionId = "sess-main"
+        let remoteRunId = "existing-active-run"
+        let now = Date().timeIntervalSince1970 * 1000
+        let responseGate = AsyncGate()
+        let historyGate = AsyncGate()
+        let emptyHistory = historyPayload(sessionId: sessionId)
+        let canonicalHistory = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "user",
+                    text: "same active request",
+                    timestamp: now,
+                    idempotencyKey: "\(remoteRunId):user"),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "early final reply",
+                    timestamp: now + 2,
+                    idempotencyKey: remoteRunId),
+                chatTextMessage(
+                    role: "user",
+                    text: "newer channel request",
+                    timestamp: now + 3),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [emptyHistory, canonicalHistory],
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                await historyGate.wait()
+                return canonicalHistory
+            },
+            sendMessageHook: { _ in
+                await responseGate.wait()
+                return OpenClawChatSendResponse(runId: remoteRunId, status: "in_flight")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "same active request")
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: remoteRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "early final reply",
+                        timestamp: now + 1,
+                        idempotencyKey: remoteRunId),
+                    errorMessage: nil)))
+        try await waitUntil("early final is visible before acknowledgement") {
+            await MainActor.run {
+                vm.messages.contains {
+                    $0.role == "assistant" && $0.content.first?.text == "early final reply"
+                }
+            }
+        }
+        let provisionalID = try await MainActor.run {
+            try #require(vm.messages.first(where: {
+                $0.role == "assistant" && $0.content.first?.text == "early final reply"
+            })?.id)
+        }
+
+        await historyGate.open()
+        try await waitUntil("history adopts early final before newer user") {
+            await MainActor.run {
+                guard let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
+                      let newerUserIndex = vm.messages.firstIndex(where: {
+                          $0.role == "user" && $0.content.first?.text == "newer channel request"
+                      })
+                else {
+                    return false
+                }
+                return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
+            }
+        }
+
+        await responseGate.open()
+        try await waitUntil("early final run acknowledgement rekeys optimistic user") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.count(where: {
+                        $0.role == "user" && $0.idempotencyKey == "\(remoteRunId):user"
+                    }) == 1
+            }
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(
+                        role: "assistant",
+                        text: "early final reply",
+                        timestamp: now + 4,
+                        idempotencyKey: remoteRunId),
+                    messageId: "srv-early-final-reply",
+                    messageSeq: 2)))
+
+        try await waitUntil("delayed canonical event preserves history order") {
+            await MainActor.run {
+                guard vm.messages.count(where: {
+                    $0.role == "assistant" && $0.idempotencyKey == remoteRunId
+                }) == 1,
+                    let replyIndex = vm.messages.firstIndex(where: { $0.id == provisionalID }),
+                    let newerUserIndex = vm.messages.firstIndex(where: {
+                        $0.role == "user" && $0.content.first?.text == "newer channel request"
+                    })
+                else {
+                    return false
+                }
+                return replyIndex < newerUserIndex && vm.messages[replyIndex].timestamp == now + 2
+            }
+        }
+    }
+
+    @Test func `terminal timeout send ack surfaces error and allows next send`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
         let sendCount = AsyncCounter()
@@ -1230,7 +2037,9 @@ struct ChatViewModelTests {
                     timestamp: now + 1),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         try await sendMessageAndEmitFinal(
             transport: transport,
@@ -1253,7 +2062,9 @@ struct ChatViewModelTests {
         let history1 = historyPayload(sessionId: sessionId)
         let history2 = historyPayload(sessionId: sessionId, messages: [])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         try await sendMessageAndEmitFinal(
             transport: transport,
@@ -1273,28 +2084,52 @@ struct ChatViewModelTests {
     @Test func `does not duplicate user message when refresh returns canonical timestamp`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
-        let history1 = historyPayload(sessionId: sessionId)
-        let history2 = historyPayload(
+        let refreshGate = AsyncGate()
+        let historyCallCount = AsyncCounter()
+        let history1 = historyPayload(
             sessionId: sessionId,
             messages: [
                 chatTextMessage(
-                    role: "user",
-                    text: "hello from mac webchat",
-                    timestamp: now + 5000),
-                chatTextMessage(
                     role: "assistant",
-                    text: "final answer",
-                    timestamp: now + 6000),
+                    text: "earlier answer",
+                    timestamp: now + 1000),
             ])
-
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (_, vm) = await makeViewModel(
+            historyResponses: [history1],
+            requestHistoryHook: { _ in
+                if await historyCallCount.increment() == 2 {
+                    await refreshGate.wait()
+                }
+            },
+            historyResponseHook: { _, index, sentRunIds in
+                guard index == 1, let runId = sentRunIds.last else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "earlier answer",
+                            timestamp: now + 1000),
+                        chatTextMessage(
+                            role: "user",
+                            text: "hello from mac webchat",
+                            timestamp: now + 5000,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "final answer",
+                            timestamp: now + 6000),
+                    ])
+            })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
-        try await sendMessageAndEmitFinal(
-            transport: transport,
-            vm: vm,
-            text: "hello from mac webchat")
+        await sendUserMessage(vm, text: "hello from mac webchat")
+        try await waitUntil("canonical refresh starts") { await historyCallCount.current() == 2 }
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        await refreshGate.open()
 
-        try await waitUntil("canonical refresh keeps one user message") {
+        try await waitUntil("send acknowledgement refresh keeps one user message") {
             await MainActor.run {
                 let userMessages = vm.messages.filter { message in
                     message.role == "user" &&
@@ -1307,26 +2142,116 @@ struct ChatViewModelTests {
                 return hasAssistant && userMessages.count == 1
             }
         }
+        #expect(await MainActor.run { vm.messages.last(where: { $0.role == "user" })?.id } == optimisticID)
+    }
+
+    @Test func `metadata free canonical refresh keeps ambiguous user turns distinct`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let refreshGate = AsyncGate()
+        let historyCallCount = AsyncCounter()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: sessionId)],
+            requestHistoryHook: { _ in
+                if await historyCallCount.increment() == 2 {
+                    await refreshGate.wait()
+                }
+            },
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "legacy echo",
+                            timestamp: now + 5000),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "legacy answer",
+                            timestamp: now + 6000),
+                    ])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm, text: "legacy echo")
+        try await waitUntil("legacy refresh starts") { await historyCallCount.current() == 2 }
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        await refreshGate.open()
+
+        try await waitUntil("metadata free canonical refresh preserves both user rows") {
+            await MainActor.run {
+                vm.messages.count(where: { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "legacy echo"
+                }) == 2 && vm.messages.contains(where: { message in
+                    message.role == "assistant" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "legacy answer"
+                })
+            }
+        }
+        #expect(await MainActor.run { vm.messages.contains(where: { $0.id == optimisticID }) })
+    }
+
+    @Test func `preserves local echo when another client sends identical text during refresh`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: sessionId)],
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "same words",
+                            timestamp: now + 5000,
+                            idempotencyKey: "other-client:user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "other client's answer",
+                            timestamp: now + 6000),
+                    ])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm, text: "same words")
+
+        try await waitUntil("foreign identical turn and local echo both survive") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.messages.count(where: { message in
+                        message.role == "user" &&
+                            message.content.compactMap(\.text).joined(separator: "\n") == "same words"
+                    }) == 2
+            }
+        }
+        #expect(await transport.sentRunIds().count == 1)
     }
 
     @Test func `preserves repeated optimistic user messages with identical content during refresh`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(sessionId: sessionId)
-        let history2 = historyPayload(
-            sessionId: sessionId,
-            messages: [
-                chatTextMessage(
-                    role: "user",
-                    text: "retry",
-                    timestamp: now + 5000),
-                chatTextMessage(
-                    role: "assistant",
-                    text: "first answer",
-                    timestamp: now + 6000),
-            ])
-
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1],
+            historyResponseHook: { _, index, sentRunIds in
+                guard index > 0, let firstRunId = sentRunIds.first else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "retry",
+                            timestamp: now + 5000,
+                            idempotencyKey: "\(firstRunId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "first answer",
+                            timestamp: now + 6000),
+                    ])
+            })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         try await sendMessageAndEmitFinal(
             transport: transport,
@@ -1454,6 +2379,72 @@ struct ChatViewModelTests {
         })
     }
 
+    @Test @MainActor func `transformed canonical reply invalidates older stale refresh`() async throws {
+        let staleRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let now = Date().timeIntervalSince1970 * 1000
+        let staleTurn = [
+            chatTextMessage(role: "user", text: "older question", timestamp: now - 2),
+            chatTextMessage(role: "assistant", text: "older answer", timestamp: now - 1),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(sessionId: "sess-bootstrap", messages: staleTurn),
+                historyPayload(sessionId: "sess-stale", messages: staleTurn),
+            ],
+            requestHistoryHook: { sessionKey in
+                guard sessionKey == "main" else { return }
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await staleRefreshGate.wait()
+                }
+            },
+            historyResponseHook: { _, index, sentRunIds in
+                guard index == 2, let runId = sentRunIds.first else { return nil }
+                return historyPayload(
+                    sessionId: "sess-canonical",
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "canonical redacted request",
+                            timestamp: now,
+                            idempotencyKey: "\(runId):user"),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "canonical answer",
+                            timestamp: now + 1,
+                            idempotencyKey: runId),
+                    ])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-bootstrap")
+
+        transport.emit(OpenClawChatTransportEvent.seqGap)
+        try await waitUntil("stale transformed refresh is in flight") {
+            await historyCount.current() == 2
+        }
+
+        vm.input = "original request"
+        vm.send()
+        _ = try await waitForLastSentRunId(transport)
+        try await waitUntil("transformed canonical answer applies") {
+            await MainActor.run {
+                vm.sessionId == "sess-canonical" &&
+                    vm.messages.containsUserText("canonical redacted request") &&
+                    vm.messages.contains { $0.content.contains { $0.text == "canonical answer" } }
+            }
+        }
+
+        let healthCallsBeforeRelease = await transport.healthCallCount()
+        await staleRefreshGate.release()
+        try await waitUntil("older transformed refresh completes") {
+            await transport.healthCallCount() > healthCallsBeforeRelease
+        }
+
+        #expect(vm.sessionId == "sess-canonical")
+        #expect(vm.messages.containsUserText("canonical redacted request"))
+        #expect(vm.messages.contains { $0.content.contains { $0.text == "canonical answer" } })
+    }
+
     @Test func `accepts canonical session key events for own pending run`() async throws {
         let history1 = historyPayload()
         let history2 = historyPayload(
@@ -1464,7 +2455,9 @@ struct ChatViewModelTests {
                     timestamp: Date().timeIntervalSince1970 * 1000),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm)
         await sendUserMessage(vm)
         try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
@@ -1496,7 +2489,9 @@ struct ChatViewModelTests {
                     timestamp: now),
             ])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm)
 
         await sendUserMessage(vm)
@@ -1694,7 +2689,9 @@ struct ChatViewModelTests {
 
     @Test func `appends external session assistant message while run pending`() async throws {
         let now = Date().timeIntervalSince1970 * 1000
-        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageStatus: "pending")
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
@@ -1741,6 +2738,7 @@ struct ChatViewModelTests {
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
 
         await sendUserMessage(vm, text: "echo me")
+        let runId = try await waitForLastSentRunId(transport)
         try await waitUntil("optimistic user message visible") {
             await MainActor.run {
                 vm.messages.count == 1 && vm.messages.first?.content.first?.text == "echo me"
@@ -1763,7 +2761,8 @@ struct ChatViewModelTests {
                                 fileName: nil,
                                 content: nil),
                         ],
-                        timestamp: Date().timeIntervalSince1970 * 1000 + 5000),
+                        timestamp: Date().timeIntervalSince1970 * 1000 + 5000,
+                        idempotencyKey: "\(runId):user"),
                     messageId: "srv-echo-1",
                     messageSeq: 1)))
 
@@ -1773,6 +2772,141 @@ struct ChatViewModelTests {
                 msg.role == "user" && msg.content.first?.text == "echo me"
             }) == 1
         })
+    }
+
+    @Test func `late correlated user echo replaces optimistic row after final`() async throws {
+        let history = historyPayload()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "sensitive draft")
+        let runId = try await waitForLastSentRunId(transport)
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+        try await waitUntil("final clears pending correlation bookkeeping") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+
+        let canonicalTimestamp = Date().timeIntervalSince1970 * 1000 + 5000
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "redacted canonical text",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: canonicalTimestamp,
+                        idempotencyKey: "\(runId):user"),
+                    messageId: "srv-late-user-echo",
+                    messageSeq: 2)))
+
+        try await waitUntil("late canonical echo replaces optimistic row") {
+            await MainActor.run {
+                vm.messages.count(where: { $0.role == "user" }) == 1 &&
+                    vm.messages.contains(where: { message in
+                        message.id == optimisticID &&
+                            message.content.first?.text == "redacted canonical text" &&
+                            message.timestamp == canonicalTimestamp
+                    })
+            }
+        }
+    }
+
+    @Test func `metadata free same text event cannot consume pending local identity`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageStatus: "pending")
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "legacy echo")
+        let runId = try await waitForLastSentRunId(transport)
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        let canonicalTimestamp = Date().timeIntervalSince1970 * 1000 + 5000
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "legacy echo",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: canonicalTimestamp),
+                    messageId: "srv-legacy-echo-1",
+                    messageSeq: 1)))
+
+        try await waitUntil("ambiguous metadata free event remains distinct") {
+            await MainActor.run {
+                vm.messages.count(where: { message in
+                    message.role == "user" && message.content.first?.text == "legacy echo"
+                }) == 2
+            }
+        }
+
+        let localCanonicalTimestamp = canonicalTimestamp + 1000
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "legacy echo",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: localCanonicalTimestamp,
+                        idempotencyKey: "\(runId):user"),
+                    messageId: "srv-local-echo-1",
+                    messageSeq: 2)))
+
+        try await waitUntil("later correlated local echo adopts only the optimistic row") {
+            await MainActor.run {
+                vm.messages.count(where: { message in
+                    message.role == "user" && message.content.first?.text == "legacy echo"
+                }) == 2 && vm.messages.contains(where: { message in
+                    message.id == optimisticID &&
+                        message.timestamp == localCanonicalTimestamp &&
+                        message.idempotencyKey == "\(runId):user"
+                }) && vm.messages.contains(where: { message in
+                    message.timestamp == canonicalTimestamp && message.idempotencyKey == nil
+                })
+            }
+        }
     }
 
     @Test func `appends same content user transcript when it is not local echo`() async throws {
@@ -1895,7 +3029,9 @@ struct ChatViewModelTests {
             text: "resynced after gap",
             timestamp: now)])
 
-        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history1, history2],
+            sendMessageStatus: "pending")
 
         try await loadAndWaitBootstrap(vm: vm)
 
@@ -3441,7 +4577,8 @@ struct ChatViewModelTests {
                     await staleFallbackGate.wait()
                     _ = await staleFallbackReleasedCount.increment()
                 }
-            })
+            },
+            sendMessageStatus: "pending")
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
@@ -4331,7 +5468,9 @@ struct ChatViewModelTests {
     @Test func `abort requests do not clear pending until aborted event`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId)
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm)

@@ -1468,6 +1468,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/make_appcast.sh", ["test/scripts/make-appcast.test.ts"]],
       ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
       ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
+      [
+        "scripts/lib/swift-toolchain.sh",
+        ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
+      ],
       ["scripts/e2e/bun-global-install-smoke.sh", ["test/scripts/test-install-sh-docker.test.ts"]],
       [
         "scripts/sparkle-build.ts",
@@ -1961,6 +1965,10 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/package-mac-app.test.ts",
           "test/scripts/package-mac-dist.test.ts",
         ],
+      ],
+      [
+        "scripts/lib/swift-toolchain.sh",
+        ["test/scripts/package-mac-app.test.ts", "test/scripts/package-mac-dist.test.ts"],
       ],
       [
         "scripts/lib/npm-publish-plan.mjs",

@@ -695,6 +695,34 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
   });
 
+  it("forwards partial-send progress through the registered Slack sender", async () => {
+    const sendSlack = vi.fn(async (...args: unknown[]) => {
+      const options = args[2] as {
+        onDeliveryResult?: (result: { messageId: string }) => Promise<void>;
+      };
+      await options.onDeliveryResult?.({ messageId: "m-first" });
+      throw new Error("later Slack chunk failed");
+    });
+    const onDeliveryResult = vi.fn();
+    const sendText = requireSlackSendText();
+
+    await expect(
+      sendText({
+        cfg,
+        to: "C123",
+        text: "long message",
+        accountId: "default",
+        deps: { sendSlack },
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("later Slack chunk failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      channel: "slack",
+      messageId: "m-first",
+    });
+  });
+
   it("prefers replyToId over threadId for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media" });
     const sendMedia = requireSlackSendMedia();
