@@ -1,5 +1,3 @@
-@import "./chat.css";
-
 /* ===========================================
    Login Gate
    =========================================== */
@@ -907,21 +905,6 @@
 .btn[data-tooltip]::after {
   content: none !important;
   display: none !important;
-}
-
-.chat-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  overflow: visible;
-}
-
-.chat-controls__separator {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1;
-  user-select: none;
 }
 
 .btn--ghost {
@@ -2220,13 +2203,11 @@
   overflow-x: auto;
 }
 
-.code-block-wrapper pre:has(> code.markdown-block-art),
-.chat-text :where(pre:has(> code.markdown-block-art)),
-.sidebar-markdown :where(pre:has(> code.markdown-block-art)) {
+.code-block-wrapper pre:has(> code.markdown-block-art) {
   background: var(--bg);
 }
 
-:is(.code-block-wrapper, .chat-text, .sidebar-markdown) :where(pre code.markdown-block-art) {
+.code-block-wrapper :where(pre code.markdown-block-art) {
   display: block;
   min-width: 100%;
   width: max-content;
@@ -3879,32 +3860,6 @@ td.data-table-key-col {
   flex: 1;
 }
 
-.chat-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.chat-header__left {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-
-.chat-header__right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-session {
-  min-width: 240px;
-}
-
 /* Chat queue */
 .chat-queue {
   margin-top: 12px;
@@ -3960,16 +3915,6 @@ td.data-table-key-col {
 .chat-queue__remove {
   align-self: start;
   padding: 4px 10px;
-  font-size: 12px;
-  line-height: 1;
-}
-
-/* New messages indicator */
-.chat-new-messages {
-  align-self: center;
-  margin: 8px auto 0;
-  border-radius: var(--radius-full);
-  padding: 6px 12px;
   font-size: 12px;
   line-height: 1;
 }
@@ -4108,108 +4053,7 @@ td.data-table-key-col {
   }
 }
 
-/* Chat text */
-.chat-text {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  color: var(--chat-text);
-  line-height: 1.5;
-}
-
-.chat-text :where(p, ul, ol, pre, blockquote, table) {
-  margin: 0;
-}
-
-.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote, p + table) {
-  margin-top: 0.75em;
-}
-
-.chat-text :where(ul, ol) {
-  padding-left: 1.2em;
-}
-
-.chat-text :where(li + li) {
-  margin-top: 0.25em;
-}
-
-.chat-text :where(a) {
-  color: var(--accent);
-}
-
-.chat-text :where(a:hover) {
-  text-decoration: underline;
-}
-
-.chat-text :where(blockquote) {
-  border-left: 2px solid var(--border-strong);
-  padding-left: 12px;
-  color: var(--muted);
-}
-
-.chat-text :where(hr) {
-  border: 0;
-  border-top: 1px solid var(--border);
-  margin: 1em 0;
-}
-
-.chat-text :where(code) {
-  font-family: var(--mono);
-  font-size: 0.9em;
-}
-
-.chat-text :where(:not(pre) > code) {
-  padding: 0.15em 0.35em;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--secondary);
-}
-
-:root[data-theme-mode="light"] .chat-text :where(:not(pre) > code) {
-  background: var(--bg-muted);
-}
-
-.chat-text :where(pre) {
-  margin-top: 0.75em;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--secondary);
-  overflow: auto;
-}
-
-:root[data-theme-mode="light"] .chat-text :where(pre) {
-  background: var(--bg-muted);
-}
-
-.chat-text :where(pre code) {
-  font-size: 12px;
-  white-space: pre;
-}
-
-.chat-text :where(table) {
-  margin-top: 0.75em;
-  border-collapse: collapse;
-  width: 100%;
-  max-width: 100%;
-  font-size: 13px;
-  display: block;
-  overflow-x: auto;
-}
-
-.chat-text :where(th, td) {
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  vertical-align: top;
-}
-
-.chat-text :where(th) {
-  font-family: var(--mono);
-  font-weight: 500;
-  color: var(--muted);
-  background: var(--secondary);
-}
-
-/* Cron markdown overrides must come after .chat-text rules to win cascade. */
+/* Cron markdown overrides out-specify the base .chat-text rules in chat/text.css. */
 .cron-run-entry__body.chat-text table,
 .cron-job-detail-value.chat-text table {
   display: table;
@@ -4384,68 +4228,6 @@ td.data-table-key-col {
 
 .chat-line.user .chat-stamp {
   text-align: right;
-}
-
-/* Chat compose */
-.chat-compose {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.shell--chat .chat-compose {
-  position: sticky;
-  bottom: 0;
-  z-index: 5;
-  margin-top: 0;
-  padding-top: 12px;
-  background: linear-gradient(180deg, transparent 0%, var(--bg) 40%);
-}
-
-.chat-compose__field {
-  gap: 4px;
-}
-
-.chat-compose__field textarea {
-  min-height: 72px;
-  padding: 10px 14px;
-  border-radius: var(--radius-lg);
-  resize: vertical;
-  white-space: pre-wrap;
-  font-family: var(--font-body);
-  line-height: 1.5;
-  border: 1px solid var(--input);
-  background: var(--card);
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-.chat-compose__field textarea:focus-visible {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 24%, transparent);
-}
-
-.chat-compose__field textarea:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.chat-compose__actions {
-  justify-content: flex-end;
-  align-self: end;
-}
-
-@media (max-width: 900px) {
-  .chat-session {
-    min-width: 180px;
-  }
-
-  .chat-compose {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ===========================================
