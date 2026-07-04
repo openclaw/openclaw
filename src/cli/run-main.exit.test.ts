@@ -383,6 +383,11 @@ describe("runCli exit behavior", () => {
   beforeEach(() => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
+    // Sibling CLI suites run `gateway run --token/--password`, which exports
+    // credentials into process.env; leaked values change gateway preflight
+    // auth in shared vitest workers.
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     vi.clearAllMocks();
     readConfigFileSnapshotMock.mockResolvedValue({

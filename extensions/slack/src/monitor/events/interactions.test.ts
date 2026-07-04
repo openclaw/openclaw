@@ -136,7 +136,7 @@ type RegisteredHandler = (args: {
     response_url?: string;
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-    message?: { ts?: string; text?: string; blocks?: unknown[] };
+    message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
@@ -2048,6 +2048,67 @@ describe("registerSlackInteractionEvents", () => {
       teamId: "T111",
     });
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("uses the message thread timestamp when Slack omits the container thread", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U333" },
+        team: { id: "T333" },
+        channel: { id: "C333" },
+        container: { channel_id: "C333", message_ts: "333.444" },
+        message: {
+          ts: "333.444",
+          thread_ts: "333.111",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "continue",
+        text: { type: "plain_text", text: "Continue" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "C333",
+      channelType: "channel",
+      senderId: "U333",
+      threadTs: "333.111",
+    });
+    expectRecordFields(slackInteractionPayload(), {
+      channelId: "C333",
+      messageTs: "333.444",
+      threadTs: "333.111",
+      teamId: "T333",
+    });
+    const eventOptions = requireRecord(
+      mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
+      "event options",
+    );
+    expectRecordFields(requireRecord(eventOptions.deliveryContext, "delivery context"), {
+      channel: "slack",
+      to: "channel:C333",
+      accountId: "default",
+      threadId: "333.111",
+    });
   });
 
   it("summarizes multi-select confirmations in updated message rows", async () => {

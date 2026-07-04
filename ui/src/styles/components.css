@@ -165,7 +165,7 @@
   margin: 4px 0 2px;
   padding: 5px 10px;
   font-family: var(--font-mono);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -205,7 +205,7 @@
 
 .login-gate__docs {
   margin-top: 10px;
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
 }
 
 /* ===========================================
@@ -801,31 +801,10 @@
   stroke-linejoin: round;
 }
 
-.btn[data-tooltip] {
-  position: relative;
-  overflow: visible;
-}
-
-.btn[data-tooltip]::before,
-.btn[data-tooltip]::after {
-  position: absolute;
-  left: 50%;
-  z-index: 50;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-}
-
-.btn[data-tooltip]::before {
-  content: none;
-}
-
-.btn[data-tooltip]::after {
-  top: calc(100% + 6px);
-  min-width: max-content;
-  max-width: min(260px, 60vw);
+.openclaw-tooltip {
+  position: fixed;
+  z-index: 2000;
+  max-width: min(260px, calc(100vw - 16px));
   padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
   border-radius: var(--radius-md);
@@ -834,77 +813,40 @@
     0 10px 28px rgba(0, 0, 0, 0.24),
     0 0 0 1px rgba(255, 255, 255, 0.04);
   color: var(--text);
-  content: attr(data-tooltip);
   font-size: 12px; /* was 11px */
   font-weight: 500;
   line-height: 1.35;
   text-align: center;
-  white-space: nowrap;
-  transform: translateY(-3px);
-}
-
-@media (hover: hover) {
-  .btn[data-tooltip]:hover::before,
-  .btn[data-tooltip]:hover::after {
-    opacity: 1;
-  }
-
-  .btn[data-tooltip]:hover::before,
-  .btn[data-tooltip]:hover::after {
-    transform: translateY(0);
-  }
-}
-
-.btn[data-tooltip]:focus-visible::before,
-.btn[data-tooltip]:focus-visible::after {
-  opacity: 1;
-}
-
-.btn[data-tooltip]:focus-visible::before,
-.btn[data-tooltip]:focus-visible::after {
-  transform: translateY(0);
-}
-
-[data-floating-tooltip-active]::before,
-[data-floating-tooltip-active]::after {
-  content: none !important;
-}
-
-.control-ui-floating-tooltip {
-  position: fixed;
-  z-index: 2000;
-  max-width: min(260px, 60vw);
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  padding: 7px 9px;
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
   opacity: 0;
   pointer-events: none;
-  text-align: center;
-  transform: translate(-50%, -3px);
+  transform: translateY(-3px);
   transition:
     opacity var(--duration-fast) var(--ease-out),
     transform var(--duration-fast) var(--ease-out);
   overflow-wrap: anywhere;
-  white-space: normal;
+  white-space: pre-line;
 }
 
-.control-ui-floating-tooltip[data-open="true"] {
+.openclaw-tooltip[data-side="bottom"] {
+  transform: translateY(3px);
+}
+
+.openclaw-tooltip[data-side="left"] {
+  transform: translateX(3px);
+}
+
+.openclaw-tooltip[data-side="right"] {
+  transform: translateX(-3px);
+}
+
+.openclaw-tooltip[data-open="true"] {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
 }
 
-.btn[data-tooltip]::before,
-.btn[data-tooltip]::after {
-  content: none !important;
-  display: none !important;
+.openclaw-tooltip[data-open="true"][data-side="left"],
+.openclaw-tooltip[data-open="true"][data-side="right"] {
+  transform: translateX(0);
 }
 
 .btn--ghost {
@@ -3606,64 +3548,6 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--accent-subtle) 72%, var(--card));
 }
 
-.session-filter-field[data-tooltip]::before,
-.session-filter-check[data-tooltip]::before,
-.session-filter-field[data-tooltip]::after,
-.session-filter-check[data-tooltip]::after {
-  position: absolute;
-  z-index: 20;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-}
-
-.session-filter-field[data-tooltip]::before,
-.session-filter-check[data-tooltip]::before {
-  content: "";
-  bottom: calc(100% + 4px);
-  left: 18px;
-  width: 8px;
-  height: 8px;
-  background: var(--text);
-  transform: translateY(3px) rotate(45deg);
-}
-
-.session-filter-field[data-tooltip]::after,
-.session-filter-check[data-tooltip]::after {
-  content: attr(data-tooltip);
-  bottom: calc(100% + 8px);
-  left: 0;
-  width: max-content;
-  max-width: min(320px, calc(100vw - 32px));
-  padding: 7px 9px;
-  color: var(--card);
-  background: var(--text);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
-  white-space: normal;
-  transform: translateY(3px);
-}
-
-@media (hover: hover) {
-  .session-filter-field[data-tooltip]:hover::before,
-  .session-filter-field[data-tooltip]:hover::after,
-  .session-filter-check[data-tooltip]:hover::before,
-  .session-filter-check[data-tooltip]:hover::after {
-    opacity: 1;
-    transform: translateY(0) rotate(45deg);
-  }
-
-  .session-filter-field[data-tooltip]:hover::after,
-  .session-filter-check[data-tooltip]:hover::after {
-    transform: translateY(0);
-  }
-}
-
 .session-filter-check__input {
   position: absolute;
   width: 1px;
@@ -3734,26 +3618,10 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
-  /* Default sizing for non-fill-height hosts; .card--fill-height overrides below. */
   max-height: calc(100vh - 280px);
   min-height: 200px;
   overflow: auto;
   container-type: inline-size;
-}
-
-/* Fill-height card: flex column that consumes the remaining settings-workspace
-   body height. `.content--logs` owns the ancestor chain. */
-.card--fill-height {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.card--fill-height .log-stream {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
 }
 
 .log-row {

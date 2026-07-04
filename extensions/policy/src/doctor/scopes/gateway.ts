@@ -86,6 +86,15 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
       );
     },
   };
+  const policyGatewayNodeCommandDeniedCheck: HealthCheck = {
+    id: CHECK_IDS.policyGatewayNodeCommandDenied,
+    kind: "plugin",
+    description: "Gateway node command allowlists match policy.",
+    source: "policy",
+    async detect(ctx) {
+      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNodeCommandDenied);
+    },
+  };
 
   return [
     policyGatewayNonLoopbackBindCheck,
@@ -96,6 +105,7 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     policyGatewayRemoteEnabledCheck,
     policyGatewayHttpEndpointEnabledCheck,
     policyGatewayHttpUrlFetchUnrestrictedCheck,
+    policyGatewayNodeCommandDeniedCheck,
   ];
 }
 
@@ -112,6 +122,7 @@ export function gatewayExposureFindings(
     ...gatewayRemoteFindings(policy, policyDocName, evidence),
     ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
     ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
+    ...gatewayNodeCommandFindings(policy, policyDocName, evidence),
   ];
 }
 
@@ -330,4 +341,59 @@ function gatewayHttpUrlFetchFindings(
         fixHint: "Add a urlAllowlist for this URL-fetch input or update policy after review.",
       };
     });
+}
+
+function gatewayNodeCommandFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (!hasValidOptionalStringList(policy, ["gateway", "nodes", "denyCommands"])) {
+    return [];
+  }
+  const policyDenied = readStringList(policy, ["gateway", "nodes", "denyCommands"], {
+    lowercase: false,
+  });
+  if (policyDenied.length === 0) {
+    return [];
+  }
+  const configDenied = new Set(
+    (evidence.gatewayExposure ?? [])
+      .filter((entry) => entry.kind === "nodeDenyCommand" && entry.command !== undefined)
+      .map((entry) => entry.command),
+  );
+  return policyDenied
+    .filter((command) => !configDenied.has(command))
+    .map((command): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayNodeCommandDenied,
+        severity: "error",
+        message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
+        target: "oc://openclaw.config/gateway/nodes/denyCommands",
+        requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
+        fixHint: `Add '${command}' to gateway.nodes.denyCommands or update policy after review.`,
+      };
+    });
+}
+
+function hasValidOptionalStringList(policy: unknown, path: readonly string[]): boolean {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return true;
+    }
+    current = current[part];
+  }
+  return (
+    current === undefined ||
+    (Array.isArray(current) &&
+      current.every((entry) => typeof entry === "string" && entry.trim() !== ""))
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

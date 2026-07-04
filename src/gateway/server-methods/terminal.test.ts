@@ -13,6 +13,24 @@ function makeOpts(
     write: vi.fn(() => true),
     resize: vi.fn(() => true),
     close: vi.fn(() => true),
+    attach: vi.fn(() => ({
+      sessionId: "s1",
+      agentId: "main",
+      cwd: "/work",
+      shell: "/bin/zsh",
+      buffer: "history",
+    })),
+    list: vi.fn(() => [
+      {
+        sessionId: "s1",
+        agentId: "main",
+        shell: "/bin/zsh",
+        cwd: "/work",
+        attached: false,
+        createdAtMs: 1,
+      },
+    ]),
+    snapshot: vi.fn(() => "10%\r100%"),
   };
   const respond = vi.fn();
   const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
@@ -28,6 +46,7 @@ function makeOpts(
       }),
     isTerminalEnabled: () => policyConfig.gateway?.terminal?.enabled === true,
     terminalSessions: sessions,
+    logGateway: { info: vi.fn() },
     // Only the fields the terminal handlers touch are needed here.
   } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0]["context"];
   const opts = {
@@ -112,5 +131,83 @@ describe("terminal.resize kill switch", () => {
     expect(sessions.resize).not.toHaveBeenCalled();
     expect(sessions.close).toHaveBeenCalledWith("conn-1", "s1");
     expect(respond).toHaveBeenCalledWith(true, { ok: false });
+  });
+});
+
+describe("terminal.attach", () => {
+  it("returns the session facts plus the replay buffer", async () => {
+    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
+    await terminalHandlers["terminal.attach"](opts);
+    expect(sessions.attach).toHaveBeenCalledWith("conn-1", "s1");
+    expect(respond).toHaveBeenCalledWith(true, {
+      sessionId: "s1",
+      agentId: "main",
+      shell: "/bin/zsh",
+      cwd: "/work",
+      confined: false,
+      buffer: "history",
+    });
+  });
+
+  it("refuses to hand out a PTY stream when the terminal is disabled", async () => {
+    const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: false });
+    await terminalHandlers["terminal.attach"](opts);
+    expect(sessions.attach).not.toHaveBeenCalled();
+    expect(respond.mock.calls[0][0]).toBe(false);
+  });
+
+  it("rejects unknown sessions", async () => {
+    const { opts, sessions, respond } = makeOpts({ sessionId: "gone" }, { enabled: true });
+    sessions.attach.mockReturnValue(undefined as never);
+    await terminalHandlers["terminal.attach"](opts);
+    expect(respond.mock.calls[0][0]).toBe(false);
+  });
+});
+
+describe("terminal.list", () => {
+  it("lists sessions with the confined flag applied", async () => {
+    const { opts, respond } = makeOpts(undefined, { enabled: true });
+    await terminalHandlers["terminal.list"](opts);
+    expect(respond).toHaveBeenCalledWith(true, {
+      sessions: [
+        {
+          sessionId: "s1",
+          agentId: "main",
+          shell: "/bin/zsh",
+          cwd: "/work",
+          attached: false,
+          createdAtMs: 1,
+          confined: false,
+        },
+      ],
+    });
+  });
+
+  it("returns an empty list when the terminal is disabled", async () => {
+    const { opts, sessions, respond } = makeOpts(undefined, { enabled: false });
+    await terminalHandlers["terminal.list"](opts);
+    expect(sessions.list).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, { sessions: [] });
+  });
+});
+
+describe("terminal.text", () => {
+  it("returns the buffer rendered as plain text", async () => {
+    const { opts, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
+    await terminalHandlers["terminal.text"](opts);
+    // The raw snapshot carries a CR overwrite; the handler collapses it.
+    expect(respond).toHaveBeenCalledWith(true, { text: "100%" });
+  });
+
+  it("rejects unknown sessions and disabled terminals", async () => {
+    const unknown = makeOpts({ sessionId: "gone" }, { enabled: true });
+    unknown.sessions.snapshot.mockReturnValue(undefined as never);
+    await terminalHandlers["terminal.text"](unknown.opts);
+    expect(unknown.respond.mock.calls[0][0]).toBe(false);
+
+    const disabled = makeOpts({ sessionId: "s1" }, { enabled: false });
+    await terminalHandlers["terminal.text"](disabled.opts);
+    expect(disabled.sessions.snapshot).not.toHaveBeenCalled();
+    expect(disabled.respond.mock.calls[0][0]).toBe(false);
   });
 });
