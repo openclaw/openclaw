@@ -196,6 +196,7 @@ import {
   dispatchToolDelegates,
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
+  requeueAwaitingNextCompactionDelegates,
   resetDelegateDispatchHedgesForTests,
 } from "./delegate-dispatch.js";
 import {
@@ -2435,6 +2436,33 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     expect(flowId).toBeDefined();
     return flowId as string;
   }
+
+  it("requeues awaiting-next-compaction running rows on startup recovery", async () => {
+    const sessionKey = "agent:main:subagent:pc-next-seam-startup-requeue";
+    stagePostCompactionDelegate(sessionKey, {
+      task: "rehydrate after crash before session-store persist",
+      stagedAt: Date.now(),
+    });
+    const claimed = consumeStagedPostCompactionDelegates(sessionKey, {
+      claimFor: "next-seam-persist",
+    });
+    expect(claimed).toHaveLength(1);
+    const flowId = claimed[0]?.flowId;
+    expect(flowId).toBeDefined();
+    if (!flowId) {
+      throw new Error("expected claimed flow id");
+    }
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+
+    const result = await requeueAwaitingNextCompactionDelegates({
+      runningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toEqual({ requeued: 1 });
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "queued" });
+    expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
+    expect(listRecoverableStagedPostCompactionDelegates()).toHaveLength(0);
+  });
 
   it("does not recover a next-seam persist claim before the next compaction", async () => {
     const sessionKey = "agent:main:subagent:pc-next-seam-persist";

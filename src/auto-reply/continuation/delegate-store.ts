@@ -1018,6 +1018,56 @@ export function requeueReleasedPostCompactionDelegate(
   return result.applied;
 }
 
+export function requeueAwaitingNextCompactionDelegates(options: {
+  runningUpdatedAtOrBefore: number;
+}): number {
+  let requeued = 0;
+  for (const flow of listTaskFlowRecords()) {
+    if (
+      !isPostCompactionDelegateFlow(flow) ||
+      flow.status !== "running" ||
+      flow.updatedAt > options.runningUpdatedAtOrBefore
+    ) {
+      continue;
+    }
+    const state = decodeDelegateState(flow);
+    if (!state || state.awaitingNextCompaction !== true) {
+      continue;
+    }
+    if (requeueReleasedPostCompactionDelegate(flowToDelegate(flow, state))) {
+      requeued++;
+    }
+  }
+  return requeued;
+}
+
+export function failQueuedDelegatesCreatedAtOrAfter(
+  sessionKey: string,
+  createdAtOrAfter: number,
+  blockedSummary: string,
+): number {
+  let failed = 0;
+  for (const flow of listTaskFlowsForOwnerKey(sessionKey)) {
+    if (
+      !isRecoverableContinuationDelegateFlow(flow) ||
+      flow.status !== "queued" ||
+      flow.createdAt < createdAtOrAfter
+    ) {
+      continue;
+    }
+    const result = failFlow({
+      flowId: flow.flowId,
+      expectedRevision: flow.revision,
+      currentStep: "Rejected replay-unsafe continuation delegate election",
+      blockedSummary,
+    });
+    if (result.applied) {
+      failed++;
+    }
+  }
+  return failed;
+}
+
 /**
  * Consume staged post-compaction delegates by CLAIMING them to `running`
  * (non-terminal), mirroring {@link consumePendingDelegates}. The row is NOT

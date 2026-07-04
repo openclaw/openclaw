@@ -53,6 +53,7 @@ import {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   peekSoonestUnmaturedDelegateDueAt,
+  requeueAwaitingNextCompactionDelegates as requeueAwaitingNextCompactionDelegateRows,
 } from "./delegate-store.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
 import {
@@ -1254,6 +1255,17 @@ export async function dispatchStagedPostCompactionDelegates(
  * a no-op (rows stay recoverable for when it is re-enabled), matching
  * {@link recoverPendingContinuationDelegates}.
  */
+
+export async function requeueAwaitingNextCompactionDelegates(options: {
+  runningUpdatedAtOrBefore: number;
+}): Promise<{ requeued: number }> {
+  return {
+    requeued: requeueAwaitingNextCompactionDelegateRows({
+      runningUpdatedAtOrBefore: options.runningUpdatedAtOrBefore,
+    }),
+  };
+}
+
 export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
   runningUpdatedAtOrBefore: number;
 }): Promise<{ sessions: number; dispatched: number; failed: number }> {

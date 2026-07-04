@@ -66,6 +66,7 @@ import {
 } from "../../utils/usage-format.js";
 import {
   enqueuePendingDelegate,
+  failQueuedDelegatesCreatedAtOrAfter,
   pendingDelegateCount,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
@@ -2026,10 +2027,24 @@ export async function runReplyAgent(replyParams: {
     const continueWorkRequests = runOutcome.continueWorkRequests ?? [];
     const suppressToolContinuationAfterIncompleteTurn =
       runResult.meta?.error?.kind === "incomplete_turn" && runResult.meta?.replayInvalid === true;
-    if (suppressToolContinuationAfterIncompleteTurn && continueWorkRequests.length > 0) {
-      defaultRuntime.log(
-        `[continuation] Ignoring ${continueWorkRequests.length} continue_work election(s) because the enclosing turn was incomplete and replay-unsafe for session ${sessionKey ?? "unknown"}`,
-      );
+    if (suppressToolContinuationAfterIncompleteTurn) {
+      if (continueWorkRequests.length > 0) {
+        defaultRuntime.log(
+          `[continuation] Ignoring ${continueWorkRequests.length} continue_work election(s) because the enclosing turn was incomplete and replay-unsafe for session ${sessionKey ?? "unknown"}`,
+        );
+      }
+      if (sessionKey) {
+        const failedDelegateRows = failQueuedDelegatesCreatedAtOrAfter(
+          sessionKey,
+          runStartedAt,
+          "Continuation delegate election ignored because the enclosing turn was incomplete and replay-unsafe.",
+        );
+        if (failedDelegateRows > 0) {
+          defaultRuntime.log(
+            `[continuation] Failed ${failedDelegateRows} queued continue_delegate election(s) because the enclosing turn was incomplete and replay-unsafe for session ${sessionKey}`,
+          );
+        }
+      }
     }
     const effectiveContinueWorkRequests = suppressToolContinuationAfterIncompleteTurn
       ? []

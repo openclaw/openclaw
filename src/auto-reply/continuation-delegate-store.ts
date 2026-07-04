@@ -35,6 +35,8 @@ export {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
+  requeueAwaitingNextCompactionDelegates,
+  failQueuedDelegatesCreatedAtOrAfter,
   listRecoverableStagedPostCompactionDelegates,
   resetDelegateStoreForTests,
   stagedPostCompactionDelegateCount,

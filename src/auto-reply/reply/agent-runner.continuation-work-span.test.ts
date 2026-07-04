@@ -32,6 +32,9 @@ import {
   clearMemoryPluginState,
   registerMemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
+import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-runtime-internal.js";
+import { enqueuePendingDelegate } from "../continuation-delegate-store.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { __testing as replyRunRegistryTesting } from "./reply-run-registry.js";
@@ -195,6 +198,7 @@ function createRecordingTracer(): { tracer: Tracer; spans: RecordedSpan[] } {
 beforeEach(() => {
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
+  resetTaskFlowRegistryForTests({ persist: false });
   runEmbeddedAgentMock.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
@@ -233,6 +237,7 @@ afterEach(() => {
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetContinuationTracer();
+  resetTaskFlowRegistryForTests({ persist: false });
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -412,6 +417,49 @@ describe("runReplyAgent :: continuation.work span", () => {
 
     expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(0);
     expect(run.sessionEntry.continuationChainCount).toBeUndefined();
+  });
+
+  it("fails queued continue_delegate rows from incomplete non-replay-safe turns", async () => {
+    vi.useFakeTimers();
+    const { tracer, spans } = createRecordingTracer();
+    setContinuationTracer(tracer);
+
+    const run = createContinuationRun({
+      sessionKey: "continuation-delegate-incomplete-replay-unsafe",
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      enqueuePendingDelegate(run.sessionKey, { task: "unsafe delegate" });
+      return {
+        payloads: [{ text: "Agent could not generate a response.", isError: true }],
+        meta: {
+          agentMeta: { usage: { input: 2, output: 3 } },
+          replayInvalid: true,
+          livenessState: "blocked",
+          error: {
+            kind: "incomplete_turn",
+            message: "Agent could not generate a response.",
+            fallbackSafe: false,
+          },
+        },
+      };
+    });
+
+    await runWorkTurn(
+      run,
+      { [run.sessionKey]: run.sessionEntry },
+      "Agent could not generate a response.",
+    );
+
+    expect(spans.filter((s) => s.name === "continuation.work")).toHaveLength(0);
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(listTaskFlowsForOwnerKey(run.sessionKey)).toMatchObject([
+      {
+        status: "failed",
+        currentStep: "Rejected replay-unsafe continuation delegate election",
+        blockedSummary:
+          "Continuation delegate election ignored because the enclosing turn was incomplete and replay-unsafe.",
+      },
+    ]);
   });
 
   it("still honors continue_work from incomplete replay-safe turns", async () => {

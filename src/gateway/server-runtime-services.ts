@@ -208,6 +208,15 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
       // compaction seam to consume them, so a requeued row would sit forever.
       // The boot-time cutoff excludes rows a live release claimed after startup,
       // so recovery cannot double-drive an actively-releasing delegate.
+      const awaitingNextCompactionRequeue =
+        await delegateModule.requeueAwaitingNextCompactionDelegates({
+          runningUpdatedAtOrBefore: recoveryArmedAt - 30_000,
+        });
+      if (awaitingNextCompactionRequeue.requeued > 0) {
+        delegateLog.info(
+          `requeued awaiting-next-compaction delegates requeued=${awaitingNextCompactionRequeue.requeued}`,
+        );
+      }
       const postCompactionRecovery =
         await delegateModule.recoverAndReleaseStagedPostCompactionDelegates({
           runningUpdatedAtOrBefore: recoveryArmedAt,
