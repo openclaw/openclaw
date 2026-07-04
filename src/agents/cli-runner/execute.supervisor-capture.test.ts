@@ -92,7 +92,7 @@ function buildPreparedCliRunContext(params: {
       env: {},
       ...(params.beforeExecution ? { beforeExecution: params.beforeExecution } : {}),
     },
-    reusableCliSession: {},
+    reusableCliSession: { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
     modelId: "model",

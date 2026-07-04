@@ -207,7 +207,9 @@ function buildPreparedContext(params?: {
       backend,
       env: {},
     },
-    reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    reusableCliSession: params?.cliSessionId
+      ? { mode: "reuse", sessionId: params.cliSessionId }
+      : { mode: "none" },
     hadSessionFile: false,
     contextEngineConfig: {},
     modelId: model,
@@ -666,6 +668,71 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("clears a soft-resumed binding after confirmed message send followed by failure", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before failure",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent before failure",
+        },
+        result: { status: "sent" },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 150,
+        stdout: "",
+        stderr: "failed after delivery",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:soft-drift-delivered-failure",
+      runId: "run-soft-drift-delivered-failure",
+      cliSessionId: "soft-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.reusableCliSession = {
+      mode: "reuse-with-drift",
+      sessionId: "soft-cli-session",
+      drift: { reasons: ["system-prompt"] },
+    };
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["sent before failure"]);
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry context overflow after a confirmed message send", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -799,6 +866,43 @@ describe("runCliAgent reliability", () => {
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes soft-resumed binding hashes without clearing the stored binding", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:soft-drift-refresh",
+      runId: "run-soft-drift-refresh",
+      cliSessionId: "soft-cli-session",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+    });
+    context.reusableCliSession = {
+      mode: "reuse-with-drift",
+      sessionId: "soft-cli-session",
+      drift: { reasons: ["system-prompt"] },
+    };
+    context.extraSystemPromptHash = "new-system-prompt-hash";
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(result.meta.agentMeta?.cliSessionBinding).toMatchObject({
+      sessionId: "soft-cli-session",
+      extraSystemPromptHash: "new-system-prompt-hash",
+    });
   });
 
   it("returns only the source-reply mirror after a successful CLI turn", async () => {
