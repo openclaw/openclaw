@@ -21,7 +21,6 @@ import type {
   HealthSummary,
   ModelAuthStatusResult,
   ModelCatalogEntry,
-  PresenceEntry,
   SessionCompactionCheckpoint,
   SessionUsageTimeSeries,
   SessionsUsageResult,
@@ -408,11 +407,6 @@ export class OpenClawApp extends LitElement {
   @state() aiAgentsSearchQuery = "";
   @state() aiAgentsActiveSection: string | null = null;
   @state() aiAgentsActiveSubsection: string | null = null;
-
-  @state() presenceLoading = false;
-  @state() presenceEntries: PresenceEntry[] = [];
-  @state() presenceError: string | null = null;
-  @state() presenceStatus: string | null = null;
 
   @state() agentsLoading = false;
   @state() agentsList: AgentsListResult | null = null;

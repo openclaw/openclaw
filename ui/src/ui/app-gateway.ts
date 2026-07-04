@@ -5,14 +5,8 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { EventLogEntry } from "../api/event-log.ts";
-import type {
-  AgentsListResult,
-  PresenceEntry,
-  HealthSummary,
-  StatusSummary,
-  UpdateAvailable,
-} from "../api/types.ts";
-import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
+import type { AgentsListResult, HealthSummary, UpdateAvailable } from "../api/types.ts";
+import { appRouter, getVisibleRouteId, routeLoadContext } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
@@ -105,9 +99,6 @@ type GatewayHost = {
   onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
-  presenceEntries: PresenceEntry[];
-  presenceError: string | null;
-  presenceStatus: StatusSummary | null;
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
@@ -1024,7 +1015,6 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     state === "final" && shouldReloadHistoryForFinalEvent(payload);
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
-    return;
   }
 }
 
@@ -1073,16 +1063,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     const sideResultHost = host as GatewayHostWithSideResults;
     sideResultHost.chatSideResult = sideResult;
     sideResultHost.chatSideResultTerminalRuns?.add(sideResult.runId);
-    return;
-  }
-
-  if (evt.event === "presence") {
-    const payload = evt.payload as { presence?: PresenceEntry[] } | undefined;
-    if (payload?.presence && Array.isArray(payload.presence)) {
-      host.presenceEntries = payload.presence;
-      host.presenceError = null;
-      host.presenceStatus = null;
-    }
     return;
   }
 
@@ -1139,15 +1119,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   const snapshot = hello.snapshot as
     | {
-        presence?: PresenceEntry[];
         health?: HealthSummary;
         sessionDefaults?: SessionDefaultsSnapshot;
         updateAvailable?: UpdateAvailable;
       }
     | undefined;
-  if (snapshot?.presence && Array.isArray(snapshot.presence)) {
-    host.presenceEntries = snapshot.presence;
-  }
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
     host.healthResult = snapshot.health;

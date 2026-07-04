@@ -10,14 +10,13 @@ export type InstancesProps = {
   loading: boolean;
   entries: PresenceEntry[];
   lastError: string | null;
-  statusMessage: string | null;
+  hostsRevealed: boolean;
   onRefresh: () => void;
+  onToggleHosts: () => void;
 };
 
-let hostsRevealed = false;
-
 export function renderInstances(props: InstancesProps) {
-  const masked = !hostsRevealed;
+  const masked = !props.hostsRevealed;
 
   return html`
     <section class="card">
@@ -32,10 +31,7 @@ export function renderInstances(props: InstancesProps) {
           >
             <button
               class="btn btn--icon ${masked ? "" : "active"}"
-              @click=${() => {
-                hostsRevealed = !hostsRevealed;
-                props.onRefresh();
-              }}
+              @click=${props.onToggleHosts}
               aria-label=${t("instances.toggleHostVisibility")}
               aria-pressed=${!masked}
               style="width: 36px; height: 36px;"
@@ -50,9 +46,6 @@ export function renderInstances(props: InstancesProps) {
       </div>
       ${props.lastError
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
-        : nothing}
-      ${props.statusMessage
-        ? html`<div class="callout" style="margin-top: 12px;">${props.statusMessage}</div>`
         : nothing}
       <div class="list" style="margin-top: 16px;">
         ${props.entries.length === 0

@@ -10,7 +10,6 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   NostrProfile,
-  PresenceEntry,
   SessionsUsageResult,
   CostUsageSummary,
   SessionUsageTimeSeries,
@@ -265,10 +264,6 @@ export type AppViewState = {
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
   configFormDirty: boolean;
-  presenceLoading: boolean;
-  presenceEntries: PresenceEntry[];
-  presenceError: string | null;
-  presenceStatus: string | null;
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;

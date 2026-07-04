@@ -9,7 +9,7 @@ import { pages as configPages } from "./pages/config/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 // import { page as dreamsPage } from "./pages/dreams/route.ts";
-// import { page as instancesPage } from "./pages/instances/route.ts";
+import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as overviewPage } from "./pages/overview/route.ts";
@@ -38,6 +38,7 @@ export const APP_ROUTE_TREE = [
   channelsPage,
   ...configPages,
   workboardPage,
+  instancesPage,
   debugPage,
   logsPage,
   skillWorkshopPage,
