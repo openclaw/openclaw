@@ -79,6 +79,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "stats",
+    description: "Show local agent usage statistics",
+    hasSubcommands: true,
+  },
+  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,

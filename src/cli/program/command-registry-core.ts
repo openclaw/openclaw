@@ -113,6 +113,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("./register.transcripts.js"),
         exportName: "registerTranscriptsCli",
       },
+      {
+        commandNames: ["stats"],
+        loadModule: () => import("./register.stats.js"),
+        exportName: "registerStatsCli",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(
