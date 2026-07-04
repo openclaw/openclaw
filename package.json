@@ -741,10 +741,6 @@
       "types": "./dist/plugin-sdk/browser-config.d.ts",
       "default": "./dist/plugin-sdk/browser-config.js"
     },
-    "./plugin-sdk/byte-format": {
-      "types": "./dist/plugin-sdk/byte-format.d.ts",
-      "default": "./dist/plugin-sdk/byte-format.js"
-    },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"

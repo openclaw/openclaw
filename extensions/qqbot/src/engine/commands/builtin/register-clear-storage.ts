@@ -1,7 +1,7 @@
 // Qqbot plugin module implements register clear storage behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { formatByteSize } from "openclaw/plugin-sdk/byte-format";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { getQQBotMediaPath } from "../../utils/platform.js";
 import type { SlashCommandRegistry } from "../slash-commands.js";
 

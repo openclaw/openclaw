@@ -2,8 +2,8 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { formatByteSize } from "openclaw/plugin-sdk/byte-format";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import {
   openLocalFileSafely,
   readRegularFile,

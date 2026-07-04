@@ -125,7 +125,6 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/conversation-runtime` | Deprecated broad barrel for conversation/thread binding, pairing, and configured-binding helpers; prefer focused binding subpaths such as `plugin-sdk/thread-bindings-runtime` and `plugin-sdk/session-binding-runtime` |
     | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
     | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
-    | `plugin-sdk/byte-format` | Byte-size formatting with explicit SI, IEC, or legacy-binary style plus precision, spacing, and unit cap |
     | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
     | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
     | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
