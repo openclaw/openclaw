@@ -1022,7 +1022,7 @@ describe("resolveSlackThreadHistory", () => {
     expect(result[1]?.text).toBe("hello");
   });
 
-  it("includes bot messages whose text is only in Slack attachments", async () => {
+  it("extracts thread text from Slack attachment and block surfaces", async () => {
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [
         {
@@ -1033,106 +1033,20 @@ describe("resolveSlackThreadHistory", () => {
             {
               title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
               fallback: "Alert: filesystem space is low",
+              fields: [{ title: "Host", value: "dc2.ipa.mgt" }],
             },
           ],
         },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result).toEqual([
-      {
-        text: "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low",
-        userId: undefined,
-        botId: "BMONITOR",
-        ts: "1.000",
-        files: undefined,
-      },
-    ]);
-  });
-
-  it("includes bot messages whose text is only in Slack blocks", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
         {
           text: "  ",
           bot_id: "BMONITOR",
-          ts: "1.000",
+          ts: "2.000",
           blocks: [{ type: "section", text: { type: "mrkdwn", text: "Pod restart rate is high" } }],
         },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.text).toBe("Pod restart rate is high");
-    expect(result[0]?.botId).toBe("BMONITOR");
-  });
-
-  it("includes bot messages whose text is only in standard attachment blocks", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
         {
           text: "  ",
           bot_id: "BMONITOR",
-          ts: "1.000",
-          attachments: [
-            {
-              blocks: [
-                {
-                  type: "section",
-                  text: { type: "mrkdwn", text: "High error rate on checkout" },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.text).toBe("High error rate on checkout");
-    expect(result[0]?.botId).toBe("BMONITOR");
-  });
-
-  it("collects all readable text from attachment blocks and section fields", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
-        {
-          text: "  ",
-          bot_id: "BMONITOR",
-          ts: "1.000",
+          ts: "3.000",
           attachments: [
             {
               blocks: [
@@ -1152,32 +1066,9 @@ describe("resolveSlackThreadHistory", () => {
             },
           ],
         },
-      ],
-      response_metadata: { next_cursor: "" },
-    });
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
-
-    const result = await resolveSlackThreadHistory({
-      channelId: "C1",
-      threadTs: "1.000",
-      client,
-      limit: 10,
-    });
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.text).toBe(
-      "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
-    );
-  });
-
-  it("preserves formatting in primary Slack text", async () => {
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [
         {
           text: "  line one\nline two  ",
-          ts: "1.000",
+          ts: "4.000",
         },
       ],
       response_metadata: { next_cursor: "" },
@@ -1193,7 +1084,18 @@ describe("resolveSlackThreadHistory", () => {
       limit: 10,
     });
 
-    expect(result[0]?.text).toBe("line one\nline two");
+    expect(result.map((entry) => entry.text)).toEqual([
+      "Filesystem on /dev/sda1 has only 14.93% available space left.\nAlert: filesystem space is low\nHost\ndc2.ipa.mgt",
+      "Pod restart rate is high",
+      "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
+      "line one\nline two",
+    ]);
+    expect(result.map((entry) => entry.botId)).toEqual([
+      "BMONITOR",
+      "BMONITOR",
+      "BMONITOR",
+      undefined,
+    ]);
   });
 
   it("returns empty when limit is zero without calling Slack API", async () => {

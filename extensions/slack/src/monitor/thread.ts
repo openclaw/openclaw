@@ -6,38 +6,11 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  normalizeOptionalString,
-  readStringValue as readString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
+import { resolveSlackBlocksText } from "./block-text.js";
 import { logVerbose } from "./thread.runtime.js";
-
-type SlackTextObject = {
-  text?: unknown;
-};
-
-type SlackRichTextElement = {
-  type?: unknown;
-  text?: unknown;
-  url?: unknown;
-  user_id?: unknown;
-  channel_id?: unknown;
-  usergroup_id?: unknown;
-  name?: unknown;
-  range?: unknown;
-  elements?: unknown;
-};
-
-type SlackBlockLike = {
-  type?: unknown;
-  text?: unknown;
-  elements?: unknown;
-  fields?: unknown;
-  alt_text?: unknown;
-  title?: unknown;
-};
 
 export type SlackThreadStarter = {
   text: string;
@@ -74,179 +47,20 @@ function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
 }
 
-function cleanSlackTextCandidate(value: string | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function readPrimarySlackText(value: string | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function pushUniqueText(parts: string[], value: string | undefined): void {
-  const text = cleanSlackTextCandidate(value);
+  const text = normalizeOptionalString(value);
   if (text && !parts.includes(text)) {
     parts.push(text);
-  }
-}
-
-function pushUniqueFormattedText(parts: string[], value: string | undefined): void {
-  const text = readPrimarySlackText(value);
-  if (text && !parts.includes(text)) {
-    parts.push(text);
-  }
-}
-
-function readTextObject(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString(readString((value as SlackTextObject).text));
-}
-
-function renderSlackRichTextLeaf(element: SlackRichTextElement): string {
-  switch (element.type) {
-    case "text":
-      return readString(element.text) ?? "";
-    case "link":
-      return readString(element.text) ?? readString(element.url) ?? "";
-    case "user": {
-      const userId = readString(element.user_id);
-      return userId ? `<@${userId}>` : "";
-    }
-    case "channel": {
-      const channelId = readString(element.channel_id);
-      return channelId ? `<#${channelId}>` : "";
-    }
-    case "usergroup": {
-      const usergroupId = readString(element.usergroup_id);
-      return usergroupId ? `<!subteam^${usergroupId}>` : "";
-    }
-    case "broadcast": {
-      const range = readString(element.range);
-      return range ? `<!${range}>` : "";
-    }
-    case "emoji": {
-      const name = readString(element.name);
-      return name ? `:${name}:` : "";
-    }
-    default:
-      return "";
-  }
-}
-
-function renderSlackRichTextElements(elements: unknown): string {
-  if (!Array.isArray(elements)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const rawElement of elements) {
-    if (!rawElement || typeof rawElement !== "object") {
-      continue;
-    }
-    const element = rawElement as SlackRichTextElement;
-    switch (element.type) {
-      case "rich_text_section":
-      case "rich_text_preformatted":
-      case "rich_text_quote": {
-        parts.push(renderSlackRichTextElements(element.elements));
-        break;
-      }
-      case "rich_text_list": {
-        const listParts: string[] = [];
-        if (Array.isArray(element.elements)) {
-          for (const child of element.elements) {
-            if (!child || typeof child !== "object") {
-              continue;
-            }
-            const rendered = renderSlackRichTextElements((child as SlackRichTextElement).elements);
-            if (rendered) {
-              listParts.push(rendered);
-            }
-          }
-        }
-        parts.push(listParts.join("\n"));
-        break;
-      }
-      default:
-        parts.push(renderSlackRichTextLeaf(element));
-        break;
-    }
-  }
-  return parts.join("");
-}
-
-function readSlackBlockText(block: unknown): string | undefined {
-  if (!block || typeof block !== "object") {
-    return undefined;
-  }
-  const blockLike = block as SlackBlockLike;
-  switch (blockLike.type) {
-    case "rich_text":
-      return normalizeOptionalString(renderSlackRichTextElements(blockLike.elements));
-    case "section": {
-      const text = readTextObject(blockLike.text);
-      if (text) {
-        return text;
-      }
-      if (!Array.isArray(blockLike.fields)) {
-        return undefined;
-      }
-      const fields: string[] = [];
-      for (const field of blockLike.fields) {
-        const fieldText = readTextObject(field);
-        if (fieldText) {
-          fields.push(fieldText);
-        }
-      }
-      return fields.length > 0 ? fields.join("\n") : undefined;
-    }
-    case "header":
-      return readTextObject(blockLike.text);
-    case "context": {
-      if (!Array.isArray(blockLike.elements)) {
-        return undefined;
-      }
-      const parts: string[] = [];
-      for (const element of blockLike.elements) {
-        const text = readTextObject(element);
-        if (text) {
-          parts.push(text);
-        }
-      }
-      return parts.length > 0 ? parts.join(" ") : undefined;
-    }
-    case "image":
-      return normalizeOptionalString(readString(blockLike.alt_text)) ?? readTextObject(blockLike.title);
-    case "video":
-      return readTextObject(blockLike.title) ?? normalizeOptionalString(readString(blockLike.alt_text));
-    default:
-      return undefined;
   }
 }
 
 function resolveSlackBlocksFallbackText(blocks: unknown[] | undefined): string | undefined {
-  if (!Array.isArray(blocks) || blocks.length === 0) {
-    return undefined;
-  }
-  const parts: string[] = [];
-  for (const block of blocks) {
-    const text = readSlackBlockText(block);
-    if (text) {
-      parts.push(text);
-    }
-  }
-  return parts.length > 0 ? parts.join("\n") : undefined;
+  return resolveSlackBlocksText(blocks)?.text;
 }
 
-function resolveSlackAttachmentFallbackText(attachments: SlackAttachment[] | undefined): string | undefined {
+function resolveSlackAttachmentFallbackText(
+  attachments: SlackAttachment[] | undefined,
+): string | undefined {
   if (!Array.isArray(attachments) || attachments.length === 0) {
     return undefined;
   }
@@ -257,8 +71,12 @@ function resolveSlackAttachmentFallbackText(attachments: SlackAttachment[] | und
     pushUniqueText(parts, attachment.title);
     pushUniqueText(parts, attachment.text);
     pushUniqueText(parts, attachment.fallback);
-    pushUniqueFormattedText(parts, resolveSlackBlocksFallbackText(attachment.blocks));
-    pushUniqueFormattedText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks));
+    for (const field of attachment.fields ?? []) {
+      pushUniqueText(parts, field.title);
+      pushUniqueText(parts, field.value);
+    }
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.blocks));
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks));
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
@@ -269,7 +87,7 @@ function resolveSlackMessageText(message: {
   attachments?: SlackAttachment[];
 }): string | undefined {
   return (
-    readPrimarySlackText(message.text) ??
+    normalizeOptionalString(message.text) ??
     resolveSlackAttachmentFallbackText(message.attachments) ??
     resolveSlackBlocksFallbackText(message.blocks)
   );
