@@ -1410,17 +1410,11 @@ describe("registerPolicyDoctorChecks", () => {
         target: "oc://openclaw.config/channels/telegram",
         requirement: "oc://policy.jsonc/channels/denyRules/#0",
         fixHint: "Telegram is not approved for this workspace.",
-        fixRecommendation: {
-          fixClass: "automatic",
-          policyPath: ["channels", "denyRules"],
-          configTargets: ["channels"],
-          summary: "Disable product-managed channels matching the denied provider.",
-        },
       }),
     ]);
 
     const evaluation = await evaluatePolicy(ctx(configPath, cfg));
-    expect(evaluation.findings[0]).toHaveProperty("fixRecommendation");
+    expect(evaluation.findings[0]).not.toHaveProperty("fixRecommendation");
     expect(evaluation.attestedFindings[0]).not.toHaveProperty("fixRecommendation");
   });
 

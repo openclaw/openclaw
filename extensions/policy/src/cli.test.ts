@@ -257,11 +257,13 @@ describe("policy commands", () => {
           ocPath: "oc://openclaw.config/channels/telegram",
           target: "oc://openclaw.config/channels/telegram",
           requirement: "oc://policy.jsonc/channels/denyRules/#0",
-          fixRecommendation: {
-            fixClass: "automatic",
-            policyPath: ["channels", "denyRules"],
-            configTargets: ["channels"],
-            summary: "Disable product-managed channels matching the denied provider.",
+          policy: {
+            fixRecommendation: {
+              fixClass: "automatic",
+              policyPath: ["channels", "denyRules"],
+              configTargets: ["channels"],
+              summary: "Disable product-managed channels matching the denied provider.",
+            },
           },
         },
       ],

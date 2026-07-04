@@ -12,6 +12,7 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
   buildPolicyConformanceReport,
@@ -428,8 +429,25 @@ function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
     ...(finding.target !== undefined ? { target: finding.target } : {}),
     ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
-    ...(finding.fixRecommendation !== undefined
-      ? { fixRecommendation: finding.fixRecommendation }
-      : {}),
+    ...policyFindingMetadata(finding),
+  };
+}
+
+function policyFindingMetadata(finding: HealthFinding): Record<string, unknown> {
+  const metadata = POLICY_FIX_METADATA_BY_CHECK_ID.get(
+    finding.checkId as (typeof POLICY_CHECK_IDS)[number],
+  );
+  if (metadata === undefined) {
+    return {};
+  }
+  return {
+    policy: {
+      fixRecommendation: {
+        fixClass: metadata.fixClass,
+        ...(metadata.policyPath !== undefined ? { policyPath: metadata.policyPath } : {}),
+        ...(metadata.configTargets !== undefined ? { configTargets: metadata.configTargets } : {}),
+        summary: metadata.summary,
+      },
+    },
   };
 }

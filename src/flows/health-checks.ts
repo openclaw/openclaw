@@ -44,12 +44,6 @@ export interface HealthFinding {
   readonly target?: string;
   readonly requirement?: string;
   readonly fixHint?: string;
-  readonly fixRecommendation?: {
-    readonly fixClass: "automatic" | "reviewRequired" | "manual" | "validateOnly" | "unsupported";
-    readonly policyPath?: readonly string[];
-    readonly configTargets?: readonly string[];
-    readonly summary: string;
-  };
 }
 
 export type HealthCheckMode = "doctor" | "lint" | "fix";
