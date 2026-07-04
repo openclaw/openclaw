@@ -19,7 +19,7 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload, CronStoreFile } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -473,17 +473,36 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
+// Rolls the live store back to its pre-mutation snapshot when the durable
+// write fails. recomputeNextRunsForMaintenance mutates schedule state across
+// all jobs, so restoring only the touched job would leave siblings ahead of
+// disk; without the rollback a failed add/update/remove keeps running,
+// reverting, or resurrecting jobs the caller was told did not apply.
+async function persistOrRestore(state: CronServiceState, snapshot: CronStoreFile | null) {
+  try {
+    await persist(state);
+  } catch (err) {
+    state.store = snapshot;
+    throw err;
+  }
+}
+
+function snapshotStoreForRollback(state: CronServiceState): CronStoreFile | null {
+  return state.store ? structuredClone(state.store) : null;
+}
+
 /** Adds a cron job, recomputes scheduler state, persists, and re-arms the timer. */
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
     recomputeNextRunsForMaintenance(state);
 
-    await persist(state);
+    await persistOrRestore(state, snapshot);
     armTimer(state);
 
     state.deps.log.info(
@@ -513,6 +532,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
+    const snapshot = snapshotStoreForRollback(state);
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     const nextJob = structuredClone(job);
@@ -581,7 +601,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
       }
     }
 
-    await persist(state);
+    await persistOrRestore(state, snapshot);
     armTimer(state);
     emit(state, {
       jobId: id,
@@ -602,13 +622,14 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 
     recomputeNextRunsForMaintenance(state);
 
-    await persist(state);
+    await persistOrRestore(state, snapshot);
     armTimer(state);
     if (removed) {
       emit(state, { jobId: id, action: "removed", job: removedJob });
