@@ -48,6 +48,7 @@ import {
   finalizeStagedPostCompactionDelegates,
   listPendingDelegateSessionKeysForRecovery,
   listRecoverableStagedPostCompactionDelegates,
+  markPendingDelegateChainStatePersistPlanned,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   peekSoonestUnmaturedDelegateDueAt,
@@ -116,14 +117,16 @@ async function persistChainStateBeforeTerminalCommit(
     persistBeforeTerminalCommit?: boolean;
     persistChainState?: (chainState: ChainState) => void | Promise<void>;
   },
+  delegate: PendingContinuationDelegate,
   chainState: ChainState,
-): Promise<boolean> {
+): Promise<PendingContinuationDelegate> {
   if (!params.persistBeforeTerminalCommit || !params.persistChainState) {
-    return false;
+    return delegate;
   }
   try {
+    const plannedDelegate = markPendingDelegateChainStatePersistPlanned(delegate, chainState);
     await params.persistChainState(chainState);
-    return true;
+    return plannedDelegate;
   } catch (err) {
     throw new DelegateTerminalChainStatePersistError(err);
   }
@@ -407,19 +410,28 @@ export async function dispatchToolDelegates(params: {
   const appliedChainTokensFold = params.applyDelegateChainTokensFold
     ? Math.max(0, ...toolDelegates.map((delegate) => delegate.chainTokensFold ?? 0))
     : 0;
-  const accumulatedTokens = chainState.accumulatedChainTokens + appliedChainTokensFold;
+  let currentAccumulatedTokens = chainState.accumulatedChainTokens + appliedChainTokensFold;
   let currentChainId = chainState.chainId;
   let chainStatePersistedBeforeTerminalCommit = false;
   const currentTerminalChainState = (): ChainState => ({
     currentChainCount,
     chainStartedAt: chainState.chainStartedAt,
-    accumulatedChainTokens: accumulatedTokens,
+    accumulatedChainTokens: currentAccumulatedTokens,
     ...(currentChainId ? { chainId: currentChainId } : {}),
   });
-  const persistTerminalChainState = async (nextState: ChainState): Promise<void> => {
-    if (await persistChainStateBeforeTerminalCommit(params, nextState)) {
+  const persistTerminalChainState = async (
+    delegate: PendingContinuationDelegate,
+    nextState: ChainState,
+  ): Promise<PendingContinuationDelegate> => {
+    const updatedDelegate = await persistChainStateBeforeTerminalCommit(
+      params,
+      delegate,
+      nextState,
+    );
+    if (params.persistBeforeTerminalCommit && params.persistChainState) {
       chainStatePersistedBeforeTerminalCommit = true;
     }
+    return updatedDelegate;
   };
 
   for (const dropped of delegatesOverLimit) {
@@ -427,8 +439,8 @@ export async function dispatchToolDelegates(params: {
     log.info(
       `[continuation:delegate-rejected] maxDelegatesPerTurn=${maxDelegatesPerTurn} task=${dropped.task.slice(0, 80)} session=${sessionKey}`,
     );
-    await persistTerminalChainState(currentTerminalChainState());
-    markDelegateFailed(dropped, summary);
+    const failedDelegate = await persistTerminalChainState(dropped, currentTerminalChainState());
+    markDelegateFailed(failedDelegate, summary);
     enqueueSystemEvent(
       `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(dropped.task)}`,
       {
@@ -450,8 +462,8 @@ export async function dispatchToolDelegates(params: {
       log.info(
         `[continuation:delegate-rejected] policy.cross_session_targeting task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
       );
-      await persistTerminalChainState(currentTerminalChainState());
-      markDelegateFailed(delegate, summary);
+      const failedDelegate = await persistTerminalChainState(delegate, currentTerminalChainState());
+      markDelegateFailed(failedDelegate, summary);
       enqueueSystemEvent(
         `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         {
@@ -473,23 +485,25 @@ export async function dispatchToolDelegates(params: {
       continue;
     }
 
-    const budgetCheck = checkContinuationBudget({
-      chainState: {
-        currentChainCount,
-        chainStartedAt: chainState.chainStartedAt,
-        accumulatedChainTokens: accumulatedTokens,
-      },
-      config,
-      sessionKey,
-    });
+    const budgetCheck = delegate.persistedChainState
+      ? undefined
+      : checkContinuationBudget({
+          chainState: {
+            currentChainCount,
+            chainStartedAt: chainState.chainStartedAt,
+            accumulatedChainTokens: currentAccumulatedTokens,
+          },
+          config,
+          sessionKey,
+        });
 
     if (budgetCheck) {
       const summary = `Tool delegate rejected: ${budgetCheck}.`;
       log.info(
         `[continuation:delegate-rejected] ${budgetCheck} task=${delegate.task.slice(0, 80)} session=${sessionKey}`,
       );
-      await persistTerminalChainState(currentTerminalChainState());
-      markDelegateFailed(delegate, summary);
+      const failedDelegate = await persistTerminalChainState(delegate, currentTerminalChainState());
+      markDelegateFailed(failedDelegate, summary);
       enqueueSystemEvent(
         `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         {
@@ -501,7 +515,24 @@ export async function dispatchToolDelegates(params: {
       continue;
     }
 
-    const nextHop = currentChainCount + 1;
+    const nextHop = delegate.persistedChainState?.currentChainCount ?? currentChainCount + 1;
+    const delegateAccumulatedTokens =
+      delegate.persistedChainState?.accumulatedChainTokens ?? currentAccumulatedTokens;
+    const dispatchChainId =
+      delegate.persistedChainState?.chainId ?? currentChainId ?? generateChainId();
+    const plannedTerminalChainState: ChainState = {
+      currentChainCount: nextHop,
+      chainStartedAt: delegate.persistedChainState?.chainStartedAt ?? chainState.chainStartedAt,
+      accumulatedChainTokens: delegateAccumulatedTokens,
+      ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
+    };
+    const commitPlannedChainState = (chainId: string | undefined): void => {
+      dispatched++;
+      currentChainCount = nextHop;
+      currentAccumulatedTokens = delegateAccumulatedTokens;
+      currentChainId = chainId ?? currentChainId;
+    };
+
     // Own mode wins; otherwise inherit the parent chain's silent/wake policy so a
     // default-mode delegate spawned under a silent/wake chain stays internal
     // instead of announcing (mirrors the subagent-announce chain-hop guards) (#1158).
@@ -527,7 +558,6 @@ export async function dispatchToolDelegates(params: {
     };
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
-    const dispatchChainId = currentChainId ?? generateChainId();
     try {
       if (delegateDelivery === "timer") {
         emitContinuationDelegateFireSpan({
@@ -559,17 +589,13 @@ export async function dispatchToolDelegates(params: {
         (hasActiveSubagentRegistryRun(childSessionKey) ||
           (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
       ) {
-        await persistTerminalChainState({
-          currentChainCount: nextHop,
-          chainStartedAt: chainState.chainStartedAt,
-          accumulatedChainTokens: accumulatedTokens,
-          chainId: dispatchChainId,
-        });
-        markPendingDelegateSpawnAccepted(delegate, childSessionKey);
+        const acceptedDelegate = await persistTerminalChainState(
+          delegate,
+          plannedTerminalChainState,
+        );
+        markPendingDelegateSpawnAccepted(acceptedDelegate, childSessionKey);
         dispatchSpan.setStatus("OK");
-        dispatched++;
-        currentChainCount = nextHop;
-        currentChainId = dispatchChainId;
+        commitPlannedChainState(dispatchChainId);
         continue;
       }
       const result = await spawnSubagentDirect(
@@ -578,8 +604,8 @@ export async function dispatchToolDelegates(params: {
           drainsContinuationDelegateQueue: true,
           continuationChainState: {
             count: nextHop,
-            startedAt: chainState.chainStartedAt,
-            tokens: accumulatedTokens,
+            startedAt: plannedTerminalChainState.chainStartedAt,
+            tokens: delegateAccumulatedTokens,
             chainId: dispatchChainId,
           },
           ...(delegate.model ? { model: delegate.model } : {}),
@@ -608,27 +634,26 @@ export async function dispatchToolDelegates(params: {
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
-        await persistTerminalChainState({
-          currentChainCount: nextHop,
-          chainStartedAt: chainState.chainStartedAt,
-          accumulatedChainTokens: accumulatedTokens,
-          chainId: dispatchChainId,
-        });
+        const acceptedDelegate = await persistTerminalChainState(
+          delegate,
+          plannedTerminalChainState,
+        );
         if (acceptedChildSessionKey) {
-          markPendingDelegateSpawnAccepted(delegate, acceptedChildSessionKey);
+          markPendingDelegateSpawnAccepted(acceptedDelegate, acceptedChildSessionKey);
         }
         dispatchSpan.setStatus("OK");
-        dispatched++;
-        currentChainCount = nextHop;
-        currentChainId = dispatchChainId;
+        commitPlannedChainState(dispatchChainId);
       } else {
         const reasonText = result.error ?? "delegation was not accepted.";
         const summary = `DELEGATE spawn ${result.status}: ${reasonText}`;
         log.info(
           `[continuation:delegate-spawn-rejected] status=${result.status} session=${sessionKey} reason=${reasonText} task=${delegate.task.slice(0, 80)}`,
         );
-        await persistTerminalChainState(currentTerminalChainState());
-        markDelegateFailed(delegate, summary);
+        const failedDelegate = await persistTerminalChainState(
+          delegate,
+          currentTerminalChainState(),
+        );
+        markDelegateFailed(failedDelegate, summary);
         dispatchSpan.setStatus("ERROR", reasonText);
         enqueueSystemEvent(
           `[continuation] ${summary} Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
@@ -657,8 +682,8 @@ export async function dispatchToolDelegates(params: {
       dispatchSpan?.recordException(err);
       dispatchSpan?.setStatus("ERROR", message);
       log.info(`[continuation:delegate-spawn-failed] error=${message} session=${sessionKey}`);
-      await persistTerminalChainState(currentTerminalChainState());
-      markDelegateFailed(delegate, summary);
+      const failedDelegate = await persistTerminalChainState(delegate, currentTerminalChainState());
+      markDelegateFailed(failedDelegate, summary);
       enqueueSystemEvent(
         `[continuation] ${summary}. Task: ${formatDelegateTaskForSystemEvent(delegate.task)}`,
         {
@@ -682,7 +707,7 @@ export async function dispatchToolDelegates(params: {
     chainState: {
       currentChainCount,
       chainStartedAt: chainState.chainStartedAt,
-      accumulatedChainTokens: accumulatedTokens,
+      accumulatedChainTokens: currentAccumulatedTokens,
       ...(currentChainId ? { chainId: currentChainId } : {}),
     },
     ...(appliedChainTokensFold > 0 ? { appliedChainTokensFold } : {}),
