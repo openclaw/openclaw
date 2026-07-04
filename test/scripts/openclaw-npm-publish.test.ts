@@ -107,14 +107,16 @@ describe("openclaw npm publish wrapper", () => {
 
   it("rejects a tarball whose package version differs from the checkout", () => {
     const tempRoot = makeTempDir("openclaw-npm-publish-");
-    const tarball = makePackageTarball(tempRoot, JSON.stringify({ version: "2026.6.10" }));
+    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const tarballVersion = `${packageVersion}-mismatch`;
+    const tarball = makePackageTarball(tempRoot, JSON.stringify({ version: tarballVersion }));
     const result = runPublishWrapper(["--publish", tarball], {
       OPENCLAW_NPM_PUBLISH_TAG: "beta",
     });
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(
-      "npm publish tarball version mismatch: expected 2026.6.11, got 2026.6.10",
+      `npm publish tarball version mismatch: expected ${packageVersion}, got ${tarballVersion}`,
     );
   });
 

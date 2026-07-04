@@ -104,9 +104,7 @@ describe("minimal npm extended-stable workflow", () => {
     expect(summary.env?.BYPASS_EXTENDED_STABLE_GUARD).toBe(
       "${{ inputs.bypass_extended_stable_guard }}",
     );
-    expect(summary.run).toContain(
-      "Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}",
-    );
+    expect(summary.run).toContain("Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}");
   });
 
   it("authenticates exact extended-stable run and Full Validation identities", () => {
@@ -128,6 +126,7 @@ describe("minimal npm extended-stable workflow", () => {
     expect(readback.run).toContain("openclaw-npm-extended-stable-release.mjs verify-readback");
     expect(summary.if).toContain("always()");
     expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
+    expect(summary.run).toContain('EXPECTED_VERSION="$RELEASE_TAG"');
     expect(publish?.environment).toBe("npm-release");
   });
 

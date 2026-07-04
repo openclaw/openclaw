@@ -134,8 +134,10 @@ npm view openclaw@extended-stable version --userconfig "$(mktemp)"
 
 Both commands must return `YYYY.M.P`. If publish succeeds but selector
 readback fails, do not republish the immutable package version. Use the single
-`npm dist-tag add` or `npm dist-tag rm` repair command printed in the failed
-workflow's always-run summary, then repeat both independent readbacks.
+`npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command printed in
+the failed workflow's always-run summary, then repeat both independent
+readbacks. Rollback to the prior selector is a separate operator decision, not
+the readback repair path.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
 plugins, macOS, Windows, and other platform publication. Do not run those steps

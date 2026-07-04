@@ -338,9 +338,7 @@ describe("Full Validation manifest identity", () => {
 describe("extended-stable selector capture", () => {
   it("distinguishes bootstrap absence from an existing selector", () => {
     expect(parsePriorExtendedStableSelector('{"latest":"2026.7.1"}')).toBe("absent");
-    expect(parsePriorExtendedStableSelector('{"extended-stable":"2026.6.33"}')).toBe(
-      "2026.6.33",
-    );
+    expect(parsePriorExtendedStableSelector('{"extended-stable":"2026.6.33"}')).toBe("2026.6.33");
   });
 
   it.each(["not json", "null", "[]", '"2026.6.33"'])("rejects invalid result %s", (value) => {
@@ -390,12 +388,18 @@ describe("extended-stable registry readback", () => {
 });
 
 describe("extended-stable selector repair", () => {
-  it("returns the exact add or remove command", () => {
-    expect(extendedStableSelectorRepairCommand("2026.5.40")).toBe(
-      "npm dist-tag add openclaw@2026.5.40 extended-stable",
-    );
-    expect(extendedStableSelectorRepairCommand("absent")).toBe(
-      "npm dist-tag rm openclaw extended-stable",
+  it("points the selector at the expected published version", () => {
+    expect(extendedStableSelectorRepairCommand("v2026.6.33")).toBe(
+      "npm dist-tag add openclaw@2026.6.33 extended-stable",
     );
   });
+
+  it.each([undefined, "absent", "2026.6.33-beta.1", "2026.6.33-1"])(
+    "rejects an invalid expected version: %s",
+    (expectedVersion) => {
+      expect(() => extendedStableSelectorRepairCommand(expectedVersion)).toThrow(
+        "Extended-stable selector repair requires an exact final YYYY.M.P version.",
+      );
+    },
+  );
 });

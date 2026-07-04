@@ -827,7 +827,7 @@ jobs:
             if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
               echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
             else
-              repair_command="$(PREVIOUS_EXTENDED_STABLE="$PREVIOUS_EXTENDED_STABLE" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
+              repair_command="$(EXPECTED_VERSION="$RELEASE_TAG" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
               echo "- Repair command: \`${repair_command}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

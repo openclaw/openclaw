@@ -119,9 +119,7 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     throw new Error("Extended-stable npm release identity requires full 40-character Git SHAs.");
   }
   if (new Set(shaValues.map((sha) => sha.toLowerCase())).size !== 1) {
-    throw new Error(
-      "Extended-stable npm checkout, tag, and branch tip SHAs must match exactly.",
-    );
+    throw new Error("Extended-stable npm checkout, tag, and branch tip SHAs must match exactly.");
   }
 
   if (bypassExtendedStableGuard) {
@@ -268,10 +266,13 @@ export async function verifyExtendedStableRegistryReadback({
   );
 }
 
-export function extendedStableSelectorRepairCommand(previous) {
-  return previous === "absent"
-    ? "npm dist-tag rm openclaw extended-stable"
-    : `npm dist-tag add openclaw@${previous} extended-stable`;
+export function extendedStableSelectorRepairCommand(expectedVersion) {
+  const normalizedVersion = (expectedVersion ?? "").replace(/^v/u, "");
+  const parsed = parseReleaseVersion(normalizedVersion);
+  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
+    throw new Error("Extended-stable selector repair requires an exact final YYYY.M.P version.");
+  }
+  return `npm dist-tag add openclaw@${parsed.version} extended-stable`;
 }
 
 function git(args) {
@@ -341,10 +342,7 @@ function validateRequestFromRepository() {
       npmWorkflowRef,
       checkoutSha: git(["rev-parse", "HEAD"]),
       tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
-      extendedStableBranchSha: git([
-        "rev-parse",
-        `refs/remotes/origin/${extendedStableBranch}`,
-      ]),
+      extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
       packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
       mainPackageVersion: "",
     });
@@ -372,10 +370,7 @@ function validateRequestFromRepository() {
     npmWorkflowRef,
     checkoutSha: git(["rev-parse", "HEAD"]),
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
-    extendedStableBranchSha: git([
-      "rev-parse",
-      `refs/remotes/origin/${extendedStableBranch}`,
-    ]),
+    extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
     packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
     mainPackageVersion: packageVersionAt("refs/remotes/origin/main"),
   });
@@ -464,9 +459,7 @@ async function main() {
     return;
   }
   if (command === "repair-command") {
-    console.log(
-      extendedStableSelectorRepairCommand(process.env.PREVIOUS_EXTENDED_STABLE),
-    );
+    console.log(extendedStableSelectorRepairCommand(process.env.EXPECTED_VERSION));
     return;
   }
   throw new Error(`Unknown extended-stable npm release command: ${command ?? "<missing>"}.`);
