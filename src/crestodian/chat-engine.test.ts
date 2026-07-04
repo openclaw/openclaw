@@ -134,10 +134,12 @@ describe("CrestodianChatEngine", () => {
   });
 
   it("prefers the real agent loop for fuzzy messages", async () => {
-    const runAgentTurn = vi.fn(async () => ({
-      text: "*click* I checked your shell — all good. Want channels next?",
-      modelLabel: "openai/gpt-5.5",
-    }));
+    const runAgentTurn = vi.fn(
+      async (_params: { input: string; surface: string; session: { sessionId: string } }) => ({
+        text: "*click* I checked your shell — all good. Want channels next?",
+        modelLabel: "openai/gpt-5.5",
+      }),
+    );
     const planner = vi.fn(async () => null);
     const engine = new CrestodianChatEngine({
       runAgentTurn,
@@ -150,11 +152,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("I checked your shell");
     expect(planner).not.toHaveBeenCalled();
-    const call = runAgentTurn.mock.calls[0]?.[0] as {
-      input: string;
-      surface: string;
-      session: { sessionId: string };
-    };
+    const call = runAgentTurn.mock.calls[0]![0];
     expect(call.input).toContain("setup looking");
     expect(call.surface).toBe("gateway");
     expect(call.session.sessionId).toMatch(/^crestodian-/);
@@ -166,9 +164,11 @@ describe("CrestodianChatEngine", () => {
   });
 
   it("answers fuzzy messages through the AI custodian with conversation history", async () => {
-    const planner = vi.fn(async () => ({
-      reply: "I'm your setup custodian. Nothing changes without your yes.",
-    }));
+    const planner = vi.fn(
+      async (_params: { input: string; history?: Array<{ role: string; text: string }> }) => ({
+        reply: "I'm your setup custodian. Nothing changes without your yes.",
+      }),
+    );
     const engine = new CrestodianChatEngine({
       runAgentTurn: async () => null,
       planWithAssistant: planner,
@@ -180,12 +180,9 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("setup custodian");
     expect(reply.action).toBe("none");
-    const call = planner.mock.calls[0]?.[0] as {
-      input: string;
-      history: Array<{ role: string; text: string }>;
-    };
+    const call = planner.mock.calls[0]![0];
     expect(call.input).toContain("machine");
-    expect(call.history[0]).toEqual({ role: "assistant", text: "welcome text" });
+    expect(call.history?.[0]).toEqual({ role: "assistant", text: "welcome text" });
   });
 
   it("routes AI-proposed persistent commands through approval with provenance", async () => {
@@ -209,7 +206,7 @@ describe("CrestodianChatEngine", () => {
   });
 
   it("keeps a pending proposal when the user asks a question instead of yes/no", async () => {
-    const planner = vi.fn(async () => ({
+    const planner = vi.fn(async (_params: { input: string; pendingOperation?: string }) => ({
       reply: "A workspace is where your agent keeps its files.",
     }));
     const engine = new CrestodianChatEngine({
@@ -223,7 +220,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("agent keeps its files");
     expect(engine.hasPendingProposal()).toBe(true);
-    const call = planner.mock.calls[0]?.[0] as { pendingOperation?: string };
+    const call = planner.mock.calls[0]![0];
     expect(call.pendingOperation).toContain("gateway.port");
   });
 
