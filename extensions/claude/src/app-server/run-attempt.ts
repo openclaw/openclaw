@@ -453,7 +453,10 @@ export async function runClaudeAppServerAttempt(
     // claude-driven replies bypass the footer-injection path entirely. See
     // codex/run-attempt.ts:2629 (mirrorTranscriptBestEffort) for the codex
     // analog.
-    result.messagesSnapshot = buildMessagesSnapshot(accumulated);
+    result.messagesSnapshot = buildMessagesSnapshot(accumulated, {
+      provider: params.model.provider,
+      model: params.modelId,
+    });
     // lastAssistant must be the actual AssistantMessage object, not just
     // text — the auto-reply dispatcher reads stopReason/usage off it.
     const lastAssistantMessage = [...result.messagesSnapshot]
@@ -1288,7 +1291,10 @@ function resolveClaudeAppServerApprovalPolicy(args: {
 // minimum that downstream consumers actually key on (role + content +
 // timestamp + tool linkage).
 
-function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
+export function buildMessagesSnapshot(
+  acc: Accumulator,
+  modelRef: { provider: string; model: string },
+): AgentMessage[] {
   const now = Date.now();
   const messages: AgentMessage[] = [];
   // Tool calls in encounter order (Map preserves insertion). Each becomes
@@ -1308,8 +1314,8 @@ function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
         },
       ],
       api: "messages",
-      provider: "anthropic",
-      model: "",
+      provider: modelRef.provider,
+      model: modelRef.model,
       usage: { input: 0, output: 0, total: 0 },
       stopReason: "toolUse",
       timestamp: now + toolSeq,
@@ -1344,8 +1350,8 @@ function buildMessagesSnapshot(acc: Accumulator): AgentMessage[] {
       role: "assistant",
       content: [{ type: "text", text }],
       api: "messages",
-      provider: "anthropic",
-      model: "",
+      provider: modelRef.provider,
+      model: modelRef.model,
       usage: turnUsage,
       stopReason: "stop",
       timestamp: now,
