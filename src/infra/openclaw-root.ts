@@ -90,10 +90,11 @@ function candidateDirsFromArgv1(argv1: string): string[] {
     return [...cached];
   }
   const normalized = path.resolve(argv1);
-  const candidates = [path.dirname(normalized)];
+  const candidates: string[] = [];
 
   // Resolve symlinks for version managers (nvm, fnm, n, Homebrew/Linuxbrew)
-  // that create symlinks in bin/ pointing to the real package location.
+  // that create symlinks in bin/ pointing to the real package location. Prefer
+  // the target so a launcher nested under another OpenClaw checkout keeps its own package root.
   try {
     const resolved = openClawRootFsSync.realpathSync(normalized);
     if (resolved !== normalized) {
@@ -102,6 +103,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   } catch {
     // realpathSync throws if path doesn't exist; keep original candidates
   }
+  candidates.push(path.dirname(normalized));
 
   const parts = normalized.split(path.sep);
   const binIndex = parts.lastIndexOf(".bin");
