@@ -477,12 +477,22 @@ function renderTelegramProgressDraftPreview(
   richMessages: boolean,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
+  // formatChannelProgressDraftText writes the draft label as `${label}\n\n${content}`
+  // and joins content lines with `\n`. Extract the heading only when the compositor
+  // actually wrote a label: either the draft is label-only (no structured content
+  // lines) or the text contains the blank-line separator. Without this guard a
+  // labelless draft (progress.label: false, or the label sliced off by maxLines)
+  // treats the first content line as a heading AND re-renders it from `lines`,
+  // which duplicates the first preview line — once with the formatLine backticks
+  // and once as the plain bold structured line.
+  const separatorIndex = trimmed.indexOf("\n\n");
+  const heading =
+    lines.length === 0
+      ? trimmed
+      : separatorIndex >= 0
+        ? trimmed.slice(0, separatorIndex)
+        : undefined;
   const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
-  const textLines = trimmed
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const heading = textLines.length > renderedLines.length ? textLines[0] : undefined;
   const htmlParts = heading
     ? [`<b>${escapeTelegramProgressHtml(heading)}</b>`, ...renderedLines]
     : renderedLines;
@@ -1468,6 +1478,21 @@ export const dispatchTelegramMessage = async ({
     const split = splitTextIntoLaneSegments(update, isReasoning);
     for (const segment of split.segments) {
       if (segment.lane === "answer") {
+        // In progress mode the answer lane is owned by the live progress draft.
+        // updateDraftFromPartial() below already no-ops answer partials here (its
+        // streamMode==="progress" guard returns before rendering), so the only
+        // remaining effect of preparing the answer lane would be
+        // rotateAnswerLaneAfterToolProgress() -> suppressProgressDraftState(),
+        // which sets progressSuppressed and silently drops EVERY later tool
+        // start/result for the rest of the turn (the trace's repeated
+        // note.DROP ... suppressed=true). claude-cli streams inter-tool
+        // commentary ("now I'll run the next command") as partial answer text;
+        // that transient text must not freeze the tool preview. Skip the answer
+        // lane while streaming progress — tool/reasoning lines keep driving it,
+        // and final-answer delivery still clears the draft via its own path.
+        if (streamMode === "progress") {
+          continue;
+        }
         await prepareAnswerLaneForText();
       }
       if (segment.lane === "reasoning") {
@@ -2435,6 +2460,34 @@ export const dispatchTelegramMessage = async ({
                       }
 
                       if (segment.lane === "answer" && info.kind === "block") {
+                        // In progress mode an intermediate assistant text block is
+                        // preamble/commentary the model emits before calling tools
+                        // (claude-cli: thinking -> "I'll run the commands" ->
+                        // tool_use). It is transient, not a durable message. Route
+                        // it into the live progress draft exactly like the tool-text
+                        // path above, so the reasoning/tool preview stays alive
+                        // instead of being wiped by resetProgressDraftState() before
+                        // the tools even run. The final answer still clears the draft
+                        // at info.kind === "final".
+                        // (NOTE: claude-cli emits no content during tool execution,
+                        // only system/task_* notifications — those could later drive
+                        // a keepalive but are intentionally left untouched here.)
+                        if (streamMode === "progress" && !verboseProgressActive()) {
+                          const canRepresentBlockAsTransientProgress =
+                            !reply.hasMedia &&
+                            telegramButtons === undefined &&
+                            !hasExecApprovalPayload(effectivePayload);
+                          if (
+                            canRepresentBlockAsTransientProgress &&
+                            answerLane.stream &&
+                            (await pushStreamToolProgress(segment.update.text, {
+                              startImmediately: true,
+                            }))
+                          ) {
+                            blockDelivered = true;
+                            continue;
+                          }
+                        }
                         const preparedAnswerLane = await prepareAnswerLaneForText();
                         const shouldRotateQueuedBlock = takeQueuedAnswerBlockRotation(
                           lanePayload,
@@ -2704,6 +2757,20 @@ export const dispatchTelegramMessage = async ({
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
                   reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
+                  onAgentRunStart: () => {
+                    // Arm the progress gate as soon as the agent run begins so the
+                    // delayed-start debounce elapses during claude-cli's initial
+                    // silent thinking window (it can think for a minute before its
+                    // first emit). The compositor still defers the first DELIVERED
+                    // frame until a real tool/reasoning line exists — it never sends
+                    // a bare label — so this only makes the first such line appear
+                    // immediately instead of waiting out the debounce.
+                    if (streamMode === "progress") {
+                      void enqueueDraftLaneEvent(async () => {
+                        await progressDraft.noteActivity();
+                      });
+                    }
+                  },
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     // Only the "start" phase is a boundary (later phases of the same

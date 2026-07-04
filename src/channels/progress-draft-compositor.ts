@@ -98,6 +98,15 @@ export function createChannelProgressDraftCompositor(params: {
     if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
+    // Tool-progress previews use the label only as a header above tool/reasoning
+    // lines, so a draft with no content lines is not a deliverable frame. The gate
+    // arms early (run-start activity) and its timer can fire during claude-cli's
+    // initial silent window before any line exists — without this guard the first
+    // delivered frame would be a bare label instead of the first tool line. Label-
+    // only previews (toolProgress disabled) keep delivering the standalone label.
+    if (previewToolProgressEnabled && lines.length === 0) {
+      return false;
+    }
     const text = formatDraftText();
     if (!text || text === lastRenderedText) {
       return false;
@@ -280,6 +289,13 @@ export function createChannelProgressDraftCompositor(params: {
         params.mode !== "progress" ||
         !text ||
         progressSuppressed ||
+        // Freeze on final-reply START, not just delivery — same teardown gate as
+        // pushToolProgress/pushCommentaryProgress/noteActivity. claude-cli resends
+        // the full reasoning-so-far (snapshot) on every thinking delta, so a late
+        // snapshot can land in the window after the final answer began delivering;
+        // without this it would still mutate the reasoning buffer/lines (the live
+        // draft kept "active") instead of collapsing into the final reply.
+        finalReplyStarted ||
         finalReplyDelivered ||
         !thinkingProgressEnabled
       ) {
@@ -481,15 +497,22 @@ function compactReasoningProgressDisplayLine(text: string, maxChars: number): st
   if (maxChars <= 1) {
     return "…";
   }
-  const head = chars
-    .slice(0, maxChars - 1)
+  // Reasoning streams keep growing across a turn (snapshot/cumulative providers
+  // resend the full thinking-so-far). Truncating from the head would pin the
+  // preview on the OLDEST thought and hide what the model is currently reasoning
+  // about, so the draft looks frozen/stale once it exceeds the line budget.
+  // Keep the TAIL instead, so the preview always reflects the latest thought.
+  const tail = chars
+    .slice(-(maxChars - 1))
     .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
+    .trimStart();
+  const boundary = tail.search(/\s/u);
+  if (boundary >= 0 && boundary < Math.floor(maxChars * 0.4)) {
+    // Drop a leading partial word so the preview starts on a clean word boundary.
+    const aligned = tail.slice(boundary).trimStart();
+    return aligned ? `…${aligned}` : `…${tail}`;
   }
-  return `${head}…`;
+  return `…${tail}`;
 }
 
 function normalizeCommentaryProgressText(text: string): string {

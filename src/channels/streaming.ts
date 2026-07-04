@@ -329,8 +329,15 @@ function buildNamedProgressLine(
   });
   const display = resolveToolDisplay({ name: normalizedName });
   const prefix = `${display.emoji} ${display.label}`;
+  // Match formatToolAggregate's compact-command detection, which keys on the
+  // case-insensitive tool name. Comparing display.name verbatim missed
+  // capitalized command tools (claude-cli's "Bash"), dropping their command
+  // detail here while the text above was still compacted — so the line kept the
+  // command only inside `text`, and the channel renderer showed BOTH the bold
+  // label and that text (a redundant "🛠️ Bash 🛠️ <cmd>" double render).
+  const toolNameKey = normalizeOptionalLowercaseString(display.name);
   const compactCommandDetail =
-    (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
+    (toolNameKey === "exec" || toolNameKey === "bash") && text.startsWith(`${display.emoji} `)
       ? text.slice(display.emoji.length + 1).trim()
       : undefined;
   const compactCommandPrefix =
@@ -348,7 +355,10 @@ function buildNamedProgressLine(
     icon: display.emoji,
     ...(detail ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
-    toolName: display.name,
+    // Store the normalized command-family name so downstream compact-command
+    // detection (getProgressDraftLineText, mergeProgressDraftLineUpdate) matches
+    // regardless of the provider's tool-name casing.
+    toolName: toolNameKey || display.name,
   };
   setProgressDraftLineCorrelationKey(line, fields?.correlationKey);
   return line;
