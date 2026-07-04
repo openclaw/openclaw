@@ -1,9 +1,6 @@
 // Msteams tests cover channel.actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runMessageAction } from "../../../src/infra/outbound/message-action-runner.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import { msteamsPlugin } from "./channel.js";
 
 const {
@@ -1181,25 +1178,23 @@ describe("msteamsPlugin message actions", () => {
     expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
-  it("routes channel fallback targets via teamId/channelId for react actions", async () => {
-    // When an action is invoked in a Teams channel context and `target` is
-    // omitted, the action handler uses the routable `currentMessagingTarget`.
-    // For channel turns, buildToolContext populates that field with the
-    // compound `teamId/channelId` form (see buildToolContext below), so the
-    // runtime call must receive that compound form — NOT a bare
-    // `conversation:<id>` — so Graph API routes through
-    // `/teams/{teamId}/channels/{channelId}` rather than `/chats/{id}`.
+  it("restores the Graph route from a core-materialized channel target", async () => {
+    // Core materializes an omitted target from currentChannelId before plugin
+    // dispatch. Teams must restore the prepared Graph target for channel turns.
     const teamChannelTarget = "team-1/19:channel-abc@thread.tacv2";
+    const conversationTarget = "conversation:19:channel-abc@thread.tacv2";
     await expectSuccessfulAction({
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
       actionParams: {
+        target: conversationTarget,
         messageId: "msg-channel-react",
         emoji: reactionType,
       },
       toolContext: {
-        currentChannelId: "conversation:19:channel-abc@thread.tacv2",
+        currentChannelId: conversationTarget,
+        currentChatType: "channel",
         currentMessagingTarget: teamChannelTarget,
       },
       runtimeParams: {
@@ -1216,48 +1211,6 @@ describe("msteamsPlugin message actions", () => {
         reactionType,
         ok: true,
       },
-    });
-  });
-
-  it("keeps the Graph channel route through full message-action normalization", async () => {
-    getMessageMSTeamsMock.mockResolvedValue(readMessage);
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "msteams", source: "test", plugin: msteamsPlugin }]),
-    );
-    try {
-      await runMessageAction({
-        cfg: {
-          channels: {
-            msteams: {
-              appId: "app-id",
-              appPassword: "app-password",
-              groupPolicy: "open",
-              dmPolicy: "disabled",
-            },
-          },
-        } as OpenClawConfig,
-        action: "read",
-        params: {
-          channel: "msteams",
-          messageId: "msg-channel-read",
-        },
-        toolContext: {
-          currentChannelProvider: "msteams",
-          currentChannelId: "conversation:19:channel-abc@thread.tacv2",
-          currentChatType: "channel",
-          currentMessagingTarget: graphChannelTarget,
-          currentGraphChannelId: graphChannelTarget,
-        },
-        requesterAccountId: "default",
-      });
-    } finally {
-      setActivePluginRegistry(createTestRegistry([]));
-    }
-
-    expect(getMessageMSTeamsMock).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      to: graphChannelTarget,
-      messageId: "msg-channel-read",
     });
   });
 

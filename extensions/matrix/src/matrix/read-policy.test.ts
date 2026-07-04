@@ -242,7 +242,8 @@ describe("Matrix read policy", () => {
   });
 
   it("preserves the trusted direct type for the current room", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org"]);
+    const getJoinedRoomMembers = vi.fn(async () => ["@bot:example.org", "@alice:example.org"]);
+    const client = createClient([], null, {}, undefined, { getJoinedRoomMembers });
     const read = vi.fn(async () => "ok");
 
     await expect(
@@ -266,7 +267,7 @@ describe("Matrix read policy", () => {
         run: read,
       }),
     ).resolves.toBe("ok");
-    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
+    expect(getJoinedRoomMembers).not.toHaveBeenCalled();
   });
 
   it("uses the global group policy when the account does not override it", async () => {
@@ -339,9 +340,16 @@ describe("Matrix read policy", () => {
   });
 
   it("treats explicitly configured two-member rooms as groups like ingress", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org"], true, {
-      canonicalAlias: "#ops:example.org",
-    });
+    const getJoinedRoomMembers = vi.fn(async () => ["@bot:example.org", "@alice:example.org"]);
+    const client = createClient(
+      [],
+      true,
+      {
+        canonicalAlias: "#ops:example.org",
+      },
+      undefined,
+      { getJoinedRoomMembers },
+    );
 
     await expect(
       withAuthorizedMatrixReadTarget({
@@ -361,7 +369,7 @@ describe("Matrix read policy", () => {
         run: async () => "ok",
       }),
     ).resolves.toBe("ok");
-    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
+    expect(getJoinedRoomMembers).not.toHaveBeenCalled();
   });
 
   it("does not let wildcard room config override direct-message policy", async () => {
