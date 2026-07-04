@@ -1099,6 +1099,62 @@ describe("handleMessageEnd", () => {
     expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
   });
 
+  it("derives totalTokens from component fields when pending usage total is missing (#99843)", () => {
+    // Simulates the exact scenario from #99843: a multi-call tool-loop turn
+    // where the provider's stream event omits total, so pendingAssistantUsage
+    // only has per-call component fields. preservePendingAssistantUsage must
+    // derive totalTokens from input + output + cacheRead + cacheWrite.
+    // With the recordAssistantUsage fix, this fallback is rarely needed, but
+    // it ensures cached prompt context is not undercounted when total is absent.
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 150_000,
+          cacheWrite: 10_000,
+          // total is intentionally absent — provider stream event omitted it
+        },
+      },
+    });
+    // Simulate a provider that sends a final assistant snapshot with zeroed
+    // usage — the exact scenario where preservePendingAssistantUsage must
+    // repair the usage from the streamed pending values.
+    const message = {
+      role: "assistant" as const,
+      api: "anthropic-messages" as const,
+      provider: "anthropic" as const,
+      model: "claude-opus-4-8" as const,
+      content: [{ type: "text" as const, text: "Done." }],
+      stopReason: "stop" as const,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 1,
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    // totalTokens should be derived from component sum, including cache fields
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 150_000,
+        cacheWrite: 10_000,
+        totalTokens: 175_116, // 12 + 15104 + 150000 + 10000
+      },
+    });
+  });
+
   it("warns when assistant text only pretends to call a registered tool", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({
