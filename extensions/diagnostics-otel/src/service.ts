@@ -165,12 +165,30 @@ function normalizeEndpoint(endpoint?: string): string | undefined {
   return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
 }
 
-function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
+type SignalQualifiedEndpointMode = "preserve" | "normalize";
+
+const SIGNAL_QUALIFIED_OTLP_PATH_RE = /\/v1\/(?:traces|metrics|logs)$/i;
+
+function resolveOtelUrl(
+  endpoint: string | undefined,
+  path: string,
+  signalQualifiedEndpointMode: SignalQualifiedEndpointMode = "preserve",
+): string | undefined {
   if (!endpoint) {
     return undefined;
   }
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
+  if (SIGNAL_QUALIFIED_OTLP_PATH_RE.test(endpointWithoutQueryOrFragment)) {
+    if (
+      signalQualifiedEndpointMode === "normalize" &&
+      !endpointWithoutQueryOrFragment.toLowerCase().endsWith(`/${path.toLowerCase()}`)
+    ) {
+      const normalizedEndpoint = endpointWithoutQueryOrFragment.replace(
+        SIGNAL_QUALIFIED_OTLP_PATH_RE,
+        `/${path}`,
+      );
+      return `${normalizedEndpoint}${endpoint.slice(endpointWithoutQueryOrFragment.length)}`;
+    }
     return endpoint;
   }
   if (/[?#]/u.test(endpoint)) {
@@ -192,10 +210,11 @@ function resolveSignalOtelUrl(params: {
   endpoint?: string;
   path: string;
 }): string | undefined {
-  return resolveOtelUrl(
-    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
-    params.path,
-  );
+  const signalEndpoint = normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
+  if (signalEndpoint) {
+    return resolveOtelUrl(signalEndpoint, params.path);
+  }
+  return resolveOtelUrl(params.endpoint, params.path, "normalize");
 }
 
 function resolveSampleRate(value: number | undefined): number | undefined {

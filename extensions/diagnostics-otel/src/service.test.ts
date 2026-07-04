@@ -1520,6 +1520,33 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("normalizes shared signal-qualified OTLP endpoint for each enabled signal", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(
+      "https://collector.example.com/api/public/otel/v1/traces?timeout=30s",
+      {
+        traces: true,
+        metrics: true,
+        logs: true,
+      },
+    );
+    await service.start(ctx);
+
+    const traceOptions = firstExporterOptions(traceExporterCtor);
+    const metricOptions = firstExporterOptions(metricExporterCtor);
+    const logOptions = firstExporterOptions(logExporterCtor);
+    expect(traceOptions.url).toBe(
+      "https://collector.example.com/api/public/otel/v1/traces?timeout=30s",
+    );
+    expect(metricOptions.url).toBe(
+      "https://collector.example.com/api/public/otel/v1/metrics?timeout=30s",
+    );
+    expect(logOptions.url).toBe(
+      "https://collector.example.com/api/public/otel/v1/logs?timeout=30s",
+    );
+    await service.stop?.(ctx);
+  });
+
   test("applies flush interval to trace batching", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
