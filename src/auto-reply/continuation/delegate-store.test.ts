@@ -139,6 +139,7 @@ import {
   consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
+  failStagedPostCompactionDelegatesForCleanup,
   hasRecoverablePendingDelegate,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
@@ -208,6 +209,32 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(hasRecoverablePendingDelegate(postCompactionSession)).toBe(false);
     consumeStagedPostCompactionDelegates(postCompactionSession);
     expect(hasRecoverablePendingDelegate(postCompactionSession)).toBe(false);
+  });
+
+  it("fails queued and running post-compaction delegates for completed child cleanup", () => {
+    const sessionKey = "session-cleanup-post-compaction-fail";
+    enqueuePendingDelegate(sessionKey, { task: "regular cleanup blocker" });
+    stagePostCompactionDelegate(sessionKey, {
+      task: "post-compaction queued",
+      stagedAt: Date.now(),
+    });
+    stagePostCompactionDelegate(sessionKey, {
+      task: "post-compaction running",
+      stagedAt: Date.now(),
+    });
+    const [running] = consumeStagedPostCompactionDelegates(sessionKey);
+    expect(running).toBeDefined();
+
+    expect(
+      failStagedPostCompactionDelegatesForCleanup(
+        sessionKey,
+        "completed delete-mode child has no future compaction seam",
+      ),
+    ).toBe(2);
+
+    expect([...mockFlows.values()].filter((flow) => flow.status === "failed")).toHaveLength(2);
+    expect(hasRecoverablePendingDelegate(sessionKey)).toBe(true);
+    expect(pendingDelegateCount(sessionKey)).toBe(1);
   });
 
   it("logs when acceptance cannot be committed after a claim", () => {

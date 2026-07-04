@@ -72,15 +72,17 @@ export async function deleteSubagentSessionForCleanup(
     );
   }
 
-  // A continuation_work TaskFlow, an in-flight continuation delegate, or an
-  // accepted child run that still uses this session as requester owns
-  // same-session re-entry. Keep the child session entry until they drain, then
-  // retry, so delete-mode child sessions do not leak after cleanup bookkeeping
-  // finishes AND delayed bracket/tool delegates do not lose the child's
-  // chain/requester state to deletion before they finish. The delegate gate must
-  // count queued AND `running` (claimed) flows; the registry gate must cover the
-  // post-accept window after the TaskFlow row has finished but the spawned
-  // continuation still depends on this requester session (#1144).
+  // A continuation_work TaskFlow, an in-flight regular continuation delegate, or
+  // an accepted child run that still uses this session as requester owns
+  // same-session re-entry. Post-compaction rows are failed above because a
+  // completed delete-mode child will not receive another compaction seam. Keep
+  // the child session entry until the remaining work drains, then retry, so
+  // delete-mode child sessions do not leak after cleanup bookkeeping finishes
+  // AND delayed bracket/tool delegates do not lose the child's chain/requester
+  // state to deletion before they finish. The delegate gate must count queued
+  // AND `running` (claimed) flows; the registry gate must cover the post-accept
+  // window after the TaskFlow row has finished but the spawned continuation
+  // still depends on this requester session (#1144).
   if (
     hasLiveOrRecentlyDispatchedContinuationWork(params.childSessionKey) ||
     hasRecoverablePendingDelegate(params.childSessionKey) ||
