@@ -181,9 +181,11 @@ struct ChatProTab: View {
                 self.connectionPill
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(self.gatewayAccessibilityLabel)
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             self.connectionPill
+                .accessibilityLabel(self.gatewayAccessibilityLabel)
         }
     }
 
