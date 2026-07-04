@@ -2,7 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeClaudeAppServerBinding } from "./app-server/thread-store.js";
+import {
+  recordClaudeThreadTurnSummary,
+  writeClaudeAppServerBinding,
+} from "./app-server/thread-store.js";
 import { createClaudeCommand, handleClaudeCommand } from "./commands.js";
 
 function makeCtx(overrides: Partial<Parameters<typeof handleClaudeCommand>[0]> = {}) {
@@ -109,6 +112,24 @@ describe("/claude threads + resume against a real binding sidecar", () => {
     const year = new Date(match?.[1] ?? "").getUTCFullYear();
     // Seconds-as-ms rendered 1970; ms renders the real year.
     expect(year).toBeGreaterThanOrEqual(2026);
+  });
+
+  it("threads: shows turn-completion summary fields when present", async () => {
+    await writeClaudeAppServerBinding(sessionFile, {
+      threadId: "thr_summary",
+      cwd: dir,
+      model: "claude-sonnet-5",
+    });
+    await recordClaudeThreadTurnSummary(sessionFile, {
+      stopReason: "toolUse",
+      usage: { input: 500, output: 42, total: 542 },
+      assistantPreview: "I ran the tests and they pass.",
+    });
+    const result = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
+    expect(result.text).toContain("Turns completed: 1");
+    expect(result.text).toContain("Last stop reason: toolUse");
+    expect(result.text).toContain("500 in / 42 out / 542 total tokens");
+    expect(result.text).toContain("I ran the tests and they pass.");
   });
 
   it("resume: writes a fresh binding when none exists", async () => {

@@ -173,6 +173,19 @@ function formatBinding(sessionFile: string, b: ClaudeAppServerBinding): string {
   if (b.dynamicToolsFingerprint) {
     lines.push(`- Dynamic tools fingerprint: \`${b.dynamicToolsFingerprint.slice(0, 16)}…\``);
   }
+  if (typeof b.turnCount === "number") {
+    lines.push(`- Turns completed: ${b.turnCount}`);
+  }
+  if (b.lastTurnStopReason) {
+    lines.push(`- Last stop reason: ${b.lastTurnStopReason}`);
+  }
+  if (b.lastTurnUsage) {
+    const { input, output, total } = b.lastTurnUsage;
+    lines.push(`- Last turn usage: ${input} in / ${output} out / ${total} total tokens`);
+  }
+  if (b.lastAssistantPreview) {
+    lines.push(`- Last reply: ${b.lastAssistantPreview}`);
+  }
   lines.push(`- Updated: ${new Date(b.updatedAt).toISOString()}`);
   return lines.join("\n");
 }

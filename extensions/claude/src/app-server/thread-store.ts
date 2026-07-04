@@ -54,6 +54,19 @@ export type ClaudeAppServerBinding = {
   createdAt: number;
   /** Epoch milliseconds (Date.now()). Rendered by `/claude threads`. */
   updatedAt: number;
+  /**
+   * Turn-completion summary, recorded by {@link recordClaudeThreadTurnSummary}
+   * after each turn finishes — separately from the pre-turn fields above,
+   * which thread-lifecycle.ts writes before a turn runs. Absent for bindings
+   * written before this field existed, or if a turn is still in flight.
+   */
+  /** The real turn outcome (openclaw-0ld C3): "stop" | "toolUse" | "aborted" | "error", etc. */
+  lastTurnStopReason?: string;
+  lastTurnUsage?: { input: number; output: number; total: number };
+  /** Truncated final assistant reply text, for a quick "what was this about" glance. */
+  lastAssistantPreview?: string;
+  /** Count of completed turns recorded against this thread binding. */
+  turnCount?: number;
 };
 
 export function resolveClaudeAppServerBindingPath(sessionFile: string): string {
@@ -156,6 +169,47 @@ export async function writeClaudeAppServerBinding(
       });
       throw err;
     }
+  });
+}
+
+const ASSISTANT_PREVIEW_MAX_CHARS = 200;
+
+/**
+ * Attaches a turn-completion summary (real stop reason, usage, a truncated
+ * preview of the final reply) to the existing binding, so `/claude threads`
+ * can say more than just "here's the thread id" — read-modify-write onto
+ * whatever thread-lifecycle.ts already wrote for this turn, matching the
+ * same pattern `/claude resume` already uses (command-handlers.ts) rather
+ * than nesting a second binding-lock acquisition inside this one.
+ *
+ * No-ops if no binding exists yet (e.g. the write raced ahead of
+ * thread-lifecycle's initial write, or the binding was cleared mid-turn) —
+ * the next turn's thread-lifecycle write recreates the binding regardless.
+ */
+export async function recordClaudeThreadTurnSummary(
+  sessionFile: string,
+  summary: {
+    stopReason?: string;
+    usage?: { input: number; output: number; total: number };
+    assistantPreview?: string;
+  },
+): Promise<void> {
+  const existing = await readClaudeAppServerBinding(sessionFile);
+  if (!existing) {
+    return;
+  }
+  const trimmedPreview = summary.assistantPreview?.trim();
+  const preview = trimmedPreview
+    ? trimmedPreview.length > ASSISTANT_PREVIEW_MAX_CHARS
+      ? `${trimmedPreview.slice(0, ASSISTANT_PREVIEW_MAX_CHARS)}…`
+      : trimmedPreview
+    : existing.lastAssistantPreview;
+  await writeClaudeAppServerBinding(sessionFile, {
+    ...existing,
+    lastTurnStopReason: summary.stopReason ?? existing.lastTurnStopReason,
+    lastTurnUsage: summary.usage ?? existing.lastTurnUsage,
+    lastAssistantPreview: preview,
+    turnCount: (existing.turnCount ?? 0) + 1,
   });
 }
 

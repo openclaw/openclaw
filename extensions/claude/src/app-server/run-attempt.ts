@@ -84,6 +84,7 @@ import {
   readDynamicToolCallParams,
 } from "./protocol-validators.js";
 import { startOrResumeClaudeThread } from "./thread-lifecycle.js";
+import { recordClaudeThreadTurnSummary } from "./thread-store.js";
 import { mirrorClaudeAppServerTranscript } from "./transcript-mirror.js";
 import type {
   ApprovalPolicy,
@@ -468,6 +469,27 @@ export async function runClaudeAppServerAttempt(
       .find((m) => (m as { role?: string }).role === "assistant");
     if (lastAssistantMessage) {
       result.lastAssistant = lastAssistantMessage as typeof result.lastAssistant;
+    }
+    // Attach a turn-completion summary to the thread binding sidecar so
+    // `/claude threads` can show more than just the thread id (real stop
+    // reason + usage + a preview of the final reply), now that C1-C3
+    // (openclaw-0ld) make those fields trustworthy. Best-effort: a failure
+    // here must never fail the turn itself.
+    if (params.sessionFile && lastAssistantMessage) {
+      const summary = lastAssistantMessage as unknown as {
+        stopReason?: string;
+        usage?: { input: number; output: number; total: number };
+        content?: Array<{ type: string; text?: string }>;
+      };
+      recordClaudeThreadTurnSummary(params.sessionFile, {
+        stopReason: summary.stopReason,
+        usage: summary.usage,
+        assistantPreview: summary.content?.find((c) => c.type === "text")?.text,
+      }).catch((err) => {
+        embeddedAgentLog.warn("claude-bridge: failed to record thread turn summary", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
     // accumulated.reasoning is collected for diagnostics but not surfaced
     // via replayMetadata (codex's EmbeddedRunReplayMetadata is strictly typed).
