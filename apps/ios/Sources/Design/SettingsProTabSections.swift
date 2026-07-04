@@ -15,66 +15,93 @@ struct SettingsIcon: View {
     }
 }
 
-extension SettingsProTab {
-    var currentAppearancePreference: AppAppearancePreference {
-        AppAppearancePreference(rawValue: appearancePreferenceRaw) ?? .system
+private struct AppearanceSettingsRow: View {
+    @Environment(AppAppearanceModel.self) private var appearanceModel
+
+    private var preference: AppAppearancePreference {
+        self.appearanceModel.preference
     }
 
-    var appearanceRow: some View {
-        // Menu hides its source label while open on iPad; a dialog keeps the visible row stable.
-        Button {
-            self.isShowingAppearanceDialog = true
+    var body: some View {
+        NavigationLink {
+            AppearanceSettingsScreen()
         } label: {
-            self.appearanceRowLabel
+            self.rowLabel
         }
-        .buttonStyle(.plain)
         .accessibilityIdentifier("settings-appearance-row")
         .accessibilityLabel("Appearance")
-        .accessibilityValue(self.currentAppearancePreference.label)
+        .accessibilityValue(self.preference.label)
         .accessibilityHint("Choose system, light, or dark appearance")
-        .confirmationDialog(
-            "Appearance",
-            isPresented: $isShowingAppearanceDialog,
-            titleVisibility: .visible)
-        {
-            ForEach(AppAppearancePreference.allCases) { preference in
-                Button {
-                    self.appearancePreferenceRaw = preference.rawValue
-                } label: {
-                    Label(preference.label, systemImage: preference.systemImage)
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                .font(OpenClawType.subheadSemiBold)
-            }
-        } message: {
-            Text("Choose system, light, or dark appearance")
-                .font(OpenClawType.subhead)
-        }
     }
 
-    var appearanceRowLabel: some View {
+    private var rowLabel: some View {
         HStack(spacing: 12) {
             ProIconBadge(
                 systemName: "circle.lefthalf.filled",
                 color: .secondary)
 
             Text("Appearance")
-                .font(OpenClawType.subheadSemiBold)
-                .foregroundStyle(.primary)
 
             Spacer(minLength: 8)
 
-            HStack(spacing: 5) {
-                Text(self.currentAppearancePreference.label)
-                    .font(OpenClawType.subheadSemiBold)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(OpenClawType.caption2Bold)
-            }
-            .foregroundStyle(OpenClawBrand.accent)
+            Text(self.preference.label)
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+    }
+}
+
+private struct AppearanceSettingsScreen: View {
+    @Environment(AppAppearanceModel.self) private var appearanceModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(AppAppearancePreference.allCases) { preference in
+                    Button {
+                        self.select(preference)
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(preference.label)
+                                Spacer()
+                                if preference == self.appearanceModel.preference {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(OpenClawBrand.accent)
+                                }
+                            }
+                        } icon: {
+                            Image(systemName: preference.systemImage)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("settings-appearance-\(preference.rawValue)")
+                    .accessibilityValue(
+                        preference == self.appearanceModel.preference ? "Selected" : "")
+                }
+            } footer: {
+                Text("System follows this device’s appearance setting.")
+            }
+        }
+        .navigationTitle("Appearance")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func select(_ preference: AppAppearancePreference) {
+        guard preference != self.appearanceModel.preference else { return }
+        self.dismiss()
+        Task { @MainActor in
+            // Changing the root scheme while an iPad split-view destination is active can
+            // leave that destination blank. Apply only after the native pop transition.
+            try? await Task.sleep(for: .milliseconds(500))
+            self.appearanceModel.select(preference)
+        }
+    }
+}
+
+extension SettingsProTab {
+    var appearanceRow: some View {
+        AppearanceSettingsRow()
     }
 
     var gatewaySection: some View {
@@ -183,7 +210,7 @@ extension SettingsProTab {
         switch route {
         case .channels:
             SettingsChannelsDestination()
-                .navigationTitle(self.title(for: route))
+                .navigationTitle(title(for: route))
                 .navigationBarTitleDisplayMode(.inline)
         default:
             List {
@@ -210,7 +237,7 @@ extension SettingsProTab {
                     EmptyView()
                 }
             }
-            .navigationTitle(self.title(for: route))
+            .navigationTitle(title(for: route))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerLeadingAction {
@@ -554,7 +581,7 @@ extension SettingsProTab {
     {
         Button(action: action) {
             HStack {
-                Text(title)
+                Label(title, systemImage: icon)
                 Spacer()
                 if isBusy {
                     ProgressView().controlSize(.small)
@@ -566,12 +593,11 @@ extension SettingsProTab {
         .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
         .accessibilityLabel(title)
-        .accessibilityHint(icon)
     }
 
     var aboutDestination: some View {
         // Concise public details only; deep hardware identifiers live in Diagnostics.
-        self.detailListCard {
+        detailListCard {
             self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
             self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
             self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
@@ -588,7 +614,7 @@ extension SettingsProTab {
         Section {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
-                    ProIconBadge(
+                    SettingsIcon(
                         systemName: "location",
                         color: self.locationModeRaw == OpenClawLocationMode.off.rawValue ? .secondary : OpenClawBrand
                             .accent)
@@ -670,8 +696,8 @@ extension SettingsProTab {
                 title: "Connect",
                 icon: "bolt.horizontal.circle",
                 color: OpenClawBrand.accent,
-                isBusy: false,
-                isDisabled: !self.canApplyGatewaySetup)
+                isBusy: self.connectingGatewayID == "manual",
+                isDisabled: !self.canApplyGatewaySetup || self.connectingGatewayID != nil)
             {
                 Task { await self.applySetupCodeAndConnect() }
             }
@@ -735,13 +761,16 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .keyboardType(.numberPad)
             Toggle("Use TLS", isOn: self.$manualGatewayTLS)
-            Button {
+            self.gatewayActionButton(
+                title: "Connect Manual",
+                icon: "network",
+                color: OpenClawBrand.accent,
+                isBusy: self.connectingGatewayID == "manual",
+                isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !self.manualPortIsValid)
+            {
                 Task { await self.connectManual() }
-            } label: {
-                Label("Connect Manual", systemImage: "network")
             }
-            .disabled(self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !self.manualPortIsValid)
         }
     }
 
@@ -806,34 +835,30 @@ extension SettingsProTab {
 
     var voiceFeatureCard: some View {
         Section {
-            VStack(alignment: .leading, spacing: 12) {
-                self.settingsToggle("Voice Wake", isOn: self.$voiceWakeEnabled) { enabled in
-                    self.appModel.setVoiceWakeEnabled(enabled)
+            self.settingsToggle("Voice Wake", isOn: self.$voiceWakeEnabled) { enabled in
+                self.appModel.setVoiceWakeEnabled(enabled)
+            }
+            self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
+                guard !self.appModel.isAppleReviewDemoModeEnabled else {
+                    self.talkEnabled = false
+                    return
                 }
-                self.settingsToggle("Talk Mode", isOn: self.$talkEnabled) { enabled in
-                    guard !self.appModel.isAppleReviewDemoModeEnabled else {
-                        self.talkEnabled = false
-                        return
-                    }
-                    self.appModel.setTalkEnabled(enabled)
+                self.appModel.setTalkEnabled(enabled)
+            }
+            .disabled(self.appModel.isAppleReviewDemoModeEnabled)
+            Picker("Speech Language", selection: self.$talkSpeechLocale) {
+                ForEach(TalkSpeechLocale.supportedOptions()) { option in
+                    Text(option.label).tag(option.id)
                 }
-                .disabled(self.appModel.isAppleReviewDemoModeEnabled)
-                Picker("Speech Language", selection: self.$talkSpeechLocale) {
-                    ForEach(TalkSpeechLocale.supportedOptions()) { option in
-                        Text(option.label)
-                            .font(OpenClawType.subhead)
-                            .tag(option.id)
-                    }
-                }
-                self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
-                self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
-                NavigationLink {
-                    VoiceWakeWordsSettingsView()
-                } label: {
-                    self.simpleSettingsRow(
-                        title: "Wake Words",
-                        value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
-                }
+            }
+            self.settingsToggle("Background Listening", isOn: self.$talkBackgroundEnabled)
+            self.settingsToggle("Speakerphone", isOn: self.talkSpeakerphoneBinding)
+            NavigationLink {
+                VoiceWakeWordsSettingsView()
+            } label: {
+                self.simpleSettingsRow(
+                    title: "Wake Words",
+                    value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
             }
         }
     }
@@ -901,10 +926,10 @@ extension SettingsProTab {
 
     var diagnosticsAdvancedCard: some View {
         Section {
-            self.settingsButtonToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
+            self.settingsToggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled) { enabled in
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
-            self.settingsButtonToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
+            self.settingsToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {
@@ -932,17 +957,6 @@ extension SettingsProTab {
         .onChange(of: isOn.wrappedValue) { _, enabled in
             onChange?(enabled)
         }
-    }
-
-    func settingsButtonToggle(
-        _ title: String,
-        isOn: Binding<Bool>,
-        onChange: ((Bool) -> Void)? = nil) -> some View
-    {
-        Toggle(title, isOn: isOn)
-            .onChange(of: isOn.wrappedValue) { _, enabled in
-                onChange?(enabled)
-            }
     }
 
     func simpleSettingsRow(title: String, value: String) -> some View {

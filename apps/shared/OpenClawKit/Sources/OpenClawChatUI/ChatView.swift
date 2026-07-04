@@ -120,7 +120,7 @@ public struct OpenClawChatView: View {
         emptyAssistantIntro: String? = nil,
         talkControl: OpenClawChatTalkControl? = nil)
     {
-        self._viewModel = State(initialValue: viewModel)
+        _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
@@ -298,7 +298,7 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListRows: some View {
-        if let introText = self.visibleEmptyAssistantIntro {
+        if let introText = visibleEmptyAssistantIntro {
             ChatAssistantIntroCard(text: introText)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -344,7 +344,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = self.viewModel.streamingAssistantText,
+        if let text = viewModel.streamingAssistantText,
            AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
         {
             ChatStreamingAssistantBubble(
@@ -363,7 +363,7 @@ public struct OpenClawChatView: View {
     private var visibleMessages: [OpenClawChatMessage] {
         let base: [OpenClawChatMessage]
         if self.style == .onboarding {
-            guard let first = self.viewModel.messages.first else { return [] }
+            guard let first = viewModel.messages.first else { return [] }
             base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
                 .messages
         } else {
@@ -423,7 +423,7 @@ public struct OpenClawChatView: View {
             EmptyView()
         } else if self.showsCleanLoadingPlaceholder {
             EmptyView()
-        } else if let error = self.activeErrorText {
+        } else if let error = activeErrorText {
             if self.hasVisibleMessageListContent {
                 EmptyView()
             } else {
@@ -432,7 +432,6 @@ public struct OpenClawChatView: View {
                     systemImage: presentation.systemImage,
                     title: presentation.title,
                     message: presentation.message,
-                    tint: presentation.tint,
                     actionTitle: "Refresh",
                     action: { self.viewModel.refresh() })
                     .padding(.horizontal, 24)
@@ -443,7 +442,6 @@ public struct OpenClawChatView: View {
                 systemImage: "bubble.left.and.bubble.right.fill",
                 title: self.emptyStateTitle,
                 message: self.emptyStateMessage,
-                tint: OpenClawChatTheme.accent,
                 actionTitle: nil,
                 action: nil)
                 .padding(.horizontal, 24)
@@ -452,20 +450,13 @@ public struct OpenClawChatView: View {
     }
 
     private var activeErrorText: String? {
-        guard let text = self.viewModel.errorText?
+        guard let text = viewModel.errorText?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !text.isEmpty
         else {
             return nil
         }
         return text
-    }
-
-    private var inlineCleanErrorText: String? {
-        guard self.composerChrome == .clean, !self.hasVisibleMessageListContent else {
-            return nil
-        }
-        return self.activeErrorText
     }
 
     private var hasVisibleMessageListContent: Bool {
@@ -485,10 +476,10 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListNoticeBanner: some View {
-        if let error = self.activeErrorText,
-           self.hasVisibleMessageListContent,
+        if let error = activeErrorText,
+           hasVisibleMessageListContent,
            !self.viewModel.isLoading,
-           self.visibleEmptyAssistantIntro == nil,
+           visibleEmptyAssistantIntro == nil,
            !self.showsCleanLoadingPlaceholder
         {
             let presentation = self.errorPresentation(for: error)
@@ -522,7 +513,7 @@ public struct OpenClawChatView: View {
         else {
             return nil
         }
-        guard let text = self.emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let text = emptyAssistantIntro?.trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty
         else {
             return nil
@@ -570,7 +561,7 @@ public struct OpenClawChatView: View {
     }
 
     private func restoreInitialScrollPosition() {
-        if let latestUserMessageID = self.latestVisibleUserMessageID {
+        if let latestUserMessageID = latestVisibleUserMessageID {
             self.followTarget = nil
             self.hasNewerContentBelow = chatReaderHasNewerContent(
                 after: latestUserMessageID,
@@ -609,7 +600,7 @@ public struct OpenClawChatView: View {
         {
         case let .removed(latestRemainingID):
             self.lastUserMessageID = latestRemainingID
-            if case let .user(messageID) = self.followTarget,
+            if case let .user(messageID) = followTarget,
                !visibleUserMessageIDs.contains(messageID)
             {
                 self.followTarget = nil
@@ -671,7 +662,7 @@ public struct OpenClawChatView: View {
 
             guard let toolCallId = message.toolCallId,
                   let last = result.last,
-                  self.toolCallIds(in: last).contains(toolCallId)
+                  toolCallIds(in: last).contains(toolCallId)
             else {
                 result.append(message)
                 continue
@@ -855,7 +846,6 @@ private struct ChatNoticeCard: View {
     let systemImage: String
     let title: String
     let message: String
-    let tint: Color
     let actionTitle: String?
     let action: (() -> Void)?
 

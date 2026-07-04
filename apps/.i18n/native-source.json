@@ -7203,23 +7203,21 @@
     },
     {
       "kind": "ui-call",
-      "line": 89,
+      "line": 109,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "Chat is preparing",
+      "source": "The session attaches once the gateway is ready.",
       "surface": "apple",
-      "id": "native.apple.e4d6867912dc7a57"
-    },
-    {
-      "kind": "ui-call",
-      "line": 91,
-      "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "The operator session will attach when the gateway is ready.",
-      "surface": "apple",
-      "id": "native.apple.3a97c70e0e573740"
+      "id": "native.apple.32179ce0b6d4543f"
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 208,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 207,
+=======
+      "line": 184,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
@@ -7227,7 +7225,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 267,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 266,
+=======
+      "line": 229,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connected",
       "surface": "apple",
@@ -7235,7 +7239,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 267,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 266,
+=======
+      "line": 229,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unavailable",
       "surface": "apple",
@@ -7243,7 +7253,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 278,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 277,
+=======
+      "line": 240,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connect to a gateway",
       "surface": "apple",
@@ -7251,7 +7267,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 278,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 277,
+=======
+      "line": 240,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message \\(self.agentDisplayName)...",
       "surface": "apple",
@@ -8163,7 +8185,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 26,
+      "line": 27,
       "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
       "source": "System",
       "surface": "apple",
@@ -8171,7 +8193,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 27,
+      "line": 28,
       "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
       "source": "Light",
       "surface": "apple",
@@ -8179,7 +8201,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 28,
+      "line": 29,
       "path": "apps/ios/Sources/Design/OpenClawBrand.swift",
       "source": "Dark",
       "surface": "apple",
@@ -8603,7 +8625,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 124,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 123,
+=======
+      "line": 119,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Settings",
       "surface": "apple",
@@ -8611,7 +8639,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 218,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 217,
+=======
+      "line": 212,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -8619,7 +8653,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 239,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 231,
+=======
+      "line": 226,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset Onboarding?",
       "surface": "apple",
@@ -8627,7 +8667,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 243,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 232,
+=======
+      "line": 227,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Reset",
       "surface": "apple",
@@ -8635,7 +8681,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 247,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 235,
+=======
+      "line": 230,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -8643,7 +8695,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 251,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 237,
+=======
+      "line": 232,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "This disconnects, clears saved gateway credentials, and reopens onboarding.",
       "surface": "apple",
@@ -8651,7 +8709,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 254,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 239,
+=======
+      "line": 234,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "QR Scanner Unavailable",
       "surface": "apple",
@@ -8659,7 +8723,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 261,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 245,
+=======
+      "line": 240,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -8667,7 +8737,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 309,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 290,
+=======
+      "line": 285,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Enable OpenClaw Hosted Push Relay?",
       "surface": "apple",
@@ -8675,7 +8751,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 323,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 303,
+=======
+      "line": 298,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Continue",
       "surface": "apple",
@@ -8683,11 +8765,25 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 331,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 306,
+=======
+      "line": 301,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "Not Now",
       "surface": "apple",
       "id": "native.apple.e212e27354542d3b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 35,
+      "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
+      "source": "Checks",
+      "surface": "apple",
+      "id": "native.apple.d77230c105bfb69f"
     },
     {
       "kind": "ui-named-argument",
@@ -8699,7 +8795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 45,
+      "line": 44,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway Link",
       "surface": "apple",
@@ -8707,7 +8803,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 52,
+      "line": 50,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Discovery",
       "surface": "apple",
@@ -8715,7 +8811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 59,
+      "line": 56,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Talk Config",
       "surface": "apple",
@@ -8723,7 +8819,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 66,
+      "line": 62,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Notifications",
       "surface": "apple",
@@ -8731,7 +8827,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 67,
+      "line": 63,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Approval and event alert channel",
       "surface": "apple",
@@ -8739,7 +8835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 73,
+      "line": 68,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Screen Capture",
       "surface": "apple",
@@ -8747,7 +8843,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 74,
+      "line": 69,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Live foreground capture state",
       "surface": "apple",
@@ -8755,7 +8851,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 80,
+      "line": 74,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Voice Wake",
       "surface": "apple",
@@ -8763,7 +8859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 652,
+      "line": 632,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Configured",
       "surface": "apple",
@@ -8771,7 +8867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 652,
+      "line": 632,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -8779,7 +8875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 717,
+      "line": 697,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -8787,7 +8883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 717,
+      "line": 697,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Gateway requests will appear here.",
       "surface": "apple",
@@ -8795,7 +8891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 772,
+      "line": 744,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "High",
       "surface": "apple",
@@ -8803,7 +8899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 772,
+      "line": 744,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Resolving",
       "surface": "apple",
@@ -8811,7 +8907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 777,
+      "line": 749,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "One-time approval",
       "surface": "apple",
@@ -8819,7 +8915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 777,
+      "line": 749,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Permission can be saved",
       "surface": "apple",
@@ -8827,7 +8923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 779,
+      "line": 751,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Medium",
       "surface": "apple",
@@ -8835,7 +8931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 779,
+      "line": 751,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Review",
       "surface": "apple",
@@ -8843,7 +8939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 804,
+      "line": 772,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "\\(diagnosticsIssueCount)",
       "surface": "apple",
@@ -8851,7 +8947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 815,
+      "line": 783,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location off",
       "surface": "apple",
@@ -8859,7 +8955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 817,
+      "line": 785,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using",
       "surface": "apple",
@@ -8867,7 +8963,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 819,
+      "line": 787,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Off",
       "surface": "apple",
@@ -8875,7 +8971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 821,
+      "line": 789,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location While Using, effective Always",
       "surface": "apple",
@@ -8883,7 +8979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 823,
+      "line": 791,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always",
       "surface": "apple",
@@ -8891,7 +8987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 825,
+      "line": 793,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective While Using",
       "surface": "apple",
@@ -8899,7 +8995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 827,
+      "line": 795,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Location Always, effective Off",
       "surface": "apple",
@@ -8907,7 +9003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 855,
+      "line": 823,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Checking iOS notification permission.",
       "surface": "apple",
@@ -8915,7 +9011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 857,
+      "line": 825,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw can show approval prompts and event alerts when the app is not active.",
       "surface": "apple",
@@ -8923,7 +9019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 859,
+      "line": 827,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Notifications have been denied. Enable them in iOS Settings.",
       "surface": "apple",
@@ -8931,7 +9027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 861,
+      "line": 829,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "Enable notifications to receive approval prompts and event alerts outside the app.",
       "surface": "apple",
@@ -8939,23 +9035,37 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 863,
+      "line": 831,
       "path": "apps/ios/Sources/Design/SettingsProTabActions.swift",
       "source": "OpenClaw cannot determine the current notification permission state.",
       "surface": "apple",
       "id": "native.apple.b525ff6cead949f4"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-call",
       "line": 36,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-call",
+      "line": 34,
+=======
+      "kind": "ui-modifier",
+      "line": 34,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Choose system, light, or dark appearance",
       "surface": "apple",
-      "id": "native.apple.cfec8b4d042a8066"
+      "id": "native.apple.80fade864c8ad242"
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 47,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 44,
+=======
+      "line": 43,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Appearance",
       "surface": "apple",
@@ -8963,22 +9073,45 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 98,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 95,
+=======
+      "line": 80,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "1 agent",
+      "source": "Selected",
       "surface": "apple",
-      "id": "native.apple.0b50dca4526336be"
+      "id": "native.apple.f459c262b181a64b"
     },
     {
+<<<<<<< HEAD
       "kind": "conditional-branch",
       "line": 98,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "conditional-branch",
+      "line": 95,
+=======
+      "kind": "ui-call",
+      "line": 83,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "\\(agentCount) agents",
+      "source": "System follows this device’s appearance setting.",
       "surface": "apple",
-      "id": "native.apple.4e579fbdce03c39a"
+      "id": "native.apple.998482352d20ebaa"
+    },
+    {
+      "kind": "ui-call",
+      "line": 124,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Connection",
+      "surface": "apple",
+      "id": "native.apple.70eca66c79335a6e"
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 105,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reconnect",
@@ -8996,6 +9129,27 @@
     {
       "kind": "ui-named-argument",
       "line": 137,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 102,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Reconnect",
+      "surface": "apple",
+      "id": "native.apple.31f9c5fa6c3ca5dd"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 112,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Diagnose",
+      "surface": "apple",
+      "id": "native.apple.1dc0c6ff4da2deca"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 134,
+=======
+      "line": 139,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Permissions",
       "surface": "apple",
@@ -9003,7 +9157,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 142,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 139,
+=======
+      "line": 144,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Channels",
       "surface": "apple",
@@ -9011,7 +9171,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 155,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 152,
+=======
+      "line": 158,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Diagnostics",
       "surface": "apple",
@@ -9019,7 +9185,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 170,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 167,
+=======
+      "line": 173,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "About",
       "surface": "apple",
@@ -9035,7 +9207,93 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 286,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 257,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Gateway",
+      "surface": "apple",
+      "id": "native.apple.5c4427c5a67068d6"
+    },
+    {
+      "kind": "ui-call",
+      "line": 263,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Address",
+      "surface": "apple",
+      "id": "native.apple.800b6502b5b49941"
+    },
+    {
+      "kind": "ui-call",
+      "line": 265,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Server",
+      "surface": "apple",
+      "id": "native.apple.fde8b41db7ec49f3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 267,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Discovered",
+      "surface": "apple",
+      "id": "native.apple.624f9dc99e8f9ff4"
+    },
+    {
+      "kind": "ui-call",
+      "line": 271,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Agents",
+      "surface": "apple",
+      "id": "native.apple.8e3656d85f092897"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 292,
+=======
+      "line": 252,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Gateway",
+      "surface": "apple",
+      "id": "native.apple.5c4427c5a67068d6"
+    },
+    {
+      "kind": "ui-call",
+      "line": 258,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Address",
+      "surface": "apple",
+      "id": "native.apple.800b6502b5b49941"
+    },
+    {
+      "kind": "ui-call",
+      "line": 259,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Server",
+      "surface": "apple",
+      "id": "native.apple.fde8b41db7ec49f3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 260,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Discovered",
+      "surface": "apple",
+      "id": "native.apple.624f9dc99e8f9ff4"
+    },
+    {
+      "kind": "ui-call",
+      "line": 262,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Agents",
+      "surface": "apple",
+      "id": "native.apple.8e3656d85f092897"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 293,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Approvals",
       "surface": "apple",
@@ -9043,7 +9301,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 289,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 295,
+=======
+      "line": 296,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "No gateway actions are waiting for review.",
       "surface": "apple",
@@ -9051,7 +9315,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 289,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 295,
+=======
+      "line": 296,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Review the pending gateway action.",
       "surface": "apple",
@@ -9059,7 +9329,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 293,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 299,
+=======
+      "line": 300,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "1 waiting",
       "surface": "apple",
@@ -9067,23 +9343,43 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 311,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 317,
+=======
+      "line": 315,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Notifications are off",
       "surface": "apple",
       "id": "native.apple.db2079af09ca465a"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-call-multiline",
       "line": 313,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-call-multiline",
+      "line": 319,
+=======
+      "kind": "ui-call",
+      "line": 317,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "Enable Notifications to receive approval notifications while OpenClaw is not open.",
+      "source": "Enable Notifications to receive approval alerts while OpenClaw is not open.",
       "surface": "apple",
-      "id": "native.apple.91124246863fcbb2"
+      "id": "native.apple.2e042499c42824f5"
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 327,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 333,
+=======
+      "line": 326,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Open Notifications",
       "surface": "apple",
@@ -9091,7 +9387,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 362,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 367,
+=======
+      "line": 347,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Allow",
       "surface": "apple",
@@ -9099,7 +9401,21 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 384,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 387,
+=======
+      "line": 354,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Always Allow",
+      "surface": "apple",
+      "id": "native.apple.53c2c08c522ceb97"
+    },
+    {
+      "kind": "ui-call",
+      "line": 361,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Deny",
       "surface": "apple",
@@ -9107,7 +9423,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 397,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 399,
+=======
+      "line": 369,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "No approvals waiting",
       "surface": "apple",
@@ -9115,7 +9437,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 415,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 417,
+=======
+      "line": 385,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Camera",
       "surface": "apple",
@@ -9123,6 +9451,7 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 416,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Allow the gateway to request photos or video while OpenClaw is foregrounded.",
@@ -9132,6 +9461,19 @@
     {
       "kind": "ui-named-argument",
       "line": 423,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 418,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Allow the gateway to request photos or video while OpenClaw is foregrounded.",
+      "surface": "apple",
+      "id": "native.apple.68d3c5dbdb054a8b"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 425,
+=======
+      "line": 391,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Keep Awake",
       "surface": "apple",
@@ -9139,6 +9481,7 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 424,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Keep the screen awake while OpenClaw is open.",
@@ -9148,6 +9491,19 @@
     {
       "kind": "ui-named-argument",
       "line": 435,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 426,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Keep the screen awake while OpenClaw is open.",
+      "surface": "apple",
+      "id": "native.apple.1b32ce3678bba852"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 437,
+=======
+      "line": 402,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -9155,7 +9511,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 450,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 452,
+=======
+      "line": 417,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Health Check",
       "surface": "apple",
@@ -9163,23 +9525,43 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 451,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 453,
+=======
+      "line": 418,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run app, permission, and gateway-adjacent checks without editing setup.",
       "surface": "apple",
       "id": "native.apple.076a83f6eed9161a"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-named-argument",
       "line": 457,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-named-argument",
+      "line": 459,
+=======
+      "kind": "ui-call",
+      "line": 426,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Diagnostics",
       "surface": "apple",
-      "id": "native.apple.5b8f207013e270d1"
+      "id": "native.apple.e06f8e5c2bb61fe0"
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 472,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 474,
+=======
+      "line": 435,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Platform",
       "surface": "apple",
@@ -9187,7 +9569,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 474,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 476,
+=======
+      "line": 436,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "App",
       "surface": "apple",
@@ -9195,7 +9583,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 476,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 478,
+=======
+      "line": 437,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Model",
       "surface": "apple",
@@ -9203,7 +9597,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 487,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 489,
+=======
+      "line": 448,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Privacy",
       "surface": "apple",
@@ -9211,7 +9611,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 488,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 490,
+=======
+      "line": 449,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Control what device context OpenClaw can expose to the gateway.",
       "surface": "apple",
@@ -9219,7 +9625,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 494,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 496,
+=======
+      "line": 454,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Camera Access",
       "surface": "apple",
@@ -9227,6 +9639,7 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 495,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Disable to block camera capture requests from the gateway.",
@@ -9236,6 +9649,19 @@
     {
       "kind": "ui-named-argument",
       "line": 502,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 497,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Disable to block camera capture requests from the gateway.",
+      "surface": "apple",
+      "id": "native.apple.3a6fd1b30501990f"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 504,
+=======
+      "line": 460,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Background Listening",
       "surface": "apple",
@@ -9243,6 +9669,7 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 503,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Allow active Talk sessions to continue while the app is backgrounded.",
@@ -9252,21 +9679,51 @@
     {
       "kind": "ui-named-argument",
       "line": 514,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 505,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Allow active Talk sessions to continue while the app is backgrounded.",
+      "surface": "apple",
+      "id": "native.apple.3b12afefbeaca766"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 516,
+=======
+      "line": 471,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Notifications",
       "surface": "apple",
       "id": "native.apple.e16cdd169d3376c2"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-call",
       "line": 560,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-call",
+      "line": 561,
+=======
+      "kind": "ui-named-argument",
+      "line": 515,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "OpenClaw app version",
+      "source": "Reconnect",
       "surface": "apple",
-      "id": "native.apple.35714980723b430d"
+      "id": "native.apple.31f9c5fa6c3ca5dd"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 525,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Diagnose",
+      "surface": "apple",
+      "id": "native.apple.1dc0c6ff4da2deca"
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 562,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device",
@@ -9292,6 +9749,35 @@
     {
       "kind": "ui-call",
       "line": 579,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 563,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Device",
+      "surface": "apple",
+      "id": "native.apple.f0a16e985312895b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 565,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "iOS",
+      "surface": "apple",
+      "id": "native.apple.bbb2c589c2049217"
+    },
+    {
+      "kind": "ui-call",
+      "line": 578,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "No licenses bundled",
+      "surface": "apple",
+      "id": "native.apple.5abfcc15e933c483"
+    },
+    {
+      "kind": "ui-call",
+      "line": 580,
+=======
+      "line": 541,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "License files are not available in this build.",
       "surface": "apple",
@@ -9299,7 +9785,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 590,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 591,
+=======
+      "line": 556,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "surface": "apple",
@@ -9307,6 +9799,7 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 666,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway",
@@ -9348,6 +9841,27 @@
     {
       "kind": "ui-call",
       "line": 758,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 696,
+=======
+      "line": 590,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "OpenClaw app version",
+      "surface": "apple",
+      "id": "native.apple.35714980723b430d"
+    },
+    {
+      "kind": "ui-call",
+      "line": 592,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "iOS",
+      "surface": "apple",
+      "id": "native.apple.bbb2c589c2049217"
+    },
+    {
+      "kind": "ui-call",
+      "line": 613,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Controls whether location can be shared with gateway tools.",
       "surface": "apple",
@@ -9355,7 +9869,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 770,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 708,
+=======
+      "line": 625,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Location",
       "surface": "apple",
@@ -9363,7 +9883,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 771,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 709,
+=======
+      "line": 626,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Off",
       "surface": "apple",
@@ -9371,7 +9897,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 774,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 710,
+=======
+      "line": 627,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "While Using",
       "surface": "apple",
@@ -9379,7 +9911,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 777,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 711,
+=======
+      "line": 628,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Always",
       "surface": "apple",
@@ -9387,7 +9925,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 802,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 734,
+=======
+      "line": 649,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Agent",
       "surface": "apple",
@@ -9395,7 +9939,21 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 805,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 736,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Agent",
+      "surface": "apple",
+      "id": "native.apple.bf6ddc5fa4832324"
+    },
+    {
+      "kind": "ui-call",
+      "line": 737,
+=======
+      "line": 650,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default",
       "surface": "apple",
@@ -9403,6 +9961,7 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 817,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Agent",
@@ -9412,6 +9971,11 @@
     {
       "kind": "ui-call",
       "line": 821,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 745,
+=======
+      "line": 659,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Used for new Chat and Talk sessions.",
       "surface": "apple",
@@ -9419,6 +9983,7 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 832,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Setup Code",
@@ -9428,6 +9993,19 @@
     {
       "kind": "ui-call",
       "line": 834,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 756,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Setup Code",
+      "surface": "apple",
+      "id": "native.apple.d8a5510f1a2e1701"
+    },
+    {
+      "kind": "ui-call",
+      "line": 758,
+=======
+      "line": 665,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paste setup code",
       "surface": "apple",
@@ -9435,7 +10013,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 841,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 764,
+=======
+      "line": 669,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -9443,7 +10027,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 849,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 772,
+=======
+      "line": 679,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect",
       "surface": "apple",
@@ -9451,7 +10041,21 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 877,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 800,
+=======
+      "line": 688,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Setup Code",
+      "surface": "apple",
+      "id": "native.apple.d8a5510f1a2e1701"
+    },
+    {
+      "kind": "ui-call",
+      "line": 699,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovered Gateways",
       "surface": "apple",
@@ -9459,7 +10063,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 880,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 803,
+=======
+      "line": 701,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "surface": "apple",
@@ -9467,7 +10077,21 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 926,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 847,
+=======
+      "line": 737,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Manual Gateway",
+      "surface": "apple",
+      "id": "native.apple.08a67e763668db42"
+    },
+    {
+      "kind": "ui-call",
+      "line": 738,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Use Manual Gateway",
       "surface": "apple",
@@ -9475,7 +10099,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 927,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 848,
+=======
+      "line": 739,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Host",
       "surface": "apple",
@@ -9483,7 +10113,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 932,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 852,
+=======
+      "line": 742,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Port",
       "surface": "apple",
@@ -9491,7 +10127,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 936,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 855,
+=======
+      "line": 744,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Use TLS",
       "surface": "apple",
@@ -9499,7 +10141,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 938,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 857,
+=======
+      "line": 746,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect Manual",
       "surface": "apple",
@@ -9507,7 +10155,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 955,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 874,
+=======
+      "line": 760,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Auto-connect on launch",
       "surface": "apple",
@@ -9515,7 +10169,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 956,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 875,
+=======
+      "line": 761,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -9523,7 +10183,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 959,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 879,
+=======
+      "line": 764,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -9531,7 +10197,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 963,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 884,
+=======
+      "line": 768,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reset Onboarding",
       "surface": "apple",
@@ -9539,7 +10211,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1022,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 897,
+=======
+      "line": 775,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Wake",
       "surface": "apple",
@@ -9547,7 +10225,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1025,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 900,
+=======
+      "line": 778,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Talk Mode",
       "surface": "apple",
@@ -9555,7 +10239,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1033,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 908,
+=======
+      "line": 786,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speech Language",
       "surface": "apple",
@@ -9563,7 +10253,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1041,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 914,
+=======
+      "line": 792,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speakerphone",
       "surface": "apple",
@@ -9571,7 +10267,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 1046,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 919,
+=======
+      "line": 797,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Wake Words",
       "surface": "apple",
@@ -9579,7 +10281,21 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1068,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 941,
+=======
+      "line": 817,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Voice",
+      "surface": "apple",
+      "id": "native.apple.698d47c5569f8d3b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 818,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Provider",
       "surface": "apple",
@@ -9587,7 +10303,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1076,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 947,
+=======
+      "line": 824,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -9595,7 +10317,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1077,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 948,
+=======
+      "line": 825,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -9603,7 +10331,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1087,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 954,
+=======
+      "line": 831,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Mode",
       "surface": "apple",
@@ -9611,7 +10345,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1089,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 956,
+=======
+      "line": 832,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Voice",
       "surface": "apple",
@@ -9619,7 +10359,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1092,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 959,
+=======
+      "line": 834,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Last Voice Issue",
       "surface": "apple",
@@ -9627,7 +10373,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1095,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 962,
+=======
+      "line": 836,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Transport",
       "surface": "apple",
@@ -9635,7 +10387,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1097,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 964,
+=======
+      "line": 837,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "API Key",
       "surface": "apple",
@@ -9643,7 +10401,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1108,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 974,
+=======
+      "line": 844,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Show Talk Control",
       "surface": "apple",
@@ -9651,7 +10415,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1111,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 975,
+=======
+      "line": 845,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Share Instruction",
       "surface": "apple",
@@ -9659,7 +10429,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1119,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 982,
+=======
+      "line": 851,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Share Self-Test",
       "surface": "apple",
@@ -9667,7 +10443,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1141,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1003,
+=======
+      "line": 866,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Debug Logs",
       "surface": "apple",
@@ -9675,7 +10457,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1144,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1006,
+=======
+      "line": 869,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Debug Screen Status",
       "surface": "apple",
@@ -9683,7 +10471,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 1148,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1010,
+=======
+      "line": 873,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Logs",
       "surface": "apple",
@@ -9691,7 +10485,21 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1158,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1020,
+=======
+      "line": 879,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Device",
+      "surface": "apple",
+      "id": "native.apple.f0a16e985312895b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 880,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device Name",
       "surface": "apple",
@@ -9699,7 +10507,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 1161,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1022,
+=======
+      "line": 881,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Instance ID",
       "surface": "apple",
@@ -9707,6 +10521,7 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 1201,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "On",
@@ -9715,6 +10530,17 @@
     },
     {
       "kind": "conditional-branch",
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1058,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "On",
+      "surface": "apple",
+      "id": "native.apple.0fca0d66e1fc4fa0"
+    },
+    {
+      "kind": "conditional-branch",
+=======
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "line": 93,
       "path": "apps/ios/Sources/Design/SettingsProTabSupport.swift",
       "source": "Enabled",
@@ -9947,46 +10773,181 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 66,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 63,
+=======
+      "line": 64,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Not Now",
       "surface": "apple",
       "id": "native.apple.c6e171128190d131"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-named-argument",
       "line": 113,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-named-argument",
+      "line": 110,
+=======
+      "kind": "ui-modifier",
+      "line": 103,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Talk",
       "surface": "apple",
-      "id": "native.apple.96d3e8f61c156202"
+      "id": "native.apple.e4b15aef3c2e3da7"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-named-argument",
       "line": 166,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-named-argument",
+      "line": 163,
+=======
+      "kind": "ui-call",
+      "line": 149,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Conversation",
+      "surface": "apple",
+      "id": "native.apple.ab3381742bdff650"
+    },
+    {
+      "kind": "ui-call",
+      "line": 150,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Agent",
+      "surface": "apple",
+      "id": "native.apple.7af100f6640c6a69"
+    },
+    {
+      "kind": "ui-call",
+      "line": 151,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Session",
+      "surface": "apple",
+      "id": "native.apple.49c4de60117b1a98"
+    },
+    {
+      "kind": "ui-call",
+      "line": 152,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Runtime",
+      "surface": "apple",
+      "id": "native.apple.37c29d2506b955e9"
+    },
+    {
+      "kind": "ui-call",
+      "line": 157,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Voice Mode",
+      "surface": "apple",
+      "id": "native.apple.13e0ad79b141576e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 158,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Configured",
+      "surface": "apple",
+      "id": "native.apple.e8035b71bab833c7"
+    },
+    {
+      "kind": "ui-call",
+      "line": 159,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Active",
+      "surface": "apple",
+      "id": "native.apple.1b2845ec89d20eef"
+    },
+    {
+      "kind": "ui-call",
+      "line": 160,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Transport",
+      "surface": "apple",
+      "id": "native.apple.a82c07df64d13b23"
+    },
+    {
+      "kind": "ui-call",
+      "line": 162,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Last issue",
+      "surface": "apple",
+      "id": "native.apple.384e097278f76954"
+    },
+    {
+      "kind": "ui-call",
+      "line": 164,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Permission",
+      "surface": "apple",
+      "id": "native.apple.a6d8fc7bfd98836f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 165,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Speech language",
+      "surface": "apple",
+      "id": "native.apple.983bdcd5e3f1baa8"
+    },
+    {
+      "kind": "ui-call",
+      "line": 170,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Controls",
+      "surface": "apple",
+      "id": "native.apple.32e7fa2b1798e9c3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 171,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Speakerphone",
       "surface": "apple",
-      "id": "native.apple.959cbf0dc86b975f"
+      "id": "native.apple.0eb012a5d3d81b32"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-named-argument",
       "line": 171,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-named-argument",
+      "line": 168,
+=======
+      "kind": "ui-call",
+      "line": 173,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Background listening",
       "surface": "apple",
-      "id": "native.apple.a970f0cda8dbd58e"
+      "id": "native.apple.ef8699e2718346da"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-modifier",
       "line": 182,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-modifier",
+      "line": 179,
+=======
+      "kind": "ui-call",
+      "line": 177,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
-      "source": "Voice & Talk settings",
+      "source": "Voice & Talk Settings",
       "surface": "apple",
-      "id": "native.apple.76b07adcc9de7470"
+      "id": "native.apple.1e6938a09b4fbe77"
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 209,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Off",
@@ -10004,6 +10965,27 @@
     {
       "kind": "conditional-branch",
       "line": 340,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 206,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Off",
+      "surface": "apple",
+      "id": "native.apple.942dedfe130d0750"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 206,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "On",
+      "surface": "apple",
+      "id": "native.apple.82725d788d542179"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 337,
+=======
+      "line": 345,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Gateway permission required",
       "surface": "apple",
@@ -10011,7 +10993,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 342,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 339,
+=======
+      "line": 347,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Requesting approval",
       "surface": "apple",
@@ -10019,7 +11007,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 344,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 341,
+=======
+      "line": 349,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Approval requested",
       "surface": "apple",
@@ -10027,7 +11021,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 346,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 343,
+=======
+      "line": 351,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Voice API key missing",
       "surface": "apple",
@@ -10035,7 +11035,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 348,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 345,
+=======
+      "line": 353,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Voice config failed",
       "surface": "apple",
@@ -10043,6 +11049,7 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 366,
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Needs approval",
@@ -10076,6 +11083,43 @@
     {
       "kind": "conditional-branch",
       "line": 438,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 363,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Needs approval",
+      "surface": "apple",
+      "id": "native.apple.cf6697421a83de7f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 365,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Pending",
+      "surface": "apple",
+      "id": "native.apple.1fce63d9610404eb"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 367,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "API key",
+      "surface": "apple",
+      "id": "native.apple.431c0caa27837957"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 369,
+      "path": "apps/ios/Sources/Design/TalkProTab.swift",
+      "source": "Config",
+      "surface": "apple",
+      "id": "native.apple.80a285e8c353f87f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 435,
+=======
+      "line": 398,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Start Talk",
       "surface": "apple",
@@ -10083,7 +11127,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 439,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 436,
+=======
+      "line": 399,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Stop Talk",
       "surface": "apple",
@@ -10091,7 +11141,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 440,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 437,
+=======
+      "line": 400,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Enable Talk",
       "surface": "apple",
@@ -10099,7 +11155,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 441,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 438,
+=======
+      "line": 401,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Open Gateway Settings",
       "surface": "apple",
@@ -10107,7 +11169,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 441,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 438,
+=======
+      "line": 401,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Open Voice Settings",
       "surface": "apple",
@@ -10115,7 +11183,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 442,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 439,
+=======
+      "line": 402,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Demo Mode Only",
       "surface": "apple",
@@ -10123,7 +11197,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 442,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 439,
+=======
+      "line": 402,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Design/TalkProTab.swift",
       "source": "Waiting for Approval",
       "surface": "apple",
@@ -10963,13 +12043,14 @@
     },
     {
       "kind": "ui-call",
-      "line": 13,
+      "line": 20,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Welcome to OpenClaw",
       "surface": "apple",
       "id": "native.apple.8197d399f16b6d15"
     },
     {
+<<<<<<< HEAD
       "kind": "ui-call",
       "line": 19,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
@@ -11010,16 +12091,87 @@
       "id": "native.apple.09e7832b23cf14f6"
     },
     {
-      "kind": "ui-call-concatenated",
-      "line": 55,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-call",
+      "line": 18,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
-      "source": "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.",
+      "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
       "surface": "apple",
-      "id": "native.apple.26d5f6d128f7d123"
+      "id": "native.apple.116e17ea3a036818"
     },
     {
       "kind": "ui-call",
+      "line": 26,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "Connect to your gateway",
+      "surface": "apple",
+      "id": "native.apple.a715ab755d539d54"
+    },
+    {
+      "kind": "ui-call",
+      "line": 27,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "Choose device permissions",
+      "surface": "apple",
+      "id": "native.apple.701ae9ceb7952290"
+    },
+    {
+      "kind": "ui-call",
+      "line": 28,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "Use OpenClaw from your phone",
+      "surface": "apple",
+      "id": "native.apple.3d6efa9b4d988d3a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 48,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "Security notice",
+      "surface": "apple",
+      "id": "native.apple.09e7832b23cf14f6"
+    },
+    {
+=======
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
+      "kind": "ui-call-concatenated",
+<<<<<<< HEAD
+      "line": 55,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 50,
+=======
+      "line": 32,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
+      "surface": "apple",
+      "id": "native.apple.aec45c66e9d1436e"
+    },
+    {
+      "kind": "ui-call",
+<<<<<<< HEAD
       "line": 77,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 72,
+=======
+      "line": 40,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "Security",
+      "surface": "apple",
+      "id": "native.apple.f755248f69e3e497"
+    },
+    {
+      "kind": "ui-call",
+      "line": 53,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "You can change permissions later in Settings.",
+      "surface": "apple",
+      "id": "native.apple.116debd4caba7aff"
+    },
+    {
+      "kind": "ui-call",
+      "line": 59,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Continue",
       "surface": "apple",
@@ -11027,7 +12179,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 102,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 97,
+=======
+      "line": 137,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connect Gateway",
       "surface": "apple",
@@ -11035,6 +12193,7 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 107,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Scan a QR code from your OpenClaw gateway or continue with manual setup.",
@@ -11060,6 +12219,35 @@
     {
       "kind": "ui-call",
       "line": 119,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 101,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "Scan a QR code from your OpenClaw gateway or continue with manual setup.",
+      "surface": "apple",
+      "id": "native.apple.e38067caa3fed1cd"
+    },
+    {
+      "kind": "ui-call",
+      "line": 108,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "How to pair",
+      "surface": "apple",
+      "id": "native.apple.90592a5f545c102a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 110,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
+      "source": "In your OpenClaw chat, run",
+      "surface": "apple",
+      "id": "native.apple.005ae52ec5edd8a1"
+    },
+    {
+      "kind": "ui-call",
+      "line": 113,
+=======
+      "line": 141,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "/pair qr",
       "surface": "apple",
@@ -11067,15 +12255,27 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 121,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 115,
+=======
+      "line": 144,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
-      "source": "Then scan the QR code here to connect this device.",
+      "source": "Run this in your OpenClaw chat, then scan the code.",
       "surface": "apple",
-      "id": "native.apple.470229f716c184bb"
+      "id": "native.apple.b727174424127618"
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 140,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 134,
+=======
+      "line": 156,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -11083,7 +12283,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 149,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 143,
+=======
+      "line": 164,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Set Up Manually",
       "surface": "apple",
@@ -11531,7 +12737,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 181,
+      "line": 178,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Talk",
       "surface": "apple",
@@ -11539,7 +12745,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 194,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 193,
+=======
+      "line": 190,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Control",
       "surface": "apple",
@@ -11547,7 +12759,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 203,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 202,
+=======
+      "line": 199,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agent",
       "surface": "apple",
@@ -11555,7 +12773,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 210,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 209,
+=======
+      "line": 206,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Settings",
       "surface": "apple",
@@ -11563,7 +12787,13 @@
     },
     {
       "kind": "ui-call",
+<<<<<<< HEAD
       "line": 309,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 308,
+=======
+      "line": 305,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -11571,7 +12801,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 339,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 337,
+=======
+      "line": 334,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw \\(self.sidebarGatewayStatusTitle)",
       "surface": "apple",
@@ -11579,7 +12815,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 344,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 342,
+=======
+      "line": 339,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Online",
       "surface": "apple",
@@ -11587,7 +12829,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 346,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 344,
+=======
+      "line": 341,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -11595,7 +12843,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 348,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 346,
+=======
+      "line": 343,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -11603,7 +12857,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 350,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 348,
+=======
+      "line": 345,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Offline",
       "surface": "apple",
@@ -11611,7 +12871,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 430,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 426,
+=======
+      "line": 423,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Chat",
       "surface": "apple",
@@ -11619,7 +12885,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 443,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 439,
+=======
+      "line": 436,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Overview",
       "surface": "apple",
@@ -11627,7 +12899,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 467,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 463,
+=======
+      "line": 460,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agents",
       "surface": "apple",
@@ -11635,7 +12913,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 474,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 470,
+=======
+      "line": 467,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Instances",
       "surface": "apple",
@@ -11643,7 +12927,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 485,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 481,
+=======
+      "line": 478,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -11651,7 +12941,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 492,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 488,
+=======
+      "line": 485,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -11659,7 +12955,13 @@
     },
     {
       "kind": "ui-named-argument",
+<<<<<<< HEAD
       "line": 499,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 495,
+=======
+      "line": 492,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -11667,7 +12969,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 621,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 617,
+=======
+      "line": 614,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -11675,7 +12983,13 @@
     },
     {
       "kind": "ui-modifier",
+<<<<<<< HEAD
       "line": 748,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 744,
+=======
+      "line": 741,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -11683,7 +12997,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 1002,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 998,
+=======
+      "line": 986,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -11691,7 +13011,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 1002,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 998,
+=======
+      "line": 986,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -11699,7 +13025,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 1038,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1034,
+=======
+      "line": 1022,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -11707,7 +13039,13 @@
     },
     {
       "kind": "conditional-branch",
+<<<<<<< HEAD
       "line": 1038,
+||||||| parent of 4dcd39368c (fix(ios): complete native interface polish)
+      "line": 1034,
+=======
+      "line": 1022,
+>>>>>>> 4dcd39368c (fix(ios): complete native interface polish)
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -19483,7 +20821,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 418,
+      "line": 421,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Talk",
       "surface": "apple",
@@ -19523,7 +20861,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 597,
+      "line": 596,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop response",
       "surface": "apple",
@@ -19531,7 +20869,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 622,
+      "line": 621,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Send message",
       "surface": "apple",
@@ -19539,7 +20877,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 637,
+      "line": 636,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -19547,7 +20885,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 745,
+      "line": 744,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -19555,7 +20893,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 745,
+      "line": 744,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Gateway connected",
       "surface": "apple",
@@ -19563,7 +20901,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 329,
+      "line": 330,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "\\(display.emoji) \\(display.title)",
       "surface": "apple",
@@ -19571,7 +20909,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 545,
+      "line": 548,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Show full output",
       "surface": "apple",
@@ -19579,7 +20917,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 545,
+      "line": 548,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Show less",
       "surface": "apple",
@@ -19587,7 +20925,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 604,
+      "line": 607,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Writing",
       "surface": "apple",
@@ -19595,7 +20933,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 696,
+      "line": 709,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Running tools…",
       "surface": "apple",
@@ -19603,7 +20941,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 704,
+      "line": 717,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "\\(display.emoji) \\(display.label)",
       "surface": "apple",
@@ -19619,7 +20957,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 404,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Jump to latest",
       "surface": "apple",
@@ -19627,7 +20965,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 427,
+      "line": 415,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Jump to latest reply",
       "surface": "apple",
@@ -19635,7 +20973,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 450,
+      "line": 435,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -19643,7 +20981,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 853,
+      "line": 832,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Loading chat",
       "surface": "apple",
@@ -19651,7 +20989,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 951,
+      "line": 907,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Dismiss",
       "surface": "apple",

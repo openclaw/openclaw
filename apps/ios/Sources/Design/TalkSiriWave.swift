@@ -29,7 +29,7 @@ struct TalkSiriWaveView: View {
 
     var body: some View {
         let frozen = self.reduceMotion || self.mode == .still
-        TimelineView(.animation(minimumInterval: nil, paused: frozen)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: frozen)) { timeline in
             let time = frozen ? 0 : timeline.date.timeIntervalSince(Self.born)
             let power = Self.power(for: self.mode, time: time)
             Canvas { context, size in
@@ -53,7 +53,6 @@ struct TalkSiriWaveView: View {
             }
         }
         .opacity(self.mode == .still ? 0.6 : 1.0)
-        .drawingGroup()
     }
 
     private var colors: [Color] {

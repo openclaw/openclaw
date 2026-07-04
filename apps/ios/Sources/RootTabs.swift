@@ -20,8 +20,6 @@ struct RootTabs: View {
     @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
-    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @State private var selectedTab: AppTab = Self.initialTab
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
@@ -52,7 +50,6 @@ struct RootTabs: View {
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
-    @State private var didApplyInitialAppearance: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
     @State private var handledGatewaySetupRequestID: Int = 0
     @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
@@ -790,7 +787,6 @@ struct RootTabs: View {
             .onAppear { self.maybeAutoOpenSettings() }
             .onAppear { self.maybeOpenSettingsForGatewaySetup() }
             .onAppear { self.maybeShowQuickSetup() }
-            .onAppear { self.applyInitialAppearanceIfNeeded() }
             .onAppear { self.applyInitialChatSessionIfNeeded() }
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
@@ -894,7 +890,6 @@ struct RootTabs: View {
                         .environment(self.appModel)
                         .environment(self.gatewayController)
                         .openClawSheetChrome()
-                        .preferredColorScheme(self.appearancePreference.colorScheme)
                 }
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -909,7 +904,6 @@ struct RootTabs: View {
                     .environment(self.appModel)
                     .environment(self.voiceWake)
                     .environment(self.gatewayController)
-                    .preferredColorScheme(self.appearancePreference.colorScheme)
             }
             .gatewayTrustPromptAlert()
             .deepLinkAgentPromptAlert()
@@ -919,12 +913,6 @@ struct RootTabs: View {
                 self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId
                 self.selectSettingsRoute(.notifications)
             })
-    }
-
-    private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference.launchArgumentPreference
-            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
-            ?? .system
     }
 
     private var gatewayStatus: GatewayDisplayState {
@@ -1322,13 +1310,6 @@ extension RootTabs {
         self.appModel.focusChatSession(Self.initialChatSessionKey)
     }
 
-    private func applyInitialAppearanceIfNeeded() {
-        guard !self.didApplyInitialAppearance else { return }
-        self.didApplyInitialAppearance = true
-        guard let preference = AppAppearancePreference.launchArgumentPreference else { return }
-        self.appearancePreferenceRaw = preference.rawValue
-    }
-
     private func maybeShowQuickSetup() {
         let shouldPresent = Self.shouldPresentQuickSetup(
             quickSetupDismissed: self.quickSetupDismissed,
@@ -1507,6 +1488,7 @@ extension EnvironmentValues {
 }
 
 private struct RootTabsPreviewHost: View {
+    @State private var appearanceModel = AppAppearanceModel()
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
     private let idiom: UIUserInterfaceIdiom
@@ -1522,6 +1504,7 @@ private struct RootTabsPreviewHost: View {
 
     var body: some View {
         RootTabs()
+            .environment(self.appearanceModel)
             .environment(self.appModel)
             .environment(self.appModel.voiceWake)
             .environment(self.gatewayController)

@@ -27,6 +27,20 @@ struct OnboardingIntroStep: View {
                         ForEach(Array(Self.features.enumerated()), id: \.offset) { _, feature in
                             OnboardingFeatureRow(icon: feature.icon, title: feature.title, detail: feature.detail)
                         }
+
+                        GroupBox {
+                            Text(
+                                "The connected agent can use capabilities you enable, including camera, "
+                                    + "microphone, photos, contacts, calendar, and location. Continue only if "
+                                    + "you trust the gateway and agent.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } label: {
+                            Label("Security", systemImage: "lock.shield.fill")
+                                .font(.headline)
+                        }
+                        .tint(OpenClawBrand.warn)
                     }
                     .padding(.horizontal, 12)
                 }
@@ -36,7 +50,7 @@ struct OnboardingIntroStep: View {
             .scrollBounceBehavior(.basedOnSize)
 
             VStack(spacing: 16) {
-                Label("Only connect to gateways you trust.", systemImage: "lock.shield")
+                Text("You can change permissions later in Settings.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)

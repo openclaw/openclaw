@@ -209,7 +209,7 @@ struct TalkProTab: View {
         if !self.appModel.talkMode.gatewayTalkConfigLoaded {
             return "Open Voice settings after the gateway loads Talk configuration."
         }
-        let subtitle = (self.appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
+        let subtitle = (appModel.talkMode.gatewayTalkVoiceModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !subtitle.isEmpty { return subtitle }
         return "Routes voice to \(self.appModel.chatAgentName)."
@@ -225,7 +225,7 @@ struct TalkProTab: View {
 
     private var activeModeText: String {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let subtitle = (self.appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
+        let subtitle = (appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty { return "Not active" }
         if subtitle.isEmpty { return title }
@@ -233,13 +233,13 @@ struct TalkProTab: View {
     }
 
     private var talkIssueText: String? {
-        let text = (self.appModel.talkMode.gatewayTalkLastIssueText ?? "")
+        let text = (appModel.talkMode.gatewayTalkLastIssueText ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text
     }
 
     private var permissionText: String {
-        if let failure = self.appModel.talkMode.gatewayTalkPermissionState.failureMessage {
+        if let failure = appModel.talkMode.gatewayTalkPermissionState.failureMessage {
             return failure
         }
         return self.appModel.talkMode.gatewayTalkPermissionState.statusLabel
@@ -365,51 +365,6 @@ struct TalkProState: Equatable {
         if self.normalizedStatus.contains("thinking") { return "Asking OpenClaw" }
         if self.isEnabled { return "Ready to talk" }
         return "Talk is off"
-    }
-
-    var chipText: String {
-        if self.isDemoMode { return "Demo" }
-        if !self.gatewayConnected { return "Offline" }
-        switch self.permissionState {
-        case .missingScope, .requestFailed:
-            return "Needs approval"
-        case .requestingUpgrade, .upgradeRequested:
-            return "Pending"
-        case .apiKeyMissing:
-            return "API key"
-        case .loadFailed:
-            return "Config"
-        default:
-            break
-        }
-        if !self.isConfigLoaded { return "Config" }
-        if self.isSpeaking { return "Speaking" }
-        if self.isListening { return "Listening" }
-        if self.isEnabled { return "Ready" }
-        return "Off"
-    }
-
-    var icon: String {
-        if self.isDemoMode { return "waveform.slash" }
-        if !self.gatewayConnected { return "wifi.slash" }
-        switch self.permissionState {
-        case .missingScope, .requestFailed:
-            return "key.fill"
-        case .requestingUpgrade:
-            return "paperplane.fill"
-        case .upgradeRequested:
-            return "hourglass"
-        case .apiKeyMissing, .loadFailed:
-            return "exclamationmark.triangle.fill"
-        default:
-            break
-        }
-        if !self.isConfigLoaded { return "exclamationmark.triangle.fill" }
-        if self.isSpeaking { return "speaker.wave.2.fill" }
-        if self.isListening { return "mic.fill" }
-        if self.normalizedStatus.contains("thinking") { return "sparkles" }
-        if self.normalizedStatus.contains("connecting") { return "dot.radiowaves.left.and.right" }
-        return "waveform"
     }
 
     var color: Color {

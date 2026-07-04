@@ -8,7 +8,6 @@ struct ChatProTab: View {
     @State private var viewModelTransportModeID = ""
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String?
-    let headerSubtitle: String?
     let showsAgentBadge: Bool
     let ownsNavigationStack: Bool
     let openSettings: (() -> Void)?
@@ -16,14 +15,12 @@ struct ChatProTab: View {
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String? = nil,
-        headerSubtitle: String? = nil,
         showsAgentBadge: Bool = true,
         ownsNavigationStack: Bool = true,
         openSettings: (() -> Void)? = nil)
     {
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
-        self.headerSubtitle = headerSubtitle
         self.showsAgentBadge = showsAgentBadge
         self.ownsNavigationStack = ownsNavigationStack
         self.openSettings = openSettings
@@ -35,30 +32,10 @@ struct ChatProTab: View {
                 NavigationStack {
                     self.content
                 }
-            } else if self.headerTitle == nil {
-                // Phone tab embeds in the host's NavigationStack; the native bar
-                // there renders our title/toolbar, so no custom header.
-                self.content
             } else {
-                VStack(spacing: 0) {
-                    // Embedded (iPad sidebar) chat draws its own header; the phone
-                    // tab uses the native navigation bar instead.
-                    OpenClawAdaptiveHeaderRow(
-                        title: self.headerDisplayTitle,
-                        subtitle: nil,
-                        titleFont: .headline.weight(.semibold),
-                        subtitleFont: .caption,
-                        subtitleLineLimit: 1)
-                    {
-                        if let headerLeadingAction {
-                            OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-                        }
-                    } accessory: {
-                        self.connectionStatusButton
-                            .contentShape(Circle())
-                    }
-                    self.content
-                }
+                // Phone and iPad hosts already provide a NavigationStack. Keep
+                // one native bar so embedded Chat never grows duplicate chrome.
+                self.content
             }
         }
         .task {
@@ -289,9 +266,9 @@ struct ChatProTab: View {
     }
 
     private var agentBadge: String {
-        if let identity = self.activeAgent?.identity,
+        if let identity = activeAgent?.identity,
            let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
+           let normalizedEmoji = normalized(emoji)
         {
             return normalizedEmoji
         }

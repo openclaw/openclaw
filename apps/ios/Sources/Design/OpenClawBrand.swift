@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 
 enum AppAppearancePreference: String, CaseIterable, Identifiable {
@@ -44,12 +45,29 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         case .dark: .dark
         }
     }
+}
 
-    var userInterfaceStyle: UIUserInterfaceStyle {
-        switch self {
-        case .system: .unspecified
-        case .light: .light
-        case .dark: .dark
+@MainActor
+@Observable
+final class AppAppearanceModel {
+    private(set) var preference: AppAppearancePreference
+
+    init(userDefaults: UserDefaults = .standard) {
+        let storedPreference = userDefaults.string(forKey: AppAppearancePreference.storageKey)
+            .flatMap(AppAppearancePreference.init(rawValue:))
+        self.preference = AppAppearancePreference.launchArgumentPreference ?? storedPreference ?? .system
+        if AppAppearancePreference.launchArgumentPreference != nil {
+            userDefaults.set(self.preference.rawValue, forKey: AppAppearancePreference.storageKey)
+        }
+    }
+
+    func select(_ preference: AppAppearancePreference, userDefaults: UserDefaults = .standard) {
+        guard self.preference != preference else { return }
+        userDefaults.set(preference.rawValue, forKey: AppAppearancePreference.storageKey)
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            self.preference = preference
         }
     }
 }
