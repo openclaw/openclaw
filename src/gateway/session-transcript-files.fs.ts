@@ -412,10 +412,13 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   topicArchives.sort(
     (left, right) => left.timestamp - right.timestamp || left.name.localeCompare(right.name),
   );
-  return uniqueStrings([
-    ...archives.map((archive) => archive.archivePath),
-    ...topicArchives.map((archive) => archive.archivePath),
-  ]);
+  return uniqueStrings(
+    [...archives, ...topicArchives]
+      .toSorted(
+        (left, right) => left.timestamp - right.timestamp || left.name.localeCompare(right.name),
+      )
+      .map((archive) => archive.archivePath),
+  );
 }
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {

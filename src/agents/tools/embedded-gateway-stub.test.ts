@@ -302,6 +302,10 @@ describe("embedded gateway stub", () => {
     );
     const storePath = path.join(sessionsDir, "sessions.json");
     const currentActive = path.join(sessionsDir, "current-topic-limit-session.jsonl");
+    const newPlainArchive = path.join(
+      sessionsDir,
+      "current-topic-limit-session.jsonl.reset.2026-06-04T03-00-00.000Z",
+    );
     const oldTopicArchive = path.join(
       sessionsDir,
       "current-topic-limit-session-topic-old.jsonl.reset.2026-06-04T01-00-00.000Z",
@@ -312,7 +316,7 @@ describe("embedded gateway stub", () => {
     );
     fs.writeFileSync(storePath, "", "utf8");
     fs.writeFileSync(currentActive, "", "utf8");
-    for (const archive of [oldTopicArchive, newTopicArchive]) {
+    for (const archive of [oldTopicArchive, newTopicArchive, newPlainArchive]) {
       fs.writeFileSync(
         archive,
         `${JSON.stringify({ type: "session", version: 1, id: "current-topic-limit-session" })}\n`,
@@ -345,14 +349,15 @@ describe("embedded gateway stub", () => {
 
     const rendered = JSON.stringify(result.messages);
     expect(result.includeFamily).toBe(true);
-    expect(rendered).toContain(path.basename(newTopicArchive));
+    expect(rendered).toContain(path.basename(newPlainArchive));
     expect(rendered).toContain(path.basename(currentActive));
+    expect(rendered).not.toContain(path.basename(newTopicArchive));
     expect(rendered).not.toContain(path.basename(oldTopicArchive));
     expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
       1,
       {
         agentId: "main",
-        sessionFile: newTopicArchive,
+        sessionFile: newPlainArchive,
         sessionId: "current-topic-limit-session",
         storePath,
       },
