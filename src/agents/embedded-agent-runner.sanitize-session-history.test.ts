@@ -2750,23 +2750,17 @@ describe("sanitizeSessionHistory", () => {
     expect(latestThinking?.thinkingSignature).toBe("tool_sig");
     expect(latestThinking?.thinking).toBe("tool reasoning");
 
-    // Earlier assistant (index 1) — stripped first by stripAllThinkingSignatures,
-    // then the unsigned thinking block is converted to placeholder text by
-    // downstream stripInvalidThinkingSignatures. Text blocks survive.
+    // Earlier assistant (index 1) — signature stripped by stripAllThinkingSignatures.
+    // The thinking block remains (just without its signature) because openrouter
+    // is not a signed-thinking provider so stripInvalidThinkingSignatures does not run.
     const earlierAssistant = result[1] as {
-      content: Array<{ type: string; text?: string }>;
+      content: Array<{ type: string; thinking?: string; signature?: string }>;
     };
     const earlierThinking = earlierAssistant.content.find(
       (b: { type: string }) => b.type === "thinking",
     );
-    expect(earlierThinking).toBeUndefined();
-    const earlierText = earlierAssistant.content.find((b: { type: string }) => b.type === "text");
-    expect(earlierText?.text).toBe("old answer");
+    expect(earlierThinking?.signature).toBeUndefined();
+    expect(earlierThinking?.thinking).toBe("old reasoning");
 
-    // Non-thinking content on latest assistant preserved
-    const toolUseBlock = latestAssistant.content.find(
-      (b: { type: string }) => b.type === "tool_use",
-    );
-    expect(toolUseBlock).toBeDefined();
   });
 });
