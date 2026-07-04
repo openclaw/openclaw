@@ -23,6 +23,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { releasePostCompactionLifecycle } from "./post-compaction-release.js";
 
 const mockState = vi.hoisted(() => ({
+  assertStagedPostCompactionFinalizationComplete: vi.fn(
+    (params: { flowIds: readonly (string | undefined)[]; finalized: number }) => {
+      const expected = params.flowIds.filter(Boolean).length;
+      if (params.finalized !== expected) {
+        throw new Error(`finalized ${params.finalized}/${expected}`);
+      }
+    },
+  ),
   consumeStagedPostCompactionDelegates: vi.fn(),
   finalizeStagedPostCompactionDelegates: vi.fn(),
   clearContextPressureState: vi.fn(),
@@ -32,6 +40,8 @@ const mockState = vi.hoisted(() => ({
 }));
 
 vi.mock("./lazy.runtime.js", () => ({
+  assertStagedPostCompactionFinalizationComplete:
+    mockState.assertStagedPostCompactionFinalizationComplete,
   consumeStagedPostCompactionDelegates: mockState.consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates: mockState.finalizeStagedPostCompactionDelegates,
   clearContextPressureState: mockState.clearContextPressureState,
@@ -80,6 +90,9 @@ const ORIGINATING = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockState.finalizeStagedPostCompactionDelegates.mockImplementation(
+    (flowIds: readonly (string | undefined)[]) => flowIds.filter(Boolean).length,
+  );
   mockState.spawnSubagentDirect.mockResolvedValue({ status: "accepted" });
 });
 

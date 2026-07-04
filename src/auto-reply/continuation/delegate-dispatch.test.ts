@@ -16,6 +16,7 @@ let listTaskFlowsShouldThrow = false;
 const activeRegistryChildSessionKeys = new Set<string>();
 const staleRegistryChildSessionKeys = new Set<string>();
 const acceptedChildSessionKeys = new Set<string>();
+let finishFlowShouldPersistFail = false;
 // #1144: recovery derives the chain cost basis from the PERSISTED session entry
 // (no explicit chainState survives a restart), so tests inject the persisted
 // store here to prove the cost cap is enforced against the post-run child total.
@@ -153,6 +154,9 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       if (!flow || flow.revision !== params.expectedRevision) {
         return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
       }
+      if (finishFlowShouldPersistFail) {
+        return { applied: false, reason: "persist_failed", current: { ...flow } };
+      }
       flow.status = "succeeded";
       flow.stateJson = params.stateJson ?? flow.stateJson;
       flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
@@ -278,6 +282,7 @@ beforeEach(() => {
   pendingSessionDeliveriesForRecovery.length = 0;
   updateSessionStoreForRecoveryOptions.length = 0;
   updateSessionStoreForRecoveryShouldThrow = false;
+  finishFlowShouldPersistFail = false;
   vi.useFakeTimers();
 });
 
@@ -294,6 +299,7 @@ afterEach(() => {
   pendingSessionDeliveriesForRecovery.length = 0;
   updateSessionStoreForRecoveryOptions.length = 0;
   updateSessionStoreForRecoveryShouldThrow = false;
+  finishFlowShouldPersistFail = false;
   vi.useRealTimers();
 });
 
@@ -637,6 +643,31 @@ describe("hedge timer ref/handle cleanup", () => {
         accumulatedChainTokens: 456,
       }),
     );
+  });
+
+  it("does not spawn live tool delegates when required chain-state persist fails first", async () => {
+    const sessionKey = "session-live-persist-before-spawn";
+    enqueuePendingDelegate(sessionKey, { task: "must not spawn before persist" });
+    const flowId = [...mockFlows.values()].find((flow) => flow.ownerKey === sessionKey)?.flowId;
+    expect(flowId).toBeDefined();
+    const persistChainState = vi.fn(async () => {
+      throw new Error("session store write failed");
+    });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: 123, accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      persistChainState,
+    });
+
+    expect(result).toMatchObject({ dispatched: 0, rejected: 1 });
+    expect(persistChainState).toHaveBeenCalledWith(
+      expect.objectContaining({ currentChainCount: 1, chainStartedAt: 123 }),
+    );
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get(flowId as string)).toMatchObject({ status: "running" });
   });
 
   it("advances + persists chain state across sequential hedge fires for multiple delayed delegates (#1158)", async () => {
@@ -2136,7 +2167,7 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
     });
     expect(claimed).toHaveLength(1);
 
-    expect(requeueReleasedPostCompactionDelegate(claimed[0]!)).toBe(true);
+    expect(requeueReleasedPostCompactionDelegate(claimed[0])).toBe(true);
 
     const flowId = claimed[0]?.flowId as string;
     expect(mockFlows.get(flowId)).toMatchObject({ status: "queued" });
@@ -2262,6 +2293,28 @@ describe("recoverAndReleaseStagedPostCompactionDelegates (#1158)", () => {
       continuationChainCount: 1,
       continuationChainTokens: 0,
     });
+  });
+
+  it("fails recovery instead of reporting success when accepted-row finalization fails", async () => {
+    const sessionKey = "agent:main:subagent:pc-recover-finalize-fail";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    const flowId = stageAndClaimRunning(sessionKey, "rehydrate then finalize fails");
+    spawnSubagentDirectMock.mockResolvedValue({ status: "accepted" });
+    finishFlowShouldPersistFail = true;
+
+    await expect(
+      recoverAndReleaseStagedPostCompactionDelegates({
+        runningUpdatedAtOrBefore: Date.now(),
+      }),
+    ).rejects.toThrow("post-compaction-finalize-incomplete");
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    expect(
+      listRecoverableStagedPostCompactionDelegates().map(({ delegate }) => delegate.flowId),
+    ).toEqual([flowId]);
   });
 
   it("finalizes a crash-orphaned row whose deterministic child was already accepted", async () => {

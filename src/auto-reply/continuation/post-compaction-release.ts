@@ -65,6 +65,7 @@ export async function releasePostCompactionLifecycle(
   const { sessionKey, cfg, agentCfgContextTokens, activeSessionEntry, originating } = params;
 
   const {
+    assertStagedPostCompactionFinalizationComplete,
     consumeStagedPostCompactionDelegates,
     finalizeStagedPostCompactionDelegates,
     clearContextPressureState,
@@ -126,7 +127,12 @@ export async function releasePostCompactionLifecycle(
       },
     );
     delegatesDispatched = result.dispatched;
-    finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+    const finalized = finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+    assertStagedPostCompactionFinalizationComplete({
+      flowIds: result.dispatchedFlowIds,
+      finalized,
+      context: `direct post-compaction release for ${sessionKey}`,
+    });
   }
 
   return { pressureFired, delegatesDispatched };

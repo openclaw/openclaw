@@ -30,6 +30,14 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { releasePostCompactionLifecycle } from "./post-compaction-release.js";
 
 const mockState = vi.hoisted(() => ({
+  assertStagedPostCompactionFinalizationComplete: vi.fn(
+    (params: { flowIds: readonly (string | undefined)[]; finalized: number; context: string }) => {
+      const expected = params.flowIds.filter(Boolean).length;
+      if (params.finalized !== expected) {
+        throw new Error(`finalized ${params.finalized}/${expected}`);
+      }
+    },
+  ),
   consumeStagedPostCompactionDelegates: vi.fn(),
   finalizeStagedPostCompactionDelegates: vi.fn(),
   clearContextPressureState: vi.fn(),
@@ -39,6 +47,8 @@ const mockState = vi.hoisted(() => ({
 }));
 
 vi.mock("./lazy.runtime.js", () => ({
+  assertStagedPostCompactionFinalizationComplete:
+    mockState.assertStagedPostCompactionFinalizationComplete,
   consumeStagedPostCompactionDelegates: mockState.consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates: mockState.finalizeStagedPostCompactionDelegates,
   clearContextPressureState: mockState.clearContextPressureState,
@@ -87,6 +97,9 @@ const ORIGINATING = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockState.finalizeStagedPostCompactionDelegates.mockImplementation(
+    (flowIds: readonly (string | undefined)[]) => flowIds.filter(Boolean).length,
+  );
   mockState.spawnSubagentDirect.mockResolvedValue({ status: "accepted" });
 });
 
@@ -184,6 +197,33 @@ describe("releasePostCompactionLifecycle", () => {
     expect(mockState.finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith([
       "pc-flow-accepted",
     ]);
+  });
+
+  it("fails direct release when an accepted row was not finalized", async () => {
+    mockState.checkContextPressure.mockReturnValue(undefined);
+    mockState.consumeStagedPostCompactionDelegates.mockReturnValue([
+      { task: "accepted post-compaction handoff", flowId: "pc-flow-accepted" },
+    ]);
+    mockState.finalizeStagedPostCompactionDelegates.mockReturnValue(0);
+
+    await expect(
+      releasePostCompactionLifecycle({
+        sessionKey: SESSION_KEY,
+        cfg: undefined,
+        agentCfgContextTokens: 200_000,
+        activeSessionEntry: { totalTokens: 180_000, contextTokens: 200_000 },
+        originating: ORIGINATING,
+      }),
+    ).rejects.toThrow("finalized 0/1");
+
+    expect(mockState.finalizeStagedPostCompactionDelegates).toHaveBeenCalledWith([
+      "pc-flow-accepted",
+    ]);
+    expect(mockState.assertStagedPostCompactionFinalizationComplete).toHaveBeenCalledWith({
+      flowIds: ["pc-flow-accepted"],
+      finalized: 0,
+      context: `direct post-compaction release for ${SESSION_KEY}`,
+    });
   });
 
   it("no staged delegates: fires the pressure event but performs no spawns", async () => {

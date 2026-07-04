@@ -43,6 +43,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import {
   annotateQueuedDelegatesInheritedPolicy,
+  assertStagedPostCompactionFinalizationComplete,
   clearQueuedDelegatesChainTokensFold,
   consumePendingDelegates,
   finalizeStagedPostCompactionDelegates,
@@ -465,6 +466,12 @@ export async function dispatchToolDelegates(params: {
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
     const dispatchChainId = currentChainId ?? generateChainId();
+    const nextChainState = {
+      currentChainCount: nextHop,
+      chainStartedAt: chainState.chainStartedAt,
+      accumulatedChainTokens: accumulatedTokens,
+      ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
+    };
     try {
       if (delegateDelivery === "timer") {
         emitContinuationDelegateFireSpan({
@@ -496,15 +503,9 @@ export async function dispatchToolDelegates(params: {
         (hasActiveSubagentRegistryRun(childSessionKey) ||
           (delegate.flowId && hasAcceptedContinuationChildRun(childSessionKey, delegate.flowId)))
       ) {
-        const acceptedChainState = {
-          currentChainCount: nextHop,
-          chainStartedAt: chainState.chainStartedAt,
-          accumulatedChainTokens: accumulatedTokens,
-          ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
-        };
         if (params.persistChainState) {
           try {
-            await params.persistChainState(acceptedChainState);
+            await params.persistChainState(nextChainState);
           } catch (err) {
             const errorMessage = formatErrorMessage(err);
             log.warn(
@@ -535,6 +536,23 @@ export async function dispatchToolDelegates(params: {
         currentChainCount = nextHop;
         currentChainId = dispatchChainId;
         continue;
+      }
+      let chainStatePersistedBeforeSpawn = false;
+      if (params.persistChainState) {
+        try {
+          await params.persistChainState(nextChainState);
+          chainStatePersistedBeforeSpawn = true;
+          currentChainCount = nextHop;
+          currentChainId = dispatchChainId;
+        } catch (err) {
+          const errorMessage = formatErrorMessage(err);
+          log.warn(
+            `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable before spawn: ${errorMessage}`,
+          );
+          dispatchSpan.setStatus("ERROR", errorMessage);
+          rejected++;
+          continue;
+        }
       }
       const result = await spawnSubagentDirect(
         {
@@ -572,25 +590,6 @@ export async function dispatchToolDelegates(params: {
           { sessionKey, trusted: true },
         );
         const acceptedChildSessionKey = result.childSessionKey ?? childSessionKey;
-        const acceptedChainState = {
-          currentChainCount: nextHop,
-          chainStartedAt: chainState.chainStartedAt,
-          accumulatedChainTokens: accumulatedTokens,
-          ...(dispatchChainId ? { chainId: dispatchChainId } : {}),
-        };
-        if (params.persistChainState) {
-          try {
-            await params.persistChainState(acceptedChainState);
-          } catch (err) {
-            const errorMessage = formatErrorMessage(err);
-            log.warn(
-              `[continuation:delegate-accept-chain-persist-failed] flowId=${delegate.flowId ?? "unknown"} session=${sessionKey} leaving row recoverable: ${errorMessage}`,
-            );
-            dispatchSpan.setStatus("ERROR", errorMessage);
-            rejected++;
-            continue;
-          }
-        }
         if (acceptedChildSessionKey) {
           try {
             markPendingDelegateSpawnAccepted(
@@ -610,8 +609,10 @@ export async function dispatchToolDelegates(params: {
         }
         dispatchSpan.setStatus("OK");
         dispatched++;
-        currentChainCount = nextHop;
-        currentChainId = dispatchChainId;
+        if (!chainStatePersistedBeforeSpawn) {
+          currentChainCount = nextHop;
+          currentChainId = dispatchChainId;
+        }
       } else {
         const reasonText = result.error ?? "delegation was not accepted.";
         const summary = `DELEGATE spawn ${result.status}: ${reasonText}`;
@@ -1214,7 +1215,12 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
       });
       sessionStore[sessionKey] = inMemoryEntry;
-      finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+      const finalized = finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
+      assertStagedPostCompactionFinalizationComplete({
+        flowIds: result.dispatchedFlowIds,
+        finalized,
+        context: `post-compaction startup recovery for ${sessionKey}`,
+      });
     }
   }
   return { sessions: recoveredSessions, dispatched, failed };

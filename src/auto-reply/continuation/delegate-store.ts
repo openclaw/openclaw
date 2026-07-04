@@ -213,6 +213,17 @@ function isContinuationDelegateFlow(flow: TaskFlowRecord): boolean {
   return isPendingDelegateFlow(flow) || isPostCompactionDelegateFlow(flow);
 }
 
+function isTerminalDelegateFlow(flow: TaskFlowRecord): boolean {
+  return (
+    isContinuationDelegateFlow(flow) &&
+    (flow.status === "succeeded" ||
+      flow.status === "blocked" ||
+      flow.status === "failed" ||
+      flow.status === "cancelled" ||
+      flow.status === "lost")
+  );
+}
+
 function isRecoverablePendingFlow(flow: TaskFlowRecord): boolean {
   return isPendingDelegateFlow(flow) && (flow.status === "queued" || flow.status === "running");
 }
@@ -634,6 +645,9 @@ export function markPendingDelegateSpawnAccepted(
     endedAt: now,
   });
   if (!finished.applied) {
+    if (finished.current && isTerminalDelegateFlow(finished.current)) {
+      return true;
+    }
     const message = `[continuation:delegate-accept-not-committed] flowId=${delegate.flowId} expectedRevision=${expectedRevision} acceptance was not committed`;
     log.warn(message);
     if (options.requireWriteSuccess === true) {
@@ -661,7 +675,10 @@ export function markPendingDelegateFailed(
     blockedSummary,
     updatedAt: Date.now(),
   });
-  return failed.applied;
+  if (failed.applied) {
+    return true;
+  }
+  return Boolean(failed.current && isTerminalDelegateFlow(failed.current));
 }
 
 /**
@@ -1022,6 +1039,22 @@ export function finalizeStagedPostCompactionDelegates(
     }
   }
   return finalized;
+}
+
+export function assertStagedPostCompactionFinalizationComplete(params: {
+  flowIds: readonly (string | undefined)[];
+  finalized: number;
+  context: string;
+}): void {
+  const expected = params.flowIds.filter(
+    (flowId): flowId is string => typeof flowId === "string" && flowId.length > 0,
+  ).length;
+  if (params.finalized === expected) {
+    return;
+  }
+  throw new Error(
+    `[continuation:post-compaction-finalize-incomplete] ${params.context}: finalized ${params.finalized}/${expected} claimed row(s)`,
+  );
 }
 
 /**
