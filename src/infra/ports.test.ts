@@ -219,6 +219,30 @@ describeUnix("inspectPortUsage", () => {
     }
   });
 
+  it("does not match ss listener ports by substring", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        throw Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" });
+      }
+      if (command === "ss") {
+        return {
+          stdout: 'LISTEN 0 4096 127.0.0.1:18789 0.0.0.0:* users:(("openclaw",pid=123,fd=12))',
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(1878);
+
+    expect(result.listeners).toEqual([]);
+  });
+
   it("reports established gateway client connections from lsof", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
