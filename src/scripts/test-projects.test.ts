@@ -941,6 +941,7 @@ describe("test-projects args", () => {
           "src/gateway/server.agent.gateway-server-agent-b.test.ts",
           "src/gateway/server.chat.gateway-server-chat-b.test.ts",
           "src/gateway/server.sessions.permissions-hooks.test.ts",
+          "src/gateway/terminal/launch.test.ts",
         ],
         watchMode: false,
       },
