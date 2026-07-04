@@ -234,7 +234,12 @@ async function callLoopbackJsonRpc(params: {
   if (!text.trim()) {
     return {};
   }
-  const parsed = JSON.parse(text) as LoopbackJsonRpcResponse;
+  let parsed: LoopbackJsonRpcResponse;
+  try {
+    parsed = JSON.parse(text) as LoopbackJsonRpcResponse;
+  } catch (cause) {
+    throw new Error("mcp loopback returned malformed JSON", { cause });
+  }
   if (parsed.error?.message) {
     throw new Error(`mcp loopback json-rpc error: ${parsed.error.message}`);
   }
@@ -261,6 +266,14 @@ async function readBoundedResponseText(response: Response, byteLimit: number): P
     chunks.push(Buffer.from(value));
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function parseCronProbeArgs(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch (cause) {
+    throw new Error("cron probe argsJson is not valid JSON", { cause });
+  }
 }
 
 export async function verifyCliCronMcpLoopbackPreflight(params: {
@@ -333,7 +346,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
       method: "tools/call",
       params: {
         name: "cron",
-        arguments: JSON.parse(cronProbe.argsJson) as Record<string, unknown>,
+        arguments: parseCronProbeArgs(cronProbe.argsJson),
       },
     },
   });
