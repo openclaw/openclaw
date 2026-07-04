@@ -138,7 +138,7 @@ describe("route-args", () => {
         "--store",
         "sqlite",
         "--active",
-        "true",
+        "30",
         "--limit",
         "25",
       ]),
@@ -147,11 +147,31 @@ describe("route-args", () => {
       allAgents: true,
       agent: "default",
       store: "sqlite",
-      active: "true",
-      limit: "25",
+      active: 30,
+      limit: 25,
     });
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent"])).toBeNull();
     expect(parseSessionsRouteArgs(["node", "openclaw", "sessions", "--limit"])).toBeNull();
+    expect(
+      parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),
+    ).toEqual({
+      json: true,
+      bindings: true,
+    });
+    // route-first --limit all
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit", "all"])
+        ?.limit,
+    ).toBe("all");
+    // route-first invalid values => undefined
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--active", "abc"])
+        ?.active,
+    ).toBeUndefined();
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit", "0"])
+        ?.limit,
+    ).toBeUndefined();
     expect(
       parseAgentsListRouteArgs(["node", "openclaw", "agents", "list", "--json", "--bindings"]),
     ).toEqual({
