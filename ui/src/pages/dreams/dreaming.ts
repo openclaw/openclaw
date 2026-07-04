@@ -1,9 +1,8 @@
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-// Control UI controller manages dreaming gateway state.
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../ui/gateway.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
@@ -241,6 +240,42 @@ export type DreamingState = {
   wikiMemoryPalace: WikiMemoryPalace | null;
   lastError: string | null;
 };
+
+export function createDreamingState(
+  initial: Partial<
+    Pick<
+      DreamingState,
+      "client" | "connected" | "hello" | "configSnapshot" | "applySessionKey" | "selectedAgentId"
+    >
+  > = {},
+): DreamingState {
+  return {
+    client: initial.client ?? null,
+    connected: initial.connected ?? false,
+    hello: initial.hello ?? null,
+    configSnapshot: initial.configSnapshot ?? null,
+    applySessionKey: initial.applySessionKey ?? "main",
+    selectedAgentId: initial.selectedAgentId ?? null,
+    dreamingStatusLoading: false,
+    dreamingStatusError: null,
+    dreamingStatus: null,
+    dreamingModeSaving: false,
+    dreamDiaryLoading: false,
+    dreamDiaryActionLoading: false,
+    dreamDiaryActionMessage: null,
+    dreamDiaryActionArchivePath: null,
+    dreamDiaryError: null,
+    dreamDiaryPath: null,
+    dreamDiaryContent: null,
+    wikiImportInsightsLoading: false,
+    wikiImportInsightsError: null,
+    wikiImportInsights: null,
+    wikiMemoryPalaceLoading: false,
+    wikiMemoryPalaceError: null,
+    wikiMemoryPalace: null,
+    lastError: null,
+  };
+}
 
 type DreamingConfigCapability = Pick<
   RuntimeConfigCapability,

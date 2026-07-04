@@ -7,7 +7,6 @@ import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts"
 import { searchForSession } from "../../lib/sessions/index.ts";
 import {
   configureWorkboardPolling,
-  getWorkboardState,
   loadWorkboard,
   stopWorkboardLifecycleRefresh,
   stopWorkboardPolling,
@@ -16,7 +15,7 @@ import {
 import { renderWorkboard } from "./view.ts";
 
 export class WorkboardPage extends LitElement {
-  createRenderRoot() {
+  override createRenderRoot() {
     return this;
   }
 
@@ -27,8 +26,9 @@ export class WorkboardPage extends LitElement {
   private stopConfigSubscription?: () => void;
   private stopGatewaySubscription?: () => void;
   private stopSessionsSubscription?: () => void;
+  private stopWorkboardSubscription?: () => void;
 
-  private readonly requestPageUpdate = () => this.requestUpdate();
+  private readonly requestPageUpdate = () => this.context?.workboard.notify();
 
   override connectedCallback() {
     super.connectedCallback();
@@ -51,8 +51,13 @@ export class WorkboardPage extends LitElement {
     this.stopGatewaySubscription = undefined;
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
-    stopWorkboardPolling(this);
-    stopWorkboardLifecycleRefresh(this);
+    this.stopWorkboardSubscription?.();
+    this.stopWorkboardSubscription = undefined;
+    const workboard = this.context?.workboard;
+    if (workboard) {
+      stopWorkboardPolling(workboard);
+      stopWorkboardLifecycleRefresh(workboard);
+    }
     super.disconnectedCallback();
   }
 
@@ -69,6 +74,9 @@ export class WorkboardPage extends LitElement {
       this.ensureInitialData();
     });
     this.stopSessionsSubscription = context.sessions.subscribe(() => {
+      this.requestUpdate();
+    });
+    this.stopWorkboardSubscription = context.workboard.subscribe(() => {
       this.requestUpdate();
     });
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
@@ -108,26 +116,28 @@ export class WorkboardPage extends LitElement {
     const gateway = context?.gateway.snapshot;
     const pluginEnabled = this.pluginEnabled();
     if (!context || !gateway?.connected || !gateway.client || pluginEnabled !== true) {
-      stopWorkboardPolling(this);
-      stopWorkboardLifecycleRefresh(this);
+      if (context) {
+        stopWorkboardPolling(context.workboard);
+        stopWorkboardLifecycleRefresh(context.workboard);
+      }
       return;
     }
-    const state = getWorkboardState(this);
+    const state = context.workboard.state;
     configureWorkboardPolling({
-      host: this,
+      host: context.workboard,
       client: gateway.client,
       enabled: state.autoRefreshIntervalMs > 0,
       requestUpdate: this.requestPageUpdate,
     });
     void loadWorkboard({
-      host: this,
+      host: context.workboard,
       client: gateway.client,
       requestUpdate: this.requestPageUpdate,
       refreshDiagnostics: hasOperatorWriteAccess(gateway.hello?.auth ?? null),
     });
     if (!state.pollRefreshInProgress && !state.dispatching) {
       void syncWorkboardLifecycle({
-        host: this,
+        host: context.workboard,
         client: gateway.client,
         sessions: context.sessions.state.result?.sessions ?? [],
         canWrite: hasOperatorWriteAccess(gateway.hello?.auth ?? null),
@@ -161,7 +171,7 @@ export class WorkboardPage extends LitElement {
         </div>
       </section>
       ${renderWorkboard({
-        host: this,
+        host: context.workboard,
         client: gateway.client,
         connected: gateway.connected,
         canWrite: hasOperatorWriteAccess(auth),
@@ -172,7 +182,7 @@ export class WorkboardPage extends LitElement {
         agentsList: context.agents.state.agentsList,
         sessions: context.sessions.state.result?.sessions ?? [],
         onOpenSession: (sessionKey) => {
-          context.navigate("chat", { search: searchForSession(sessionKey) });
+          context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
         },
         onReloadConfig: () => this.reloadConfig(),
         onRequestUpdate: this.requestPageUpdate,

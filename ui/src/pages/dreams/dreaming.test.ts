@@ -4,6 +4,7 @@ import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
+  createDreamingState,
   dedupeDreamDiary,
   loadDreamDiary,
   loadDreamingStatus,
@@ -15,7 +16,7 @@ import {
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
-} from "./data.ts";
+} from "./dreaming.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 type DreamingConfigCapability = Pick<
@@ -26,32 +27,12 @@ type DreamingConfigCapability = Pick<
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
   const state: DreamingState = {
+    ...createDreamingState(),
     client: {
       request,
     } as unknown as DreamingState["client"],
     connected: true,
-    hello: null,
     configSnapshot: { hash: "hash-1" },
-    applySessionKey: "main",
-    selectedAgentId: null,
-    dreamingStatusLoading: false,
-    dreamingStatusError: null,
-    dreamingStatus: null,
-    dreamingModeSaving: false,
-    dreamDiaryLoading: false,
-    dreamDiaryActionLoading: false,
-    dreamDiaryActionMessage: null,
-    dreamDiaryActionArchivePath: null,
-    dreamDiaryError: null,
-    dreamDiaryPath: null,
-    dreamDiaryContent: null,
-    wikiImportInsightsLoading: false,
-    wikiImportInsightsError: null,
-    wikiImportInsights: null,
-    wikiMemoryPalaceLoading: false,
-    wikiMemoryPalaceError: null,
-    wikiMemoryPalace: null,
-    lastError: null,
   };
   return { state, request };
 }
@@ -87,7 +68,7 @@ function getConfigPatchRawPayload(config: DreamingConfigCapability): Record<stri
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
     throw new Error("Expected config patch object");
   }
-  return patch as Record<string, unknown>;
+  return patch;
 }
 
 describe("dreaming controller", () => {
@@ -826,7 +807,7 @@ describe("dreaming controller", () => {
   });
 
   it("blocks dreaming patch when selected plugin config rejects unknown keys", async () => {
-    const { state, request } = createState();
+    const { state } = createState();
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -915,7 +896,7 @@ describe("dreaming controller", () => {
   });
 
   it("fails gracefully when config hash is missing", async () => {
-    const { state, request } = createState();
+    const { state } = createState();
     state.configSnapshot = {};
     const config = createConfig(state);
 

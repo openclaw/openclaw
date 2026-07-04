@@ -22,6 +22,7 @@ import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability, resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { createBrowserHistory } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
@@ -479,6 +480,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
   });
   const sessions = createSessionCapability(gateway);
+  const workboard = createWorkboardCapability();
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
@@ -548,6 +550,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     config,
     runtimeConfig,
     sessions,
+    workboard,
     overlays,
     navigation,
     theme,
@@ -589,6 +592,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       agents.dispose();
       channels.dispose();
       sessions.dispose();
+      workboard.dispose();
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();

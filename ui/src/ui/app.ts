@@ -20,7 +20,6 @@ import type {
   HealthSummary,
   ModelAuthStatusResult,
   ModelCatalogEntry,
-  SessionCompactionCheckpoint,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
@@ -112,7 +111,11 @@ import {
   scheduleChatScroll as scheduleChatScrollInternal,
 } from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
-import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
+import type {
+  DreamingStatus,
+  WikiImportInsights,
+  WikiMemoryPalace,
+} from "../pages/dreams/dreaming.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
 import {
   loadSkillWorkshopMode,
@@ -120,7 +123,6 @@ import {
   saveSkillWorkshopMode,
   saveSkillWorkshopUseCurrentChatForRevisions,
 } from "../pages/skill-workshop/storage.ts";
-import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
   handleConnected,
@@ -437,24 +439,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsResultShowArchived = false;
   @state() selectedChatSessionArchived = false;
   @state() sessionsError: string | null = null;
-  @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
-  @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
-  @state() sessionsIncludeGlobal = true;
-  @state() sessionsIncludeUnknown = false;
   @state() sessionsShowArchived = false;
-  @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
-  @state() sessionsSearchQuery = "";
-  @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
-  @state() sessionsSortDir: "asc" | "desc" = "desc";
-  @state() sessionsPage = 0;
-  @state() sessionsPageSize = 25;
-  @state() sessionsSelectedKeys: Set<string> = new Set();
-  @state() sessionsExpandedCheckpointKey: string | null = null;
-  @state() sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
-  @state() sessionsCheckpointLoadingKey: string | null = null;
-  @state() sessionsCheckpointBusyKey: string | null = null;
-  @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
 
   @state() cronLoading = false;
   @state() cronQuickCreateOpen = false;

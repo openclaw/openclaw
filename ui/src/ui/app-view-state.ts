@@ -11,7 +11,6 @@ import type {
   ModelCatalogEntry,
   NostrProfile,
   SessionsListResult,
-  SessionCompactionCheckpoint,
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
@@ -203,7 +202,7 @@ export type AppViewState = {
   selectedAgentId: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
-  dreamingStatus: import("../pages/dreams/data.js").DreamingStatus | null;
+  dreamingStatus: import("../pages/dreams/dreaming.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
   dreamingRestartConfirmOpen: boolean;
   dreamingRestartConfirmLoading: boolean;
@@ -217,10 +216,10 @@ export type AppViewState = {
   dreamDiaryContent: string | null;
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
-  wikiImportInsights: import("../pages/dreams/data.js").WikiImportInsights | null;
+  wikiImportInsights: import("../pages/dreams/dreaming.js").WikiImportInsights | null;
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
-  wikiMemoryPalace: import("../pages/dreams/data.js").WikiMemoryPalace | null;
+  wikiMemoryPalace: import("../pages/dreams/dreaming.js").WikiMemoryPalace | null;
   configFormMode: "form" | "raw";
   configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;
@@ -290,27 +289,8 @@ export type AppViewState = {
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
-  threadsLoading: boolean;
-  threadsResult: SessionsListResult | null;
-  threadsError: string | null;
-  sessionsFilterActive: string;
-  sessionsFilterLimit: string;
-  sessionsIncludeGlobal: boolean;
-  sessionsIncludeUnknown: boolean;
   sessionsShowArchived: boolean;
-  sessionsFiltersCollapsed: boolean;
   sessionsHideCron: boolean;
-  sessionsSearchQuery: string;
-  sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
-  sessionsSortDir: "asc" | "desc";
-  sessionsPage: number;
-  sessionsPageSize: number;
-  sessionsSelectedKeys: Set<string>;
-  sessionsExpandedCheckpointKey: string | null;
-  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  sessionsCheckpointLoadingKey: string | null;
-  sessionsCheckpointBusyKey: string | null;
-  sessionsCheckpointErrorByKey: Record<string, string>;
 } & Pick<
   CronState,
   | "cronLoading"
@@ -478,8 +458,6 @@ export type AppViewState = {
     handleCronAdd: () => Promise<void>;
     handleCronRunsLoad: (jobId: string) => Promise<void>;
     handleCronFormUpdate: (path: string, value: unknown) => void;
-    handleSessionsLoad: () => Promise<void>;
-    handleSessionsPatch: (key: string, patch: unknown) => Promise<void>;
     handleLoadNodes: () => Promise<void>;
     handleLoadPresence: () => Promise<void>;
     handleLoadSkills: () => Promise<void>;

@@ -1,19 +1,32 @@
 import { consume } from "@lit/context";
 import { html, LitElement } from "lit";
-import { state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentIdentityResult,
+  GatewaySessionRow,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import {
   filterSessionRows,
   scopedAgentParamsForSession,
   searchForSession,
 } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { renderSessions } from "./view.ts";
+
+export type SessionsRouteData = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
+  result: SessionsListResult | null;
+  error: string | null;
+};
 
 function parseFilterInteger(value: string): number | undefined {
   const parsed = Number.parseInt(value, 10);
@@ -23,6 +36,8 @@ function parseFilterInteger(value: string): number | undefined {
 export class SessionsPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context?: ApplicationContext;
+
+  @property({ attribute: false }) routeData?: SessionsRouteData;
 
   @state() private result: SessionsListResult | null = null;
   @state() private loading = false;
@@ -47,8 +62,21 @@ export class SessionsPage extends LitElement {
 
   private stopSessionSubscription?: () => void;
   private stopAgentIdentitySubscription?: () => void;
+  private stopAgentSelectionSubscription?: () => void;
+  private stopGatewaySubscription?: () => void;
+  private stopRuntimeConfigSubscription?: () => void;
+  private stopWorkboardSubscription?: () => void;
   private sessionRequestId = 0;
   private checkpointRequestId = 0;
+  private routeDataInitialized = false;
+  private routeDataEnabled = true;
+  private ignorePendingSharedRefresh = false;
+  private sessionMutationPending = false;
+  private sessionReloadQueued = false;
+  private sharedSessionsResult: SessionsListResult | null = null;
+  private sharedSessionsLoading = false;
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
 
   override createRenderRoot() {
     return this;
@@ -60,9 +88,16 @@ export class SessionsPage extends LitElement {
     this.startAgentIdentityState();
   }
 
+  override willUpdate(changed: Map<PropertyKey, unknown>) {
+    if (changed.has("routeData") || changed.has("context")) {
+      this.applyRouteData();
+    }
+  }
+
   override updated() {
     this.startSessionState();
     this.startAgentIdentityState();
+    this.startApplicationState();
   }
 
   override disconnectedCallback() {
@@ -70,8 +105,19 @@ export class SessionsPage extends LitElement {
     this.stopSessionSubscription = undefined;
     this.stopAgentIdentitySubscription?.();
     this.stopAgentIdentitySubscription = undefined;
+    this.stopAgentSelectionSubscription?.();
+    this.stopAgentSelectionSubscription = undefined;
+    this.stopGatewaySubscription?.();
+    this.stopGatewaySubscription = undefined;
+    this.stopRuntimeConfigSubscription?.();
+    this.stopRuntimeConfigSubscription = undefined;
+    this.stopWorkboardSubscription?.();
+    this.stopWorkboardSubscription = undefined;
     this.sessionRequestId += 1;
     this.checkpointRequestId += 1;
+    this.sessionReloadQueued = false;
+    this.gatewayClient = null;
+    this.gatewayConnected = false;
     super.disconnectedCallback();
   }
 
@@ -80,12 +126,24 @@ export class SessionsPage extends LitElement {
     if (!context || this.stopSessionSubscription) {
       return;
     }
-    this.stopSessionSubscription = context.sessions.subscribe((state) => {
-      if (!state.loading) {
-        void this.loadSessions();
+    this.sharedSessionsResult = context.sessions.state.result;
+    this.sharedSessionsLoading = context.sessions.state.loading;
+    this.stopSessionSubscription = context.sessions.subscribe((snapshot) => {
+      const resultChanged = snapshot.result !== this.sharedSessionsResult;
+      const refreshCompleted = this.sharedSessionsLoading && !snapshot.loading;
+      this.sharedSessionsResult = snapshot.result;
+      this.sharedSessionsLoading = snapshot.loading;
+      if (snapshot.loading || !this.routeDataInitialized || this.sessionMutationPending) {
+        return;
+      }
+      if (this.ignorePendingSharedRefresh && refreshCompleted) {
+        this.ignorePendingSharedRefresh = false;
+        return;
+      }
+      if (resultChanged) {
+        this.scheduleSessionReload();
       }
     });
-    void this.loadSessions();
   }
 
   private startAgentIdentityState() {
@@ -96,6 +154,103 @@ export class SessionsPage extends LitElement {
     this.stopAgentIdentitySubscription = context.agentIdentity.subscribe(() =>
       this.requestUpdate(),
     );
+  }
+
+  private startApplicationState() {
+    const context = this.context;
+    if (!context || this.stopGatewaySubscription) {
+      return;
+    }
+    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() =>
+      this.requestUpdate(),
+    );
+    const gateway = context.gateway.snapshot;
+    this.gatewayClient = gateway.client;
+    this.gatewayConnected = gateway.connected;
+    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) =>
+      this.applyGatewaySnapshot(snapshot),
+    );
+    this.stopRuntimeConfigSubscription = context.runtimeConfig.subscribe(() =>
+      this.requestUpdate(),
+    );
+    this.stopWorkboardSubscription = context.workboard.subscribe(() => this.requestUpdate());
+  }
+
+  private applyGatewaySnapshot(snapshot: ApplicationContext["gateway"]["snapshot"]) {
+    const clientChanged = snapshot.client !== this.gatewayClient;
+    const becameConnected = snapshot.connected && !this.gatewayConnected;
+    this.gatewayClient = snapshot.client;
+    this.gatewayConnected = snapshot.connected;
+    if (clientChanged) {
+      this.ignorePendingSharedRefresh = false;
+      this.sessionRequestId += 1;
+      this.checkpointRequestId += 1;
+      this.result = null;
+      this.error = null;
+      this.loading = false;
+      this.selectedKeys = new Set();
+      this.expandedCheckpointKey = null;
+      this.checkpointItemsByKey = {};
+      this.checkpointLoadingKey = null;
+      this.checkpointBusyKey = null;
+      this.checkpointErrorByKey = {};
+    }
+    if (!snapshot.connected || !snapshot.client) {
+      this.sessionRequestId += 1;
+      this.loading = false;
+      this.requestUpdate();
+      return;
+    }
+    if (this.routeDataInitialized && (clientChanged || becameConnected)) {
+      this.ignorePendingSharedRefresh = true;
+      void this.loadSessions();
+    }
+    this.requestUpdate();
+  }
+
+  private applyRouteData() {
+    const data = this.routeData;
+    const context = this.context;
+    if (!data || !context) {
+      return;
+    }
+    this.routeDataInitialized = true;
+    if (!this.routeDataEnabled) {
+      return;
+    }
+    const gateway = context.gateway.snapshot;
+    if (data.client !== gateway.client || data.connected !== gateway.connected) {
+      this.routeDataEnabled = false;
+      void this.loadSessions();
+      return;
+    }
+    this.result = data.result ? filterSessionRows(data.result, { showArchived: false }) : null;
+    this.error = data.error;
+    this.loading = false;
+    const sharedSessions = context.sessions.state;
+    this.ignorePendingSharedRefresh = sharedSessions.loading;
+    this.ensureAgentIdentities(this.result);
+  }
+
+  private scheduleSessionReload() {
+    if (this.sessionReloadQueued) {
+      return;
+    }
+    this.sessionReloadQueued = true;
+    queueMicrotask(() => {
+      this.sessionReloadQueued = false;
+      const context = this.context;
+      const gateway = context?.gateway.snapshot;
+      if (
+        this.isConnected &&
+        context &&
+        gateway?.connected &&
+        gateway.client &&
+        !context.sessions.state.loading
+      ) {
+        void this.loadSessions();
+      }
+    });
   }
 
   private sessionAgentId(key: string): string | undefined {
@@ -130,6 +285,7 @@ export class SessionsPage extends LitElement {
     }
     const requestId = ++this.sessionRequestId;
     const previous = this.result;
+    this.routeDataEnabled = false;
     this.loading = true;
     this.error = null;
     try {
@@ -253,21 +409,35 @@ export class SessionsPage extends LitElement {
     ) {
       return;
     }
-    const deleted: string[] = [];
-    const result = await context.sessions.deleteMany(
-      keys.map((key) => ({
-        key,
-        agentId: this.sessionAgentId(key),
-      })),
-    );
-    deleted.push(...result.deleted);
-    if (deleted.length > 0) {
+    this.sessionMutationPending = true;
+    const result = await context.sessions
+      .deleteMany(
+        keys.map((key) => ({
+          key,
+          agentId: this.sessionAgentId(key),
+        })),
+      )
+      .finally(() => {
+        this.sessionMutationPending = false;
+      });
+    if (result.deleted.length > 0) {
+      const deleted = new Set(result.deleted);
       const selected = new Set(this.selectedKeys);
-      for (const key of deleted) {
+      for (const key of result.deleted) {
         selected.delete(key);
       }
       this.selectedKeys = selected;
-      await this.loadSessions();
+      if (this.result) {
+        const sessions = this.result.sessions.filter((row) => !deleted.has(row.key));
+        this.result = {
+          ...this.result,
+          count: Math.max(0, this.result.count - (this.result.sessions.length - sessions.length)),
+          sessions,
+        };
+      }
+      if (this.expandedCheckpointKey && deleted.has(this.expandedCheckpointKey)) {
+        this.expandedCheckpointKey = null;
+      }
     }
     if (result.errors.length > 0) {
       this.error = result.errors.join("; ");
@@ -335,8 +505,7 @@ export class SessionsPage extends LitElement {
       const result = await context.sessions.branchCheckpoint(sessionKey, checkpointId, {
         agentId: this.sessionAgentId(sessionKey),
       });
-      await this.loadSessions();
-      context.navigate("chat", { search: searchForSession(result.key) });
+      context.navigate("chat", { search: searchForSession(result.key), hash: "" });
     } catch (error) {
       this.error = String(error);
     } finally {
@@ -363,7 +532,6 @@ export class SessionsPage extends LitElement {
       await context.sessions.restoreCheckpoint(sessionKey, checkpointId, {
         agentId: this.sessionAgentId(sessionKey),
       });
-      await this.loadSessions();
     } catch (error) {
       this.error = String(error);
     } finally {
@@ -378,104 +546,140 @@ export class SessionsPage extends LitElement {
     if (!context) {
       return html``;
     }
-    return renderSessions({
-      loading: this.loading,
-      result: this.result,
-      error: this.error,
-      activeMinutes: this.activeMinutes,
-      limit: this.limit,
-      includeGlobal: this.includeGlobal,
-      includeUnknown: this.includeUnknown,
-      showArchived: this.showArchived,
-      filtersCollapsed: this.filtersCollapsed,
-      basePath: context.basePath,
-      searchQuery: this.searchQuery,
-      agentIdentityById: this.sessionAgentIdentityById(this.result),
-      sortColumn: this.sortColumn,
-      sortDir: this.sortDir,
-      page: this.page,
-      pageSize: this.pageSize,
-      selectedKeys: this.selectedKeys,
-      expandedCheckpointKey: this.expandedCheckpointKey,
-      checkpointItemsByKey: this.checkpointItemsByKey,
-      checkpointLoadingKey: this.checkpointLoadingKey,
-      checkpointBusyKey: this.checkpointBusyKey,
-      checkpointErrorByKey: this.checkpointErrorByKey,
-      onFiltersChange: (next) => this.updateFilters(next),
-      onToggleFiltersCollapsed: () => {
-        this.filtersCollapsed = !this.filtersCollapsed;
-      },
-      onClearFilters: () => {
-        this.activeMinutes = "";
-        this.limit = "";
-        this.includeGlobal = true;
-        this.includeUnknown = true;
-        this.showArchived = true;
-        this.searchQuery = "";
-        this.page = 0;
-        this.selectedKeys = new Set();
-        void this.loadSessions();
-      },
-      onSearchChange: (query) => {
-        this.searchQuery = query;
-        this.page = 0;
-      },
-      onSortChange: (column, direction) => {
-        this.sortColumn = column;
-        this.sortDir = direction;
-        this.page = 0;
-      },
-      onPageChange: (page) => {
-        this.page = page;
-      },
-      onPageSizeChange: (pageSize) => {
-        this.pageSize = pageSize;
-        this.page = 0;
-      },
-      onRefresh: () => void this.loadSessions(),
-      onPatch: (key, patch) => {
-        void context.sessions
-          .patch(key, patch, {
-            agentId: this.sessionAgentId(key),
-          })
-          .then(async () => {
-            await this.loadSessions();
-          })
-          .catch((error: unknown) => {
-            this.error = String(error);
-          });
-      },
-      onToggleSelect: (key) => {
-        const next = new Set(this.selectedKeys);
-        if (next.has(key)) {
-          next.delete(key);
-        } else {
-          next.add(key);
-        }
-        this.selectedKeys = next;
-      },
-      onSelectPage: (keys) => {
-        this.selectedKeys = new Set([...this.selectedKeys, ...keys]);
-      },
-      onDeselectPage: (keys) => {
-        const next = new Set(this.selectedKeys);
-        for (const key of keys) {
-          next.delete(key);
-        }
-        this.selectedKeys = next;
-      },
-      onDeselectAll: () => {
-        this.selectedKeys = new Set();
-      },
-      onDeleteSelected: () => void this.deleteSelected(),
-      onNavigateToChat: (sessionKey) =>
-        context.navigate("chat", { search: searchForSession(sessionKey) }),
-      onToggleCheckpointDetails: (sessionKey) => void this.toggleCheckpointDetails(sessionKey),
-      onBranchFromCheckpoint: (sessionKey, checkpointId) =>
-        void this.branchCheckpoint(sessionKey, checkpointId),
-      onRestoreCheckpoint: (sessionKey, checkpointId) =>
-        void this.restoreCheckpoint(sessionKey, checkpointId),
+    const gateway = context.gateway.snapshot;
+    const workboardEnabled = isPluginEnabledInConfigSnapshot(
+      context.runtimeConfig.state.configSnapshot,
+      "workboard",
+      { enabledByDefault: false },
+    );
+    const canCapture = workboardEnabled && hasOperatorWriteAccess(gateway.hello?.auth ?? null);
+    const workboardState = context.workboard.state;
+    return html`
+      <section class="content-header content-header--page">
+        <div>
+          <div class="page-title">${titleForRoute("sessions")}</div>
+          <div class="page-sub">${subtitleForRoute("sessions")}</div>
+        </div>
+      </section>
+      ${renderSessions({
+        loading: this.loading,
+        result: this.result,
+        error: this.error,
+        activeMinutes: this.activeMinutes,
+        limit: this.limit,
+        includeGlobal: this.includeGlobal,
+        includeUnknown: this.includeUnknown,
+        showArchived: this.showArchived,
+        filtersCollapsed: this.filtersCollapsed,
+        basePath: context.basePath,
+        searchQuery: this.searchQuery,
+        agentIdentityById: this.sessionAgentIdentityById(this.result),
+        sortColumn: this.sortColumn,
+        sortDir: this.sortDir,
+        page: this.page,
+        pageSize: this.pageSize,
+        selectedKeys: this.selectedKeys,
+        workboardSessionKeys: new Set(
+          workboardState.cards
+            .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
+            .filter((key): key is string => typeof key === "string" && key.length > 0),
+        ),
+        workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
+        expandedCheckpointKey: this.expandedCheckpointKey,
+        checkpointItemsByKey: this.checkpointItemsByKey,
+        checkpointLoadingKey: this.checkpointLoadingKey,
+        checkpointBusyKey: this.checkpointBusyKey,
+        checkpointErrorByKey: this.checkpointErrorByKey,
+        onFiltersChange: (next) => this.updateFilters(next),
+        onToggleFiltersCollapsed: () => {
+          this.filtersCollapsed = !this.filtersCollapsed;
+        },
+        onClearFilters: () => {
+          this.activeMinutes = "";
+          this.limit = "";
+          this.includeGlobal = true;
+          this.includeUnknown = true;
+          this.showArchived = true;
+          this.searchQuery = "";
+          this.page = 0;
+          this.selectedKeys = new Set();
+          void this.loadSessions();
+        },
+        onSearchChange: (query) => {
+          this.searchQuery = query;
+          this.page = 0;
+        },
+        onSortChange: (column, direction) => {
+          this.sortColumn = column;
+          this.sortDir = direction;
+          this.page = 0;
+        },
+        onPageChange: (page) => {
+          this.page = page;
+        },
+        onPageSizeChange: (pageSize) => {
+          this.pageSize = pageSize;
+          this.page = 0;
+        },
+        onRefresh: () => void this.loadSessions(),
+        onPatch: (key, patch) => {
+          void context.sessions
+            .patch(key, patch, {
+              agentId: this.sessionAgentId(key),
+            })
+            .catch((error: unknown) => {
+              this.error = String(error);
+            });
+        },
+        onToggleSelect: (key) => {
+          const next = new Set(this.selectedKeys);
+          if (next.has(key)) {
+            next.delete(key);
+          } else {
+            next.add(key);
+          }
+          this.selectedKeys = next;
+        },
+        onSelectPage: (keys) => {
+          this.selectedKeys = new Set([...this.selectedKeys, ...keys]);
+        },
+        onDeselectPage: (keys) => {
+          const next = new Set(this.selectedKeys);
+          for (const key of keys) {
+            next.delete(key);
+          }
+          this.selectedKeys = next;
+        },
+        onDeselectAll: () => {
+          this.selectedKeys = new Set();
+        },
+        onDeleteSelected: () => void this.deleteSelected(),
+        onNavigateToChat: (sessionKey) =>
+          context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
+        onAddToWorkboard: canCapture
+          ? (session: GatewaySessionRow) => this.addToWorkboard(session)
+          : undefined,
+        onToggleCheckpointDetails: (sessionKey) => void this.toggleCheckpointDetails(sessionKey),
+        onBranchFromCheckpoint: (sessionKey, checkpointId) =>
+          void this.branchCheckpoint(sessionKey, checkpointId),
+        onRestoreCheckpoint: (sessionKey, checkpointId) =>
+          void this.restoreCheckpoint(sessionKey, checkpointId),
+      })}
+    `;
+  }
+
+  private async addToWorkboard(session: GatewaySessionRow) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    await captureSessionToWorkboard({
+      host: context.workboard,
+      client: context.gateway.snapshot.client,
+      session,
+      requestUpdate: context.workboard.notify,
     });
+    context.navigate("workboard");
   }
 }
 

@@ -17,18 +17,9 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import {
-  filterSessionRows,
-  getVisibleSessionRows,
-  resolveSessionNavigation,
-  scopedAgentIdForSession,
-  scopedAgentListParamsForRefreshTarget,
-  scopedAgentListParamsForSession,
-  scopedAgentParamsForSession,
-  visibleSessionMatches,
-} from "./navigation.ts";
-import {
   reconcileSessionChanged,
   reconcileSessionHistory,
+  type SessionChangedResult,
   type SessionReconcileOptions,
 } from "./reconcile.ts";
 import { normalizeAgentId } from "./session-key.ts";
@@ -193,7 +184,7 @@ export {
   visibleSessionMatches,
 } from "./navigation.ts";
 export { reconcileSessionHistory } from "./reconcile.ts";
-export type { SessionReconcileOptions } from "./reconcile.ts";
+export type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
 export type {
   SessionNavigation,
   SessionNavigationInput,
@@ -558,6 +549,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
+  const drainRefreshQueue = async (options: SessionListOptions & { force?: boolean }) => {
+    let next: (SessionListOptions & { force?: boolean }) | null = options;
+    while (next) {
+      await load(next);
+      next = queuedRefresh;
+      queuedRefresh = null;
+    }
+  };
+
   const refresh = (options: SessionListOptions & { force?: boolean } = {}) => {
     if (!gateway.snapshot.connected || !gateway.snapshot.client || disposed) {
       return Promise.resolve();
@@ -572,13 +572,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (state.result && !options.force && !hasListOverrides) {
       return Promise.resolve();
     }
-    const request = load(options).finally(() => {
+    const request = drainRefreshQueue(options).finally(() => {
       inFlight = null;
-      const queued = queuedRefresh;
-      queuedRefresh = null;
-      if (queued) {
-        void refresh({ ...queued, force: true });
-      }
     });
     inFlight = request;
     return request;
@@ -740,9 +735,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     try {
       await requestSessionReset(client, key, options);
-      if (disposed || gateway.snapshot.client !== client) {
-        return;
-      }
     } catch (error) {
       publish({ ...state, error: String(error) });
       throw error;

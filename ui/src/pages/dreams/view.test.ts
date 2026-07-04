@@ -1,17 +1,31 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  createDreamingViewState,
   renderDreaming,
-  setDreamAdvancedWaitingSort,
-  setDreamDiarySubTab,
-  setDreamSubTab,
   type DreamingProps,
+  type DreamingViewState,
 } from "./view.ts";
+
+let viewState = createDreamingViewState();
+
+function setDreamSubTab(tab: DreamingViewState["activeSubTab"]) {
+  viewState.activeSubTab = tab;
+}
+
+function setDreamDiarySubTab(tab: DreamingViewState["activeDiarySubTab"]) {
+  viewState.activeDiarySubTab = tab;
+}
+
+function setDreamAdvancedWaitingSort(sort: DreamingViewState["advancedWaitingSort"]) {
+  viewState.advancedWaitingSort = sort;
+}
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
+    viewState,
     active: true,
     selectedAgentId: "main",
     agentOptions: [
@@ -201,6 +215,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
+    onViewStateChange: () => {},
   };
   return { ...props, ...overrides };
 }
@@ -229,6 +244,10 @@ function textItems(container: Element, selector: string): Array<string | undefin
 }
 
 describe("dreaming view", () => {
+  beforeEach(() => {
+    viewState = createDreamingViewState();
+  });
+
   it("renders the active dream scene chrome and status", () => {
     const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
 
@@ -378,7 +397,7 @@ describe("dreaming view", () => {
     const rerender = () => render(renderDreaming(props), container);
     const props: DreamingProps = buildProps({
       onOpenWikiPage,
-      onRequestUpdate: rerender,
+      onViewStateChange: rerender,
     });
     rerender();
 
@@ -438,7 +457,7 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("palace");
     const container = document.createElement("div");
     const rerender = () => render(renderDreaming(props), container);
-    const props: DreamingProps = buildProps({ onRequestUpdate: rerender });
+    const props: DreamingProps = buildProps({ onViewStateChange: rerender });
     rerender();
 
     const card = expectElement(container, "[data-palace-page='syntheses/travel-system.md']");
@@ -463,7 +482,7 @@ describe("dreaming view", () => {
     const rerender = () => render(renderDreaming(props), container);
     const props: DreamingProps = buildProps({
       onOpenWikiPage,
-      onRequestUpdate: rerender,
+      onViewStateChange: rerender,
       wikiMemoryPalace: {
         totalItems: 1,
         totalPages: 1,

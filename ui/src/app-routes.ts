@@ -8,11 +8,12 @@ import { page as chatPage } from "./pages/chat/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
-// import { page as dreamsPage } from "./pages/dreams/route.ts";
+import { page as dreamsPage } from "./pages/dreams/route.ts";
 import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as overviewPage } from "./pages/overview/route.ts";
+import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
@@ -39,6 +40,7 @@ export const APP_ROUTE_TREE = [
   ...configPages,
   workboardPage,
   instancesPage,
+  sessionsPage,
   usagePage,
   debugPage,
   logsPage,
@@ -46,6 +48,7 @@ export const APP_ROUTE_TREE = [
   skillsPage,
   cronPage,
   nodesPage,
+  dreamsPage,
 ] as const;
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
 export const APP_ROUTE_IDS = APP_ROUTE_TREE.map((route) => route.id) as readonly RouteId[];
@@ -85,7 +88,13 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;
-  return appRoutes.find((route) => normalizePath(route.path) === routePath)?.id ?? null;
+  return (
+    appRoutes.find((route) =>
+      [route.path, ...(route.aliases ?? [])].some(
+        (candidate) => normalizePath(candidate) === routePath,
+      ),
+    )?.id ?? null
+  );
 }
 
 export async function startApplicationRouter(
@@ -122,7 +131,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   const segments = normalized.split("/").filter(Boolean);
-  const routePaths = appRoutes.map((route) => route.path);
+  const routePaths = appRoutes.flatMap((route) => [route.path].concat(route.aliases ?? []));
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
     const routePath = routePaths.find((path) => normalizePath(path) === candidate);

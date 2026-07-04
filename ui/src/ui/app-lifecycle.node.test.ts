@@ -27,7 +27,6 @@ function createHost() {
     chatMessages: [],
     chatToolMessages: [],
     chatStream: null,
-    sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     sessionLocationSubscription: vi.fn(),
     topbarObserver: { disconnect: vi.fn() } as unknown as ResizeObserver,
   };
@@ -69,23 +68,6 @@ describe("handleDisconnected", () => {
     expect(host.connected).toBe(false);
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
     expect(host.topbarObserver).toBeNull();
-  });
-
-  it("clears pending session reload timers on teardown", () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("window", {
-      removeEventListener: vi.fn(),
-    });
-    const host = createHost();
-    const pendingReload = vi.fn();
-    host.sessionsChangedReloadTimer = globalThis.setTimeout(() => pendingReload(), 1_000);
-
-    handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
-
-    expect(host.sessionsChangedReloadTimer).toBeNull();
-    vi.advanceTimersByTime(1_000);
-    expect(pendingReload).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 
   it("stops Workboard polling timers on teardown", async () => {
