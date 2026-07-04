@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
@@ -42,6 +43,8 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     },
   ),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
@@ -241,7 +244,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-user-home-"));
+    const root = tempDirs.make("openclaw-codex-user-home-");
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(root, "user-codex-home");
     vi.stubEnv("CODEX_HOME", codexHome);

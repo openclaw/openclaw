@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
@@ -12,6 +12,7 @@ const LIVE =
   process.env.OPENCLAW_LIVE_TEST === "1" &&
   process.env.OPENCLAW_LIVE_CODEX_THREAD_COEXISTENCE === "1";
 const describeLive = LIVE ? describe : describe.skip;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withClient<T>(
   options: Parameters<typeof createIsolatedCodexAppServerClient>[0],
@@ -27,7 +28,7 @@ async function withClient<T>(
 
 describeLive("native Codex thread coexistence", () => {
   it("shares thread storage across independent app-server processes", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-coexistence-"));
+    const root = tempDirs.make("openclaw-codex-coexistence-");
     const codexHome = path.join(root, "codex-home");
     const agentDir = path.join(root, "agent");
     const workspace = path.join(root, "workspace");

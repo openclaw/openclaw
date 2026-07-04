@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS,
@@ -26,6 +27,8 @@ import {
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
@@ -558,7 +561,7 @@ describe("Codex app-server config", () => {
   });
 
   it("checks shared user config before enabling model-backed approval review", async () => {
-    const codexHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-user-home-"));
+    const codexHome = tempDirs.make("openclaw-codex-user-home-");
     try {
       await fs.writeFile(
         path.join(codexHome, "config.toml"),

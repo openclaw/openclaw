@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import {
@@ -13,12 +13,14 @@ import {
 } from "./app-server/session-binding.js";
 import { createCodexThreadsTool } from "./native-thread-tool.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("native Codex thread tool", () => {
   let root: string;
   let sessionFile: string;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-threads-"));
+    root = tempDirs.make("openclaw-codex-threads-");
     sessionFile = path.join(root, "sessions", "session-id.jsonl");
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
     await fs.writeFile(sessionFile, "");
