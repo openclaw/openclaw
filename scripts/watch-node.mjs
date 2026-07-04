@@ -19,10 +19,21 @@ const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
+const WATCH_BUILD_READY_POLL_MS = 200;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 
 const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
 const buildDoctorRunnerArgs = () => [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"];
+
+/** Checks if the build output is ready for restart (dist/entry.js exists). */
+const isBuildReadyForRestart = (cwd, fsImpl = fs) => {
+  const distEntry = path.join(cwd, "dist", "entry.js");
+  try {
+    return fsImpl.existsSync(distEntry);
+  } catch {
+    return false;
+  }
+};
 
 const normalizePath = (filePath) =>
   String(filePath ?? "")
@@ -267,6 +278,7 @@ export async function runWatchMain(params = {}) {
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    fs: params.fs ?? fs,
     now: params.now ?? Date.now,
     sleep: params.sleep ?? sleep,
     signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
@@ -491,6 +503,30 @@ export async function runWatchMain(params = {}) {
         return;
       }
       restartRequested = true;
+
+      // #99603 fix: Check if build output exists before restarting.
+      // If dist/entry.js is missing (mid-rebuild state), wait for it to appear
+      // before sending SIGTERM to avoid crash-loop.
+      // Skip this check in test mode to preserve existing test behavior.
+      const isTestMode = deps.env.OPENCLAW_WATCH_MODE === "test";
+      if (!isTestMode && !isBuildReadyForRestart(deps.cwd, deps.fs)) {
+        logWatcher("Build output not ready (dist/entry.js missing); waiting before restart.", deps);
+        // Poll until build is ready, then restart
+        const pollBuildReady = async () => {
+          while (!isBuildReadyForRestart(deps.cwd, deps.fs)) {
+            await deps.sleep(WATCH_BUILD_READY_POLL_MS);
+          }
+          logWatcher("Build output ready; proceeding with restart.", deps);
+          if (typeof watchProcess.kill === "function") {
+            signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
+          }
+        };
+        pollBuildReady().catch((err) => {
+          logWatcher(`Error polling build readiness: ${err?.message ?? String(err)}`, deps);
+        });
+        return;
+      }
+
       if (typeof watchProcess.kill === "function") {
         signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
       }

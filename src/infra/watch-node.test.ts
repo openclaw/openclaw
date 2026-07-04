@@ -84,7 +84,8 @@ const startWatchRun = ({
   const runPromise = runWatch({
     args,
     createWatcher,
-    env,
+    // Default to test mode to skip dist/entry.js checks in tests
+    env: env ? { ...env, OPENCLAW_WATCH_MODE: "test" } : { OPENCLAW_WATCH_MODE: "test" },
     lockDisabled: true,
     process: fakeProcess,
     spawn,
@@ -671,4 +672,5 @@ describe("watch-node script", () => {
       expect(watcher.close).toHaveBeenCalledTimes(1);
     });
   });
+
 });
