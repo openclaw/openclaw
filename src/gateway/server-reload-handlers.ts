@@ -466,12 +466,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     if (plan.restartCron) {
       params.onCronRestart?.();
-      state.cronState.cron.stop();
-      state.cronState.stopExitWatchers?.();
+      // Hot reload keeps unchanged on-exit watcher children alive; the rebuilt
+      // cron service updates their callbacks before reconcile cancels removed jobs.
+      if (state.cronState.stopCronForHotReload) {
+        state.cronState.stopCronForHotReload();
+      } else {
+        state.cronState.cron.stop();
+      }
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
+        exitWatchers: state.cronState.exitWatchers,
       });
       startGatewayCronWithLogging({
         cron: nextState.cronState.cron,

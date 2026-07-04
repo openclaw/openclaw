@@ -149,6 +149,39 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(1);
     expect(reconcileExitWatchers).not.toHaveBeenCalled();
   });
+
+  it("hands loaded exit watchers to hot reload without cancelling active watchers", async () => {
+    const cron = createCronService();
+    const stopCronForHotReload = vi.fn();
+    const stopExitWatchers = vi.fn();
+    const exitWatchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(),
+      activeJobIds: vi.fn(() => ["watch-build"]),
+      updateHandlers: vi.fn(),
+    };
+    hoisted.setState(
+      createCronState(cron, {
+        stopCronForHotReload,
+        stopExitWatchers,
+        exitWatchers,
+      }),
+    );
+
+    const lazy = createLazyGatewayCronState(createParams());
+
+    expect(lazy.exitWatchers).toBeUndefined();
+
+    await lazy.cron.start();
+    lazy.stopCronForHotReload?.();
+
+    expect(lazy.exitWatchers).toBe(exitWatchers);
+    expect(stopCronForHotReload).toHaveBeenCalledTimes(1);
+    expect(cron["stop"]).not.toHaveBeenCalled();
+    expect(stopExitWatchers).not.toHaveBeenCalled();
+    expect(exitWatchers.cancelAll).not.toHaveBeenCalled();
+  });
 });
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
@@ -161,11 +194,15 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
   };
 }
 
-function createCronState(cron: CronServiceContract): GatewayCronState {
+function createCronState(
+  cron: CronServiceContract,
+  overrides: Partial<GatewayCronState> = {},
+): GatewayCronState {
   return {
     cron,
     storePath: "/tmp/openclaw-cron.json",
     cronEnabled: true,
+    ...overrides,
   } as GatewayCronState;
 }
 
