@@ -49,12 +49,13 @@
 
 <!-- AUTOSCAN:START -->
 
-_Last automated scan: 2026-07-03 06:00:11 UTC · hosts:eu us_
+_Last automated scan: 2026-07-04 06:00:12 UTC · hosts:eu us_
 
-| Pri | Host | Agent | Issue               | Detail                                                                 |
-| --- | ---- | ----- | ------------------- | ---------------------------------------------------------------------- |
-| P1  | eu   | -     | Heavy swap usage    | 2759MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
-| P1  | eu   | -     | Low memory headroom | Only 187MiB available (warn<500MiB); OOM risk under load.              |
-| P1  | us   | -     | Heavy swap usage    | 2344MiB swap in use; host is memory-pressured. Consider a RAM rescale. |
+| Pri | Host | Agent | Issue                          | Detail                                                                     |
+| --- | ---- | ----- | ------------------------------ | -------------------------------------------------------------------------- |
+| P1  | eu   | -     | Heavy swap usage               | 2998MiB swap in use; host is memory-pressured. Consider a RAM rescale.     |
+| P1  | eu   | -     | Low memory headroom            | Only 159MiB available (warn<500MiB); OOM risk under load.                  |
+| P1  | us   | -     | Heavy swap usage               | 2265MiB swap in use; host is memory-pressured. Consider a RAM rescale.     |
+| P3  | deps | -     | Undocumented env var candidate | NEXTAUTH_URL in lib/app — suggested fix: add a row to docs/DEPENDENCIES.md |
 
 <!-- AUTOSCAN:END -->
