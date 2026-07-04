@@ -154,7 +154,7 @@ export class WorkboardPage extends LitElement {
     const auth = gateway.hello?.auth ?? null;
     const pluginEnabled = this.pluginEnabled();
     return html`
-      <section class="content-header">
+      <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("workboard")}</div>
           <div class="page-sub">${subtitleForRoute("workboard")}</div>

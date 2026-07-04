@@ -388,7 +388,7 @@ export class OverviewPage extends LitElement {
     const channels = this.context.channels.state;
     const sessions = this.context.sessions.state;
     return html`
-      <section class="content-header">
+      <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("overview")}</div>
           <div class="page-sub">${subtitleForRoute("overview")}</div>

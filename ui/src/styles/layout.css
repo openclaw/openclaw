@@ -1280,17 +1280,6 @@
   background: var(--bg-content);
 }
 
-.content > .workboard {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding-bottom: 16px;
-}
-
-.content > .workboard > * + * {
-  margin-top: 14px;
-}
-
 /* Content header */
 .content-header {
   display: flex;
@@ -1306,6 +1295,10 @@
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: 80px;
+}
+
+.content-header--page + * {
+  margin-top: 20px;
 }
 
 .content--chat .content-header.content-header--chat-hidden {

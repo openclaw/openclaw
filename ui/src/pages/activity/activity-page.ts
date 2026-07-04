@@ -198,7 +198,7 @@ export class ActivityPage extends LitElement {
 
   override render() {
     return html`
-      <section class="content-header">
+      <section class="content-header content-header--page">
         <div>
           <div class="page-title">${titleForRoute("activity")}</div>
           <div class="page-sub">${subtitleForRoute("activity")}</div>
