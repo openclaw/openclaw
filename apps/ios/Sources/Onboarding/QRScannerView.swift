@@ -29,11 +29,12 @@ final class QRScannerResultHandoff {
     }
 
     func isActive(scanID: UInt64) -> Bool {
-        scanID == self.activeScanID
+        scanID == self.activeScanID && self.pendingResult == nil
     }
 
     @discardableResult
     func queue(_ result: QRScannerResult, scanID: UInt64) -> Bool {
+        // Camera and Photos can finish together; the first valid result owns this scan.
         guard self.isActive(scanID: scanID) else { return false }
         self.pendingResult = result
         return true

@@ -54,6 +54,20 @@ struct QRScannerResultHandoffTests {
 
         #expect(deliveredResult == .setupCode("current"))
     }
+
+    @Test func `first producer claims the active scan`() async throws {
+        let handoff = QRScannerResultHandoff(settlingNanoseconds: 0)
+        let scanID = handoff.beginScan()
+        var deliveredResult: QRScannerResult?
+
+        #expect(handoff.queue(.setupCode("camera"), scanID: scanID))
+        #expect(!handoff.isActive(scanID: scanID))
+        #expect(!handoff.queue(.setupCode("photo"), scanID: scanID))
+        let task = try #require(handoff.processAfterDismissal { deliveredResult = $0 })
+        await task.value
+
+        #expect(deliveredResult == .setupCode("camera"))
+    }
 }
 
 struct GatewaySetupLinkStagingTests {

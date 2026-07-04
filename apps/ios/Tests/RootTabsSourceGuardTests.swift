@@ -779,6 +779,14 @@ struct RootTabsSourceGuardTests {
         let settingsOnDismiss = try #require(settingsScannerSheet.range(of: "onDismiss: {"))
         let settingsProcessing = try #require(settingsScannerSheet.range(of: "self.processQueuedScannerResult()"))
         let settingsContent = try #require(settingsScannerSheet.range(of: "content: {"))
+        let settingsPendingSetupHandler = try Self.extract(
+            actionsSource,
+            from: "func applyPendingGatewaySetupLinkIfNeeded()",
+            to: "@discardableResult\n    func applySetupCode()")
+        let settingsScannerCancel = try #require(
+            settingsPendingSetupHandler.range(of: "self.scannerResultHandoff.cancel()"))
+        let settingsSetupStaging = try #require(
+            settingsPendingSetupHandler.range(of: "self.stagedGatewaySetupLink = link"))
         let scannerDelivery = try Self.extract(
             scannerSource,
             from: "private func deliver(_ result: QRScannerResult",
@@ -873,6 +881,8 @@ struct RootTabsSourceGuardTests {
         #expect(settingsSource.contains("QRScannerView("))
         #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
         #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
+        #expect(settingsPendingSetupHandler.contains("self.showQRScanner = false"))
+        #expect(settingsScannerCancel.lowerBound < settingsSetupStaging.lowerBound)
         #expect(!settingsSource.contains(".onChange(of: self.showQRScanner)"))
         #expect(actionsSource.contains("case let .gatewayLink(link):"))
         #expect(actionsSource.contains("case let .setupCode(code):"))

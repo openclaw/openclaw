@@ -227,6 +227,8 @@ extension SettingsProTab {
         // setup link; other Settings views can remain mounted behind onboarding.
         guard self.acceptsGatewaySetupRequests else { return }
         guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
+        self.showQRScanner = false
+        self.scannerResultHandoff.cancel()
         self.setupCode = ""
         self.setupStatusText = nil
         self.stagedGatewaySetupLink = link
