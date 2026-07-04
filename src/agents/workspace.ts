@@ -259,7 +259,7 @@ function isTransientFsError(error: unknown): boolean {
     return true;
   }
   const message = anyErr.message ?? "";
-  return /Unknown system error -11/.test(message) || /system error -4\b/.test(message);
+  return message.includes("Unknown system error -11") || /\bsystem error -4\b/.test(message);
 }
 
 /** @internal Exported for tests that need to exercise transient FS retry behavior directly. */
