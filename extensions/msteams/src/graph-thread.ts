@@ -3,7 +3,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson } from "./graph.js";
 
 export type GraphThreadMessage = {
   id?: string;
@@ -115,12 +115,11 @@ export async function fetchChannelMessage(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * **Limitation:** The Graph API replies endpoint (`/messages/{id}/replies`) does not
- * support `$orderby`, so results are always returned in ascending (oldest-first) order.
- * Combined with the `$top` cap of 50, this means only the **oldest 50 replies** are
- * returned for long threads — newer replies are silently omitted. There is currently no
- * Graph API workaround for this; pagination via `@odata.nextLink` can retrieve more
- * replies but still in ascending order only.
+ * The Graph replies endpoint (`/messages/{id}/replies`) returns replies ascending
+ * (oldest-first), does not support `$orderby`, and caps `$top` at 50. Fetching a single
+ * page therefore dropped the newest (usually most relevant) replies on long threads.
+ * This follows `@odata.nextLink` to page through the thread and returns the newest
+ * `limit` replies. Pagination is bounded by `maxPages`.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -129,13 +128,12 @@ export async function fetchThreadReplies(
   messageId: string,
   limit = 50,
 ): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
-  // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
-  // For threads with >50 replies, only the oldest 50 are returned. The most recent
-  // replies (often the most relevant context) may be truncated.
+  const want = Math.max(limit, 1);
+  const top = Math.min(want, 50);
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
-  const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
-  return res.value ?? [];
+  const { items } = await fetchAllGraphPages<GraphThreadMessage>({ token, path, maxPages: 50 });
+  // Replies come back oldest-first, so the newest `want` are at the end of the list.
+  return items.slice(-want);
 }
 
 /**
