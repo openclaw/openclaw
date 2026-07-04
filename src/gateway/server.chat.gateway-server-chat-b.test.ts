@@ -511,19 +511,19 @@ describe("gateway server chat", () => {
         },
       });
       await fs.writeFile(
-        path.join(sessionDir, ancestorSessionId + ".jsonl.reset.2026-01-18T04-00-00.000Z"),
+        path.join(sessionDir, ancestorSessionId + ".jsonl.reset.2026-01-18T04-50-00.000Z"),
         [
           JSON.stringify({
             type: "session",
             version: 1,
             id: ancestorSessionId,
-            timestamp: "2026-01-18T04:00:00.000Z",
+            timestamp: "2026-01-18T04:50:00.000Z",
             cwd: sessionDir,
           }),
           JSON.stringify({
             message: {
               role: "user",
-              content: [{ type: "text", text: "ancestor thread context" }],
+              content: [{ type: "text", text: "newer plain ancestor context" }],
               timestamp: startedAt - 60_000,
             },
           }),
@@ -546,7 +546,7 @@ describe("gateway server chat", () => {
           JSON.stringify({
             message: {
               role: "user",
-              content: [{ type: "text", text: "owned topic ancestor context" }],
+              content: [{ type: "text", text: "older topic ancestor context" }],
               timestamp: startedAt - 40_000,
             },
           }),
@@ -625,16 +625,23 @@ describe("gateway server chat", () => {
       );
 
       const defaultHistory = JSON.stringify(await fetchHistoryMessages(ws));
-      expect(defaultHistory).not.toContain("ancestor thread context");
+      expect(defaultHistory).not.toContain("newer plain ancestor context");
       expect(defaultHistory).toContain("current thread context");
 
       const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
-      expect(familyHistory).toContain("ancestor thread context");
-      expect(familyHistory).toContain("owned topic ancestor context");
+      expect(familyHistory).toContain("newer plain ancestor context");
+      expect(familyHistory).toContain("older topic ancestor context");
       expect(familyHistory).toContain("current thread context");
       expect(familyHistory).not.toContain("unrelated topic context");
       expect(familyHistory).not.toContain("headerless topic context");
       expect(familyHistory).not.toContain("stale active announce reply");
+
+      const limitedFamilyHistory = JSON.stringify(
+        await fetchHistoryMessages(ws, { includeFamily: true, limit: 2 }),
+      );
+      expect(limitedFamilyHistory).toContain("newer plain ancestor context");
+      expect(limitedFamilyHistory).toContain("current thread context");
+      expect(limitedFamilyHistory).not.toContain("older topic ancestor context");
     });
   });
 
