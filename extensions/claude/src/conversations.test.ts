@@ -28,20 +28,16 @@ describe("isConversationSessionKey", () => {
 });
 
 describe("buildConversationRows", () => {
-  it("skips entries with no sessionId, no provider binding, or that aren't real conversations", async () => {
+  it("skips entries with no sessionId or that aren't real conversations, but counts real-key candidates even without a binding", async () => {
     const entries: ConversationSessionEntry[] = [
       { sessionKey: "agent:tank:direct:eddie", entry: {} }, // no sessionId
       {
         sessionKey: "agent:tank:direct:someone",
-        entry: { sessionId: "s1", modelProvider: "anthropic" }, // no cliSessionBindings
+        entry: { sessionId: "s1" }, // real key, no binding sidecar (readBinding returns null below)
       },
       {
         sessionKey: "agent:tank:subagent:xyz",
-        entry: {
-          sessionId: "s2",
-          modelProvider: "anthropic",
-          cliSessionBindings: { anthropic: { sessionId: "thr_1" } },
-        }, // automation key, excluded
+        entry: { sessionId: "s2" }, // automation key, excluded regardless of sessionId
       },
     ];
     const { rows, candidateCount } = await buildConversationRows(entries, {
@@ -49,10 +45,12 @@ describe("buildConversationRows", () => {
       readBinding: async () => null,
     });
     expect(rows).toHaveLength(0);
-    expect(candidateCount).toBe(0);
+    // Only "someone" is a real-key candidate with a sessionId; "eddie" lacks a
+    // sessionId and "xyz" is filtered by key before ever counting.
+    expect(candidateCount).toBe(1);
   });
 
-  it("resolves a binding for a qualifying entry via the injected deps", async () => {
+  it("resolves a binding for a qualifying entry via the injected deps, regardless of cliSessionBindings", async () => {
     const binding = {
       schemaVersion: 1,
       threadId: "thr_abc",
@@ -63,12 +61,7 @@ describe("buildConversationRows", () => {
     const entries: ConversationSessionEntry[] = [
       {
         sessionKey: "agent:tank:direct:eddie",
-        entry: {
-          sessionId: "s1",
-          modelProvider: "anthropic",
-          cliSessionBindings: { anthropic: { sessionId: "thr_abc" } },
-          origin: { label: "eddie" },
-        },
+        entry: { sessionId: "s1", origin: { label: "eddie" } },
       },
     ];
     const { rows, candidateCount } = await buildConversationRows(entries, {
@@ -81,41 +74,36 @@ describe("buildConversationRows", () => {
     expect(rows[0]?.binding.threadId).toBe("thr_abc");
   });
 
-  it("falls back to the legacy cliSessionIds map when cliSessionBindings is absent", async () => {
+  it("finds a real conversation whose binding sidecar predates any core-session-store provider marker (the real bug this fixed)", async () => {
+    // Confirmed against real production data: a session last touched
+    // 2026-06-29 had a real, readable .claude-binding.json sidecar but no
+    // cliSessionBindings/cliSessionIds entry on its core session record at
+    // all (that marker is only written by openclaw-pg9-era turns). Gating on
+    // the marker silently hid it from /claude conversations.
     const binding = {
       schemaVersion: 1,
-      threadId: "thr_legacy",
+      threadId: "thr_predates_marker",
       cwd: "/tmp",
       createdAt: 1,
       updatedAt: 2,
     };
     const entries: ConversationSessionEntry[] = [
       {
-        sessionKey: "agent:tank:direct:eddie",
-        entry: {
-          sessionId: "s1",
-          providerOverride: "anthropic",
-          cliSessionIds: { anthropic: "thr_legacy" },
-        },
+        sessionKey: "agent:tank:discord:tank:direct:159471966640799744",
+        entry: { sessionId: "old-session-id" }, // no cliSessionBindings/cliSessionIds at all
       },
     ];
     const { rows } = await buildConversationRows(entries, {
-      resolveSessionFile: () => "/tmp/session.jsonl",
-      readBinding: async () => binding,
+      resolveSessionFile: () => "/tmp/old-session.jsonl",
+      readBinding: async (file) => (file === "/tmp/old-session.jsonl" ? binding : null),
     });
     expect(rows).toHaveLength(1);
+    expect(rows[0]?.binding.threadId).toBe("thr_predates_marker");
   });
 
   it("skips a candidate entry when no binding sidecar exists yet", async () => {
     const entries: ConversationSessionEntry[] = [
-      {
-        sessionKey: "agent:tank:direct:eddie",
-        entry: {
-          sessionId: "s1",
-          modelProvider: "anthropic",
-          cliSessionBindings: { anthropic: { sessionId: "thr_abc" } },
-        },
-      },
+      { sessionKey: "agent:tank:direct:eddie", entry: { sessionId: "s1" } },
     ];
     const { rows, candidateCount } = await buildConversationRows(entries, {
       resolveSessionFile: () => "/tmp/session.jsonl",
@@ -128,7 +116,7 @@ describe("buildConversationRows", () => {
 
 describe("formatConversationsList", () => {
   it("reports no-candidates vs no-bindings-yet distinctly when empty", () => {
-    expect(formatConversationsList([], 0)).toContain("No other real conversations");
+    expect(formatConversationsList([], 0)).toContain("No other real conversation sessions found");
     expect(formatConversationsList([], 3)).toContain("none have a claude-binding sidecar yet");
   });
 
@@ -222,8 +210,6 @@ describe("handleConversations end-to-end against a real binding sidecar", () => 
         sessionKey: "agent:tank:direct:eddie",
         entry: {
           sessionId: "real-session-id",
-          modelProvider: "anthropic",
-          cliSessionBindings: { anthropic: { sessionId: "thr_real" } },
           origin: { label: "eddie (real)" },
         },
       },
