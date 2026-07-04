@@ -301,6 +301,12 @@ importers:
         specifier: 0.1.9
         version: 0.1.9
 
+  examples/ai-chat:
+    dependencies:
+      '@openclaw/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
+
   extensions/acpx:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':
