@@ -584,6 +584,20 @@ async function resolveChannelId(
   return { channelId, isDm: true, cacheHit: false };
 }
 
+export async function resolveSlackDmChannelId(params: {
+  client: WebClient;
+  userId: string;
+  accountId?: string;
+  token: string;
+}): Promise<string> {
+  const resolved = await resolveChannelId(
+    params.client,
+    { kind: "user", id: params.userId },
+    { accountId: params.accountId, token: params.token },
+  );
+  return resolved.channelId;
+}
+
 export function clearSlackDmChannelCache(): void {
   slackDmChannelCache.clear();
 }

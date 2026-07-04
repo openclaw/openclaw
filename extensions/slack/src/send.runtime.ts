@@ -1,2 +1,2 @@
 // Slack plugin module implements send behavior.
-export { sendMessageSlack } from "./send.js";
+export { resolveSlackDmChannelId, sendMessageSlack } from "./send.js";

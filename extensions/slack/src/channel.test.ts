@@ -10,13 +10,17 @@ import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
 const { handleSlackActionMock } = vi.hoisted(() => ({
   handleSlackActionMock: vi.fn(),
 }));
-const { sendMessageSlackMock } = vi.hoisted(() => ({
+const { resolveSlackDmChannelIdMock, sendMessageSlackMock } = vi.hoisted(() => ({
+  resolveSlackDmChannelIdMock: vi.fn(),
   sendMessageSlackMock: vi.fn(),
 }));
-const { conversationsInfoMock, conversationsOpenMock } = vi.hoisted(() => ({
-  conversationsInfoMock: vi.fn(),
-  conversationsOpenMock: vi.fn(),
-}));
+const { assistantThreadsSetStatusMock, conversationsInfoMock, conversationsOpenMock } = vi.hoisted(
+  () => ({
+    assistantThreadsSetStatusMock: vi.fn(),
+    conversationsInfoMock: vi.fn(),
+    conversationsOpenMock: vi.fn(),
+  }),
+);
 
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
@@ -27,6 +31,7 @@ vi.mock("./action-runtime.js", async () => {
 });
 
 vi.mock("./send.runtime.js", () => ({
+  resolveSlackDmChannelId: resolveSlackDmChannelIdMock,
   sendMessageSlack: sendMessageSlackMock,
 }));
 
@@ -35,6 +40,11 @@ vi.mock("./client.js", async () => {
   return {
     ...actual,
     createSlackWebClient: vi.fn(() => ({
+      assistant: {
+        threads: {
+          setStatus: assistantThreadsSetStatusMock,
+        },
+      },
       conversations: {
         info: conversationsInfoMock,
         open: conversationsOpenMock,
@@ -45,8 +55,12 @@ vi.mock("./client.js", async () => {
 
 beforeEach(async () => {
   handleSlackActionMock.mockReset();
+  resolveSlackDmChannelIdMock.mockReset();
+  resolveSlackDmChannelIdMock.mockResolvedValue("D123");
   sendMessageSlackMock.mockReset();
   sendMessageSlackMock.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
+  assistantThreadsSetStatusMock.mockReset();
+  assistantThreadsSetStatusMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
   setSlackRuntime({
@@ -100,6 +114,22 @@ function requireSlackSendPayload() {
     throw new Error("slack outbound.sendPayload unavailable");
   }
   return sendPayload;
+}
+
+function requireSlackHeartbeatSendTyping() {
+  const sendTyping = slackPlugin.heartbeat?.sendTyping;
+  if (!sendTyping) {
+    throw new Error("slack heartbeat.sendTyping unavailable");
+  }
+  return sendTyping;
+}
+
+function requireSlackHeartbeatClearTyping() {
+  const clearTyping = slackPlugin.heartbeat?.clearTyping;
+  if (!clearTyping) {
+    throw new Error("slack heartbeat.clearTyping unavailable");
+  }
+  return clearTyping;
 }
 
 function requireSlackListPeers() {
@@ -807,6 +837,54 @@ describe("slackPlugin outbound", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
     expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBeUndefined();
+  });
+
+  it("sets and clears Slack assistant status for channel thread targets", async () => {
+    const target = {
+      cfg,
+      to: "channel:C123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+    };
+
+    await requireSlackHeartbeatSendTyping()(target);
+    await requireSlackHeartbeatClearTyping()(target);
+
+    expect(resolveSlackDmChannelIdMock).not.toHaveBeenCalled();
+    expect(assistantThreadsSetStatusMock).toHaveBeenNthCalledWith(1, {
+      token: "xoxb-test",
+      channel_id: "C123",
+      thread_ts: "1712345678.123456",
+      status: "is typing...",
+    });
+    expect(assistantThreadsSetStatusMock).toHaveBeenNthCalledWith(2, {
+      token: "xoxb-test",
+      channel_id: "C123",
+      thread_ts: "1712345678.123456",
+      status: "",
+    });
+  });
+
+  it("resolves user targets to concrete DM channels for assistant status", async () => {
+    await requireSlackHeartbeatSendTyping()({
+      cfg,
+      to: "user:U123",
+      accountId: "default",
+      threadId: "1712345678.123456",
+    });
+
+    expect(resolveSlackDmChannelIdMock).toHaveBeenCalledWith({
+      client: expect.any(Object),
+      userId: "U123",
+      accountId: "default",
+      token: "xoxb-test",
+    });
+    expect(assistantThreadsSetStatusMock).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      channel_id: "D123",
+      thread_ts: "1712345678.123456",
+      status: "is typing...",
+    });
   });
 
   it("falls back to auto-thread lookup when replyToId is not a Slack thread timestamp", () => {
