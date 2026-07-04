@@ -64,6 +64,8 @@ describe("buildFeishuAgentBody", () => {
     expect(body).toContain(`${"A".repeat(76)}...`);
     expect(body).not.toContain("\ud83d");
     expect(body).not.toContain("\ude00");
+  });
+
   it("produces minimal body with only speaker metadata when content is empty (mention-only edge case #99725)", () => {
     // After normalizeMentions strips bot mention away entirely,
     // the agent body has no meaningful user content — only the speaker label.
