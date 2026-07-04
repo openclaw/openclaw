@@ -4,7 +4,6 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/agent-media-p
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveLineAccount } from "./accounts.js";
 import { datetimePickerAction, messageAction, postbackAction, uriAction } from "./actions.js";
@@ -15,6 +14,8 @@ type RichMenuResponse = messagingApi.RichMenuResponse;
 type RichMenuArea = messagingApi.RichMenuArea;
 type Action = messagingApi.Action;
 const USER_BATCH_SIZE = 500;
+// LINE counts rich-menu names and chat-bar text in grapheme clusters, unlike most message fields.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export interface RichMenuSize {
   width: 2500;
@@ -79,6 +80,19 @@ function chunkUserIds(userIds: string[]): string[][] {
   return batches;
 }
 
+function truncateGraphemes(input: string, maxLength: number): string {
+  let result = "";
+  let count = 0;
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    if (count >= maxLength) {
+      break;
+    }
+    result += segment;
+    count += 1;
+  }
+  return result;
+}
+
 export async function createRichMenu(
   menu: CreateRichMenuParams,
   opts: RichMenuOpts,
@@ -88,8 +102,8 @@ export async function createRichMenu(
   const richMenuRequest: RichMenuRequest = {
     size: menu.size,
     selected: menu.selected ?? false,
-    name: truncateUtf16Safe(menu.name, 300),
-    chatBarText: truncateUtf16Safe(menu.chatBarText, 14),
+    name: truncateGraphemes(menu.name, 300),
+    chatBarText: truncateGraphemes(menu.chatBarText, 14),
     areas: menu.areas as RichMenuArea[],
   };
 
