@@ -538,17 +538,14 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("</prompt-data>");
     expect(msg).toContain("raw subagent reply");
     expect(msg).toContain("Stats:");
-    expect(msg).toContain("A completed subagent task is ready for parent review.");
+    expect(msg).toContain("A completed subagent task is ready for user delivery.");
     expect(msg).toContain(
-      "Review/verify the result above before deciding whether the original task is done.",
-    );
-    expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "Convert the result above into your normal assistant voice and send that user-facing update now.",
     );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
-    expect(call?.params?.continuationTrigger).toBe("delegate-return");
+    expect(call?.params?.continuationTrigger).toBe("subagent-return");
   });
 
   it("omits continuationTrigger when continuation is disabled", async () => {
@@ -750,9 +747,9 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tokens 1.0k (in 12 / out 1.0k)");
     expect(msg).toContain("prompt/cache 197.0k");
     expect(msg).toContain("session_id: child-session-usage");
-    expect(msg).toContain("A completed subagent task is ready for parent review.");
+    expect(msg).toContain("A completed subagent task is ready for user delivery.");
     expect(msg).toContain(
-      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+      "Convert the result above into your normal assistant voice and send that user-facing update now.",
     );
     expect(msg).toContain(
       `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
@@ -1987,7 +1984,7 @@ describe("subagent announce formatting", () => {
       params: {
         sessionKey: "agent:main:main",
         deliver: false,
-        continuationTrigger: "delegate-return",
+        continuationTrigger: "subagent-return",
       },
     });
   });
