@@ -1,5 +1,10 @@
 // Durable parent/child fan-in policy helpers.
-import type { DurableRuntimeLink, DurableRuntimeStepStatus, DurableRuntimeStore } from "./types.js";
+import type {
+  DurableRuntimeLink,
+  DurableRuntimeRun,
+  DurableRuntimeStepStatus,
+  DurableRuntimeStore,
+} from "./types.js";
 
 export type DurableChildTerminalOutcomeStatus =
   | "succeeded"
@@ -81,6 +86,15 @@ function summarizeTerminalOutcomes(
     summary[outcome] = (summary[outcome] ?? 0) + 1;
   }
   return summary;
+}
+
+function isTerminalRun(run: DurableRuntimeRun | undefined): boolean {
+  return (
+    run?.status === "succeeded" ||
+    run?.status === "failed" ||
+    run?.status === "cancelled" ||
+    run?.status === "lost"
+  );
 }
 
 function computeFanInResult(params: {
@@ -165,6 +179,8 @@ export function reconcileDurableFanIn(params: {
     policy: params.policy,
   });
   const outcomes = summarizeTerminalOutcomes(childLinks);
+  const parentRun = params.store.getRun(params.parentRuntimeRunId);
+  const parentAlreadyTerminal = isTerminalRun(parentRun);
 
   params.store.updateStep({
     runtimeRunId: params.parentRuntimeRunId,
@@ -201,6 +217,10 @@ export function reconcileDurableFanIn(params: {
       outcomes,
     },
   });
+
+  if (parentAlreadyTerminal) {
+    return result;
+  }
 
   if (result.status === "waiting") {
     params.store.updateRun({

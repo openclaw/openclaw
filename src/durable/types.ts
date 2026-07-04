@@ -38,7 +38,8 @@ export type DurableRuntimeStepType =
   | "signal"
   | "child_runtime"
   | "checkpoint"
-  | "fan_in";
+  | "fan_in"
+  | "result_mailbox";
 
 export type DurableRuntimeStepStatus =
   | "pending"

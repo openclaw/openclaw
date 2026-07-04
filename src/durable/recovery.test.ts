@@ -429,20 +429,41 @@ describe("durable runtime recovery", () => {
         status: "queued",
         recoveryState: "runnable",
       });
-      expect(store.listSteps(parent.runtimeRunId)).toMatchObject([
-        {
+      expect(store.listSteps(parent.runtimeRunId)).toContainEqual(
+        expect.objectContaining({
           stepId: "subagents",
           status: "succeeded",
           recoveryState: "terminal",
           completedAt: 200,
-          metadata: {
+          metadata: expect.objectContaining({
             total: 1,
             succeeded: 0,
             failed: 1,
             terminal: 1,
-          },
-        },
-      ]);
+          }),
+        }),
+      );
+      expect(store.listSteps(parent.runtimeRunId)).toContainEqual(
+        expect.objectContaining({
+          stepType: "result_mailbox",
+          status: "queued",
+          recoveryState: "runnable",
+          metadata: expect.objectContaining({
+            kind: "child_result_mailbox",
+            status: "pending_parent_ack",
+            childRuntimeRunId: child.runtimeRunId,
+            childSessionKey: "agent:bo-worker:subagent:child",
+            outcome: expect.objectContaining({
+              linkStatus: "lost",
+              terminalOutcome: "lost",
+              reason: "gateway_startup_reconciliation",
+            }),
+            ack: expect.objectContaining({
+              status: "pending",
+            }),
+          }),
+        }),
+      );
       expect(store.getTimeline(child.runtimeRunId).at(-1)).toMatchObject({
         eventType: "subagent.run.lost",
         payload: expect.objectContaining({
@@ -452,6 +473,7 @@ describe("durable runtime recovery", () => {
       });
       expect(store.getTimeline(parent.runtimeRunId).map((event) => event.eventType)).toEqual([
         "subagent.child.lost",
+        "subagent.child.result_mailbox_queued",
         "fan_in.ready",
       ]);
     } finally {
