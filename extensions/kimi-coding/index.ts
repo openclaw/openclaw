@@ -9,6 +9,7 @@ import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-
 import { isKimiK3ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
+import { fetchKimiUsage, isManagedKimiUsageBaseUrl, normalizeKimiUsageBaseUrl } from "./usage.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
@@ -103,6 +104,34 @@ export default definePluginEntry({
         return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
       },
       resolveThinkingProfile,
+      resolveUsageAuth: async (ctx) => {
+        const explicitProvider = findExplicitProviderConfig(
+          ctx.config.models?.providers as Record<string, unknown> | undefined,
+          PROVIDER_ID,
+        );
+        const baseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
+        if (baseUrl && !isManagedKimiUsageBaseUrl(baseUrl)) {
+          return { handled: true };
+        }
+        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+          providerIds: [PROVIDER_ID, "kimi-code", "kimi-coding"],
+          envDirect: [ctx.env.KIMI_API_KEY, ctx.env.KIMICODE_API_KEY],
+        });
+        return apiKey ? { token: apiKey } : null;
+      },
+      fetchUsageSnapshot: async (ctx) => {
+        const explicitProvider = findExplicitProviderConfig(
+          ctx.config.models?.providers as Record<string, unknown> | undefined,
+          PROVIDER_ID,
+        );
+        const baseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
+        if (baseUrl && !isManagedKimiUsageBaseUrl(baseUrl)) {
+          return null;
+        }
+        return await fetchKimiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
+          baseUrl: normalizeKimiUsageBaseUrl(baseUrl),
+        });
+      },
       wrapSimpleCompletionStreamFn: (ctx) =>
         isKimiK3ModelId(ctx.modelId) ? wrapKimiProviderStream(ctx) : ctx.streamFn,
       wrapStreamFn: wrapKimiProviderStream,
