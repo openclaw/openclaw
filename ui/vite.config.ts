@@ -213,14 +213,6 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
     apply: "build",
     closeBundle() {
       const swPath = path.join(outDir, "sw.js");
-      console.error("[sw-debug] closeBundle", {
-        swPath,
-        exists: fs.existsSync(swPath),
-        placeholders:
-          (fs.existsSync(swPath) ? fs.readFileSync(swPath, "utf8") : "").split(
-            "__OPENCLAW_CONTROL_UI_BUILD_ID__",
-          ).length - 1,
-      });
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
