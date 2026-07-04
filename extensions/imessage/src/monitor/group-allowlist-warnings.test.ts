@@ -11,11 +11,12 @@ beforeEach(() => {
 });
 
 describe("warnGroupAllowlistMisconfigOnce", () => {
-  it("fires when groupPolicy=allowlist and groups is undefined", () => {
+  it("fires when groupPolicy=allowlist with no groups and no groupAllowFrom", () => {
     const messages: string[] = [];
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
       groups: undefined,
+      hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
     });
@@ -23,6 +24,7 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain('groupPolicy="allowlist"');
     expect(messages[0]).toContain("channels.imessage.groups is empty");
+    expect(messages[0]).toContain("channels.imessage.groupAllowFrom");
     expect(messages[0]).toContain("default");
   });
 
@@ -31,6 +33,7 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
       groups: {},
+      hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
     });
@@ -43,6 +46,7 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "open",
       groups: undefined,
+      hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
     });
@@ -55,6 +59,7 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
       groups: { "*": { requireMention: true } },
+      hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
     });
@@ -67,10 +72,35 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     const fired = warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
       groups: { "12345": {} },
+      hasGroupAllowFrom: false,
       accountId: "default",
       log: (m) => messages.push(m),
     });
     expect(fired).toBe(false);
+    expect(messages).toHaveLength(0);
+  });
+
+  it("does not fire when groupAllowFrom admits groups despite empty groups (senderFilterBypass)", () => {
+    const messages: string[] = [];
+    const log = (m: string) => messages.push(m);
+    expect(
+      warnGroupAllowlistMisconfigOnce({
+        groupPolicy: "allowlist",
+        groups: undefined,
+        hasGroupAllowFrom: true,
+        accountId: "default",
+        log,
+      }),
+    ).toBe(false);
+    expect(
+      warnGroupAllowlistMisconfigOnce({
+        groupPolicy: "allowlist",
+        groups: {},
+        hasGroupAllowFrom: true,
+        accountId: "default",
+        log,
+      }),
+    ).toBe(false);
     expect(messages).toHaveLength(0);
   });
 
@@ -81,6 +111,7 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
       warnGroupAllowlistMisconfigOnce({
         groupPolicy: "allowlist",
         groups: undefined,
+        hasGroupAllowFrom: false,
         accountId: "default",
         log,
       }),
@@ -89,6 +120,7 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
       warnGroupAllowlistMisconfigOnce({
         groupPolicy: "allowlist",
         groups: undefined,
+        hasGroupAllowFrom: false,
         accountId: "default",
         log,
       }),
@@ -102,12 +134,14 @@ describe("warnGroupAllowlistMisconfigOnce", () => {
     warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
       groups: undefined,
+      hasGroupAllowFrom: false,
       accountId: "primary",
       log,
     });
     warnGroupAllowlistMisconfigOnce({
       groupPolicy: "allowlist",
       groups: undefined,
+      hasGroupAllowFrom: false,
       accountId: "secondary",
       log,
     });

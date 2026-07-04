@@ -1,7 +1,10 @@
-// Group-allowlist visibility helpers. The runtime gate at line ~336 of
-// inbound-processing.ts drops every group message when groupPolicy="allowlist"
-// and channels.imessage.groups is missing. Without these warnings the drop is
-// invisible at default log level during iMessage config migration. See
+// Group-allowlist visibility helpers. With groupPolicy="allowlist" the inbound
+// gates drop every group message only when channels.imessage.groups is empty
+// AND no effective group sender allowlist exists (groupAllowFrom, or its
+// allowFrom fallback). A non-empty groupAllowFrom admits groups despite an
+// empty groups map (senderFilterBypass in src/config/group-policy.ts). Without
+// these warnings the drop-all case is invisible at default log level during
+// iMessage config migration. See
 // https://github.com/openclaw/openclaw/issues/78749.
 
 type GroupsConfig = Record<
@@ -14,13 +17,16 @@ const perChatWarned = new Set<string>();
 
 /**
  * Fires once per `accountId` at monitor startup when `groupPolicy === "allowlist"`
- * but `channels.imessage.groups` is empty (no `"*"` wildcard, no explicit
- * `chat_id` entries). Without one of those, every group message is dropped at
- * the second gate even when the sender passes `groupAllowFrom`.
+ * and group messages cannot be admitted at all: `channels.imessage.groups` is
+ * empty (no `"*"` wildcard, no explicit `chat_id` entries) AND the effective
+ * group sender allowlist is empty. With a non-empty `groupAllowFrom`,
+ * sender-level filtering admits groups despite the empty groups map, so that
+ * configuration is valid and no warning fires.
  */
 export function warnGroupAllowlistMisconfigOnce(params: {
   groupPolicy: string;
   groups: GroupsConfig | undefined;
+  hasGroupAllowFrom: boolean;
   accountId: string;
   log: (message: string) => void;
 }): boolean {
@@ -31,16 +37,22 @@ export function warnGroupAllowlistMisconfigOnce(params: {
   if (entries.length > 0) {
     return false;
   }
+  // A non-empty effective groupAllowFrom admits groups without a groups map
+  // (senderFilterBypass in src/config/group-policy.ts) — not a misconfig.
+  if (params.hasGroupAllowFrom) {
+    return false;
+  }
   const key = `imessage:${params.accountId}`;
   if (startupWarned.has(key)) {
     return false;
   }
   startupWarned.add(key);
   params.log(
-    `imessage: groupPolicy="allowlist" but channels.imessage.groups is empty for account "${params.accountId}". ` +
+    `imessage: groupPolicy="allowlist" for account "${params.accountId}" but channels.imessage.groups is empty ` +
+      `and no group sender allowlist is configured (channels.imessage.groupAllowFrom, or its allowFrom fallback). ` +
       `Every inbound group message will be dropped. ` +
-      `Add channels.imessage.groups["*"] = { requireMention: true } to allow all groups, ` +
-      `or explicit per-chat_id entries to allow specific groups.`,
+      `Set channels.imessage.groupAllowFrom (sender handles, chat targets like chat_id:<id>, or "*") to admit group senders, ` +
+      `and optionally add channels.imessage.groups entries to scope which chats are allowed.`,
   );
   return true;
 }
