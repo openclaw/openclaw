@@ -9,7 +9,7 @@ import type {
   SimpleStreamOptions,
   StreamOptions,
 } from "@openclaw/llm-core";
-import { createApiRegistry, defaultApiRegistry, type ApiRegistry } from "./api-registry.js";
+import { createApiRegistry, type ApiRegistry } from "./api-registry.js";
 
 /** Creates an isolated LLM runtime backed by the supplied provider registry. */
 export function createLlmRuntime(registry: ApiRegistry = createApiRegistry()) {
@@ -57,8 +57,3 @@ export function createLlmRuntime(registry: ApiRegistry = createApiRegistry()) {
 }
 
 export type LlmRuntime = ReturnType<typeof createLlmRuntime>;
-
-/** Process-default runtime retained for existing OpenClaw callers. */
-export const defaultLlmRuntime = createLlmRuntime(defaultApiRegistry);
-
-export const { stream, complete, streamSimple, completeSimple } = defaultLlmRuntime;

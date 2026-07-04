@@ -8,34 +8,8 @@ import type {
   RawMessageStreamEvent,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
-import {
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
-  resolveOriginalAnthropicToolName,
-  type AnthropicProjectedToolChoice,
-  type AnthropicToolProjection,
-} from "../../../../src/agents/anthropic-tool-projection.js";
-import { buildGuardedModelFetch } from "../../../../src/agents/provider-transport-fetch.js";
-import {
-  splitSystemPromptCacheBoundary,
-  stripSystemPromptCacheBoundary,
-} from "../../../../src/agents/system-prompt-cache-boundary.js";
-import {
-  omitFoundryBearerCredentialHeaders,
-  usesFoundryBearerAuth,
-} from "../../../../src/shared/anthropic-auth-headers.js";
-import {
-  resolveClaudeNativeThinkingLevelMap,
-  requiresClaudeAdaptiveThinking,
-  supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
-  supportsClaudeNativeXhighEffort,
-  usesClaudeFable5MessagesContract,
-} from "../../../../src/shared/anthropic-model-contract.js";
-import { applyAnthropicRefusal } from "../../../../src/shared/anthropic-refusal.js";
-import { createDeferredEventBuffer } from "../../../../src/shared/deferred-event-buffer.js";
-import { notifyLlmRequestActivity } from "../../../../src/shared/llm-request-activity.js";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   AnthropicMessagesCompat,
@@ -57,14 +31,40 @@ import type {
   ToolCall,
   ToolResultMessage,
 } from "../types.js";
+import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../utils/system-prompt-cache-boundary.js";
+import {
+  omitFoundryBearerCredentialHeaders,
+  usesFoundryBearerAuth,
+} from "./anthropic-auth-headers.js";
+import {
+  resolveClaudeNativeThinkingLevelMap,
+  requiresClaudeAdaptiveThinking,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+} from "./anthropic-model-contract.js";
+import { applyAnthropicRefusal } from "./anthropic-refusal.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "./anthropic-thinking-replay.js";
+import {
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  resolveOriginalAnthropicToolName,
+  type AnthropicProjectedToolChoice,
+  type AnthropicToolProjection,
+} from "./anthropic-tool-projection.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -948,7 +948,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch: buildGuardedModelFetch(model),
+      fetch: getAiTransportHost().buildModelFetch(model),
     });
 
     return { client, isOAuthToken: false };

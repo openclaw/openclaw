@@ -13,27 +13,6 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import {
-  resolveOpenAIReasoningEffortForModel,
-  supportsOpenAIReasoningEffort,
-} from "../../../../src/agents/openai-reasoning-effort.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  type FirstStreamEventInternalOptions,
-  withFirstStreamEventTimeout,
-} from "../../../../src/agents/stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "../../../../src/agents/system-prompt-cache-boundary.js";
-import {
-  AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
-  OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
-  type AzureResponsesTextContentPart,
-  type AzureResponsesTextDeltaEvent,
-  isAzureResponsesTextDeltaEvent,
-  isResponsesTextContentPartType,
-  resolveResponsesMessageSnapshotCollapse,
-} from "../../../../src/shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -55,6 +34,27 @@ import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  type FirstStreamEventInternalOptions,
+  withFirstStreamEventTimeout,
+} from "../utils/stream-first-event-timeout.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import {
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "./openai-reasoning-effort.js";
+import {
+  AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
+  OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
+  type AzureResponsesTextContentPart,
+  type AzureResponsesTextDeltaEvent,
+  isAzureResponsesTextDeltaEvent,
+  isResponsesTextContentPartType,
+  resolveResponsesMessageSnapshotCollapse,
+} from "./openai-responses-stream-compat.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";

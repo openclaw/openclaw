@@ -3,9 +3,11 @@
  *
  * Caches normalized object inputs by provider compatibility so repeated inventory builds preserve identity.
  */
-import type { ModelCompatConfig } from "../config/types.models.js";
-import { shouldOmitEmptyArrayItems } from "../plugins/provider-model-compat.js";
-import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import {
+  normalizeToolParameterSchema,
+  shouldOmitEmptyArrayItems,
+  type ToolSchemaModelCompat,
+} from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 
 /**
@@ -24,7 +26,7 @@ let strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: un
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
-): ModelCompatConfig | undefined {
+): ToolSchemaModelCompat | undefined {
   if (!compat) {
     return undefined;
   }

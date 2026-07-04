@@ -1,7 +1,8 @@
 // Mistral provider tests cover request mapping and stream conversion.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../src/agents/system-prompt-cache-boundary.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const mistralMockState = vi.hoisted(() => ({
   payloads: [] as unknown[],
@@ -70,6 +71,10 @@ function makeUnreadableParameterTool() {
 describe("Mistral provider", () => {
   beforeEach(() => {
     mistralMockState.payloads = [];
+  });
+
+  afterEach(() => {
+    configureAiTransportHost({});
   });
 
   it("forwards simple stop sequences to Mistral stop", async () => {
@@ -247,6 +252,10 @@ describe("Mistral provider", () => {
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
+    // Prove the host redaction port is applied to structured tool-result text.
+    configureAiTransportHost({
+      redactToolPayloadText: (text) => text.replaceAll('"value"', '"***"'),
+    });
     const testContext = {
       messages: [
         {

@@ -21,6 +21,7 @@ import {
   getSupportedThinkingLevels,
   isContextOverflow,
   modelsAreEqual,
+  defaultApiRegistry,
 } from "@openclaw/ai/internal/runtime";
 import { resetApiProviders } from "@openclaw/ai/providers";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -2571,7 +2572,7 @@ export class AgentSession {
       reason: "reload",
     });
     await this.settingsManager.reload();
-    resetApiProviders();
+    resetApiProviders(defaultApiRegistry);
     await this.sessionResourceLoader.reload();
     this.buildRuntime({
       activeToolNames: this.getActiveToolNames(),

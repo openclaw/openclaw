@@ -1,8 +1,8 @@
 // ChatGPT Responses provider tests cover stream handling and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../src/agents/system-prompt-cache-boundary.js";
 import type { Context, Model } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   extractOpenAICodexAccountId,
   parseSSEForTest,

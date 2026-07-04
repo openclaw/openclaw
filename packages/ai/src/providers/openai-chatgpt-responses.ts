@@ -25,13 +25,6 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-} from "../../../../src/agents/stream-first-event-timeout.js";
-import { createSseByteGuard } from "../../../../src/agents/streaming-byte-guard.js";
-import { stripSystemPromptCacheBoundary } from "../../../../src/agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
@@ -52,6 +45,13 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+} from "../utils/stream-first-event-timeout.js";
+import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,

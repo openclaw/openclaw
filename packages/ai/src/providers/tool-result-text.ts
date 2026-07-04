@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { redactSecrets, redactToolPayloadText } from "../../../../src/logging/redact.js";
-import { truncateUtf16Safe } from "../../../../src/shared/utf16-slice.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getAiTransportHost } from "../host.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 const PROVIDER_TOOL_RESULT_MAX_CHARS = 8000;
@@ -55,13 +55,14 @@ function redactInlineDataUris(value: string): string {
 }
 
 function redactStructuredTextValue(value: string): string {
-  const redacted = redactToolPayloadText(value);
+  const host = getAiTransportHost();
+  const redacted = host.redactToolPayloadText(value);
   const trimmed = redacted.trim();
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
     return redacted;
   }
   try {
-    const redactedWrapper = redactSecrets({ structuredTextValue: JSON.parse(redacted) });
+    const redactedWrapper = host.redactSecrets({ structuredTextValue: JSON.parse(redacted) });
     return JSON.stringify(redactedWrapper.structuredTextValue);
   } catch {
     return redacted;
@@ -71,7 +72,7 @@ function redactStructuredTextValue(value: string): string {
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
-    const redactedWrapper = redactSecrets({ structuredToolResult: block });
+    const redactedWrapper = getAiTransportHost().redactSecrets({ structuredToolResult: block });
     const redactedBlock = redactedWrapper.structuredToolResult;
     const serialized = JSON.stringify(
       redactedBlock,

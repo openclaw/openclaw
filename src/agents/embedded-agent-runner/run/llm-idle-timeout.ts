@@ -1,3 +1,4 @@
+import { onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 /**
  * Wraps LLM streams with idle-timeout detection and diagnostics.
  */
@@ -8,7 +9,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { toErrorObject } from "../../../infra/errors.js";
-import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";

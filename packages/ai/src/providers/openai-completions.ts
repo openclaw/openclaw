@@ -11,25 +11,8 @@ import type {
   ChatCompletionSystemMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
-import {
-  projectOpenAITools,
-  reconcileOpenAICompletionsToolChoice,
-  type OpenAICompletionsToolChoice,
-  type OpenAIToolProjection,
-} from "../../../../src/agents/openai-tool-projection.js";
-import { buildGuardedModelFetch } from "../../../../src/agents/provider-transport-fetch.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  withFirstStreamEventTimeout,
-} from "../../../../src/agents/stream-first-event-timeout.js";
-import {
-  splitSystemPromptCacheBoundary,
-  stripSystemPromptCacheBoundary,
-} from "../../../../src/agents/system-prompt-cache-boundary.js";
-import { createReasoningTagTextPartitioner } from "../../../../src/shared/text/reasoning-tag-text-partitioner.js";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   AssistantMessage,
@@ -51,12 +34,29 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
+} from "../utils/stream-first-event-timeout.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "../utils/system-prompt-cache-boundary.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
+import {
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  type OpenAICompletionsToolChoice,
+  type OpenAIToolProjection,
+} from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
@@ -638,7 +638,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
-    fetch: buildGuardedModelFetch(model),
+    fetch: getAiTransportHost().buildModelFetch(model),
   });
 }
 

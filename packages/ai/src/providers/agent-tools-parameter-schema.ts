@@ -5,20 +5,62 @@
  */
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import type { TSchema } from "typebox";
-import type { ModelCompatConfig } from "../config/types.models.js";
 import {
-  resolveUnsupportedToolSchemaKeywords,
-  shouldOmitEmptyArrayItems,
-} from "../plugins/provider-model-compat.js";
-import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
-import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
+  normalizeStringEntries,
+  uniqueValues,
+} from "@openclaw/normalization-core/string-normalization";
+import type { TSchema } from "typebox";
+import { cleanSchemaForGemini } from "./clean-for-gemini.js";
+import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
+
+/**
+ * Narrow structural view of the host's model compat config. packages/ai must stay
+ * config-agnostic, so only tool-schema-relevant fields are modeled here; the host's
+ * ModelCompatConfig remains structurally assignable.
+ */
+export type ToolSchemaModelCompat = {
+  toolSchemaProfile?: string;
+  unsupportedToolSchemaKeywords?: string[];
+  omitEmptyArrayItems?: boolean;
+};
+
+/** Extracts the compat record whether callers pass a model (`{ compat }`) or the compat itself. */
+export function extractToolSchemaModelCompat(
+  modelOrCompat: { compat?: unknown } | ToolSchemaModelCompat | undefined,
+): ToolSchemaModelCompat | undefined {
+  if (!modelOrCompat || typeof modelOrCompat !== "object") {
+    return undefined;
+  }
+  if ("compat" in modelOrCompat) {
+    const compat = (modelOrCompat as { compat?: unknown }).compat;
+    return compat && typeof compat === "object" ? (compat as ToolSchemaModelCompat) : undefined;
+  }
+  return modelOrCompat as ToolSchemaModelCompat;
+}
+
+/** JSON Schema keywords this model/provider rejects in tool schemas. */
+export function resolveUnsupportedToolSchemaKeywords(
+  modelOrCompat: { compat?: unknown } | ToolSchemaModelCompat | undefined,
+): ReadonlySet<string> {
+  const keywords = extractToolSchemaModelCompat(modelOrCompat)?.unsupportedToolSchemaKeywords ?? [];
+  return new Set(
+    normalizeStringEntries(
+      keywords.filter((keyword): keyword is string => typeof keyword === "string"),
+    ),
+  );
+}
+
+/** Whether empty `items: {}` on array schemas must be omitted for this model/provider. */
+export function shouldOmitEmptyArrayItems(
+  modelOrCompat: { compat?: unknown } | ToolSchemaModelCompat | undefined,
+): boolean {
+  return extractToolSchemaModelCompat(modelOrCompat)?.omitEmptyArrayItems === true;
+}
 
 export type ToolParameterSchemaOptions = {
   modelProvider?: string;
   modelId?: string;
-  modelCompat?: ModelCompatConfig;
+  modelCompat?: ToolSchemaModelCompat;
 };
 
 const MAX_TOOL_PARAMETER_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;

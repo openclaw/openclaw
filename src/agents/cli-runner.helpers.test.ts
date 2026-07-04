@@ -1,6 +1,7 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +19,6 @@ import {
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {

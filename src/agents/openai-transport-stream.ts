@@ -8,13 +8,41 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   clampOpenAIPromptCacheKey,
   convertMessages,
+  findOpenAIStrictToolProjectionDiagnostics,
+  isOpenAICompatibleAzureResponsesBaseUrl,
+  isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
+  isResponsesTextContentPartType,
+  isResponsesTextDeltaEventType,
   mapOpenAIStopReason,
+  normalizeOpenAIReasoningEffort,
+  normalizeOpenAIStrictToolParameters,
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  reconcileOpenAIResponsesToolChoice,
   resolveAzureDeploymentNameFromMap,
+  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIReasoningEffortForModel,
+  resolveResponsesMessageSnapshotCollapse,
+  type OpenAIApiReasoningEffort,
+  type OpenAICompletionsToolChoice,
+  type OpenAIReasoningEffort,
+  type OpenAIToolProjection,
 } from "@openclaw/ai/internal/openai";
-import { calculateCost, getEnvApiKey, parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import {
+  calculateCost,
+  createFirstStreamEventAbortController,
+  createReasoningTagTextPartitioner,
+  getEnvApiKey,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  parseStreamingJson,
+  withFirstStreamEventTimeout,
+} from "@openclaw/ai/internal/runtime";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
+  stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -39,13 +67,6 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
-import {
-  isResponsesTextContentPartType,
-  isResponsesTextDeltaEventType,
-  resolveResponsesMessageSnapshotCollapse,
-} from "../shared/openai-responses-stream-compat.js";
-import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -65,31 +86,11 @@ import {
 } from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  normalizeOpenAIReasoningEffort,
-  resolveOpenAIReasoningEffortForModel,
-  type OpenAIApiReasoningEffort,
-  type OpenAIReasoningEffort,
-} from "./openai-reasoning-effort.js";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
-import {
-  projectOpenAITools,
-  reconcileOpenAICompletionsToolChoice,
-  reconcileOpenAIResponsesToolChoice,
-  type OpenAICompletionsToolChoice,
-  type OpenAIToolProjection,
-} from "./openai-tool-projection.js";
-import {
-  findOpenAIStrictToolProjectionDiagnostics,
-  normalizeOpenAIStrictToolParameters,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
@@ -98,13 +99,6 @@ import {
 } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import type { StreamFn } from "./runtime/index.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  withFirstStreamEventTimeout,
-} from "./stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,

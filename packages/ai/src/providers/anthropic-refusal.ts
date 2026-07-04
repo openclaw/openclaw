@@ -1,4 +1,4 @@
-import type { AssistantMessageDiagnostic } from "../llm/types.js";
+import type { AssistantMessageDiagnostic } from "../types.js";
 
 type AnthropicRefusalOutput = {
   stopReason: string;

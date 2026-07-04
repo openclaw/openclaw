@@ -3,10 +3,11 @@ import type {
   ResponseStreamEvent,
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
-import { describe, expect, it, vi } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../src/agents/system-prompt-cache-boundary.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
@@ -117,6 +118,23 @@ async function* responseEvents(events: Array<Record<string, unknown>>) {
 }
 
 describe("convertResponsesTools", () => {
+  beforeEach(() => {
+    // Mimic the OpenClaw host strict-tool policy: native OpenAI routes force
+    // strict=true, proxy-like routes leave the flag unset.
+    configureAiTransportHost({
+      resolveOpenAIStrictToolSetting: (model, options) => {
+        if (model.provider === "openai" && model.baseUrl === "https://api.openai.com/v1") {
+          return true;
+        }
+        return options?.supportsStrictMode ? false : undefined;
+      },
+    });
+  });
+
+  afterEach(() => {
+    configureAiTransportHost({});
+  });
+
   it("enables native strict OpenAI Responses tools and normalizes schemas", () => {
     const tools = [
       {

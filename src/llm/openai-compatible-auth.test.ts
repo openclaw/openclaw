@@ -1,17 +1,20 @@
+import type { Context, Model } from "@openclaw/ai";
+import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 // OpenAI-compatible auth tests cover API key and base URL normalization.
+// Lives in core: it proves the facade-installed guarded fetch routes provider
+// requests through OpenClaw's SSRF guard.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../../../src/test-utils/env.js";
-import type { Context, Model } from "../types.js";
-import { streamOpenAICompletions } from "./openai-completions.js";
-import { streamOpenAIResponses } from "./openai-responses.js";
+import { captureEnv } from "../test-utils/env.js";
+// Importing the facade installs the OpenClaw AI transport host ports.
+import "./stream.js";
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("../../../../src/infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../src/infra/net/fetch-guard.js")>(
-    "../../../../src/infra/net/fetch-guard.js",
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
   );
   return {
     ...actual,

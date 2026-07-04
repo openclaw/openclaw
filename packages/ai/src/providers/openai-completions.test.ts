@@ -1,8 +1,9 @@
 // OpenAI completions tests cover chat completion stream adaptation.
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../src/agents/system-prompt-cache-boundary.js";
+import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, SimpleStreamOptions } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
@@ -160,24 +161,28 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
-  it("configures the OpenAI SDK client with guarded fetch", async () => {
+  it("configures the OpenAI SDK client with the host-built model fetch", async () => {
     mockOpenAIOptionsRef.options = [];
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
 
-    const stream = streamOpenAICompletions(model, context, {
-      apiKey: "sk-test",
-    });
-    const result = await stream.result();
+    try {
+      const stream = streamOpenAICompletions(model, context, {
+        apiKey: "sk-test",
+      });
+      const result = await stream.result();
 
-    expect(result.stopReason).toBe("stop");
-    expect(mockOpenAIOptionsRef.options).toHaveLength(1);
-    expect(mockOpenAIOptionsRef.options[0]).toMatchObject({
-      baseURL: "https://api.openai.com/v1",
-      dangerouslyAllowBrowser: true,
-    });
-    expect((mockOpenAIOptionsRef.options[0] as { fetch?: unknown }).fetch).toEqual(
-      expect.any(Function),
-    );
+      expect(result.stopReason).toBe("stop");
+      expect(mockOpenAIOptionsRef.options).toHaveLength(1);
+      expect(mockOpenAIOptionsRef.options[0]).toMatchObject({
+        baseURL: "https://api.openai.com/v1",
+        dangerouslyAllowBrowser: true,
+      });
+      expect((mockOpenAIOptionsRef.options[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
+    } finally {
+      configureAiTransportHost({});
+    }
   });
 
   it("fails when streaming headers arrive but no first SSE event follows", async () => {

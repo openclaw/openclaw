@@ -1,9 +1,9 @@
 // Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../src/agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleGenerateContentParams,
   consumeGoogleGenerateContentStream,

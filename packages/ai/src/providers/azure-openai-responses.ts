@@ -1,9 +1,8 @@
 // Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
-import { buildGuardedModelFetch } from "../../../../src/agents/provider-transport-fetch.js";
-import { isOpenAICompatibleAzureResponsesBaseUrl } from "../../../../src/shared/azure-openai-responses-client-compat.js";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import type {
   Context,
   Model,
@@ -13,6 +12,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
+import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   applyCommonResponsesParams,
@@ -200,7 +200,7 @@ function createClient(
   }
 
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
-  const guardedFetch = buildGuardedModelFetch({ ...model, baseUrl });
+  const guardedFetch = getAiTransportHost().buildModelFetch({ ...model, baseUrl });
 
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
     return new OpenAI({

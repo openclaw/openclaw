@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -90,7 +91,6 @@ import { CommandLaneClearedError, GatewayDrainingError } from "../../process/com
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,

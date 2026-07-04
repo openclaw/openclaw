@@ -1,18 +1,14 @@
 // OpenAI Responses tool helpers convert runtime tools to Responses API schemas.
 import { createHash } from "node:crypto";
 import type { Tool as OpenAITool } from "openai/resources/responses/responses.js";
-import { resolveOpenAIStrictToolSetting } from "../../../../src/agents/openai-strict-tool-setting.js";
-import {
-  projectOpenAITools,
-  type OpenAIToolProjection,
-} from "../../../../src/agents/openai-tool-projection.js";
+import { getAiTransportHost } from "../host.js";
+import type { Model, Tool } from "../types.js";
+import { projectOpenAITools, type OpenAIToolProjection } from "./openai-tool-projection.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
   resolveOpenAIProjectedToolsStrictToolFlag,
-} from "../../../../src/agents/openai-tool-schema.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import type { Model, Tool } from "../types.js";
+} from "./openai-tool-schema.js";
 
 /** Options for converting internal tool schemas to OpenAI Responses function tools. */
 export interface ConvertResponsesToolsOptions {
@@ -36,7 +32,7 @@ export type ConvertedResponsesTools = {
 };
 
 // Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
-const log = createSubsystemLogger("llm/openai-responses");
+const LOG_SUBSYSTEM = "llm/openai-responses";
 const MAX_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 64;
 const loggedStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -83,7 +79,7 @@ function resolveResponsesStrictToolSetting(
     return options.strict;
   }
   if (options?.model) {
-    return resolveOpenAIStrictToolSetting(options.model, {
+    return getAiTransportHost().resolveOpenAIStrictToolSetting(options.model, {
       transport: "stream",
       supportsStrictMode: options.supportsStrictMode,
     });
@@ -97,25 +93,29 @@ function resolveResponsesStrictToolFlag(
   model: Model | undefined,
 ): boolean | undefined {
   const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
-  if (strictSetting === true && strict === false && model && log.isEnabled("debug", "any")) {
-    const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
-    if (shouldLogStrictToolDowngradeDiagnostic(diagnostics, model)) {
+  if (strictSetting === true && strict === false && model) {
+    getAiTransportHost().logDebug(LOG_SUBSYSTEM, () => {
+      const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
+      if (!shouldLogStrictToolDowngradeDiagnostic(diagnostics, model)) {
+        return null;
+      }
       const sample = diagnostics.slice(0, 5).map((entry) => ({
         tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
         violations: entry.violations.slice(0, 8),
       }));
-      log.debug(
-        `OpenAI responses tool schema strict mode downgraded to strict=false for ` +
+      return {
+        message:
+          `OpenAI responses tool schema strict mode downgraded to strict=false for ` +
           `${model.provider ?? "unknown"}/${model.id ?? "unknown"} because ` +
           `${diagnostics.length} tool schema(s) are not strict-compatible`,
-        {
+        data: {
           provider: model.provider,
           model: model.id,
           incompatibleToolCount: diagnostics.length,
           sample,
         },
-      );
-    }
+      };
+    });
   }
   return strict;
 }

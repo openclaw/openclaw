@@ -1,19 +1,17 @@
 /**
  * Public SDK subpath for LLM provider registration, streaming, model utils, and validation.
  */
-export {
-  getApiProvider,
-  getApiProviders,
-  registerApiProvider,
-  unregisterApiProviders,
-  type ApiProvider,
-} from "../llm/api-registry.js";
+export type { ApiProvider } from "@openclaw/ai";
 export {
   calculateCost,
   clampThinkingLevel,
+  getApiProvider,
+  getApiProviders,
   getEnvApiKey,
   parseStreamingJson,
+  registerApiProvider,
   sanitizeSurrogates,
+  unregisterApiProviders,
 } from "@openclaw/ai/internal/runtime";
 export {
   adjustMaxTokensForThinking,
@@ -53,5 +51,5 @@ export {
   AssistantMessageEventStream,
   createAssistantMessageEventStream,
 } from "../../packages/llm-core/src/utils/event-stream.js";
-export { createHttpProxyAgentsForTarget } from "@openclaw/ai/internal/runtime";
+export { createHttpProxyAgentsForTarget } from "../llm/utils/node-http-proxy.js";
 export { validateToolArguments, validateToolCall } from "../../packages/llm-core/src/validation.js";

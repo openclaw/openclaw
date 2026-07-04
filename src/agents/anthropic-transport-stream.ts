@@ -1,12 +1,29 @@
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
+  applyAnthropicRefusal,
   findActiveAnthropicToolTurnAssistantIndex,
+  omitFoundryBearerCredentialHeaders,
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  requiresClaudeAdaptiveThinking,
+  resolveClaudeNativeThinkingLevelMap,
+  resolveOriginalAnthropicToolName,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+  usesFoundryBearerAuth,
+  type AnthropicOptions,
+  type AnthropicProjectedToolChoice,
+  type AnthropicThinkingDisplay,
+  type AnthropicToolProjection,
 } from "@openclaw/ai/internal/anthropic";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "@openclaw/ai/internal/anthropic";
 import {
   calculateCost,
   clampThinkingLevel,
+  createDeferredEventBuffer,
   getEnvApiKey,
+  notifyLlmRequestActivity,
   parseStreamingJson,
 } from "@openclaw/ai/internal/runtime";
 import {
@@ -30,33 +47,11 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import {
-  omitFoundryBearerCredentialHeaders,
-  usesFoundryBearerAuth,
-} from "../shared/anthropic-auth-headers.js";
-import {
-  resolveClaudeNativeThinkingLevelMap,
-  requiresClaudeAdaptiveThinking,
-  supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
-  supportsClaudeNativeXhighEffort,
-  usesClaudeFable5MessagesContract,
-} from "../shared/anthropic-model-contract.js";
-import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-import { notifyLlmRequestActivity } from "../shared/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
-import {
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
-  resolveOriginalAnthropicToolName,
-  type AnthropicProjectedToolChoice,
-  type AnthropicToolProjection,
-} from "./anthropic-tool-projection.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";

@@ -1,7 +1,8 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../src/agents/system-prompt-cache-boundary.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, Tool } from "../types.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -54,7 +55,14 @@ describe("Anthropic provider", () => {
     anthropicMockState.configs = [];
   });
 
+  afterEach(() => {
+    configureAiTransportHost({});
+  });
+
   it("keeps Cloudflare AI Gateway upstream provider auth on the Anthropic API key", async () => {
+    // Prove the Cloudflare client receives the host-built model fetch.
+    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
+    configureAiTransportHost({ buildModelFetch: () => hostFetch });
     const model = makeAnthropicModel({
       provider: "cloudflare-ai-gateway",
       baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic/v1/messages",
@@ -82,7 +90,7 @@ describe("Anthropic provider", () => {
     expect(config.authToken).toBeNull();
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
-    expect(typeof config.fetch).toBe("function");
+    expect(config.fetch).toBe(hostFetch);
   });
 
   it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {

@@ -1,5 +1,5 @@
 // Built-in provider registration installs lazy protocol adapters.
-import { defaultApiRegistry, type ApiRegistry } from "../api-registry.js";
+import type { ApiRegistry } from "../api-registry.js";
 import type {
   Api,
   AssistantMessage,
@@ -151,14 +151,14 @@ const registerBuiltIns: RegisterBuiltIn[] = [
 ];
 
 /** Registers every built-in API provider in one runtime registry. */
-export function registerBuiltInApiProviders(registry: ApiRegistry = defaultApiRegistry): void {
+export function registerBuiltInApiProviders(registry: ApiRegistry): void {
   for (const register of registerBuiltIns) {
     register(registry);
   }
 }
 
 /** Restores the built-in provider registry state for tests. */
-export function resetApiProviders(registry: ApiRegistry = defaultApiRegistry): void {
+export function resetApiProviders(registry: ApiRegistry): void {
   registry.unregisterApiProviders(BUILT_IN_API_PROVIDER_SOURCE_ID);
   registerBuiltInApiProviders(registry);
 }

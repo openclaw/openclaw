@@ -117,14 +117,3 @@ export function createApiRegistry() {
 }
 
 export type ApiRegistry = ReturnType<typeof createApiRegistry>;
-
-/** Process-default registry retained for the OpenClaw compatibility facade. */
-export const defaultApiRegistry = createApiRegistry();
-
-export const {
-  registerApiProvider,
-  getApiProvider,
-  getApiProviders,
-  unregisterApiProviders,
-  clearApiProviders,
-} = defaultApiRegistry;
