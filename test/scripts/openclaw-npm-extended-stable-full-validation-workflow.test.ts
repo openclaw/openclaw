@@ -33,14 +33,14 @@ function runReleaseChecksTrustedRefGuard(workflowRef: string): ReturnType<typeof
     encoding: "utf8",
     env: {
       ...process.env,
-      RELEASE_REF: "stable/2026.6.33",
+      RELEASE_REF: "extended-stable/2026.6.33",
       WORKFLOW_REF: workflowRef,
     },
   });
 }
 
-describe("stable Full Release Validation workflow", () => {
-  it("lets the exact stable branch reach every rerun_group=all child at the target SHA", () => {
+describe("extended-stable Full Release Validation workflow", () => {
+  it("lets the exact extended-stable branch reach every child at the target SHA", () => {
     const fullValidation = readFileSync(fullValidationPath, "utf8");
     const childDispatches = [
       {
@@ -77,31 +77,34 @@ describe("stable Full Release Validation workflow", () => {
     }
 
     expect(fullValidation).toContain(
-      '"$CHILD_WORKFLOW_REF" =~ ^stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33$',
+      '"$CHILD_WORKFLOW_REF" =~ ^extended-stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33$',
     );
     expect(fullValidation).toContain(
-      "Dispatch Full Release Validation from a release-ci or stable ref pinned to the target SHA",
+      "Dispatch Full Release Validation from a release-ci or extended-stable ref pinned to the target SHA",
     );
   });
 
-  it("accepts only the exact stable/YYYY.M.33 workflow-ref shape", () => {
-    for (const valid of ["refs/heads/stable/2026.6.33", "refs/heads/stable/2026.12.33"]) {
+  it("accepts only the exact extended-stable/YYYY.M.33 workflow-ref shape", () => {
+    for (const valid of [
+      "refs/heads/extended-stable/2026.6.33",
+      "refs/heads/extended-stable/2026.12.33",
+    ]) {
       const result = runReleaseChecksTrustedRefGuard(valid);
       expect(result.status, result.stderr).toBe(0);
     }
 
     for (const invalid of [
-      "refs/heads/stable/2026.0.33",
-      "refs/heads/stable/2026.01.33",
-      "refs/heads/stable/2026.13.33",
-      "refs/heads/stable/2026.6.32",
-      "refs/heads/stable/2026.6.34",
-      "refs/heads/stable/2026.6.33/extra",
-      "refs/heads/stable/not-a-release",
+      "refs/heads/extended-stable/2026.0.33",
+      "refs/heads/extended-stable/2026.01.33",
+      "refs/heads/extended-stable/2026.13.33",
+      "refs/heads/extended-stable/2026.6.32",
+      "refs/heads/extended-stable/2026.6.34",
+      "refs/heads/extended-stable/2026.6.33/extra",
+      "refs/heads/extended-stable/not-a-release",
     ]) {
       const result = runReleaseChecksTrustedRefGuard(invalid);
       expect(result.status, invalid).not.toBe(0);
-      expect(result.stderr).toContain("stable/YYYY.M.33");
+      expect(result.stderr).toContain("extended-stable/YYYY.M.33");
     }
   });
 });

@@ -15,13 +15,13 @@ OpenClaw currently exposes three user-facing update channels:
 - dev: the moving head of `main`
 
 Separately, release operators can publish the trailing completed month's core
-package to npm `stable`, beginning at patch `33`. The current-month regular
+package to npm `extended-stable`, beginning at patch `33`. The current-month regular
 final line continues on npm `latest`; this operator-side publication split does
 not by itself change CLI update-channel resolution.
 
 ## Version naming
 
-- Monthly npm stable release version: `YYYY.M.PATCH`, with `PATCH >= 33`
+- Monthly npm extended-stable release version: `YYYY.M.PATCH`, with `PATCH >= 33`
   - Git tag: `vYYYY.M.PATCH`
 - Daily/regular final release version: `YYYY.M.PATCH`, with `PATCH < 33`
   - Git tag: `vYYYY.M.PATCH`
@@ -52,9 +52,9 @@ not by itself change CLI update-channel resolution.
   if automated alpha-only tags with higher patch numbers already exist.
 - `latest` continues to follow the current regular/daily npm line
 - `beta` means the current beta install target
-- `stable` means the supported trailing-month npm package, beginning at patch
+- `extended-stable` means the supported trailing-month npm package, beginning at patch
   `33`; patch `34` and later are maintenance releases on that monthly line
-- The dedicated monthly stable path publishes only the core npm package. It
+- The dedicated monthly extended-stable path publishes only the core npm package. It
   does not publish plugins, macOS or Windows artifacts, a GitHub Release,
   private-repository dist-tags, Docker images, mobile artifacts, or website
   downloads.
@@ -71,51 +71,54 @@ not by itself change CLI update-channel resolution.
 - Detailed release procedure, approvals, credentials, and recovery notes are
   maintainer-only
 
-## Monthly npm-only stable publication
+## Monthly npm-only extended-stable publication
 
 This is a dedicated exception to the regular release procedure below. For a
-completed month `YYYY.M`, create `stable/YYYY.M.33`; publish `vYYYY.M.33` and
+completed month `YYYY.M`, create `extended-stable/YYYY.M.33`; publish `vYYYY.M.33` and
 later maintenance patches from that same branch. The release tag, branch tip,
 checkout, package version, npm preflight, and Full Release Validation run must
 all identify the same commit. Protected `main` must already contain a strictly
 later calendar month's final version below patch `33`; maintenance patches stay
 eligible after `main` advances by more than one month.
 
-Run the npm preflight and Full Release Validation from the exact stable branch,
+Run the npm preflight and Full Release Validation from the exact extended-stable branch,
 then save both run IDs:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
-  --ref stable/YYYY.M.33 \
+  --ref extended-stable/YYYY.M.33 \
   -f tag=vYYYY.M.P \
   -f preflight_only=true \
-  -f npm_dist_tag=stable
+  -f npm_dist_tag=extended-stable
 
 gh workflow run full-release-validation.yml \
-  --ref stable/YYYY.M.33 \
-  -f ref=stable/YYYY.M.33 \
+  --ref extended-stable/YYYY.M.33 \
+  -f ref=extended-stable/YYYY.M.33 \
   -f release_profile=stable
 ```
+
+`release_profile=stable` is the existing validation-depth profile; it is
+separate from the npm `extended-stable` dist-tag and is intentionally unchanged.
 
 After both runs succeed and the npm release environment is ready, promote the
 exact preflight tarball. Patch `P` must be `33` or greater:
 
 ```bash
 gh workflow run openclaw-npm-release.yml \
-  --ref stable/YYYY.M.33 \
+  --ref extended-stable/YYYY.M.33 \
   -f tag=vYYYY.M.P \
   -f preflight_only=false \
-  -f npm_dist_tag=stable \
+  -f npm_dist_tag=extended-stable \
   -f preflight_run_id=<npm-preflight-run-id> \
   -f full_release_validation_run_id=<full-validation-run-id>
 ```
 
 For a fork or non-production rehearsal that intentionally cannot satisfy the
 monthly `.33` or protected-`main` month policy, add
-`-f bypass_stable_guard=true` to both npm preflight and publish dispatches. The
-default is `false`. The bypass is accepted only with `npm_dist_tag=stable` and
+`-f bypass_extended_stable_guard=true` to both npm preflight and publish dispatches. The
+default is `false`. The bypass is accepted only with `npm_dist_tag=extended-stable` and
 is recorded in the workflow summary. It does not bypass the canonical
-`stable/YYYY.M.33` workflow ref, branch-tip/tag/checkout equality, final-tag
+`extended-stable/YYYY.M.33` workflow ref, branch-tip/tag/checkout equality, final-tag
 syntax, package/tag version equality, referenced run and manifest identity,
 tarball provenance, environment approval, registry readback, or selector
 repair evidence.
@@ -126,7 +129,7 @@ result after the workflow succeeds:
 
 ```bash
 npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
-npm view openclaw@stable version --userconfig "$(mktemp)"
+npm view openclaw@extended-stable version --userconfig "$(mktemp)"
 ```
 
 Both commands must return `YYYY.M.P`. If publish succeeds but selector
@@ -136,7 +139,7 @@ workflow's always-run summary, then repeat both independent readbacks.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
 plugins, macOS, Windows, and other platform publication. Do not run those steps
-for this npm-only stable path.
+for this npm-only extended-stable path.
 
 ## Regular release operator checklist
 
@@ -827,7 +830,7 @@ Telegram workflow still accepts a published npm spec for post-publish checks.
 
 For beta, `latest`, plugin, GitHub Release, and platform publication,
 `OpenClaw Release Publish` is the normal mutating entrypoint. The monthly
-`.33+` npm-only stable path does not use this orchestrator. The regular workflow
+`.33+` npm-only extended-stable path does not use this orchestrator. The regular workflow
 orchestrates the trusted-publisher workflows in the order the release needs:
 
 1. Check out the release tag and resolve its commit SHA.
@@ -900,14 +903,14 @@ package cannot ship without every publishable official plugin, including
   real publish path
 - `preflight_run_id`: required on the real publish path so the workflow reuses
   the prepared tarball from the successful preflight run
-- `full_release_validation_run_id`: required for real monthly stable and regular
+- `full_release_validation_run_id`: required for real monthly extended-stable and regular
   non-beta publication so the workflow authenticates the exact validation run
 - `npm_dist_tag`: npm target tag for the publish path; accepts `alpha`, `beta`,
-  `latest`, or `stable` and defaults to `beta`. Final patch `33` and later must
-  use `stable`; by default, `stable` rejects earlier patches, and it always
+  `latest`, or `extended-stable` and defaults to `beta`. Final patch `33` and later must
+  use `extended-stable`; by default, `extended-stable` rejects earlier patches, and it always
   rejects non-final tags.
-- `bypass_stable_guard`: testing-only boolean, default `false`; with
-  `npm_dist_tag=stable`, bypasses monthly stable eligibility while preserving
+- `bypass_extended_stable_guard`: testing-only boolean, default `false`; with
+  `npm_dist_tag=extended-stable`, bypasses monthly extended-stable eligibility while preserving
   release identity, artifact, approval, and readback checks.
 
 `OpenClaw Release Publish` accepts these operator-controlled inputs:
@@ -946,7 +949,7 @@ Rules:
 
 - Regular final and correction versions below patch `33` may publish to either
   `beta` or `latest`. Final versions at patch `33` or above must publish to
-  `stable`, and correction-suffix versions at that boundary are rejected.
+  `extended-stable`, and correction-suffix versions at that boundary are rejected.
 - Beta prerelease tags may publish only to `beta`
 - For `OpenClaw NPM Release`, full commit SHA input is allowed only when
   `preflight_only=true`
@@ -959,7 +962,7 @@ Rules:
 
 This legacy sequence is for the regular orchestrated release that also owns
 plugins, GitHub Release, Windows, and other platform work. It is not the
-monthly `.33+` npm-only stable path documented at the top of this page.
+monthly `.33+` npm-only extended-stable path documented at the top of this page.
 
 When cutting a regular orchestrated stable release:
 

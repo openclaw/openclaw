@@ -133,16 +133,18 @@ describe("openclaw npm publish wrapper", () => {
     expect(result.stderr).toContain(expectedError);
   });
 
-  it("rejects publishing the current pre-.33 final version to stable", () => {
+  it("rejects publishing the current pre-.33 final version to extended-stable", () => {
     const result = runPublishWrapper(["--publish"], {
-      OPENCLAW_NPM_PUBLISH_TAG: "stable",
+      OPENCLAW_NPM_PUBLISH_TAG: "extended-stable",
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Stable npm publication requires release patch 33 or above");
+    expect(result.stderr).toContain(
+      "Extended-stable npm publication requires release patch 33 or above",
+    );
   });
 
-  it("publishes the current pre-.33 final version to stable with the explicit bypass", () => {
+  it("publishes a pre-.33 final version to extended-stable with the explicit bypass", () => {
     const tempRoot = makeTempDir("openclaw-npm-publish-");
     const binDir = path.join(tempRoot, "bin");
     const npmLog = path.join(tempRoot, "npm.log");
@@ -152,24 +154,29 @@ describe("openclaw npm publish wrapper", () => {
     });
 
     const result = runPublishWrapper(["--publish"], {
-      BYPASS_STABLE_GUARD: "true",
-      OPENCLAW_NPM_PUBLISH_TAG: "stable",
+      BYPASS_EXTENDED_STABLE_GUARD: "true",
+      OPENCLAW_NPM_PUBLISH_TAG: "extended-stable",
       PATH: `${binDir}:${process.env.PATH}`,
     });
 
     expect(result.status).toBe(0);
     expect(readFileSync(npmLog, "utf8")).toContain(
-      "publish --access public --tag stable --provenance",
+      "publish --access public --tag extended-stable --provenance",
     );
-    expect(result.stdout).toContain("Resolved publish tag: stable");
+    expect(result.stdout).toContain("Resolved publish tag: extended-stable");
   });
 
   it.each([
-    ["malformed bypass", "stable", "sometimes", 'must be "true" or "false"'],
-    ["non-stable bypass", "beta", "true", "only be used with the stable npm dist-tag"],
+    ["malformed bypass", "extended-stable", "sometimes", 'must be "true" or "false"'],
+    [
+      "non-extended-stable bypass",
+      "beta",
+      "true",
+      "only be used with the extended-stable npm dist-tag",
+    ],
   ])("rejects %s before npm publish", (_label, distTag, bypass, expectedError) => {
     const result = runPublishWrapper(["--publish"], {
-      BYPASS_STABLE_GUARD: bypass,
+      BYPASS_EXTENDED_STABLE_GUARD: bypass,
       OPENCLAW_NPM_PUBLISH_TAG: distTag,
     });
 

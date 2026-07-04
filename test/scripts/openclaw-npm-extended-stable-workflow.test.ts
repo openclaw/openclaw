@@ -10,7 +10,7 @@ type Workflow = {
   on?: {
     workflow_dispatch?: {
       inputs?: {
-        bypass_stable_guard?: { default?: boolean; type?: string };
+        bypass_extended_stable_guard?: { default?: boolean; type?: string };
         npm_dist_tag?: { options?: string[] };
       };
     };
@@ -30,15 +30,15 @@ function step(job: Job | undefined, name: string): Step {
   return found;
 }
 
-describe("minimal npm stable workflow", () => {
-  it("adds stable without adding policy or verifier contracts", () => {
+describe("minimal npm extended-stable workflow", () => {
+  it("adds extended-stable without adding policy or verifier contracts", () => {
     const raw = readFileSync(workflowPath, "utf8");
     const parsed = workflow();
     expect(parsed.on?.workflow_dispatch?.inputs?.npm_dist_tag?.options).toEqual([
       "alpha",
       "beta",
       "latest",
-      "stable",
+      "extended-stable",
     ]);
     for (const forbidden of [
       "release-policy",
@@ -51,29 +51,31 @@ describe("minimal npm stable workflow", () => {
     }
   });
 
-  it("reuses the v1 preflight tarball and guards all three stable gates", () => {
+  it("reuses the v1 preflight tarball and guards all three extended-stable gates", () => {
     const parsed = workflow();
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("version: 1");
     expect(raw).toContain("openclaw-npm-preflight-${{ inputs.tag }}");
-    expect(raw.match(/openclaw-npm-stable-release\.mjs validate-request/g)).toHaveLength(3);
+    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs validate-request/g)).toHaveLength(
+      3,
+    );
     expect(step(parsed.jobs?.preflight_openclaw_npm, "Validate npm release request").run).toContain(
-      "openclaw-npm-stable-release.mjs validate-request",
+      "openclaw-npm-extended-stable-release.mjs validate-request",
     );
     expect(
       step(parsed.jobs?.validate_publish_request, "Validate npm release request").run,
-    ).toContain("openclaw-npm-stable-release.mjs validate-request");
+    ).toContain("openclaw-npm-extended-stable-release.mjs validate-request");
     expect(step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request").run).toContain(
-      "openclaw-npm-stable-release.mjs validate-request",
+      "openclaw-npm-extended-stable-release.mjs validate-request",
     );
     expect(
       parsed.jobs?.validate_publish_request?.steps?.map((candidate) => candidate.name),
     ).not.toContain("Setup Node environment");
   });
 
-  it("threads an explicit, default-off stable guard bypass through every policy gate", () => {
+  it("threads an explicit, default-off extended-stable bypass through every policy gate", () => {
     const parsed = workflow();
-    const input = parsed.on?.workflow_dispatch?.inputs?.bypass_stable_guard;
+    const input = parsed.on?.workflow_dispatch?.inputs?.bypass_extended_stable_guard;
     expect(input).toMatchObject({ default: false, type: "boolean" });
 
     const policySteps = [
@@ -83,40 +85,49 @@ describe("minimal npm stable workflow", () => {
       step(parsed.jobs?.publish_openclaw_npm, "Publish"),
     ];
     for (const policyStep of policySteps) {
-      expect(policyStep.env?.BYPASS_STABLE_GUARD).toBe("${{ inputs.bypass_stable_guard }}");
+      expect(policyStep.env?.BYPASS_EXTENDED_STABLE_GUARD).toBe(
+        "${{ inputs.bypass_extended_stable_guard }}",
+      );
     }
     const trustedRef = step(
       parsed.jobs?.validate_publish_request,
       "Require trusted workflow ref for publish",
     );
-    expect(trustedRef.env?.BYPASS_STABLE_GUARD).toBeUndefined();
-    expect(trustedRef.run).not.toContain("BYPASS_STABLE_GUARD");
-    expect(trustedRef.run).toContain('"${WORKFLOW_REF}" == refs/heads/stable/*');
+    expect(trustedRef.env?.BYPASS_EXTENDED_STABLE_GUARD).toBeUndefined();
+    expect(trustedRef.run).not.toContain("BYPASS_EXTENDED_STABLE_GUARD");
+    expect(trustedRef.run).toContain('"${WORKFLOW_REF}" == refs/heads/extended-stable/*');
 
-    const summary = step(parsed.jobs?.publish_openclaw_npm, "Summarize stable npm publication");
-    expect(summary.env?.BYPASS_STABLE_GUARD).toBe("${{ inputs.bypass_stable_guard }}");
-    expect(summary.run).toContain("Stable guard bypass: ${BYPASS_STABLE_GUARD}");
+    const summary = step(
+      parsed.jobs?.publish_openclaw_npm,
+      "Summarize extended-stable npm publication",
+    );
+    expect(summary.env?.BYPASS_EXTENDED_STABLE_GUARD).toBe(
+      "${{ inputs.bypass_extended_stable_guard }}",
+    );
+    expect(summary.run).toContain(
+      "Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}",
+    );
   });
 
-  it("authenticates exact stable run and Full Validation identities", () => {
+  it("authenticates exact extended-stable run and Full Validation identities", () => {
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,conclusion,url");
     expect(raw).toContain("--json workflowName,headBranch,headSha,event,status,conclusion,url");
-    expect(raw.match(/openclaw-npm-stable-release\.mjs verify-run/g)).toHaveLength(2);
-    expect(raw).toContain("openclaw-npm-stable-release.mjs verify-manifest");
+    expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(2);
+    expect(raw).toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
   });
 
-  it("captures selector fail closed, publishes stable, retries readback, and summarizes repair", () => {
+  it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {
     const parsed = workflow();
     const publish = parsed.jobs?.publish_openclaw_npm;
-    const capture = step(publish, "Capture previous stable selector");
-    const readback = step(publish, "Verify stable registry readback");
-    const summary = step(publish, "Summarize stable npm publication");
-    expect(capture.run).toContain("openclaw-npm-stable-release.mjs capture-selector");
+    const capture = step(publish, "Capture previous extended-stable selector");
+    const readback = step(publish, "Verify extended-stable registry readback");
+    const summary = step(publish, "Summarize extended-stable npm publication");
+    expect(capture.run).toContain("openclaw-npm-extended-stable-release.mjs capture-selector");
     expect(step(publish, "Publish").run).toContain("openclaw-npm-publish.sh");
-    expect(readback.run).toContain("openclaw-npm-stable-release.mjs verify-readback");
+    expect(readback.run).toContain("openclaw-npm-extended-stable-release.mjs verify-readback");
     expect(summary.if).toContain("always()");
-    expect(summary.run).toContain("openclaw-npm-stable-release.mjs repair-command");
+    expect(summary.run).toContain("openclaw-npm-extended-stable-release.mjs repair-command");
     expect(publish?.environment).toBe("npm-release");
   });
 

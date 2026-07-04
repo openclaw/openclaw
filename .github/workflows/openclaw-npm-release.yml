@@ -33,9 +33,9 @@ on:
           - alpha
           - beta
           - latest
-          - stable
-      bypass_stable_guard:
-        description: Testing only; relax the stable patch and protected-main month policy on the canonical stable branch
+          - extended-stable
+      bypass_extended_stable_guard:
+        description: Testing only; relax the extended-stable patch and protected-main month policy on the canonical extended-stable branch
         required: true
         default: false
         type: boolean
@@ -128,11 +128,11 @@ jobs:
 
       - name: Validate npm release request
         env:
-          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
-        run: node scripts/openclaw-npm-stable-release.mjs validate-request
+        run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
       - name: Ensure version is not already published
         env:
@@ -411,11 +411,11 @@ jobs:
 
       - name: Validate npm release request
         env:
-          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
-        run: node scripts/openclaw-npm-stable-release.mjs validate-request
+        run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
       - name: Require trusted workflow ref for publish
         env:
@@ -425,15 +425,15 @@ jobs:
         run: |
           set -euo pipefail
           tideclaw_alpha_publish=false
-          stable_publish=false
+          extended_stable_publish=false
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "stable" && "${WORKFLOW_REF}" == refs/heads/stable/* ]]; then
-            stable_publish=true
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${WORKFLOW_REF}" == refs/heads/extended-stable/* ]]; then
+            extended_stable_publish=true
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${stable_publish}" != "true" ]]; then
-            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, the exact validated stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]] && [[ "${extended_stable_publish}" != "true" ]]; then
+            echo "Real publish runs must be dispatched from main, release/YYYY.M.PATCH, the exact validated extended-stable branch, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
 
@@ -568,14 +568,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-          EXPECTED_STABLE_BRANCH: ${{ github.ref_name }}
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
           RUN_KIND: preflight
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
           RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-stable-release.mjs verify-run
+          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
 
       - name: Verify full release validation run metadata
         if: ${{ inputs.full_release_validation_run_id != '' }}
@@ -583,14 +583,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-          EXPECTED_STABLE_BRANCH: ${{ github.ref_name }}
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
           RUN_KIND: validation
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
           RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,headSha,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-stable-release.mjs verify-run
+          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
 
       - name: Download prepared npm tarball
         env:
@@ -736,7 +736,7 @@ jobs:
             exit 1
           fi
           export EXPECTED_RELEASE_SHA MANIFEST_FILE
-          node scripts/openclaw-npm-stable-release.mjs verify-manifest
+          node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest
           RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
           RUN_RELEASE_SOAK="$(jq -r '.runReleaseSoak // ""' "$MANIFEST_FILE")"
           PERFORMANCE_BLOCKING="$(jq -r '.controls.performanceBlocking // false' "$MANIFEST_FILE")"
@@ -755,21 +755,21 @@ jobs:
 
       - name: Recheck npm release request
         env:
-          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
-        run: node scripts/openclaw-npm-stable-release.mjs validate-request
+        run: node scripts/openclaw-npm-extended-stable-release.mjs validate-request
 
-      - name: Capture previous stable selector
-        id: previous_stable
-        if: ${{ inputs.npm_dist_tag == 'stable' }}
-        run: node scripts/openclaw-npm-stable-release.mjs capture-selector
+      - name: Capture previous extended-stable selector
+        id: previous_extended_stable
+        if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
+        run: node scripts/openclaw-npm-extended-stable-release.mjs capture-selector
 
       - name: Publish
         id: publish
         env:
-          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           OPENCLAW_PREPACK_PREPARED: "1"
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.preflight_provenance.outputs.tarball_path }}
@@ -781,53 +781,53 @@ jobs:
           fi
           bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"
 
-      - name: Verify stable registry readback
-        id: stable_readback
-        if: ${{ success() && inputs.npm_dist_tag == 'stable' }}
+      - name: Verify extended-stable registry readback
+        id: extended_stable_readback
+        if: ${{ success() && inputs.npm_dist_tag == 'extended-stable' }}
         env:
           EXPECTED_VERSION: ${{ inputs.tag }}
-        run: node scripts/openclaw-npm-stable-release.mjs verify-readback
+        run: node scripts/openclaw-npm-extended-stable-release.mjs verify-readback
 
-      - name: Summarize stable npm publication
-        if: ${{ always() && inputs.npm_dist_tag == 'stable' }}
+      - name: Summarize extended-stable npm publication
+        if: ${{ always() && inputs.npm_dist_tag == 'extended-stable' }}
         env:
-          BYPASS_STABLE_GUARD: ${{ inputs.bypass_stable_guard }}
+          BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ github.sha }}
-          STABLE_BRANCH: ${{ github.ref_name }}
+          EXTENDED_STABLE_BRANCH: ${{ github.ref_name }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           TARBALL_NAME: ${{ steps.preflight_provenance.outputs.tarball_name }}
           TARBALL_SHA256: ${{ steps.preflight_provenance.outputs.tarball_sha256 }}
-          SELECTOR_CAPTURE_OUTCOME: ${{ steps.previous_stable.outcome }}
-          PREVIOUS_STABLE: ${{ steps.previous_stable.outputs.previous }}
+          SELECTOR_CAPTURE_OUTCOME: ${{ steps.previous_extended_stable.outcome }}
+          PREVIOUS_EXTENDED_STABLE: ${{ steps.previous_extended_stable.outputs.previous }}
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
-          EXACT_READBACK: ${{ steps.stable_readback.outputs.exact_version }}
-          SELECTOR_READBACK: ${{ steps.stable_readback.outputs.stable_selector }}
-          READBACK_OUTCOME: ${{ steps.stable_readback.outcome }}
+          EXACT_READBACK: ${{ steps.extended_stable_readback.outputs.exact_version }}
+          SELECTOR_READBACK: ${{ steps.extended_stable_readback.outputs.extended_stable_selector }}
+          READBACK_OUTCOME: ${{ steps.extended_stable_readback.outcome }}
         run: |
           set -euo pipefail
           release_version="${RELEASE_TAG#v}"
           {
-            echo "## npm stable publication"
+            echo "## npm extended-stable publication"
             echo "- Package: openclaw@${release_version}"
-            echo "- Stable guard bypass: ${BYPASS_STABLE_GUARD}"
-            echo "- Stable branch: ${STABLE_BRANCH}"
+            echo "- Extended-stable guard bypass: ${BYPASS_EXTENDED_STABLE_GUARD}"
+            echo "- Extended-stable branch: ${EXTENDED_STABLE_BRANCH}"
             echo "- Release tag: ${RELEASE_TAG}"
             echo "- Release SHA: ${RELEASE_SHA}"
             echo "- npm preflight run: ${PREFLIGHT_RUN_ID}"
             echo "- Full Release Validation run: ${FULL_RELEASE_VALIDATION_RUN_ID}"
             echo "- Tarball: ${TARBALL_NAME:-unavailable}"
             echo "- Tarball SHA-256: ${TARBALL_SHA256:-unavailable}"
-            echo "- Previous openclaw@stable: ${PREVIOUS_STABLE:-unavailable}"
+            echo "- Previous openclaw@extended-stable: ${PREVIOUS_EXTENDED_STABLE:-unavailable}"
             echo "- npm publish outcome: ${PUBLISH_OUTCOME}"
             echo "- Exact-version readback: ${EXACT_READBACK:-unavailable}"
-            echo "- Stable-selector readback: ${SELECTOR_READBACK:-unavailable}"
+            echo "- Extended-stable selector readback: ${SELECTOR_READBACK:-unavailable}"
             echo "- Registry readback outcome: ${READBACK_OUTCOME}"
             if [[ "$SELECTOR_CAPTURE_OUTCOME" != "success" ]]; then
               echo "- Selector capture failed; npm publish did not run and no repair is required because npm was unchanged."
             else
-              repair_command="$(PREVIOUS_STABLE="$PREVIOUS_STABLE" node scripts/openclaw-npm-stable-release.mjs repair-command)"
+              repair_command="$(PREVIOUS_EXTENDED_STABLE="$PREVIOUS_EXTENDED_STABLE" node scripts/openclaw-npm-extended-stable-release.mjs repair-command)"
               echo "- Repair command: \`${repair_command}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
