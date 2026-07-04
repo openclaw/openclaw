@@ -475,6 +475,24 @@ async function canBootstrapGoViaApt(): Promise<boolean> {
   if (!deps.hasBinary("apt-get")) {
     return false;
   }
+  // installGoViaApt installs the distro's unversioned golang-go; on older
+  // suites (Ubuntu 22.04 → 1.18, Debian 12 → 1.19) that still fails newer
+  // module directives, so require a 1.21+ candidate before calling it ready.
+  const policy = await runCommandSafely(["apt-cache", "policy", "golang-go"], {
+    timeoutMs: 10_000,
+  });
+  if (policy.code !== 0) {
+    return false;
+  }
+  const candidate = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(policy.stdout);
+  if (!candidate) {
+    return false;
+  }
+  const major = Number(candidate[1]);
+  const minor = Number(candidate[2]);
+  if (major < MIN_AUTO_GO_MAJOR || (major === MIN_AUTO_GO_MAJOR && minor < MIN_AUTO_GO_MINOR)) {
+    return false;
+  }
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return true;
   }
@@ -489,6 +507,10 @@ async function canBootstrapGoViaApt(): Promise<boolean> {
  * Preflight twin of installSkill's prerequisite fallbacks (brew exe, ensureUvInstalled,
  * ensureGoInstalled/installGoViaApt). Says whether a recipe kind can run without manual
  * setup so callers can skip doomed installs; keep in lockstep with those fallbacks.
+ *
+ * uv/go bootstraps count only on-PATH brew: the recipe still spawns bare `uv`/`go`,
+ * so a tool bootstrapped through off-PATH Linuxbrew would not be executable. Brew
+ * recipes accept any resolvable brew because installSkill swaps argv[0] to that path.
  */
 export async function resolveInstallerKindReadiness(kind: string): Promise<SkillInstallReadiness> {
   const deps = getSkillsInstallDeps();
@@ -496,7 +518,7 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
     case "brew":
       return resolvePreflightBrewExe() ? { ready: true } : { ready: false, reason: "brew" };
     case "uv":
-      return deps.hasBinary("uv") || resolvePreflightBrewExe()
+      return deps.hasBinary("uv") || deps.hasBinary("brew")
         ? { ready: true }
         : { ready: false, reason: "uv" };
     case "go": {
@@ -505,10 +527,15 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
           ? { ready: true }
           : { ready: false, reason: "go" };
       }
-      if (resolvePreflightBrewExe() || (await canBootstrapGoViaApt())) {
+      if (deps.hasBinary("brew")) {
         return { ready: true };
       }
-      return { ready: false, reason: "go" };
+      if (deps.resolveBrewExecutable()) {
+        // ensureGoInstalled prefers any resolvable brew over apt, so the install
+        // would bootstrap an off-PATH Go and then fail spawning bare `go`.
+        return { ready: false, reason: "go" };
+      }
+      return (await canBootstrapGoViaApt()) ? { ready: true } : { ready: false, reason: "go" };
     }
     default:
       return { ready: true };

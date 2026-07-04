@@ -280,32 +280,71 @@ describe("skills-install fallback edge cases", () => {
       return fn().finally(() => spy.mockRestore());
     }
 
+    const usableAptCandidate = {
+      code: 0,
+      stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
+      stderr: "",
+    };
+
     it("keeps missing-Go recipes ready when apt-get can bootstrap as root", async () => {
       await withUid(0, async () => {
         mockAvailableBinaries(["apt-get"]);
+        runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        // Preflight must not run installs; the sudo probe is the only allowed command.
-        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+        // Preflight must not run installs; only read-only probes are allowed.
+        expect(commandCallAt(0)[0]).toEqual(["apt-cache", "policy", "golang-go"]);
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
       });
     });
 
     it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
       await withUid(1000, async () => {
         mockAvailableBinaries(["apt-get", "sudo"]);
+        runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
         runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(commandCallAt(0)[0]).toEqual(["sudo", "-n", "true"]);
+        expect(commandCallAt(1)[0]).toEqual(["sudo", "-n", "true"]);
+      });
+    });
+
+    it("skips missing-Go recipes when the apt candidate is older than 1.21", async () => {
+      await withUid(0, async () => {
+        mockAvailableBinaries(["apt-get"]);
+        runCommandWithTimeoutMock.mockResolvedValueOnce({
+          code: 0,
+          stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.18~0ubuntu2\n",
+          stderr: "",
+        });
+
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
       });
     });
 
     it("skips missing-Go recipes when neither brew nor a usable apt path exists", async () => {
       await withUid(1000, async () => {
         mockAvailableBinaries(["apt-get"]);
+        runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
       });
+    });
+
+    it("skips missing-Go and uv recipes when only off-PATH Linuxbrew exists", async () => {
+      // Bootstrapped tools land in the Linuxbrew prefix, so bare `go`/`uv`
+      // recipe commands would still fail to spawn.
+      mockAvailableBinaries([]);
+      skillsInstallTesting.setDepsForTest({
+        hasBinary: (bin: string) => hasBinaryMock(bin),
+        resolveBrewExecutable: () => "/home/linuxbrew/.linuxbrew/bin/brew",
+        isContainerEnvironment: () => false,
+      });
+
+      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+      expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: false, reason: "uv" });
+      // Brew recipes stay ready: installSkill swaps argv[0] to the resolved path.
+      expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
     });
 
     it("skips too-old Go even though the binary exists", async () => {
@@ -336,12 +375,8 @@ describe("skills-install fallback edge cases", () => {
       expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: false, reason: "brew" });
       expect(await resolveInstallerKindReadiness("node")).toEqual({ ready: true });
 
-      // Off-PATH Linuxbrew satisfies both brew recipes and uv's brew bootstrap.
-      skillsInstallTesting.setDepsForTest({
-        hasBinary: (bin: string) => hasBinaryMock(bin),
-        resolveBrewExecutable: () => "/home/linuxbrew/.linuxbrew/bin/brew",
-        isContainerEnvironment: () => false,
-      });
+      // On-PATH brew satisfies brew recipes and uv's brew bootstrap.
+      mockAvailableBinaries(["brew"]);
       expect(await resolveInstallerKindReadiness("uv")).toEqual({ ready: true });
       expect(await resolveInstallerKindReadiness("brew")).toEqual({ ready: true });
     });
