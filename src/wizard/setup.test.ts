@@ -698,7 +698,7 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
-  it("keeps an existing config without re-entering setup", async () => {
+  it("keeps an existing config while continuing explicit setup", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -734,6 +734,10 @@ describe("runSetupWizard", () => {
         flow: "quickstart",
         authChoice: "skip",
         installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHooks: true,
         skipHealth: true,
         skipUi: true,
       },
@@ -741,14 +745,87 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(prompter.outro).toHaveBeenCalledWith("Current configuration kept.");
-    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(prompter.outro).not.toHaveBeenCalledWith("Current configuration kept.");
     expect(promptAuthChoiceGrouped).not.toHaveBeenCalled();
-    expect(configureGatewayForSetup).not.toHaveBeenCalled();
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          gateway: expect.objectContaining({ port: 19001 }),
+        }),
+      }),
+    );
     expect(setupChannels).not.toHaveBeenCalled();
     expect(setupSkills).not.toHaveBeenCalled();
     expect(setupInternalHooks).not.toHaveBeenCalled();
-    expect(finalizeSetupWizard).not.toHaveBeenCalled();
+    expect(finalizeSetupWizard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseConfig: expect.objectContaining({
+          gateway: expect.objectContaining({ port: 19001 }),
+        }),
+        nextConfig: expect.objectContaining({
+          gateway: expect.objectContaining({ port: 19001 }),
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("continues an explicit daemon install after keeping the existing config", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          port: 19001,
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    finalizeSetupWizard.mockClear();
+
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "keep";
+      }
+      if (opts.message === "What do you want to set up?") {
+        return "local";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHooks: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({ select }),
+    );
+
+    expect(finalizeSetupWizard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({ installDaemon: true }),
+        baseConfig: expect.objectContaining({
+          gateway: expect.objectContaining({ port: 19001 }),
+        }),
+        nextConfig: expect.objectContaining({
+          gateway: expect.objectContaining({ port: 19001 }),
+        }),
+      }),
+    );
     vi.clearAllMocks();
   });
 
