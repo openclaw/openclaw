@@ -1,4 +1,6 @@
 // Resolves installed plugin directories for security trust audits.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 const IGNORED_INSTALLED_PLUGIN_DIR_NAMES = new Set(["node_modules", ".openclaw-install-backups"]);
@@ -30,4 +32,33 @@ export function shouldIgnoreInstalledPluginDirName(name: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Lists installed plugin directories under the state extensions dir. Stat and
+ * readdir failures surface through `onReadError` so audits can report scan
+ * problems instead of silently treating them as "no plugins".
+ */
+export async function listInstalledPluginDirs(params: {
+  stateDir: string;
+  onReadError?: (error: unknown) => void;
+}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
+  const extensionsDir = path.join(params.stateDir, "extensions");
+  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
+    params.onReadError?.(err);
+    return null;
+  });
+  if (!st?.isDirectory()) {
+    return { extensionsDir, pluginDirs: [] };
+  }
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
+    params.onReadError?.(err);
+    return [];
+  });
+  const pluginDirs = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
+    .filter(Boolean);
+  return { extensionsDir, pluginDirs };
 }
