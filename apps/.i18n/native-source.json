@@ -10987,7 +10987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 20,
+      "line": 24,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Welcome to OpenClaw",
       "surface": "apple",
@@ -10995,7 +10995,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 32,
+      "line": 36,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "The connected agent can use capabilities you enable, including camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent.",
       "surface": "apple",
@@ -11003,7 +11003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 40,
+      "line": 44,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Security",
       "surface": "apple",
@@ -11011,7 +11011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 53,
+      "line": 57,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "You can change permissions later in Settings.",
       "surface": "apple",
@@ -11019,7 +11019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 59,
+      "line": 63,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Continue",
       "surface": "apple",
@@ -11027,7 +11027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 137,
+      "line": 143,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Connect Gateway",
       "surface": "apple",
@@ -11035,7 +11035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 141,
+      "line": 147,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "/pair qr",
       "surface": "apple",
@@ -11043,7 +11043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 144,
+      "line": 150,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Run this in your OpenClaw chat, then scan the code.",
       "surface": "apple",
@@ -11051,7 +11051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 156,
+      "line": 162,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Scan QR Code",
       "surface": "apple",
@@ -11059,7 +11059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 165,
+      "line": 171,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift",
       "source": "Set Up Manually",
       "surface": "apple",

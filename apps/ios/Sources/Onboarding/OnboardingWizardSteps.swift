@@ -1,5 +1,9 @@
 import SwiftUI
 
+private enum OnboardingLayout {
+    static let contentMaxWidth: CGFloat = 680
+}
+
 struct OnboardingIntroStep: View {
     let onContinue: () -> Void
 
@@ -68,6 +72,8 @@ struct OnboardingIntroStep: View {
             .padding(.top, 12)
             .padding(.bottom, 16)
         }
+        .frame(maxWidth: OnboardingLayout.contentMaxWidth)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -183,6 +189,8 @@ struct OnboardingWelcomeStep: View {
 
             Color.clear.frame(height: 12)
         }
+        .frame(maxWidth: OnboardingLayout.contentMaxWidth)
+        .frame(maxWidth: .infinity)
     }
 }
 
