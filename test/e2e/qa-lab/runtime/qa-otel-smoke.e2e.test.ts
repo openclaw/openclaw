@@ -256,6 +256,43 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(env.OTEL_SERVICE_NAME).toBe("openclaw-qa-lab-otel-smoke");
   });
 
+  it("passes repo-relative output dirs to the child QA suite", () => {
+    const repoRoot = path.join(os.tmpdir(), "openclaw-qa-otel-repo");
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "smoke-ci-profile",
+      "script",
+      "qa-otel-smoke",
+    );
+    const childOutputDir = path.join(
+      ".artifacts",
+      "qa-e2e",
+      "smoke-ci-profile",
+      "script",
+      "qa-otel-smoke",
+    );
+
+    const currentRepoOutputDir = path.join(process.cwd(), childOutputDir);
+    const childArgs = testing.buildQaArgs({
+      ...testing.parseArgs([]),
+      outputDir: currentRepoOutputDir,
+    });
+
+    expect(testing.childQaOutputDir(outputDir, repoRoot)).toBe(childOutputDir);
+    expect(childArgs).toContain(childOutputDir);
+  });
+
+  it("rejects child QA output dirs outside the repo", () => {
+    const repoRoot = path.join(os.tmpdir(), "openclaw-qa-otel-repo");
+    const outputDir = path.join(os.tmpdir(), "openclaw-qa-otel-outside");
+
+    expect(() => testing.childQaOutputDir(outputDir, repoRoot)).toThrow(
+      "--output-dir must stay within the repo root",
+    );
+  });
+
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
     expect(() => testing.decodeRequestBody(Buffer.alloc(65), undefined, 64)).toThrow(
       "OTLP request body exceeded 64 bytes: 65 bytes",
