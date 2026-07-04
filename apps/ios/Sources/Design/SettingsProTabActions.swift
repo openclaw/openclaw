@@ -223,6 +223,9 @@ extension SettingsProTab {
     }
 
     func applyPendingGatewaySetupLinkIfNeeded() {
+        // Only the root-selected Gateway destination may destructively claim a
+        // setup link; other Settings views can remain mounted behind onboarding.
+        guard self.acceptsGatewaySetupRequests else { return }
         guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
         self.setupCode = ""
         self.setupStatusText = nil

@@ -66,6 +66,7 @@ struct SettingsProTab: View {
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
+    let acceptsGatewaySetupRequests: Bool
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
@@ -74,6 +75,7 @@ struct SettingsProTab: View {
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
+        acceptsGatewaySetupRequests: Bool = false,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
@@ -81,6 +83,7 @@ struct SettingsProTab: View {
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
+        self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
         self.headerLeadingAction = headerLeadingAction
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
@@ -177,6 +180,10 @@ struct SettingsProTab: View {
                 ShareToAgentSettings.saveDefaultInstruction(newValue)
             }
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+                self.applyPendingGatewaySetupLinkIfNeeded()
+            }
+            .onChange(of: self.acceptsGatewaySetupRequests) { _, acceptsRequests in
+                guard acceptsRequests else { return }
                 self.applyPendingGatewaySetupLinkIfNeeded()
             }
             .onChange(of: self.onboardingRequestID) { _, _ in
