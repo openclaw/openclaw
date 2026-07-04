@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>"
+  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] [--candidate-tag <tag>] <package-dir>"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
@@ -18,8 +18,27 @@ if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != 
 fi
 shift
 
-if [[ "${1:-}" == "--" ]]; then
-  shift
+candidate_tag=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --candidate-tag)
+      candidate_tag="${2:-}"
+      if [[ -z "${candidate_tag}" || "${candidate_tag}" == -* ]]; then
+        echo "--candidate-tag requires a value" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *) break ;;
+  esac
+done
+if [[ -n "${candidate_tag}" && ! "${candidate_tag}" =~ ^extended-stable-plugin-candidate-[a-z0-9-]+-[0-9]{4}-[0-9]+-[0-9]+$ ]]; then
+  echo "invalid extended-stable plugin candidate tag: ${candidate_tag}" >&2
+  exit 2
 fi
 package_dir=""
 if [[ "$#" -gt 0 ]]; then
@@ -39,7 +58,18 @@ fi
 
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
-current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
+if [[ -n "${candidate_tag}" ]]; then
+  plugin_id="$(basename "${package_dir}")"
+  expected_candidate_tag="extended-stable-plugin-candidate-${plugin_id}-${package_version//./-}"
+  if [[ "${candidate_tag}" != "${expected_candidate_tag}" ]]; then
+    echo "candidate tag mismatch: expected ${expected_candidate_tag}, found ${candidate_tag}" >&2
+    exit 1
+  fi
+fi
+current_beta_version=""
+if [[ -z "${candidate_tag}" ]]; then
+  current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
+fi
 log() {
   if [[ "${mode}" == "--pack-dry-run" ]]; then
     printf '%s\n' "$*" >&2
@@ -48,17 +78,20 @@ log() {
   fi
 }
 publish_plan_output="$(
-  PACKAGE_VERSION="${package_version}" CURRENT_BETA_VERSION="${current_beta_version}" PUBLISH_MODE="${mode}" node --input-type=module <<'EOF'
+  PACKAGE_VERSION="${package_version}" CURRENT_BETA_VERSION="${current_beta_version}" PUBLISH_MODE="${mode}" CANDIDATE_TAG="${candidate_tag}" node --input-type=module <<'EOF'
 import {
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   shouldRequireNpmDistTagMirrorAuth,
 } from "./scripts/lib/npm-publish-plan.mjs";
 
-const plan = resolveNpmPublishPlan(
-  process.env.PACKAGE_VERSION ?? "",
-  process.env.CURRENT_BETA_VERSION,
-);
+const candidateTag = process.env.CANDIDATE_TAG ?? "";
+const plan = candidateTag
+  ? { channel: "extended-stable", publishTag: candidateTag, mirrorDistTags: [] }
+  : resolveNpmPublishPlan(
+      process.env.PACKAGE_VERSION ?? "",
+      process.env.CURRENT_BETA_VERSION,
+    );
 const auth = resolveNpmDistTagMirrorAuth({
   nodeAuthToken: process.env.NODE_AUTH_TOKEN,
   npmToken: process.env.NPM_TOKEN,
@@ -125,6 +158,20 @@ publish_auth_source="${mirror_auth_source}"
 if [[ "${OPENCLAW_NPM_PUBLISH_AUTH_MODE:-}" == "trusted-publisher" ]]; then
   publish_auth_token=""
   publish_auth_source="trusted-publisher"
+fi
+if [[ -n "${candidate_tag}" && "${mode}" == "--publish" ]]; then
+  if [[ "${OPENCLAW_NPM_PUBLISH_AUTH_MODE:-}" != "trusted-publisher" ]]; then
+    echo "extended-stable candidate publication requires GitHub OIDC trusted publishing." >&2
+    exit 1
+  fi
+  if [[ -n "${NODE_AUTH_TOKEN:-}" || -n "${NPM_TOKEN:-}" ]]; then
+    echo "extended-stable candidate publication must not receive an npm token." >&2
+    exit 1
+  fi
+  if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" == "0" || "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" == "false" ]]; then
+    echo "extended-stable candidate publication requires npm provenance." >&2
+    exit 1
+  fi
 fi
 publish_provenance="without provenance"
 if [[ " ${publish_cmd[*]} " == *" --provenance "* ]]; then

@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
+import { loadExtendedStablePluginSupport } from "./extended-stable-plugin-support.js";
 import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
 export type PluginPackageJson = {
@@ -54,7 +55,9 @@ export type PublishablePluginPackage = {
   packageName: string;
   version: string;
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
+  publishTag: string;
+  candidateTag?: string;
+  acceptanceProfile?: string;
   installNpmSpec?: string;
   requiredLatestDependencies?: RequiredLatestDependency[];
 };
@@ -69,7 +72,7 @@ export type PluginReleasePlan = {
   skippedPublished: PluginReleasePlanItem[];
 };
 
-export type PluginReleaseSelectionMode = "selected" | "all-publishable";
+export type PluginReleaseSelectionMode = "selected" | "all-publishable" | "extended-stable";
 
 export type GitRangeSelection = {
   baseRef: string;
@@ -159,6 +162,77 @@ function readOptionalTextFile(path: string): string | undefined {
   }
 }
 
+export function deriveExtendedStablePluginCandidateTag(params: {
+  pluginId: string;
+  version: string;
+}): string {
+  const parsed = parseReleaseVersion(params.version);
+  if (parsed === null || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
+    throw new Error(
+      `Extended-stable plugin publication requires a stable YYYY.M.PATCH version; found "${params.version}".`,
+    );
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(params.pluginId)) {
+    throw new Error(
+      `Extended-stable plugin id is not safe for an npm dist-tag: ${params.pluginId}.`,
+    );
+  }
+  return `extended-stable-plugin-candidate-${params.pluginId}-${parsed.year}-${parsed.month}-${parsed.patch}`;
+}
+
+export function collectExtendedStablePublishablePluginPackages(
+  rootDir = resolve("."),
+): PublishablePluginPackage[] {
+  const manifest = loadExtendedStablePluginSupport(rootDir);
+  const rootPackage = readPluginPackageJson(join(rootDir, "package.json")) as PluginPackageJson;
+  if (typeof rootPackage.version !== "string") {
+    throw new Error("Root package.json version must be a string.");
+  }
+  const rootVersion = rootPackage.version.trim();
+  const parsedRootVersion = parseReleaseVersion(rootVersion);
+  if (
+    parsedRootVersion === null ||
+    parsedRootVersion.channel !== "stable" ||
+    parsedRootVersion.correctionNumber !== undefined
+  ) {
+    throw new Error(
+      `Extended-stable plugin publication requires a stable root YYYY.M.PATCH version; found "${rootVersion}".`,
+    );
+  }
+
+  const publishable = collectPublishablePluginPackages(rootDir, {
+    packageNames: manifest.plugins.map((entry) => entry.packageName),
+  });
+  const byName = new Map(publishable.map((plugin) => [plugin.packageName, plugin]));
+  return manifest.plugins.map((entry) => {
+    const plugin = byName.get(entry.packageName);
+    if (
+      !plugin ||
+      plugin.extensionId !== entry.pluginId ||
+      plugin.packageDir !== entry.packageDir
+    ) {
+      throw new Error(
+        `${entry.packageName} must resolve to ${entry.packageDir} with plugin id ${entry.pluginId}.`,
+      );
+    }
+    if (plugin.version !== rootVersion) {
+      throw new Error(
+        `${entry.packageName} version must equal root release version ${rootVersion}; found ${plugin.version}.`,
+      );
+    }
+    const candidateTag = deriveExtendedStablePluginCandidateTag({
+      pluginId: entry.pluginId,
+      version: rootVersion,
+    });
+    return Object.assign({}, plugin, {
+      channel: "stable",
+      publishTag: candidateTag,
+      candidateTag,
+      acceptanceProfile: entry.acceptanceProfile,
+    });
+  });
+}
+
 export function collectExtensionPackageJsonCandidates<
   TPackageJson extends PluginPackageJson = PluginPackageJson,
 >(rootDir = resolve(".")): PublishablePluginPackageCandidate<TPackageJson>[] {
@@ -225,12 +299,12 @@ export function parsePluginReleaseSelection(value: string | undefined): string[]
 export function parsePluginReleaseSelectionMode(
   value: string | undefined,
 ): PluginReleaseSelectionMode {
-  if (value === "selected" || value === "all-publishable") {
+  if (value === "selected" || value === "all-publishable" || value === "extended-stable") {
     return value;
   }
 
   throw new Error(
-    `Unknown selection mode: ${value ?? "<missing>"}. Expected "selected" or "all-publishable".`,
+    `Unknown selection mode: ${value ?? "<missing>"}. Expected "selected", "all-publishable", or "extended-stable".`,
   );
 }
 
@@ -278,6 +352,11 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   }
   if (selectionMode === "all-publishable" && pluginsFlagProvided) {
     throw new Error("`--selection-mode all-publishable` must not be combined with `--plugins`.");
+  }
+  if (selectionMode === "extended-stable" && pluginsFlagProvided) {
+    throw new Error(
+      "`--selection-mode extended-stable` derives its package set from policy and must not be combined with `--plugins`.",
+    );
   }
   if (selection.length > 0 && (baseRef || headRef)) {
     throw new Error("Use either --plugins or --base-ref/--head-ref, not both.");
@@ -678,6 +757,22 @@ export function collectPluginReleasePlan(params?: {
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
 }): PluginReleasePlan {
+  if (params?.selectionMode === "extended-stable") {
+    const selectedPublishable = collectExtendedStablePublishablePluginPackages(params.rootDir);
+    assertPluginReleaseVersionFloors(selectedPublishable, "Plugin NPM release plan");
+    assertPluginReleaseDependencyFreshness(selectedPublishable, "Plugin NPM release plan");
+    const all = selectedPublishable.map((plugin) =>
+      Object.assign({}, plugin, {
+        alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
+      }),
+    );
+    return {
+      all,
+      candidates: all.filter((plugin) => !plugin.alreadyPublished),
+      skippedPublished: all.filter((plugin) => plugin.alreadyPublished),
+    };
+  }
+
   const changedExtensionIds = params?.gitRange
     ? collectChangedExtensionIdsFromGitRange({
         rootDir: params.rootDir,

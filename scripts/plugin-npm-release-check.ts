@@ -6,6 +6,7 @@ import {
   assertPluginReleaseDependencyFreshness,
   assertPluginReleaseVersionFloors,
   collectChangedExtensionIdsFromGitRange,
+  collectExtendedStablePublishablePluginPackages,
   collectPublishablePluginPackages,
   parsePluginReleaseArgs,
   resolveChangedPublishablePluginPackages,
@@ -14,6 +15,17 @@ import {
 
 export function runPluginNpmReleaseCheck(argv: string[]) {
   const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
+  if (selectionMode === "extended-stable") {
+    const selected = collectExtendedStablePublishablePluginPackages(".");
+    assertPluginReleaseVersionFloors(selected, "plugin-npm-release-check");
+    console.log("plugin-npm-release-check: extended-stable plugin metadata looks OK.");
+    for (const plugin of selected) {
+      console.log(
+        `  - ${plugin.packageName}@${plugin.version} (${plugin.candidateTag}, ${plugin.extensionId})`,
+      );
+    }
+    return;
+  }
   const changedExtensionIds =
     baseRef && headRef
       ? collectChangedExtensionIdsFromGitRange({

@@ -13,10 +13,11 @@ OpenClaw currently exposes three user-facing update channels:
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
-Separately, release operators can publish the trailing completed month's core
-package to npm `extended-stable`, beginning at patch `33`. The current-month
-regular final line continues on npm `latest`; this operator-side publication
-split does not by itself change CLI update-channel resolution.
+Separately, release operators can publish immutable candidates for the trailing
+completed month's core package and the covered Codex, Discord, and Slack plugin
+packages, beginning at patch `33`. The current-month regular final line continues
+on npm `latest`; this operator-side publication split does not by itself change
+CLI update-channel resolution.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -34,7 +35,8 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
 - `extended-stable` means the supported trailing-month npm package, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- The dedicated monthly extended-stable path publishes only the core npm package. It does not publish plugins, macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
+- The dedicated monthly extended-stable path publishes core plus the covered `@openclaw/codex`, `@openclaw/discord`, and `@openclaw/slack` npm candidates. It does not publish other plugins, macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
+- Installing core does not automatically install every covered plugin. As with the regular channel, onboarding, configuration, or explicit plugin commands install the plugins a user actually enables.
 - Every regular final release ships the npm package, macOS app, and signed Windows Hub installers together. Beta releases normally validate and publish the npm/package path first, with native app build/sign/notarize/promote reserved for regular final unless explicitly requested.
 
 ## Release cadence
@@ -75,48 +77,58 @@ gh workflow run full-release-validation.yml \
 separate from the npm `extended-stable` dist-tag and is intentionally
 unchanged.
 
-After both runs succeed and the npm release environment is ready, promote the
-exact preflight tarball. Patch `P` must be `33` or greater:
+After both runs succeed and the npm release environment is ready, run the
+extended-stable release orchestrator. Patch `P` must be `33` or greater:
 
 ```bash
-gh workflow run openclaw-npm-release.yml \
+gh workflow run openclaw-release-publish.yml \
   --ref extended-stable/YYYY.M.33 \
   -f tag=vYYYY.M.P \
-  -f preflight_only=false \
   -f npm_dist_tag=extended-stable \
+  -f plugin_publish_scope=extended-stable \
+  -f publish_openclaw_npm=true \
+  -f release_profile=stable \
   -f preflight_run_id=<npm-preflight-run-id> \
   -f full_release_validation_run_id=<full-validation-run-id>
 ```
 
-For a fork or non-production rehearsal that intentionally cannot satisfy the
-monthly `.33` or protected-`main` month policy, add
-`-f bypass_extended_stable_guard=true` to both npm preflight and publish
-dispatches. The default is `false`. The bypass is accepted only with
-`npm_dist_tag=extended-stable` and is recorded in the workflow summary. It
-does not bypass the canonical `extended-stable/YYYY.M.33` workflow ref,
-branch-tip/tag/checkout equality, final-tag syntax, package/tag version
-equality, referenced run and manifest identity, tarball provenance,
-environment approval, registry readback, or selector repair evidence.
+For a fork or local core-only guard rehearsal, the lower-level
+`openclaw-npm-release.yml` workflow still accepts
+`bypass_extended_stable_guard=true`. The coordinated core-plus-plugin
+orchestrator does not accept that bypass: use a synthetic `.33+` version for
+an end-to-end rehearsal. The lower-level bypass never relaxes the canonical
+workflow ref, branch-tip/tag/checkout equality, referenced evidence, or
+candidate readback.
 
-The publish workflow verifies the referenced run identities, the prepared
-tarball digest, and both npm registry selectors. Independently confirm the
-result after the workflow succeeds:
+The public workflow publishes each immutable package under a derived,
+version-specific candidate tag, verifies exact versions, integrities,
+provenance, and package acceptance, proves both `latest` and shared
+`extended-stable` selectors remained unchanged, then uploads one closed
+plugin-first/core-last selector handoff.
+
+The protected `openclaw/releases` selector owner is a separate required phase.
+Until that workflow consumes the handoff and reports successful plugin-first,
+core-last promotion and candidate cleanup, the release is candidate-only and
+must not be announced as available on `extended-stable`. Do not repair shared
+selectors from this public repository or republish immutable versions.
+
+After protected promotion succeeds, independently confirm the result:
 
 ```bash
 npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
 npm view openclaw@extended-stable version --userconfig "$(mktemp)"
+npm view @openclaw/codex@extended-stable version --userconfig "$(mktemp)"
+npm view @openclaw/discord@extended-stable version --userconfig "$(mktemp)"
+npm view @openclaw/slack@extended-stable version --userconfig "$(mktemp)"
 ```
 
-Both commands must return `YYYY.M.P`. If publish succeeds but selector
-readback fails, do not republish the immutable package version. Use the
-single `npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command
-printed in the failed workflow's always-run summary, then repeat both
-independent readbacks. Rollback to the prior selector is a separate operator
-decision, not the readback repair path.
+Every command must return `YYYY.M.P`. If promotion or readback fails, do not
+republish. Use only the protected selector owner's guarded repair operation,
+with its captured prior state and terminal evidence.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
-plugins, macOS, Windows, and other platform publication. Do not run those
-steps for this npm-only extended-stable path.
+uncovered plugins, macOS, Windows, and other platform publication. Do not run
+those steps for this npm-only extended-stable path.
 
 ## Regular release operator checklist
 

@@ -1,0 +1,71 @@
+name: Extended-Stable Plugin Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Exact final extended-stable version, for example 2026.6.33
+        required: true
+        type: string
+      plugin_package_name:
+        description: Covered plugin npm package name
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-stable-plugin-acceptance-${{ inputs.release_version }}-${{ inputs.plugin_package_name }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  accept:
+    name: Accept exact core and plugin pair
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require protected workflow identity
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "${GITHUB_REF}" != "refs/heads/main" || "${actual_sha}" != "${EXPECTED_SHA}" ]]; then
+            echo "Extended-stable plugin acceptance must run from the recorded protected-main SHA." >&2
+            exit 1
+          fi
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run exact package acceptance
+        env:
+          PLUGIN_PACKAGE_NAME: ${{ inputs.plugin_package_name }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          node --import tsx scripts/run-extended-stable-plugin-acceptance.ts \
+            --release-version "${RELEASE_VERSION}" \
+            --plugin-package-name "${PLUGIN_PACKAGE_NAME}" \
+            --output "${RUNNER_TEMP}/extended-stable-plugin-acceptance/extended-stable-plugin-acceptance.json"
+
+      - name: Upload immutable acceptance result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: extended-stable-plugin-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/extended-stable-plugin-acceptance/extended-stable-plugin-acceptance.json
+          if-no-files-found: error

@@ -2004,6 +2004,10 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       [
+        "scripts/plugin-npm-publication-result.ts",
+        ["test/scripts/plugin-npm-publication-result.test.ts"],
+      ],
+      [
         "scripts/plugin-release-pretag-pack-check.ts",
         ["test/scripts/plugin-release-pretag-pack-check.test.ts"],
       ],

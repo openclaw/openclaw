@@ -1,6 +1,7 @@
 // Sync Plugin Versions script supports OpenClaw repository automation.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { validateExtendedStablePluginPackages } from "./lib/extended-stable-plugin-support.js";
 
 type PackageJson = {
   name?: string;
@@ -175,17 +176,39 @@ export function syncPluginVersions(
 if (import.meta.main) {
   const check = process.argv.includes("--check");
   const summary = syncPluginVersions(resolve("."), { write: !check });
+  let supportValidationError: unknown;
+  try {
+    validateExtendedStablePluginPackages({
+      rootDir: resolve("."),
+      targetVersion: summary.targetVersion,
+    });
+  } catch (error) {
+    supportValidationError = error;
+  }
   console.log(
     `Synced plugin versions to ${summary.targetVersion}. Updated: ${summary.updated.length}. Changelogged: ${summary.changelogged.length}. Skipped: ${summary.skipped.length}.`,
   );
-  if (check && (summary.updated.length > 0 || summary.changelogged.length > 0)) {
+  if (
+    check &&
+    (summary.updated.length > 0 ||
+      summary.changelogged.length > 0 ||
+      supportValidationError !== undefined)
+  ) {
     for (const packageName of summary.updated) {
       console.error(`  update required: ${packageName}`);
     }
     for (const packageName of summary.changelogged) {
       console.error(`  changelog entry required: ${packageName}`);
     }
+    if (supportValidationError !== undefined) {
+      console.error(
+        `  extended-stable plugin support invalid: ${supportValidationError instanceof Error ? supportValidationError.message : String(supportValidationError)}`,
+      );
+    }
     console.error("Run `pnpm plugins:sync` and commit the plugin version alignment.");
     process.exit(1);
+  }
+  if (supportValidationError !== undefined) {
+    throw supportValidationError;
   }
 }
