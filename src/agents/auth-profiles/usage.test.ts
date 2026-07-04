@@ -991,6 +991,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     now: number;
     reason?: "rate_limit" | "no_error_details" | "unknown";
     useLock?: boolean;
+    modelId?: string;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
     if (params.useLock) {
@@ -1007,6 +1008,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         store: params.store,
         profileId: "openai:default",
         reason: params.reason ?? "rate_limit",
+        modelId: params.modelId,
       });
     } finally {
       dateNowSpy.mockRestore();
@@ -1129,6 +1131,32 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store.usageStats).toBeUndefined();
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  it("scopes a subscription_limit block to the failing model so other models on the same profile stay usable", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, modelId: "gpt-5.5" });
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedReason).toBe("subscription_limit");
+    expect(stats?.blockedModel).toBe("gpt-5.5");
+
+    // The failing model remains blocked...
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.5")).toBe(true);
+    // ...but a different model sharing the same auth profile (e.g. a
+    // separately-quota'd Codex Spark lane) is not blocked by it.
+    expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.3-codex-spark")).toBe(false);
+    // Unscoped checks (no forModel) stay conservative and report the profile
+    // as unusable, matching existing display/rotation behavior.
+    expect(isProfileInCooldown(store, "openai:default", now)).toBe(true);
   });
 
   it("maps HTTP 401 to a 12h cooldown", async () => {
