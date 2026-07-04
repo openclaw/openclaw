@@ -312,31 +312,6 @@ function buildGatewayDeliveryPayload(params: {
   if ("pollId" in params.result) {
     payload.pollId = params.result.pollId;
   }
-  // Forward only the delivery-evidence fields the receipt normalizer consumes,
-  // not the full raw receipt, to avoid exposing channel-private metadata through
-  // the client-facing payload. The normalizer looks for messageId,
-  // deliveryStatus, channel, and meta.status — project those fields only.
-  if (
-    "receipt" in params.result &&
-    params.result.receipt &&
-    typeof params.result.receipt === "object"
-  ) {
-    const receipt = params.result.receipt as Record<string, unknown>;
-    const sanitizedReceipt: Record<string, unknown> = {
-      channel: "sms",
-      ...(typeof receipt.messageId === "string" ? { messageId: receipt.messageId } : {}),
-      ...(typeof receipt.providerId === "string" && !receipt.messageId
-        ? { messageId: receipt.providerId }
-        : {}),
-      ...(typeof receipt.deliveryStatus === "string"
-        ? { deliveryStatus: receipt.deliveryStatus }
-        : {}),
-      ...(typeof receipt.status === "string" ? { meta: { status: receipt.status } } : {}),
-      ...(typeof receipt.sender === "string" ? { sender: receipt.sender } : {}),
-      ...(typeof receipt.recipient === "string" ? { recipient: receipt.recipient } : {}),
-    };
-    payload.receipt = sanitizedReceipt;
-  }
   return payload;
 }
 
