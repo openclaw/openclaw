@@ -543,4 +543,19 @@ describe("resolvePluginRuntimeDependencyDriftUpdateCommand", () => {
       }),
     ).toBe("openclaw plugins update codex");
   });
+
+  it("uses the package name for exact pinned stale route runtime dependencies", () => {
+    expect(
+      resolvePluginRuntimeDependencyDriftUpdateCommand({
+        pluginId: "codex",
+        dependencyName: "@openai/codex",
+        expectedVersion: "0.142.5",
+        source: "npm",
+        installedVersion: "2026.6.11",
+        installedDependencyVersion: "0.139.0",
+        packageName: "@openclaw/codex",
+        spec: "@openclaw/codex@2026.6.11",
+      }),
+    ).toBe("openclaw plugins update @openclaw/codex");
+  });
 });

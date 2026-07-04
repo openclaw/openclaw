@@ -112,9 +112,9 @@ function readOptionalTextFile(path: string): string | undefined {
   }
 }
 
-function readOptionalJsonFile<TValue>(path: string): TValue | undefined {
+function readOptionalJsonFile(path: string): unknown {
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as TValue;
+    return JSON.parse(readFileSync(path, "utf8")) as unknown;
   } catch {
     return undefined;
   }
@@ -122,6 +122,10 @@ function readOptionalJsonFile<TValue>(path: string): TValue | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function collectCodexRouteRuntimePackageErrors(
@@ -156,25 +160,25 @@ function collectCodexRouteRuntimePackageErrors(
     );
   }
 
-  const shrinkwrap = readOptionalJsonFile<{
-    packages?: Record<string, unknown>;
-  }>(join(candidate.packageDir, "npm-shrinkwrap.json"));
-  if (!shrinkwrap) {
+  const shrinkwrap = readOptionalJsonFile(join(candidate.packageDir, "npm-shrinkwrap.json"));
+  if (!isRecord(shrinkwrap)) {
     errors.push(
       `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap.json is required so npm publishes the approved ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} route binary.`,
     );
     return errors;
   }
 
-  const packages = shrinkwrap.packages;
+  const packages = isRecord(shrinkwrap.packages) ? shrinkwrap.packages : {};
   const rootPackage = isRecord(packages?.[""]) ? packages[""] : undefined;
   const rootDependencies = isRecord(rootPackage?.dependencies)
     ? rootPackage.dependencies
     : undefined;
-  const shrinkwrapRootVersion = rootDependencies?.[CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME];
+  const shrinkwrapRootVersion = optionalString(
+    rootDependencies?.[CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME],
+  );
   if (shrinkwrapRootVersion !== expectedVersion) {
     errors.push(
-      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap root dependency ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} must be ${expectedVersion}; found "${String(shrinkwrapRootVersion ?? "<missing>")}".`,
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap root dependency ${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME} must be ${expectedVersion}; found "${shrinkwrapRootVersion ?? "<missing>"}".`,
     );
   }
 
@@ -182,9 +186,10 @@ function collectCodexRouteRuntimePackageErrors(
   const runtimePackage = isRecord(packages?.[runtimePackageKey])
     ? packages[runtimePackageKey]
     : undefined;
-  if (runtimePackage?.version !== expectedVersion) {
+  const runtimePackageVersion = optionalString(runtimePackage?.version);
+  if (runtimePackageVersion !== expectedVersion) {
     errors.push(
-      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${runtimePackageKey}.version must be ${expectedVersion}; found "${String(runtimePackage?.version ?? "<missing>")}".`,
+      `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${runtimePackageKey}.version must be ${expectedVersion}; found "${runtimePackageVersion ?? "<missing>"}".`,
     );
   }
   const optionalDependencies = isRecord(runtimePackage?.optionalDependencies)
@@ -193,9 +198,10 @@ function collectCodexRouteRuntimePackageErrors(
   for (const platformPackage of CODEX_ROUTE_RUNTIME_PLATFORM_PACKAGES) {
     const platformSuffix = platformPackage.slice(`${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME}-`.length);
     const expectedAlias = `npm:${CODEX_ROUTE_RUNTIME_DEPENDENCY_NAME}@${expectedVersion}-${platformSuffix}`;
-    if (optionalDependencies[platformPackage] !== expectedAlias) {
+    const actualAlias = optionalString(optionalDependencies[platformPackage]);
+    if (actualAlias !== expectedAlias) {
       errors.push(
-        `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${runtimePackageKey}.optionalDependencies["${platformPackage}"] must be "${expectedAlias}"; found "${String(optionalDependencies[platformPackage] ?? "<missing>")}".`,
+        `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${runtimePackageKey}.optionalDependencies["${platformPackage}"] must be "${expectedAlias}"; found "${actualAlias ?? "<missing>"}".`,
       );
     }
     const platformPackageKey = `node_modules/${platformPackage}`;
@@ -203,9 +209,10 @@ function collectCodexRouteRuntimePackageErrors(
       ? packages[platformPackageKey]
       : undefined;
     const expectedPlatformVersion = `${expectedVersion}-${platformSuffix}`;
-    if (lockedPlatformPackage?.version !== expectedPlatformVersion) {
+    const lockedPlatformPackageVersion = optionalString(lockedPlatformPackage?.version);
+    if (lockedPlatformPackageVersion !== expectedPlatformVersion) {
       errors.push(
-        `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${platformPackageKey}.version must be ${expectedPlatformVersion}; found "${String(lockedPlatformPackage?.version ?? "<missing>")}".`,
+        `${CODEX_ROUTE_PLUGIN_PACKAGE_NAME} npm-shrinkwrap ${platformPackageKey}.version must be ${expectedPlatformVersion}; found "${lockedPlatformPackageVersion ?? "<missing>"}".`,
       );
     }
   }

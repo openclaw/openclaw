@@ -53,7 +53,10 @@ export const DEFAULT_PLUGIN_RUNTIME_DEPENDENCY_EXPECTATIONS: readonly PluginRunt
     },
   ];
 
-function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string | undefined {
+function resolveExactNpmPinPackageName(entry: {
+  source: PluginInstallRecord["source"];
+  spec?: string;
+}): string | undefined {
   if (entry.source !== "npm" || !entry.spec) {
     return undefined;
   }
@@ -79,6 +82,10 @@ export function resolvePluginVersionDriftUpdateCommand(entry: PluginVersionDrift
 export function resolvePluginRuntimeDependencyDriftUpdateCommand(
   entry: PluginRuntimeDependencyDriftEntry,
 ): string {
+  const exactNpmPackageName = resolveExactNpmPinPackageName(entry);
+  if (exactNpmPackageName) {
+    return `openclaw plugins update ${exactNpmPackageName}`;
+  }
   return `openclaw plugins update ${entry.pluginId}`;
 }
 
