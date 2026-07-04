@@ -3,14 +3,19 @@ import { html, LitElement } from "lit";
 import { property, state } from "lit/decorators.js";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
 import {
   approveDevicePairing,
+  closeDevicePairSetup,
   createInitialNodesState,
   loadDevices,
   loadExecApprovals,
   loadNodes,
+  openDevicePairSetup,
+  refreshDevicePairSetup,
   rejectDevicePairing,
   removeExecApprovalsFormValue,
   revokeDeviceToken,
@@ -18,6 +23,8 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
   type DevicePairingList,
+  type DevicePairSetup,
+  type DevicePairSetupState,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
   type ExecApprovalsTarget,
@@ -31,7 +38,7 @@ export type NodesRouteData = {
 
 const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
-export class NodesPage extends LitElement implements NodesPageDataState {
+export class NodesPage extends LitElement implements NodesPageDataState, DevicePairSetupState {
   createRenderRoot() {
     return this;
   }
@@ -50,6 +57,11 @@ export class NodesPage extends LitElement implements NodesPageDataState {
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
+  @state() devicePairSetupOpen = false;
+  @state() devicePairSetupLoading = false;
+  @state() devicePairSetupError: string | null = null;
+  @state() devicePairSetup: DevicePairSetup | null = null;
+  @state() private canPairDevice = false;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;
@@ -71,7 +83,7 @@ export class NodesPage extends LitElement implements NodesPageDataState {
     this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
       const previousClient = this.client;
       this.syncGatewayState();
-      if (previousClient !== snapshot.client) {
+      if (previousClient !== snapshot.client || !snapshot.connected) {
         this.resetServerState();
       }
       this.syncPolling();
@@ -100,6 +112,7 @@ export class NodesPage extends LitElement implements NodesPageDataState {
   }
 
   override disconnectedCallback() {
+    closeDevicePairSetup(this);
     this.stopPolling();
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
@@ -114,6 +127,7 @@ export class NodesPage extends LitElement implements NodesPageDataState {
     const gateway = this.context.gateway.snapshot;
     this.client = gateway.client;
     this.connected = gateway.connected;
+    this.canPairDevice = gateway.connected && hasOperatorAdminAccess(gateway.hello?.auth ?? null);
   }
 
   private applyRouteData() {
@@ -145,6 +159,7 @@ export class NodesPage extends LitElement implements NodesPageDataState {
   }
 
   private resetServerState() {
+    closeDevicePairSetup(this);
     const next = createInitialNodesState(this.context.gateway.snapshot);
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
@@ -223,6 +238,11 @@ export class NodesPage extends LitElement implements NodesPageDataState {
           devicesLoading: this.devicesLoading,
           devicesError: this.devicesError,
           devicesList: this.devicesList,
+          devicePairSetupOpen: this.devicePairSetupOpen,
+          devicePairSetupLoading: this.devicePairSetupLoading,
+          devicePairSetupError: this.devicePairSetupError,
+          devicePairSetup: this.devicePairSetup,
+          canPairDevice: this.canPairDevice,
           configForm: currentConfigObject(config),
           configLoading: config.configLoading,
           configSaving: config.configSaving,
@@ -238,6 +258,10 @@ export class NodesPage extends LitElement implements NodesPageDataState {
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
           onRefresh: () => void loadNodes(this),
           onDevicesRefresh: () => void loadDevices(this),
+          onDevicePairSetupOpen: () => void openDevicePairSetup(this),
+          onDevicePairSetupRefresh: () => void refreshDevicePairSetup(this),
+          onDevicePairSetupClose: () => closeDevicePairSetup(this),
+          onDevicePairSetupCopy: (setupCode) => void copyToClipboard(setupCode),
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
           onDeviceRotate: (deviceId, role, scopes) =>
@@ -248,15 +272,19 @@ export class NodesPage extends LitElement implements NodesPageDataState {
           onLoadExecApprovals: () =>
             void loadExecApprovals(this, this.resolveExecApprovalsTarget()),
           onBindDefault: (nodeId) => {
-            nodeId
-              ? this.context.runtimeConfig.patchForm(["tools", "exec", "node"], nodeId)
-              : this.context.runtimeConfig.removeFormValue(["tools", "exec", "node"]);
+            if (nodeId) {
+              this.context.runtimeConfig.patchForm(["tools", "exec", "node"], nodeId);
+            } else {
+              this.context.runtimeConfig.removeFormValue(["tools", "exec", "node"]);
+            }
           },
           onBindAgent: (agentIndex, nodeId) => {
             const path = ["agents", "list", agentIndex, "tools", "exec", "node"];
-            nodeId
-              ? this.context.runtimeConfig.patchForm(path, nodeId)
-              : this.context.runtimeConfig.removeFormValue(path);
+            if (nodeId) {
+              this.context.runtimeConfig.patchForm(path, nodeId);
+            } else {
+              this.context.runtimeConfig.removeFormValue(path);
+            }
           },
           onSaveBindings: () => void this.context.runtimeConfig.save(),
           onExecApprovalsTargetChange: (kind, nodeId) => {

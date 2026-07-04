@@ -5,11 +5,13 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatList } from "../../lib/format.ts";
 import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
+import { renderDevicePairSetup } from "./view-pairing.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
 export type { NodesProps } from "./view.types.ts";
 import type { NodesProps } from "./view.types.ts";
@@ -18,7 +20,8 @@ export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
   return html`
-    ${renderExecApprovals(approvalsState)} ${renderBindings(bindingState)} ${renderDevices(props)}
+    ${renderDevicePairSetup(props)} ${renderExecApprovals(approvalsState)}
+    ${renderBindings(bindingState)} ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -54,9 +57,19 @@ function renderDevices(props: NodesProps) {
           <div class="card-title">Devices</div>
           <div class="card-sub">Pairing requests + role tokens.</div>
         </div>
-        <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
-          ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
-        </button>
+        <div class="row" style="gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
+          <button
+            class="btn primary"
+            title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
+            ?disabled=${!props.canPairDevice || props.devicePairSetupLoading}
+            @click=${props.onDevicePairSetupOpen}
+          >
+            ${icons.smartphone} ${t("nodes.pairing.button")}
+          </button>
+          <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
+            ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
+          </button>
+        </div>
       </div>
       ${props.devicesError
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.devicesError}</div>`
