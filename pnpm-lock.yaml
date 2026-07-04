@@ -73,9 +73,6 @@ importers:
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
         version: 1.2.0-beta.12
-      '@mistralai/mistralai':
-        specifier: 2.2.5
-        version: 2.2.5
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -157,9 +154,6 @@ importers:
       openai:
         specifier: 6.39.1
         version: 6.39.1(ws@8.21.0)(zod@4.4.3)
-      partial-json:
-        specifier: 0.1.7
-        version: 0.1.7
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
@@ -1849,36 +1843,15 @@ importers:
       '@mistralai/mistralai':
         specifier: 2.2.5
         version: 2.2.5
-      '@openclaw/fs-safe':
-        specifier: 0.3.0
-        version: 0.3.0
-      '@openclaw/proxyline':
-        specifier: 0.3.3
-        version: 0.3.3(undici@8.5.0)
-      chalk:
-        specifier: 5.6.2
-        version: 5.6.2
-      json5:
-        specifier: 2.2.3
-        version: 2.2.3
-      kysely:
-        specifier: 0.29.2
-        version: 0.29.2
       openai:
         specifier: 6.39.1
         version: 6.39.1(ws@8.21.0)(zod@4.4.3)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
-      tslog:
-        specifier: 4.10.2
-        version: 4.10.2
       typebox:
         specifier: 1.1.39
         version: 1.1.39
-      zod:
-        specifier: 4.4.3
-        version: 4.4.3
 
   packages/gateway-client:
     dependencies:

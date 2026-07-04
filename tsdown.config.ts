@@ -780,11 +780,13 @@ export default defineConfig([
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
-    dts: RUN_NODE_SKIP_DTS_BUILD ? false : { neverBundle: shouldNeverBundleDependency },
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,
       neverBundle: shouldNeverBundleDependency,
+      // Keep dts generation from inlining externalized package types.
+      dts: { neverBundle: shouldNeverBundleDependency },
     },
   }),
 ]);

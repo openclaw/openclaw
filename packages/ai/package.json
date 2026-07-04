@@ -23,6 +23,7 @@
   },
   "files": [
     "dist",
+    "npm-shrinkwrap.json",
     "LICENSE",
     "README.md"
   ],
@@ -70,21 +71,19 @@
     "@anthropic-ai/sdk": "0.100.1",
     "@google/genai": "2.7.0",
     "@mistralai/mistralai": "2.2.5",
-    "@openclaw/fs-safe": "0.3.0",
-    "@openclaw/proxyline": "0.3.3",
-    "chalk": "5.6.2",
-    "json5": "2.2.3",
-    "kysely": "0.29.2",
     "openai": "6.39.1",
     "partial-json": "0.1.7",
-    "tslog": "4.10.2",
-    "typebox": "1.1.39",
-    "zod": "4.4.3"
+    "typebox": "1.1.39"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "openclaw": {
+    "release": {
+      "publishToNpm": true
+    }
   }
 }

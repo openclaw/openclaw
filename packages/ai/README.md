@@ -19,3 +19,10 @@ runtime package is required.
 
 Provider ids, credentials, model catalogs, retries, and failover remain
 application concerns. OpenClaw supplies those policies around this package.
+Host policy (request fetch guarding, secret redaction, strict-tool defaults,
+diagnostics logging) can be injected with `configureAiTransportHost`; the
+defaults are inert.
+
+`@openclaw/ai/internal/*` subpaths exist for the OpenClaw application itself.
+They carry no semver guarantee and can change or disappear in any release; do
+not depend on them outside OpenClaw.
