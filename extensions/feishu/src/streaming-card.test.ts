@@ -400,7 +400,10 @@ describe("FeishuStreamingSession", () => {
           settingsBodies.push(init?.body ?? "");
         }
         return {
-          response: { ok: true, status: 200, json: async () => ({ code: 0, msg: "ok" }) },
+          response: new Response(JSON.stringify({ code: 0, msg: "ok" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
           release,
         };
       },
