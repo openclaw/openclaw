@@ -67,6 +67,18 @@ function formatTime(value?: number): string {
   return value ? new Date(value).toISOString() : "-";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
 function parseLimit(value: number | undefined): number {
   return Math.max(1, Math.min(500, Math.trunc(value ?? 50)));
 }
@@ -170,19 +182,31 @@ function renderSteps(steps: DurableRuntimeStep[]): string {
     return "No durable runtime steps found.";
   }
   return steps
-    .map((step) =>
-      [
+    .map((step) => {
+      const metadata = metadataRecord(step.metadata);
+      const outcome = metadataRecord(metadata.outcome);
+      const ack = metadataRecord(metadata.ack);
+      const delivery = metadataRecord(metadata.delivery);
+      const fanInGroupId = optionalString(metadata.fanInGroupId);
+      const terminalOutcome = optionalString(outcome.terminalOutcome);
+      const ackStatus = optionalString(ack.status);
+      const deliveryStatus = optionalString(delivery.status);
+      return [
         step.stepId,
         step.stepType,
         `${step.status}/${step.recoveryState}`,
         `attempt=${step.attempt}`,
+        fanInGroupId ? `fan_in=${fanInGroupId}` : "",
+        terminalOutcome ? `outcome=${terminalOutcome}` : "",
+        ackStatus ? `ack=${ackStatus}` : "",
+        deliveryStatus ? `delivery=${deliveryStatus}` : "",
         step.heartbeatAt ? `heartbeat=${formatTime(step.heartbeatAt)}` : "",
         step.outputRef ? `output=${step.outputRef}` : "",
         step.errorRef ? `error=${step.errorRef}` : "",
       ]
         .filter(Boolean)
-        .join("  "),
-    )
+        .join("  ");
+    })
     .join("\n");
 }
 
@@ -191,17 +215,24 @@ function renderLinks(links: DurableRuntimeLink[], direction: "children" | "paren
     return `No durable runtime ${direction} found.`;
   }
   return links
-    .map((link) =>
-      [
+    .map((link) => {
+      const metadata = metadataRecord(link.metadata);
+      const fanInGroupId = optionalString(metadata.fanInGroupId);
+      const childSessionKey = optionalString(metadata.childSessionKey);
+      return [
         direction === "children"
           ? `child=${link.childRuntimeRunId}`
           : `parent=${link.parentRuntimeRunId}`,
         `step=${link.parentStepId}`,
         link.linkType,
         link.status,
+        fanInGroupId ? `fan_in=${fanInGroupId}` : "",
+        childSessionKey ? `session=${childSessionKey}` : "",
         `updated=${formatTime(link.updatedAt)}`,
-      ].join("  "),
-    )
+      ]
+        .filter(Boolean)
+        .join("  ");
+    })
     .join("\n");
 }
 
@@ -430,7 +461,11 @@ export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEn
 
     if (opts.action === "runs") {
       const runs = store.listRuns({ limit: parseLimit(opts.limit) });
-      opts.json ? writeJson(runtime, runs) : write(runtime, renderRuns(runs));
+      if (opts.json) {
+        writeJson(runtime, runs);
+      } else {
+        write(runtime, renderRuns(runs));
+      }
       return;
     }
 

@@ -14,6 +14,18 @@ import {
   recordDurableSubagentTerminal,
 } from "./subagent.js";
 
+function withSqliteStore<T>(
+  dbPath: string,
+  callback: (store: ReturnType<typeof openDurableRuntimeSqliteStore>) => T,
+): T {
+  const store = openDurableRuntimeSqliteStore({ path: dbPath });
+  try {
+    return callback(store);
+  } finally {
+    store.close();
+  }
+}
+
 describe("durable subagent bridge", () => {
   it("links children to the active requester run when same-session parents overlap", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-subagent-"));
@@ -25,11 +37,8 @@ describe("durable subagent bridge", () => {
     };
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
 
-    let olderParentId = "";
-    let activeParentId = "";
-    const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
-    try {
-      olderParentId = setupStore.createRun({
+    const { activeParentId, olderParentId } = withSqliteStore(dbPath, (setupStore) => {
+      const olderId = setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "running",
         recoveryState: "running",
@@ -39,7 +48,7 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 100,
       }).runtimeRunId;
-      activeParentId = setupStore.createRun({
+      const activeId = setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "running",
         recoveryState: "running",
@@ -49,9 +58,8 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 200,
       }).runtimeRunId;
-    } finally {
-      setupStore.close();
-    }
+      return { activeParentId: activeId, olderParentId: olderId };
+    });
 
     recordDurableSubagentRegistered({
       runId: "run_child",
@@ -77,6 +85,9 @@ describe("durable subagent bridge", () => {
         {
           childRuntimeRunId: child?.runtimeRunId,
           status: "running",
+          metadata: {
+            fanInGroupId: expect.any(String),
+          },
         },
       ]);
       expect(assertStore.listChildLinks(olderParentId)).toEqual([]);
@@ -96,9 +107,7 @@ describe("durable subagent bridge", () => {
     };
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
 
-    let newerParentId = "";
-    const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
-    try {
+    const newerParentId = withSqliteStore(dbPath, (setupStore) => {
       setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "running",
@@ -109,7 +118,7 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 100,
       });
-      newerParentId = setupStore.createRun({
+      return setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "running",
         recoveryState: "running",
@@ -119,9 +128,7 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 200,
       }).runtimeRunId;
-    } finally {
-      setupStore.close();
-    }
+    });
 
     recordDurableSubagentRegistered({
       runId: "run_child",
@@ -157,10 +164,8 @@ describe("durable subagent bridge", () => {
     };
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
 
-    let staleParentId = "";
-    const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
-    try {
-      staleParentId = setupStore.createRun({
+    const staleParentId = withSqliteStore(dbPath, (setupStore) => {
+      const staleId = setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "queued",
         recoveryState: "runnable",
@@ -180,9 +185,8 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 200,
       });
-    } finally {
-      setupStore.close();
-    }
+      return staleId;
+    });
 
     recordDurableSubagentRegistered({
       runId: "run_child_current",
@@ -239,11 +243,8 @@ describe("durable subagent bridge", () => {
     };
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
 
-    let realParentId = "";
-    let announceContinuationId = "";
-    const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
-    try {
-      realParentId = setupStore.createRun({
+    const { announceContinuationId, realParentId } = withSqliteStore(dbPath, (setupStore) => {
+      const realId = setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "running",
         recoveryState: "running",
@@ -253,7 +254,7 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 100,
       }).runtimeRunId;
-      announceContinuationId = setupStore.createRun({
+      const continuationId = setupStore.createRun({
         operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
         status: "queued",
         recoveryState: "runnable",
@@ -263,9 +264,8 @@ describe("durable subagent bridge", () => {
         metadata: { sessionKey: parentSessionKey },
         now: 300,
       }).runtimeRunId;
-    } finally {
-      setupStore.close();
-    }
+      return { announceContinuationId: continuationId, realParentId: realId };
+    });
 
     recordDurableSubagentRegistered({
       runId: "run_child",
@@ -390,22 +390,20 @@ describe("durable subagent bridge", () => {
     const parentSessionKey = "agent:bo:discord:channel:bo-main";
     const childSessionKey = "agent:bo-worker:subagent:slow-child";
 
-    let parentRuntimeRunId = "";
-    const setupStore = openDurableRuntimeSqliteStore({ path: dbPath });
-    try {
-      parentRuntimeRunId = setupStore.createRun({
-        operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
-        status: "running",
-        recoveryState: "running",
-        idempotencyKey: "run_parent",
-        sourceType: "agent_turn",
-        sourceRef: parentSessionKey,
-        metadata: { sessionKey: parentSessionKey },
-        now: 100,
-      }).runtimeRunId;
-    } finally {
-      setupStore.close();
-    }
+    const parentRuntimeRunId = withSqliteStore(
+      dbPath,
+      (setupStore) =>
+        setupStore.createRun({
+          operationKind: DURABLE_AGENT_TURN_OPERATION_KIND,
+          status: "running",
+          recoveryState: "running",
+          idempotencyKey: "run_parent",
+          sourceType: "agent_turn",
+          sourceRef: parentSessionKey,
+          metadata: { sessionKey: parentSessionKey },
+          now: 100,
+        }).runtimeRunId,
+    );
 
     recordDurableSubagentRegistered({
       runId: "run_child_slow",
