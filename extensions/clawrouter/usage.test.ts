@@ -82,4 +82,25 @@ describe("ClawRouter usage", () => {
       }),
     ).rejects.toThrow("ClawRouter usage request failed (HTTP 403)");
   });
+
+  it("bounds successful usage response bodies", async () => {
+    const oversizedPayload = JSON.stringify({
+      budget: { configured: false },
+      usage: { summary: { requestCount: 1 } },
+      padding: "x".repeat(1024 * 1024),
+    });
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "proxy-key",
+        timeoutMs: 5000,
+        fetchFn: vi.fn(
+          async () =>
+            new Response(oversizedPayload, {
+              headers: { "content-type": "application/json" },
+            }),
+        ) as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("ClawRouter usage response exceeds");
+  });
 });
