@@ -311,16 +311,14 @@ export async function readResponseText(
     }
   }
 
-  // Only arrive here when the response has neither a readable body stream
-  // nor an arrayBuffer() method.  When maxBytes is set the caller expects
-  // bounded memory — calling .text() would buffer the full body unbounded
-  // before the post-read check, defeating the cap.
-  if (maxBytes !== undefined) {
-    return { text: "", truncated: true, bytesRead: 0 };
-  }
   try {
     const text = await res.text();
-    return { text, truncated: false, bytesRead: new TextEncoder().encode(text).byteLength };
+    const bytes = new TextEncoder().encode(text);
+    if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+      const truncated = new TextDecoder().decode(bytes.slice(0, maxBytes));
+      return { text: truncated, truncated: true, bytesRead: maxBytes };
+    }
+    return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }

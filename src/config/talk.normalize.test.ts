@@ -228,6 +228,21 @@ describe("talk normalization", () => {
     });
   });
 
+  it.each(["constructor", "__proto__"])(
+    "does not resolve provider when set to Object.prototype key '%s'",
+    (protoKey) => {
+      const payload = buildTalkConfigResponse({
+        provider: protoKey,
+        providers: {
+          elevenlabs: { voiceId: "voice-123" },
+        },
+      });
+
+      expect(payload?.resolved).toBeUndefined();
+      expect(payload?.provider).toBeUndefined();
+    },
+  );
+
   it("does not inject provider apiKey defaults during snapshot materialization", () => {
     const payload = buildTalkConfigResponse({
       voiceId: "voice-123",
