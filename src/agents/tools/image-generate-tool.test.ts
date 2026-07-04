@@ -830,7 +830,7 @@ describe("createImageGenerateTool", () => {
     expect(scheduled).toHaveLength(1);
     expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
     expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Image generation started; wait for the generated image completion event.",
+      "Image generation is running in the background — you will be automatically re-prompted with the finished image to continue your task. Do not call image_generate again for this request.",
     );
     expect(resultText(result)).toContain("Background task started for image generation");
     const details = resultDetails(result);

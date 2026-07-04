@@ -620,7 +620,7 @@ describe("createMusicGenerateTool", () => {
     expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
     expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
     expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Music generation started; wait for the generated music completion event.",
+      "Music generation is running in the background — you will be automatically re-prompted with the finished music to continue your task. Do not call music_generate again for this request.",
     );
     const details = detailsOf(result);
     expect(details.async).toBe(true);

@@ -1227,7 +1227,8 @@ export function createVideoGenerateTool(options?: {
 
         await notifyMediaGenerationAsyncTaskStarted({
           callback: options?.onAsyncTaskStarted,
-          message: "Video generation started; wait for the generated video completion event.",
+          message:
+            "Video generation is running in the background — you will be automatically re-prompted with the finished video to continue your task. Do not call video_generate again for this request.",
           toolName: "video_generate",
           handle: taskHandle,
           onFailure: (message, meta) => log.warn(message, meta),

@@ -931,7 +931,7 @@ describe("createVideoGenerateTool", () => {
     expect(text).toContain("Do not call video_generate again for this request.");
     expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
     expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Video generation started; wait for the generated video completion event.",
+      "Video generation is running in the background — you will be automatically re-prompted with the finished video to continue your task. Do not call video_generate again for this request.",
     );
     const details = resultDetails(result);
     expect(details.async).toBe(true);

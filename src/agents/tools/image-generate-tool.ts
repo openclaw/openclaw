@@ -1080,7 +1080,8 @@ export function createImageGenerateTool(options?: {
 
         await notifyMediaGenerationAsyncTaskStarted({
           callback: options?.onAsyncTaskStarted,
-          message: "Image generation started; wait for the generated image completion event.",
+          message:
+            "Image generation is running in the background — you will be automatically re-prompted with the finished image to continue your task. Do not call image_generate again for this request.",
           toolName: "image_generate",
           handle: taskHandle,
           onFailure: (message, meta) => log.warn(message, meta),

@@ -775,7 +775,8 @@ export function createMusicGenerateTool(options?: {
 
         await notifyMediaGenerationAsyncTaskStarted({
           callback: options?.onAsyncTaskStarted,
-          message: "Music generation started; wait for the generated music completion event.",
+          message:
+            "Music generation is running in the background — you will be automatically re-prompted with the finished music to continue your task. Do not call music_generate again for this request.",
           toolName: "music_generate",
           handle: taskHandle,
           onFailure: (message, meta) => log.warn(message, meta),
