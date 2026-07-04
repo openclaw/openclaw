@@ -228,8 +228,13 @@ export { splitModelRef } from "./subagent-spawn-plan.js";
 async function updateSubagentSessionStore(
   storePath: string,
   mutator: Parameters<typeof updateSessionStore>[1],
+  opts?: { activeSessionKey?: string },
 ) {
-  return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
+  // Forward the requester (parent) session key so session-store maintenance
+  // treats the active human conversation as protected during subagent spawn
+  // writes. Without this, an unprotected active DM can be evicted by
+  // capEntryCount when protected external threads already fill the cap.
+  return await subagentSpawnDeps.updateSessionStore(storePath, mutator, opts);
 }
 
 async function callSubagentGateway(
@@ -366,6 +371,7 @@ function loadSubagentConfig() {
 async function persistInitialChildSessionRuntimeModel(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
+  requesterInternalKey: string;
   resolvedModel?: string;
 }): Promise<string | undefined> {
   const { provider, model } = splitModelRef(params.resolvedModel);
@@ -377,17 +383,21 @@ async function persistInitialChildSessionRuntimeModel(params: {
       cfg: params.cfg,
       key: params.childSessionKey,
     });
-    await updateSubagentSessionStore(target.storePath, (store) => {
-      pruneLegacyStoreKeys({
-        store,
-        canonicalKey: target.canonicalKey,
-        candidates: target.storeKeys,
-      });
-      store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
-        model,
-        ...(provider ? { modelProvider: provider } : {}),
-      });
-    });
+    await updateSubagentSessionStore(
+      target.storePath,
+      (store) => {
+        pruneLegacyStoreKeys({
+          store,
+          canonicalKey: target.canonicalKey,
+          candidates: target.storeKeys,
+        });
+        store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
+          model,
+          ...(provider ? { modelProvider: provider } : {}),
+        });
+      },
+      { activeSessionKey: params.requesterInternalKey },
+    );
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -1307,17 +1317,21 @@ export async function spawnSubagentDirect(
         cfg,
         key: childSessionKey,
       });
-      await updateSubagentSessionStore(target.storePath, (store) => {
-        pruneLegacyStoreKeys({
-          store,
-          canonicalKey: target.canonicalKey,
-          candidates: target.storeKeys,
-        });
-        store[target.canonicalKey] = mergeSessionEntry(
-          store[target.canonicalKey],
-          buildDirectChildSessionPatch(patch),
-        );
-      });
+      await updateSubagentSessionStore(
+        target.storePath,
+        (store) => {
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
+          store[target.canonicalKey] = mergeSessionEntry(
+            store[target.canonicalKey],
+            buildDirectChildSessionPatch(patch),
+          );
+        },
+        { activeSessionKey: requesterInternalKey },
+      );
       return undefined;
     } catch (err) {
       const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
@@ -1365,6 +1379,7 @@ export async function spawnSubagentDirect(
     const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
       cfg,
       childSessionKey,
+      requesterInternalKey,
       resolvedModel,
     });
     if (runtimeModelPersistError) {
