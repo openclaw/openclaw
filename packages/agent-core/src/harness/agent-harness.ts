@@ -825,7 +825,9 @@ export class CoreAgentHarness<
         throw new AgentHarnessError("auth", "No auth available for compaction");
       }
       const branchEntries = await this.session.getBranch();
-      const preparationResult = prepareCompaction(branchEntries, DEFAULT_COMPACTION_SETTINGS);
+      const preparationResult = prepareCompaction(branchEntries, DEFAULT_COMPACTION_SETTINGS, {
+        force: true,
+      });
       if (!preparationResult.ok) {
         throw preparationResult.error;
       }

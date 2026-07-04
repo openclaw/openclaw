@@ -42,6 +42,7 @@ export {
   shouldCompact,
   type CompactionDetails,
   type CompactionPreparation,
+  type CompactionPreparationOptions,
   type CompactionResult,
   type CompactionSettings,
   type ContextUsageEstimate,
