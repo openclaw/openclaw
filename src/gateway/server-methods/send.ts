@@ -312,14 +312,30 @@ function buildGatewayDeliveryPayload(params: {
   if ("pollId" in params.result) {
     payload.pollId = params.result.pollId;
   }
-  // Forward delivery receipt so client-side evidence extractors can verify
-  // provider status (e.g. Twilio queued/delivered) without a second round trip.
-  // Without this, successful SMS sends via the built-in message tool only carry
-  // the provider message id and the receipt guard rejects truthful status claims.
-  // Only forward the typed receipt field, not arbitrary channel result metadata,
-  // to avoid exposing plugin-private data through the client-facing payload.
-  if ("receipt" in params.result) {
-    payload.receipt = params.result.receipt;
+  // Forward only the delivery-evidence fields the receipt normalizer consumes,
+  // not the full raw receipt, to avoid exposing channel-private metadata through
+  // the client-facing payload. The normalizer looks for messageId,
+  // deliveryStatus, channel, and meta.status — project those fields only.
+  if (
+    "receipt" in params.result &&
+    params.result.receipt &&
+    typeof params.result.receipt === "object"
+  ) {
+    const receipt = params.result.receipt as Record<string, unknown>;
+    const sanitizedReceipt: Record<string, unknown> = {
+      channel: "sms",
+      ...(typeof receipt.messageId === "string" ? { messageId: receipt.messageId } : {}),
+      ...(typeof receipt.providerId === "string" && !receipt.messageId
+        ? { messageId: receipt.providerId }
+        : {}),
+      ...(typeof receipt.deliveryStatus === "string"
+        ? { deliveryStatus: receipt.deliveryStatus }
+        : {}),
+      ...(typeof receipt.status === "string" ? { meta: { status: receipt.status } } : {}),
+      ...(typeof receipt.sender === "string" ? { sender: receipt.sender } : {}),
+      ...(typeof receipt.recipient === "string" ? { recipient: receipt.recipient } : {}),
+    };
+    payload.receipt = sanitizedReceipt;
   }
   return payload;
 }
