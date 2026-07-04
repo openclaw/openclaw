@@ -88,6 +88,36 @@ node scripts/run-vitest.mjs <path-or-filter>
 That keeps the test scoped without giving pnpm a chance to run dependency
 status checks or install reconciliation in a linked worktree.
 
+## Plugin Package And Live Proof
+
+When validating an external or official plugin package, prove the package shape
+and trust shape separately. Do not use raw archive/path installs to prove the
+managed dependency path, and do not treat `npm-pack:` as proof of catalog-linked
+official trust.
+
+- For local release-candidate proof, pack the plugin and install it with
+  `openclaw plugins install npm-pack:<path.tgz> --force`. This uses the managed
+  per-plugin npm project and is the closest local substitute for the registry
+  artifact's dependency behavior.
+- If the behavior depends on bundled-plugin or trusted official plugin status,
+  add a second proof through a catalog-backed official install or a published
+  package path that records official trust. Local `npm-pack:` proof alone is
+  not sufficient for privileged helpers or trusted-official scope handling.
+- Treat missing runtime imports as package-manifest bugs first. Runtime code
+  must depend on packages declared in the plugin package `dependencies` or
+  `optionalDependencies`; do not make a final proof depend on manually running
+  `npm install` inside `~/.openclaw/npm/projects/...`.
+- If the plugin ships `npm-shrinkwrap.json`, regenerate or check it after
+  moving dependencies between dev and runtime sections.
+- Inspect the packed tarball when dependency ownership or generated `dist/`
+  matters: verify `package/package.json`, the expected runtime files, and any
+  package-local shrinkwrap before installing it on a live host.
+- After installing the package, restart the Gateway when the touched surface is
+  plugin registration, runtime dependency loading, privileged helpers, provider
+  routing, or generated dist.
+- For live provider or channel probes, add only temporary config needed for the
+  proof, then remove it and verify the cleanup state before closeout.
+
 ## Command Semantics
 
 - `pnpm check` and `pnpm check:changed` do not run Vitest tests. They are for

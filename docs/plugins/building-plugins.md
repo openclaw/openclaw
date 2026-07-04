@@ -63,6 +63,12 @@ local proof.
   "name": "@myorg/openclaw-my-plugin",
   "version": "1.0.0",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.39"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
   "openclaw": {
     "extensions": ["./index.ts"],
     "compat": {
@@ -166,6 +172,39 @@ local proof.
     pnpm test -- extensions/my-plugin/
     pnpm check
     ```
+
+  </Step>
+
+  <Step title="Test the package install">
+    Before publishing a package-ready plugin, test the same install shape users
+    will get. First add a build step, point runtime entries such as
+    `openclaw.extensions` at built JavaScript like `./dist/index.js`, and make
+    sure `npm pack` includes that `dist/` output. TypeScript source entries are
+    only for source checkouts and local development paths.
+
+    Then pack the plugin and install the tarball with `npm-pack:`:
+
+    ```bash
+    npm pack --pack-destination /tmp
+    openclaw plugins install npm-pack:/tmp/<plugin-package>.tgz --force
+    openclaw plugins inspect my-plugin --runtime --json
+    ```
+
+    `npm-pack:` uses OpenClaw's managed per-plugin npm project, so it catches
+    runtime dependency mistakes that source checkout testing can hide. It proves
+    the package and dependency shape, not catalog-linked official trust.
+    Runtime imports must be in `dependencies` or `optionalDependencies`;
+    dependencies left only in `devDependencies` will not be installed for the
+    managed runtime project.
+
+    Do not use a raw archive/path install as the final proof for official or
+    privileged plugin behavior. Raw sources are useful for local debugging, but
+    they do not prove the same dependency path as npm or ClawHub installs. If
+    your plugin relies on trusted official plugin status, add a second proof
+    through a catalog-backed official install or a published package path that
+    records official trust. See
+    [Plugin dependency resolution](/plugins/dependency-resolution) for
+    install-root and dependency ownership details.
 
   </Step>
 
