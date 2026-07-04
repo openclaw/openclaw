@@ -1428,6 +1428,7 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/clawrouter",
                   "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1745,7 +1746,7 @@
                   },
                   {
                     "group": "Interfaces",
-                    "pages": ["cli/dashboard", "cli/tui"]
+                    "pages": ["cli/attach", "cli/dashboard", "cli/tui"]
                   },
                   {
                     "group": "Utility",

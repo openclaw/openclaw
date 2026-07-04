@@ -33,7 +33,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import { normalizeVerboseLevel } from "../thinking.js";
+import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -320,6 +320,10 @@ export async function getReplyFromConfig(
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
   const agentCfg = cfg.agents?.defaults;
+  const agentEntry = resolveAgentConfig(cfg, agentId);
+  const configuredThinkingDefault =
+    normalizeThinkLevel(agentEntry?.thinkingDefault) ??
+    normalizeThinkLevel(agentCfg?.thinkingDefault);
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
     "reply.resolve_default_model",
@@ -921,15 +925,18 @@ export async function getReplyFromConfig(
       hasResolvedHeartbeatModelOverride,
       isHeartbeat: opts?.isHeartbeat === true,
     });
-    const hasExplicitThinkLevel =
-      resolvedOpts?.thinkingLevelOverride !== undefined ||
+    const thinkingLevelOverride = normalizeThinkLevel(resolvedOpts?.thinkingLevelOverride);
+    const hasTurnOrSessionThinkLevel =
+      thinkingLevelOverride !== undefined ||
       directives.thinkLevel !== undefined ||
-      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined) ||
-      agentCfg?.thinkingDefault !== undefined;
-    if (!hasExplicitThinkLevel) {
+      (!directives.clearThinkLevel && sessionEntry.thinkingLevel !== undefined);
+    const hasExplicitThinkLevel =
+      hasTurnOrSessionThinkLevel ||
+      configuredThinkingDefault !== undefined ||
+      runModelState.hasConfiguredThinkingDefault === true;
+    if (!hasTurnOrSessionThinkLevel) {
       resolvedThinkLevel = await runModelState.resolveDefaultThinkingLevel();
     }
-    const agentEntry = resolveAgentConfig(cfg, agentId);
     const rawSessionReasoningLevel = sessionEntry.reasoningLevel;
     const canUseReasoningState =
       command.isAuthorizedSender ||
@@ -942,8 +949,12 @@ export async function getReplyFromConfig(
       (rawSessionReasoningLevel != null && !canUseReasoningState) ||
       agentEntry?.reasoningDefault != null ||
       agentCfg?.reasoningDefault != null;
-    if (!hasExplicitReasoningLevel && resolvedThinkLevel === "off") {
-      resolvedReasoningLevel = await runModelState.resolveDefaultReasoningLevel();
+    if (!hasExplicitReasoningLevel) {
+      const thinkingActive = resolvedThinkLevel !== "off";
+      resolvedReasoningLevel =
+        thinkingActive || hasExplicitThinkLevel
+          ? "off"
+          : await runModelState.resolveDefaultReasoningLevel();
     }
   }
 

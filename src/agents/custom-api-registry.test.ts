@@ -12,6 +12,7 @@ import {
 } from "../llm/providers/register-builtins.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
+import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
 function getRegisteredTestProvider() {
   const provider = getApiProvider("test-custom-api");
@@ -54,6 +55,50 @@ describe("ensureCustomApiRegistered", () => {
     expect(provider.stream(model as never, context as never, options as never)).toBe(stream);
     expect(provider.streamSimple(model as never, context as never, options as never)).toBe(stream);
     expect(streamFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("adapts async stream factories to the synchronous provider contract", async () => {
+    const message = buildAssistantMessageWithZeroUsage({
+      model: { api: "test-custom-api", provider: "custom", id: "m" },
+      content: [{ type: "text", text: "done" }],
+      stopReason: "stop",
+    });
+    const streamFn = vi.fn(async () => {
+      await Promise.resolve();
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "stop", message });
+      return stream;
+    });
+    ensureCustomApiRegistered("test-custom-api", streamFn);
+
+    const provider = getRegisteredTestProvider();
+    const stream = provider.stream(
+      { api: "test-custom-api", provider: "custom", id: "m" } as never,
+      { messages: [] },
+      {},
+    );
+
+    expect(stream).not.toBeInstanceOf(Promise);
+    await expect(stream.result()).resolves.toBe(message);
+  });
+
+  it("converts async stream factory failures into terminal stream errors", async () => {
+    const streamFn = vi.fn(async () => {
+      throw new Error("factory failed");
+    });
+    ensureCustomApiRegistered("test-custom-api", streamFn);
+
+    const provider = getRegisteredTestProvider();
+    const stream = provider.stream(
+      { api: "test-custom-api", provider: "custom", id: "m" } as never,
+      { messages: [] },
+      {},
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "factory failed",
+    });
   });
 
   it("keeps plugin api providers when refreshing built-ins", () => {

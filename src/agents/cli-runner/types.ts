@@ -24,6 +24,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
@@ -93,6 +94,7 @@ export type RunCliAgentParams = {
   allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
+  cliSessionBindingFacts?: CliSessionBindingFacts;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
@@ -159,23 +161,25 @@ export type RunCliAgentParams = {
 /** Backend config after MCP, skill, env, and cleanup preparation. */
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
 
-/** Reusable CLI session id and the reason it was rejected, when any. */
-export type CliReusableSession = {
-  sessionId?: string;
-  invalidatedReason?:
-    | "auth-profile"
-    | "auth-epoch"
-    | "system-prompt"
-    | "cwd"
-    | "mcp"
-    | "missing-transcript"
-    | "orphaned-tool-use";
+/** Reusable CLI session id, soft content drift, or hard invalidation. */
+export type CliReusableSession =
+  | CliSessionReuseResult
+  | {
+      mode: "invalidate";
+      invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
+    };
+
+export type CliSessionBindingFacts = {
+  extraSystemPromptStatic?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
 };
 
 /** Fully prepared execution context consumed by the CLI runner executor. */

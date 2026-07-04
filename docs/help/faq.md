@@ -1531,7 +1531,7 @@ lives on the [Models FAQ](/help/faq-models).
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
-    - Built-in setup-code bootstrap is node-only. After approval, it returns a node device token with `scopes: []` and does not return a handed-off operator token.
+    - Built-in setup-code bootstrap returns a node device token with `scopes: []` plus a bounded operator handoff token for trusted mobile onboarding. The operator handoff can read setup-time native configuration but does not grant pairing mutation scopes or `operator.admin`.
 
     Fix:
 

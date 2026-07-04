@@ -201,9 +201,9 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10405),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5223),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 323),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10421),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5234),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       3261,
@@ -282,27 +282,29 @@ function countWildcardReexports(entrypoints) {
   return { count, matches };
 }
 
+// All three inventories overlap. Reuse one module graph so reporting subsets
+// does not triple TypeScript compiler time and heap usage.
+const exportStatsProgram = ts.createProgram(pluginSdkEntrypoints.map(entrypointPath), {
+  allowJs: false,
+  declaration: true,
+  emitDeclarationOnly: true,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  noEmit: true,
+  skipLibCheck: true,
+  strict: false,
+  target: ts.ScriptTarget.ES2022,
+  types: [],
+});
+const exportStatsChecker = exportStatsProgram.getTypeChecker();
+
 function collectExportStats(entrypoints) {
-  const files = entrypoints.map(entrypointPath);
-  const program = ts.createProgram(files, {
-    allowJs: false,
-    declaration: true,
-    emitDeclarationOnly: true,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    noEmit: true,
-    skipLibCheck: true,
-    strict: false,
-    target: ts.ScriptTarget.ES2022,
-    types: [],
-  });
-  const checker = program.getTypeChecker();
   const byEntrypoint = new Map();
   const uniqueNames = new Set();
   const uniqueCallableNames = new Set();
 
   for (const entrypoint of entrypoints) {
-    const sourceFile = program.getSourceFile(entrypointPath(entrypoint));
+    const sourceFile = exportStatsProgram.getSourceFile(entrypointPath(entrypoint));
     if (!sourceFile) {
       byEntrypoint.set(entrypoint, {
         exports: 0,
@@ -312,8 +314,8 @@ function collectExportStats(entrypoints) {
       });
       continue;
     }
-    const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
-    const symbols = moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : [];
+    const moduleSymbol = exportStatsChecker.getSymbolAtLocation(sourceFile);
+    const symbols = moduleSymbol ? exportStatsChecker.getExportsOfModule(moduleSymbol) : [];
     let callableExports = 0;
     let deprecatedExports = 0;
     let deprecatedCallableExports = 0;
@@ -321,11 +323,11 @@ function collectExportStats(entrypoints) {
     for (const symbol of symbols) {
       const exportName = `${entrypoint}:${symbol.getName()}`;
       uniqueNames.add(exportName);
-      const callable = isCallableExport(checker, symbol, sourceFile);
+      const callable = isCallableExport(exportStatsChecker, symbol, sourceFile);
       const deprecated =
         deprecatedEntrypoint ||
         hasDeprecatedTag(symbol) ||
-        hasDeprecatedTag(unwrapAlias(checker, symbol));
+        hasDeprecatedTag(unwrapAlias(exportStatsChecker, symbol));
       if (callable) {
         callableExports += 1;
         uniqueCallableNames.add(exportName);

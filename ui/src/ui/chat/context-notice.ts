@@ -106,6 +106,9 @@ export function getContextNoticeViewModel(
   };
 }
 
+const RING_RADIUS = 6.5;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
 export function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
@@ -117,43 +120,33 @@ export function renderContextNotice(
   }
   const canRenderCompact = model.compactRecommended && options.onCompact;
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
+  const summary = `Session context usage: ${model.detail} (${model.pct}%)`;
+  const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
   return html`
     <div
-      class="context-notice ${model.warning ? "context-notice--warning" : "context-notice--usage"}"
+      class="context-ring ${model.warning ? "context-ring--warning" : ""}"
       role="status"
+      aria-label=${summary}
       style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
-      title=${`Session context usage: ${model.detail} (${model.pct}%)`}
+      title=${summary}
     >
-      ${model.warning
-        ? html`
-            <svg
-              class="context-notice__icon"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-          `
-        : html`
-            <span class="context-notice__meter" aria-hidden="true">
-              <span class="context-notice__meter-fill" style="width:${model.pct}%"></span>
-            </span>
-          `}
-      <span>${model.pct}% context used</span>
-      <span class="context-notice__detail">${model.detail}</span>
+      <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />
+        <circle
+          class="context-ring__fill"
+          cx="8"
+          cy="8"
+          r=${RING_RADIUS}
+          stroke-dasharray=${RING_CIRCUMFERENCE.toFixed(2)}
+          stroke-dashoffset=${dashOffset.toFixed(2)}
+        />
+      </svg>
+      <span class="context-ring__pct">${model.pct}%</span>
       ${canRenderCompact
         ? html`
             <button
-              class="context-notice__action ${options.compactBusy
-                ? "context-notice__action--busy"
+              class="context-ring__action ${options.compactBusy
+                ? "context-ring__action--busy"
                 : ""}"
               type="button"
               title="Compact session context"

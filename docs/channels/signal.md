@@ -289,6 +289,24 @@ Groups:
 - **Read receipts**: when `channels.signal.sendReadReceipts` is true, OpenClaw forwards read receipts for allowed DMs.
 - Signal-cli does not expose read receipts for groups.
 
+## Lifecycle status reactions
+
+Set `messages.statusReactions.enabled: true` to let Signal show the shared
+queued/thinking/tool/compaction/done/error reaction lifecycle on inbound turns.
+Signal uses the inbound message timestamp as the reaction target; group
+reactions are sent with the Signal group id plus the original sender as the
+target author.
+
+Status reactions also require an ack reaction and a matching
+`messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`).
+Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
+The message-tool `react` action remains stricter: it requires
+`reactionLevel: "minimal"` or `"extensive"`.
+
+`messages.removeAckAfterReply: true` clears the final status reaction after the
+configured hold time. Otherwise Signal restores the initial ack reaction after
+the final done/error state.
+
 ## Reactions (message tool)
 
 - Use `message action=react` with `channel=signal`.
@@ -333,6 +351,58 @@ without explicit approvers; no-approver group approvals keep the local fallback 
 - UUID DMs: `uuid:<id>` (or bare UUID).
 - Groups: `signal:group:<groupId>`.
 - Usernames: `username:<name>` (if supported by your Signal account).
+
+## Aliases
+
+Configure aliases when you want stable names for recurring Signal targets.
+Aliases are OpenClaw-side config only; they do not create or edit Signal contacts.
+
+```json5
+{
+  channels: {
+    signal: {
+      aliases: {
+        me: "+15557654321",
+        jane: "uuid:123e4567-e89b-12d3-a456-426614174000",
+        ops: "group:<groupId>",
+      },
+      defaultTo: "signal:me",
+    },
+  },
+}
+```
+
+Use aliases anywhere Signal delivery targets are accepted:
+
+```bash
+openclaw message send --channel signal --target signal:ops --message "Deployment is complete"
+```
+
+Per-account aliases inherit the top-level aliases and can add or override names:
+
+```json5
+{
+  channels: {
+    signal: {
+      aliases: {
+        me: "+15557654321",
+      },
+      accounts: {
+        work: {
+          aliases: {
+            ops: "group:<workGroupId>",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`openclaw directory peers list --channel signal` and
+`openclaw directory groups list --channel signal` list configured aliases. The
+Signal directory is config-backed; it does not live-query Signal contacts or
+mutate the Signal account.
 
 ## Troubleshooting
 
@@ -398,10 +468,12 @@ Provider options:
 - `channels.signal.sendReadReceipts`: forward read receipts.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID ids.
+- `channels.signal.aliases`: OpenClaw-side aliases for DM or group delivery targets.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender E.164 numbers, or `uuid:<id>` values.
 - `channels.signal.groups`: per-group overrides keyed by Signal group id (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
+- `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).

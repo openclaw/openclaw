@@ -34,6 +34,7 @@ import {
   getLiveSecretsRuntimeAuthStores,
   setPreparedSecretsRuntimeSnapshotRefreshContext,
 } from "../secrets/runtime-state.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
@@ -183,19 +184,14 @@ export function createRuntimeSecretsActivator(params: {
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
-  let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
-  let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
+  const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
+    cacheRejections: true,
+  });
+  const loadAuthProfiles = createLazyPromise(() => import("../agents/auth-profiles.js"), {
+    cacheRejections: true,
+  });
   const startupManifestRegistry =
     params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  const loadSecretsRuntime = () => {
-    secretsRuntimePromise ??= import("../secrets/runtime.js");
-    return secretsRuntimePromise;
-  };
-  const loadAuthProfiles = () => {
-    authProfilesPromise ??= import("../agents/auth-profiles.js");
-    return authProfilesPromise;
-  };
-
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     // Secret refresh mutates process-wide active snapshot state, so activation
     // requests are serialized even when reload and startup probes overlap.

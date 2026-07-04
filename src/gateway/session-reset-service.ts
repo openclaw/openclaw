@@ -32,6 +32,7 @@ import {
   type SessionEntry,
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
+import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import {
@@ -1075,6 +1076,11 @@ export async function performGatewaySessionReset(params: {
       // `parentSessionKey` (e.g. dashboard children) are not exempt.
       if (!isSubagentSessionKey(primaryKey)) {
         clearAllCliSessions(nextEntry);
+      } else {
+        nextEntry.cliSessionBindings = rebindCliSessionReseedReceiptsForReset(
+          nextEntry.cliSessionBindings,
+          nextSessionId,
+        );
       }
       return nextEntry;
     },

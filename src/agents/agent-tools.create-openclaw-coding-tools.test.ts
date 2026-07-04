@@ -620,6 +620,33 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("forwards owner identity to plugin-only tool construction", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["codex_threads"],
+        senderIsOwner: true,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.senderIsOwner).toBe(true);
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
   it("forwards auth profiles to plugin-only tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

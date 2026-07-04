@@ -23,6 +23,7 @@ import {
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { sleep } from "../utils/sleep.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 
@@ -309,12 +310,6 @@ export async function createBootstrapWorkspace(
   await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), `IDENTITY-${randomUUID()}\n`);
   await fs.writeFile(path.join(workspaceDir, "USER.md"), `USER-${randomUUID()}\n`);
   return { expectedInjectedFiles, workspaceDir, workspaceRootDir };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {

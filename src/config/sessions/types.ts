@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -46,6 +43,13 @@ export type {
   SessionAcpMeta,
 };
 
+export type CliSessionReseedReceipt = {
+  version: 1;
+  promptHash: string;
+  localSessionId: string;
+  userTurnDisposition: "persisted" | "omitted";
+};
+
 export type CliSessionBinding = {
   sessionId: string;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
@@ -59,6 +63,8 @@ export type CliSessionBinding = {
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
+  /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
+  reseedReceipt?: CliSessionReseedReceipt;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -113,6 +119,13 @@ export type SessionContextBudgetStatus = {
   messageCount: number;
   unwindowedMessageCount: number;
   sessionId?: string;
+};
+
+export type AmbientTranscriptWatermark = {
+  sessionId: string;
+  messageId: string;
+  timestampMs?: number;
+  updatedAt: number;
 };
 
 export type SessionPluginDebugEntry = {
@@ -408,6 +421,8 @@ export type SessionEntry = {
   origin?: SessionOrigin;
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
+  /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
+  ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
   lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;

@@ -57,6 +57,18 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["readJob"]).toHaveBeenCalledWith("demo");
   });
 
+  it("forwards run payload overrides to the loaded cron service", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const payload = { kind: "systemEvent" as const, text: "done" };
+    await lazy.cron.run("demo", "force", { payload });
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
+  });
+
   it("starts the loaded cron service once", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -120,6 +132,22 @@ describe("createLazyGatewayCronState", () => {
 
     expect(lazy.cronEnabled).toBe(false);
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("does not reconcile exit watchers when cron is disabled", async () => {
+    const cron = createCronService();
+    const reconcileExitWatchers = vi.fn(async () => {});
+    hoisted.setState({
+      ...createCronState(cron),
+      cronEnabled: false,
+      reconcileExitWatchers,
+    });
+
+    const lazy = createLazyGatewayCronState(createParams({ cron: { enabled: false } }));
+    await lazy.cron.start();
+
+    expect(cron["start"]).toHaveBeenCalledTimes(1);
+    expect(reconcileExitWatchers).not.toHaveBeenCalled();
   });
 });
 

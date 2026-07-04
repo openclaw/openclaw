@@ -3,6 +3,9 @@ import OpenClawKit
 import ReplayKit
 
 final class ScreenRecordService: @unchecked Sendable {
+    typealias CaptureHandler = @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void
+    typealias CaptureCompletion = @Sendable (Error?) -> Void
+
     private struct UncheckedSendableBox<T>: @unchecked Sendable {
         let value: T
     }
@@ -22,6 +25,36 @@ final class ScreenRecordService: @unchecked Sendable {
             defer { lock.unlock() }
             return body(self)
         }
+    }
+
+    private let startReplayKitCaptureAction: @Sendable (
+        Bool,
+        @escaping CaptureHandler,
+        @escaping CaptureCompletion)
+        -> Void
+    private let stopReplayKitCaptureAction: @Sendable (@escaping CaptureCompletion) -> Void
+
+    init(
+        startReplayKitCaptureAction: @escaping @Sendable (
+            Bool,
+            @escaping CaptureHandler,
+            @escaping CaptureCompletion)
+            -> Void = { includeAudio, handler, completion in
+                Task { @MainActor in
+                    startReplayKitCapture(
+                        includeAudio: includeAudio,
+                        handler: handler,
+                        completion: completion)
+                }
+            },
+        stopReplayKitCaptureAction: @escaping @Sendable (@escaping CaptureCompletion) -> Void = { completion in
+            Task { @MainActor in
+                stopReplayKitCapture(completion)
+            }
+        })
+    {
+        self.startReplayKitCaptureAction = startReplayKitCaptureAction
+        self.stopReplayKitCaptureAction = stopReplayKitCaptureAction
     }
 
     enum ScreenRecordError: LocalizedError {
@@ -59,7 +92,12 @@ final class ScreenRecordService: @unchecked Sendable {
         let recordQueue = DispatchQueue(label: "ai.openclawfoundation.app.screenrecord")
 
         try await self.startCapture(state: state, config: config, recordQueue: recordQueue)
-        try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
+        do {
+            try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
+        } catch {
+            try? await self.stopCapture()
+            throw error
+        }
         try await self.stopCapture()
         try self.finalizeCapture(state: state)
         try await self.finishWriting(state: state)
@@ -123,12 +161,10 @@ final class ScreenRecordService: @unchecked Sendable {
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
             }
 
-            Task { @MainActor in
-                startReplayKitCapture(
-                    includeAudio: config.includeAudio,
-                    handler: handler,
-                    completion: completion)
-            }
+            self.startReplayKitCaptureAction(
+                config.includeAudio,
+                handler,
+                completion)
         }
     }
 
@@ -277,8 +313,8 @@ final class ScreenRecordService: @unchecked Sendable {
 
     private func stopCapture() async throws {
         let stopError = await withCheckedContinuation { cont in
-            Task { @MainActor in
-                stopReplayKitCapture { error in cont.resume(returning: error) }
+            self.stopReplayKitCaptureAction { error in
+                cont.resume(returning: error)
             }
         }
         if let stopError { throw stopError }

@@ -145,6 +145,8 @@ export function enqueueFollowupRun(
           lastElision.count += 1;
           lastElision.source = createOverflowSummaryRetrySource(item);
           lastElision.sourceRefs.add(item);
+          lastElision.allRoomEvents =
+            lastElision.allRoomEvents && item.currentInboundEventKind === "room_event";
         } else {
           if (queue.summaryElisions.length >= queue.cap) {
             const evicted = queue.summaryElisions.shift();
@@ -158,6 +160,7 @@ export function enqueueFollowupRun(
             count: 1,
             source: createOverflowSummaryRetrySource(item),
             sourceRefs: new WeakSet([item]),
+            allRoomEvents: item.currentInboundEventKind === "room_event",
           });
         }
         completeFollowupRunLifecycle(item);
