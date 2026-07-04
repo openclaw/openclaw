@@ -23,6 +23,13 @@ import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payloa
 // Matches a typical restart drain budget so default managed handoffs survive
 // normal active-task window drain periods (#99666).
 const DEFAULT_PARENT_EXIT_GRACE_MS = 300_000;
+
+// Shutdown/scheduling reserve added on top of the drain budget so the helper
+// does not report managed-service-handoff-parent-timeout before the parent
+// finishes shutting down after a full active-task drain window. The Gateway
+// restart path allows restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS (25 s) for
+// force-exit; this reserve covers that shutdown window plus scheduling jitter.
+const SHUTDOWN_RESERVE_MS = 30_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -695,7 +702,8 @@ export async function startManagedServiceUpdateHandoff(params: {
     // managed-service-handoff-parent-timeout (#99666).
     parentExitTimeoutMs:
       Math.max(0, params.restartDelayMs ?? 0) +
-      Math.max(DEFAULT_PARENT_EXIT_GRACE_MS, params.timeoutMs ?? 0),
+      Math.max(DEFAULT_PARENT_EXIT_GRACE_MS, params.timeoutMs ?? 0) +
+      SHUTDOWN_RESERVE_MS,
     cwd: handoffCwd,
     commandArgv,
     commandLabel,

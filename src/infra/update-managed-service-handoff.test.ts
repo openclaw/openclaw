@@ -754,8 +754,8 @@ describe("managed service update handoff", () => {
       unknown
     >;
 
-    // timeoutMs=300000 -> parentExitTimeoutMs >= 300000 (not just 60000)
-    expect(helperParams.parentExitTimeoutMs).toBeGreaterThanOrEqual(300_000);
+    // timeoutMs=300000 + SHUTDOWN_RESERVE_MS (30000) -> parentExitTimeoutMs >= 330000
+    expect(helperParams.parentExitTimeoutMs).toBeGreaterThanOrEqual(330_000);
   });
 
   it("preserves backward-compatible parent exit grace with default timeout", async () => {
@@ -782,7 +782,7 @@ describe("managed service update handoff", () => {
       unknown
     >;
 
-    // Default without timeoutMs: parentExitTimeoutMs = 300_000 (DEFAULT_PARENT_EXIT_GRACE_MS)
-    expect(helperParams.parentExitTimeoutMs).toBe(300_000);
+    // Default without timeoutMs: parentExitTimeoutMs = DEFAULT_PARENT_EXIT_GRACE_MS (300s) + SHUTDOWN_RESERVE_MS (30s)
+    expect(helperParams.parentExitTimeoutMs).toBe(330_000);
   });
 });
