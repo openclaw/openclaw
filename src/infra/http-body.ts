@@ -1,6 +1,7 @@
 // Reads HTTP request and response bodies with timeout and byte limits.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "./errors.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
@@ -126,7 +127,8 @@ function advanceRequestBodyChunk(
   };
 }
 
-async function readResponseChunkWithIdleTimeout(
+/** Reads one chunk, rejecting and cancelling the reader after an idle timeout. */
+export async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
@@ -165,7 +167,7 @@ async function readResponseChunkWithIdleTimeout(
       (error: unknown) => {
         clear();
         if (!timedOut) {
-          reject(toHttpBodyError(error, "Non-Error rejection"));
+          reject(toErrorObject(error, "Non-Error rejection"));
         }
       },
     );
@@ -207,7 +209,7 @@ async function readResponsePrefix(
   try {
     while (true) {
       const { done, value } = options?.chunkTimeoutMs
-        ? await readResponseChunkWithIdleTimeout(
+        ? await readChunkWithIdleTimeout(
             reader,
             options.chunkTimeoutMs,
             options.onIdleTimeout,
@@ -311,20 +313,6 @@ export async function readResponseTextSnippet(
     return `${collapsed.slice(0, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
-}
-
-function toHttpBodyError(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
 
 export async function readRequestBodyWithLimit(
