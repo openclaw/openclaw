@@ -719,48 +719,12 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
-  config?: EmbeddedRunAttemptParams["config"];
-  sessionKey?: string;
-  sandboxSessionKey?: string;
-  agentId?: string;
-  modelProvider?: string;
-  modelId?: string;
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
+  // The attempt's single resolved profile: keeps these allowlist *sources*
+  // in lockstep with the policy that actually constructed and filtered the
+  // run's tools, instead of re-resolving with divergent session inputs.
+  capabilityProfile: ResolvedConversationCapabilityProfile;
   toolsAllow?: string[];
-  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
 }) {
-  const capabilityProfile =
-    params.conversationCapabilityProfile ??
-    resolveConversationCapabilityProfile({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sandboxSessionKey: params.sandboxSessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-      messageProvider: params.messageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      sandboxToolPolicy: params.sandboxToolPolicy,
-      runtimeToolAllowlist: params.toolsAllow,
-    });
   const {
     agentId,
     globalPolicy,
@@ -768,9 +732,10 @@ function collectAttemptExplicitToolAllowlistSources(params: {
     agentPolicy,
     agentProviderPolicy,
     groupPolicy,
+    sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
-  } = capabilityProfile.policy;
+  } = params.capabilityProfile.policy;
   return collectExplicitToolAllowlistSources([
     { label: "tools.allow", allow: globalPolicy?.allow },
     { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
@@ -783,7 +748,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
       allow: agentProviderPolicy?.allow,
     },
     { label: "group tools.allow", allow: groupPolicy?.allow },
-    { label: "sandbox tools.allow", allow: params.sandboxToolPolicy?.allow },
+    { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
     { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
     { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
@@ -1626,22 +1591,6 @@ export async function runEmbeddedAttempt(
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: allowedBundledTools,
       config: params.config,
-      sandboxToolPolicy: sandbox?.tools,
-      sessionKey: sandboxSessionKey,
-      agentId: sessionAgentId,
-      modelProvider: params.provider,
-      modelId: params.modelId,
-      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
@@ -1815,23 +1764,7 @@ export async function runEmbeddedAttempt(
       toolSearch.catalogRegistered;
     prepStages.mark("bundle-tools");
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sandboxSessionKey,
-      agentId: sessionAgentId,
-      modelProvider: params.provider,
-      modelId: params.modelId,
-      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      sandboxToolPolicy: sandbox?.tools,
+      capabilityProfile: runtimeCapabilityProfile,
       toolsAllow: params.toolsAllow,
     });
     const toolSearchRunPlan = buildToolSearchRunPlan({
