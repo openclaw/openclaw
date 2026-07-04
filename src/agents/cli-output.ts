@@ -76,6 +76,13 @@ export type CliStreamJsonOutputLimits = {
   maxTurnLines: number;
 };
 
+/** Incremental thinking text emitted while parsing a streaming CLI response. */
+export type CliThinkingDelta = {
+  text: string;
+  delta: string;
+  isReasoningSnapshot?: boolean;
+};
+
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
@@ -778,6 +785,133 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
+type ThinkingTracker = {
+  currentMessageId?: string;
+  // Thinking text already streamed via thinking_delta, keyed by the Anthropic
+  // content-block index. Snapshot frames repeat streamed thinking, so each block
+  // is deduped against its own index; a single global concatenation misfires
+  // once a message carries more than one thinking block (re-emits or reorders).
+  streamedByIndex: Map<number, string>;
+  // Full thinking already emitted for the message in block order. The callback
+  // contract exposes this as the running snapshot text for downstream coalescing,
+  // so it stays a message-level concatenation, not a per-index value.
+  emittedText: string;
+};
+
+function createThinkingTracker(): ThinkingTracker {
+  return { streamedByIndex: new Map(), emittedText: "" };
+}
+
+function resetThinkingTrackerForMessage(
+  tracker: ThinkingTracker,
+  messageId: string | undefined,
+): void {
+  if (messageId && messageId === tracker.currentMessageId) {
+    return;
+  }
+  if (messageId && tracker.currentMessageId === undefined) {
+    tracker.currentMessageId = messageId;
+    return;
+  }
+  // Anthropic content-block indexes restart at 0 for each message, so a prior
+  // tool-round message's per-index thinking must not bleed into the next one.
+  tracker.streamedByIndex.clear();
+  tracker.emittedText = "";
+  tracker.currentMessageId = messageId;
+}
+
+function assembleThinkingTextByIndex(streamedByIndex: Map<number, string>): string {
+  return [...streamedByIndex.entries()]
+    .toSorted(([left], [right]) => left - right)
+    .map(([, text]) => text)
+    .join("");
+}
+
+function emitClaudeThinking(
+  tracker: ThinkingTracker,
+  index: number,
+  streamed: string,
+  delta: string,
+  onThinkingDelta: (delta: CliThinkingDelta) => void,
+): void {
+  tracker.streamedByIndex.set(index, `${streamed}${delta}`);
+  tracker.emittedText = assembleThinkingTextByIndex(tracker.streamedByIndex);
+  onThinkingDelta({ text: tracker.emittedText, delta, isReasoningSnapshot: true });
+}
+
+function dispatchClaudeCliThinking(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ThinkingTracker;
+  onThinkingDelta: (delta: CliThinkingDelta) => void;
+}): void {
+  if (!supportsCliJsonlToolEvents(params)) {
+    return;
+  }
+  const tracker = params.tracker;
+
+  if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
+    const event = params.parsed.event;
+    if (event.type === "message_start") {
+      const message = isRecord(event.message) ? event.message : undefined;
+      resetThinkingTrackerForMessage(
+        tracker,
+        typeof message?.id === "string" ? message.id : undefined,
+      );
+      return;
+    }
+    if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+      return;
+    }
+    // Thinking state is per content-block; a delta without a numeric index cannot
+    // be attributed to a block, so it is dropped rather than mixed into another.
+    if (typeof event.index !== "number") {
+      return;
+    }
+    // signature_delta carries opaque continuation material; the Claude CLI owns
+    // its own session transcript, so it never enters the thinking text lane.
+    if (event.delta.type !== "thinking_delta" || typeof event.delta.thinking !== "string") {
+      return;
+    }
+    if (!event.delta.thinking) {
+      return;
+    }
+    const streamed = tracker.streamedByIndex.get(event.index) ?? "";
+    emitClaudeThinking(
+      tracker,
+      event.index,
+      streamed,
+      event.delta.thinking,
+      params.onThinkingDelta,
+    );
+    return;
+  }
+
+  if (params.parsed.type === "assistant" && isRecord(params.parsed.message)) {
+    resetThinkingTrackerForMessage(
+      tracker,
+      typeof params.parsed.message.id === "string" ? params.parsed.message.id : undefined,
+    );
+    const content = Array.isArray(params.parsed.message.content)
+      ? params.parsed.message.content
+      : [];
+    for (const [index, block] of content.entries()) {
+      // redacted_thinking blocks are opaque provider material with no text lane.
+      if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
+        continue;
+      }
+      tracker.streamedByIndex.set(index, block.thinking);
+      const text = assembleThinkingTextByIndex(tracker.streamedByIndex);
+      if (text === tracker.emittedText) {
+        continue;
+      }
+      tracker.emittedText = text;
+      params.onThinkingDelta({ text, delta: block.thinking, isReasoningSnapshot: true });
+    }
+  }
+}
+
 function dispatchGeminiCliStreamingToolEvent(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -854,6 +988,7 @@ export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -874,6 +1009,7 @@ export function createCliJsonlStreamingParser(params: {
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
+  const thinkingTracker = createThinkingTracker();
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -967,6 +1103,16 @@ export function createCliJsonlStreamingParser(params: {
       } else if (evt.type === "content_block_start" || evt.type === "message_stop") {
         flushPendingClaudeAssistantText();
       }
+    }
+
+    if (params.onThinkingDelta) {
+      dispatchClaudeCliThinking({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        tracker: thinkingTracker,
+        onThinkingDelta: params.onThinkingDelta,
+      });
     }
 
     if (params.onToolUseStart || params.onToolResult) {

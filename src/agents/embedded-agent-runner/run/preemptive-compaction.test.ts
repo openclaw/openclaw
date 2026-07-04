@@ -393,7 +393,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("routes to compact then truncate when recent tool tails help but cannot fully cover the overflow", () => {
-    const medium = "alpha beta gamma delta epsilon ".repeat(220);
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
     const longHistory = "old discussion with substantial retained context and decisions ".repeat(
       5000,
     );
@@ -426,6 +426,8 @@ describe("preemptive-compaction", () => {
       makeToolResultMessage(oversized),
       makeToolResultMessage(medium),
       makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
+      makeToolResultMessage(medium),
     ];
     const reserveTokens = 2_000;
     const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
@@ -435,7 +437,7 @@ describe("preemptive-compaction", () => {
     });
     const potential = estimateToolResultReductionPotential({
       messages,
-      contextWindowTokens: 128_000,
+      contextWindowTokens: 20_000,
     });
     const desiredOverflowTokens = 2_000;
     const result = shouldPreemptivelyCompactBeforePrompt({
