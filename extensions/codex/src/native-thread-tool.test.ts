@@ -117,7 +117,7 @@ describe("native Codex thread tool", () => {
     expect(request).toHaveBeenCalledWith(
       { appServer: { homeScope: "user" } },
       CODEX_CONTROL_METHODS.forkThread,
-      { threadId: "source-thread" },
+      { threadId: "source-thread", threadSource: "user" },
       expect.any(Object),
     );
     await expect(

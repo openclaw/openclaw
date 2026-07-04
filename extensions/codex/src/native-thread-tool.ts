@@ -290,7 +290,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       const response = await request(
         pluginConfig,
         CODEX_CONTROL_METHODS.forkThread,
-        { threadId },
+        { threadId, threadSource: "user" },
         requestOptions(),
       );
       if (!isJsonObject(response) || !isJsonObject(response.thread)) {
