@@ -139,11 +139,8 @@ export type ConversationSessionEntry = {
   sessionKey: string;
   entry: {
     sessionId?: string;
+    /** Passed through opaquely to resolveSessionFilePath, not read directly here. */
     sessionFile?: string;
-    providerOverride?: string;
-    modelProvider?: string;
-    cliSessionBindings?: Record<string, { sessionId?: string } | undefined>;
-    cliSessionIds?: Record<string, string | undefined>;
     origin?: { label?: string };
   };
 };
@@ -174,14 +171,15 @@ export async function buildConversationRows(
     if (!isConversationSessionKey(sessionKey) || !entry.sessionId) {
       continue;
     }
-    const provider = entry.providerOverride ?? entry.modelProvider;
-    const bound = provider
-      ? (entry.cliSessionBindings?.[provider]?.sessionId ?? entry.cliSessionIds?.[provider])
-      : undefined;
-    if (!bound) {
-      continue;
-    }
     candidateCount += 1;
+    // The binding sidecar's own existence is the real signal that this
+    // session had a Claude/GLM app-server turn — NOT entry.cliSessionBindings
+    // (the openclaw-pg9 provider-owned-session marker). That marker is only
+    // written by a turn completing AFTER that fix landed, so gating on it
+    // silently hid every older conversation whose sidecar predates it (found
+    // via real production data: a session last touched 2026-06-29 had a
+    // real, readable .claude-binding.json but no cliSessionBindings entry at
+    // all, and was wrongly excluded before this fix).
     const sessionFile = deps.resolveSessionFile(entry);
     const binding = sessionFile ? await deps.readBinding(sessionFile) : null;
     if (!binding) {
@@ -198,8 +196,8 @@ export function formatConversationsList(
 ): string {
   if (rows.length === 0) {
     return candidateCount === 0
-      ? "**Claude conversations**\n\nNo other real conversations with a bound Claude/GLM thread found for this agent yet."
-      : "**Claude conversations**\n\nFound conversation sessions bound to a provider, but none have a claude-binding sidecar yet (no turn has completed through the app-server harness for them).";
+      ? "**Claude conversations**\n\nNo other real conversation sessions found for this agent yet."
+      : `**Claude conversations**\n\nFound ${candidateCount} other real conversation session(s), but none have a claude-binding sidecar yet (no turn has completed through the Claude/GLM app-server harness for them).`;
   }
   const sorted = rows.toSorted((a, b) => b.binding.updatedAt - a.binding.updatedAt);
   const top = sorted.slice(0, CONVERSATIONS_LIST_LIMIT);
