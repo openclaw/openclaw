@@ -55,6 +55,22 @@ const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSess
   id,
   threadId,
 }) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
+const resolveTelegramSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => {
+  const marker = ":topic:";
+  const index = rawId.lastIndexOf(marker);
+  if (index === -1) {
+    return { id: rawId };
+  }
+  const chatId = rawId.slice(0, index);
+  return {
+    id: chatId,
+    threadId: rawId.slice(index + marker.length),
+    baseConversationId: chatId,
+    parentConversationCandidates: [chatId],
+  };
+};
 
 type SessionsListResult = Awaited<
   ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
@@ -179,6 +195,29 @@ const installRegistry = async () => {
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
             resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "Telegram test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "group", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveTelegramSessionConversationStub,
             resolveSessionTarget: resolveSessionTargetStub,
           },
           config: {
@@ -973,6 +1012,33 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.sessionKey).toBe(threadSessionKey);
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram topic session targets before dispatching an agent run", async () => {
+    await installRegistry();
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-topic-target", {
+      sessionKey: topicSessionKey,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(topicSessionKey);
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );
