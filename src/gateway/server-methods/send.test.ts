@@ -276,7 +276,7 @@ async function runMessageActionRequest(
                     ? params.requesterSenderId
                     : undefined,
                 toolContext: {
-                  ...(messageActionContextFromSessionKeyForTests(sessionKey).toolContext ?? {}),
+                  ...messageActionContextFromSessionKeyForTests(sessionKey).toolContext,
                   ...(params.toolContext && typeof params.toolContext === "object"
                     ? params.toolContext
                     : {}),
