@@ -2,12 +2,12 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
-const EVENT_LOOP_DELAY_WARN_MS = 1_000;
-const EVENT_LOOP_UTILIZATION_WARN = 0.95;
-const CPU_CORE_RATIO_WARN = 0.9;
+const EVENT_LOOP_DELAY_WARN_MS = 200;
+const EVENT_LOOP_UTILIZATION_WARN = 0.85;
+const CPU_CORE_RATIO_WARN = 0.8;
 // Load counters can spike during frequent short async wakeups; delay is the blocking signal.
-const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
-const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
+const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 20;
+const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 500;
 
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;

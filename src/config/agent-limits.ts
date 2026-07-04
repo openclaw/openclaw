@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "./types.js";
 
 /** Default maximum concurrent top-level agent runs. */
-export const DEFAULT_AGENT_MAX_CONCURRENT = 4;
+export const DEFAULT_AGENT_MAX_CONCURRENT = 10;
 /** Default maximum concurrent child-agent runs across subagent execution. */
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
 /** Default maximum direct children a single agent run may spawn. */

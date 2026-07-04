@@ -1077,30 +1077,35 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
-  const result: WorkspaceBootstrapFile[] = [];
-  for (const entry of entries) {
-    if (
-      entry.name === DEFAULT_MEMORY_FILENAME &&
-      !(await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME))
-    ) {
-      continue;
+  // Check MEMORY.md existence first since it gates one entry.
+  const memoryExists = await exactWorkspaceEntryExists(resolvedDir, DEFAULT_MEMORY_FILENAME);
+
+  // Read all bootstrap files concurrently — sequential I/O was a major bottleneck.
+  const loadPromises = entries.map(async (entry) => {
+    if (entry.name === DEFAULT_MEMORY_FILENAME && !memoryExists) {
+      return null;
     }
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
-      result.push({
+      return {
         name: entry.name,
         path: entry.filePath,
         content: loaded.content,
         missing: false,
-      });
-    } else {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
+      } satisfies WorkspaceBootstrapFile;
     }
-  }
-  return result;
+    return {
+      name: entry.name,
+      path: entry.filePath,
+      missing: true,
+    } satisfies WorkspaceBootstrapFile;
+  });
+
+  const results = await Promise.all(loadPromises);
+  return results.filter((r): r is WorkspaceBootstrapFile => r !== null);
 }
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
