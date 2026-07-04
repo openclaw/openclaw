@@ -1398,12 +1398,14 @@ describe("subagent-announce continuation drain (F7)", () => {
       {
         task: string;
         delayMs?: number;
+        traceparent?: string;
         spawnRequesterSessionKey?: string;
       },
     ];
     expect(enqueueSessionKey).toBe("agent:main:subagent:bracket");
     expect(enqueued.task).toBe("keep working");
     expect(enqueued.delayMs).toBe(30_000);
+    expect(enqueued.traceparent).toBeUndefined();
     expect(enqueued.spawnRequesterSessionKey).toBe("agent:main:main");
 
     // It must NOT be spawned immediately via a volatile in-process path.
@@ -1419,6 +1421,46 @@ describe("subagent-announce continuation drain (F7)", () => {
       currentChainCount: 1,
       accumulatedChainTokens: 1_000,
     });
+  });
+
+  it("persists traceparent on durable delayed bracket delegates (#1159)", async () => {
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:bracket-trace": {
+            sessionId: "session-child",
+            updatedAt: Date.now(),
+            continuationChainCount: 1,
+            continuationChainStartedAt: 1_700_000_000_000,
+            continuationChainTokens: 1_000,
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:bracket-trace",
+      childRunId: "run-bracket-trace",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] Delegated from sub-agent: keep working",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: `Research result.\n[[CONTINUE_DELEGATE: keep working +30s | traceparent=${validTraceparent}]]`,
+    });
+
+    expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
+    expect(enqueuePendingDelegateMock.mock.calls[0]?.[1]).toMatchObject({
+      task: "keep working",
+      delayMs: 30_000,
+      traceparent: validTraceparent,
+      spawnRequesterSessionKey: "agent:main:main",
+    });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("persists inherited silent/wake policy on durable delayed bracket delegates (#1159)", async () => {

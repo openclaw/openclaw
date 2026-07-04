@@ -1578,6 +1578,7 @@ export async function runSubagentAnnounceFlow(params: {
                     ? { targetSessionKeys: chainSignal.targetSessionKeys }
                     : {}),
                   ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
+                  ...(chainSignal.traceparent ? { traceparent: chainSignal.traceparent } : {}),
                   ...(chainSignal.model ? { model: chainSignal.model } : {}),
                   spawnRequesterSessionKey: targetRequesterSessionKey,
                   ...(targetRequesterOrigin?.channel
