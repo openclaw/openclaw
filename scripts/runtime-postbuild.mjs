@@ -200,7 +200,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
     return { candidate, source };
   });
   const implementationCandidates = candidatesWithSources.filter(
-    ({ source }) => source.trim() !== `export * from "./${aliasFileName}";`,
+    ({ source }) => !isRuntimeAliasSource(source, aliasFileName),
   );
   const candidateNames = implementationCandidates.map(({ candidate }) => candidate);
   if (candidateNames.length === 1) {
@@ -299,6 +299,45 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+const RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN =
+  /(^|\n)\s*export\b\s*(?:default\b|\{[^}]*(?:\bas\s+default\b|\bdefault\b\s*(?=[,}]))[^}]*\})/u;
+
+function formatRuntimeAliasSource(targetFileName, forwardDefault = false) {
+  const specifier = JSON.stringify(`./${targetFileName}`);
+  const starSource = `export * from ${specifier};\n`;
+  return forwardDefault ? `${starSource}export { default } from ${specifier};\n` : starSource;
+}
+
+function isRuntimeAliasSource(source, targetFileName) {
+  const normalizedSource = source.trim();
+  return (
+    normalizedSource === formatRuntimeAliasSource(targetFileName).trim() ||
+    normalizedSource === formatRuntimeAliasSource(targetFileName, true).trim()
+  );
+}
+
+/**
+ * Builds alias module source for a runtime chunk target. `export * from`
+ * never re-exports `default`, so when the target chunk has a default export
+ * the alias must forward it explicitly — otherwise lazy `import()` consumers
+ * that destructure `default` receive `undefined` (e.g. the post-compaction
+ * count reconcile failed this way with "TypeError: reconcile is not a
+ * function" on every compaction).
+ */
+function buildRuntimeAliasSource(params) {
+  const { distDir, fsImpl, targetFileName } = params;
+  let targetSource;
+  try {
+    targetSource = fsImpl.readFileSync(path.join(distDir, targetFileName), "utf8");
+  } catch {
+    return formatRuntimeAliasSource(targetFileName);
+  }
+  return formatRuntimeAliasSource(
+    targetFileName,
+    RUNTIME_CHUNK_DEFAULT_EXPORT_PATTERN.test(targetSource),
+  );
+}
+
 /**
  * Writes stable aliases for current hashed runtime chunks.
  */
@@ -320,7 +359,10 @@ export function writeStableRootRuntimeAliases(params = {}) {
       fsImpl.rmSync?.(aliasPath, { force: true });
       continue;
     }
-    writeTextFileIfChanged(aliasPath, `export * from "./${candidate}";\n`);
+    writeTextFileIfChanged(
+      aliasPath,
+      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName: candidate }),
+    );
   }
 }
 
@@ -480,7 +522,10 @@ export function writeLegacyRootRuntimeCompatAliases(params = {}) {
     if (!targetFileName) {
       continue;
     }
-    writeTextFileIfChanged(legacyPath, `export * from "./${targetFileName}";\n`);
+    writeTextFileIfChanged(
+      legacyPath,
+      buildRuntimeAliasSource({ distDir, fsImpl, targetFileName }),
+    );
   }
 }
 

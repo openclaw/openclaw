@@ -628,6 +628,7 @@ struct OpenClawApp: App {
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
+        OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
@@ -658,6 +659,7 @@ struct OpenClawApp: App {
         WindowGroup {
             RootTabs()
                 .tint(OpenClawBrand.accent)
+                .font(OpenClawType.body)
                 .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
@@ -667,6 +669,11 @@ struct OpenClawApp: App {
                     self.applyAppearancePreference()
                     self.gatewayController.setScenePhase(self.scenePhase)
                 }
+                .onReceive(
+                    NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification),
+                    perform: { _ in
+                        OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
+                    })
                 .onOpenURL { url in
                     Task { await self.handleOpenURL(url) }
                 }
@@ -707,13 +714,17 @@ struct OpenClawApp: App {
     @MainActor
     private func applyAppearancePreference() {
         let style = self.appearancePreference.userInterfaceStyle
+        for window in Self.connectedWindows() {
+            window.overrideUserInterfaceStyle = style
+            window.tintColor = OpenClawBrand.uiAccent
+        }
+    }
+
+    @MainActor
+    private static func connectedWindows() -> [UIWindow] {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap(\.windows)
-            .forEach { window in
-                window.overrideUserInterfaceStyle = style
-                window.tintColor = OpenClawBrand.uiAccent
-            }
     }
 }
 

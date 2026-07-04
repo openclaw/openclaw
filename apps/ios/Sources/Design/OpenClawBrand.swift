@@ -61,6 +61,13 @@ enum OpenClawBrand {
     static let uiAccentForeground = adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102))
     static let uiAccentHot = adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86))
     static let uiAccentHotForeground = adaptiveUIColor(light: (166, 55, 50), dark: (255, 123, 115))
+    static let uiAccentPressed = adaptiveUIColor(light: (148, 40, 36), dark: (148, 40, 36))
+    static let uiTeal = adaptiveUIColor(light: (0, 196, 176), dark: (0, 196, 176))
+    static let uiVoid = adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17))
+    static let uiObsidian = adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28))
+    static let uiSlate = adaptiveUIColor(light: (242, 243, 247), dark: (28, 31, 43))
+    static let uiTextPrimary = adaptiveUIColor(light: (11, 12, 17), dark: (242, 239, 232))
+    static let uiTextSecondary = adaptiveUIColor(light: (90, 94, 110), dark: (168, 170, 191))
     static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (48, 209, 88))
     static let uiWarn = adaptiveUIColor(light: (154, 87, 0), dark: (255, 214, 10))
     static let uiDanger = adaptiveUIColor(light: (185, 28, 28), dark: (252, 165, 165))
@@ -70,12 +77,19 @@ enum OpenClawBrand {
     static let accentForeground = Color(uiColor: Self.uiAccentForeground)
     static let accentHot = Color(uiColor: Self.uiAccentHot)
     static let accentHotForeground = Color(uiColor: Self.uiAccentHotForeground)
+    static let accentPressed = Color(uiColor: Self.uiAccentPressed)
+    static let teal = Color(uiColor: Self.uiTeal)
+    static let void = Color(uiColor: Self.uiVoid)
+    static let obsidian = Color(uiColor: Self.uiObsidian)
+    static let slate = Color(uiColor: Self.uiSlate)
+    static let textPrimary = Color(uiColor: Self.uiTextPrimary)
+    static let textSecondary = Color(uiColor: Self.uiTextSecondary)
     static let danger = Color(uiColor: Self.uiDanger)
     static let ok = Color(uiColor: Self.uiOK)
     static let warn = Color(uiColor: Self.uiWarn)
     static let info = Color(uiColor: Self.uiInfo)
-    static let graphite = Color(uiColor: adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17)))
-    static let graphiteElevated = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28)))
+    static let graphite = void
+    static let graphiteElevated = obsidian
 
     static var sheetBackground: LinearGradient {
         LinearGradient(

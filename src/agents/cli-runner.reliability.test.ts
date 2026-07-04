@@ -65,7 +65,7 @@ vi.mock("../tts/tts.js", () => ({
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
-const autoCleanupTempDirs = useAutoCleanupTempDirTracker();
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 type HookRunnerGlobalStateForTest = {

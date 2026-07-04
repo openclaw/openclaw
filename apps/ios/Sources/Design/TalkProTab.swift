@@ -60,8 +60,11 @@ struct TalkProTab: View {
                     .navigationTitle("Enable Talk")
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Not Now") {
+                            Button {
                                 self.showPermissionPrompt = false
+                            } label: {
+                                Text("Not Now")
+                                    .font(OpenClawType.subheadSemiBold)
                             }
                         }
                     }
@@ -109,8 +112,8 @@ struct TalkProTab: View {
         OpenClawAdaptiveHeaderRow(
             title: "Talk",
             subtitle: self.headerSubtitle,
-            titleFont: .system(size: 30, weight: .bold),
-            subtitleFont: .caption.weight(.medium),
+            titleFont: OpenClawType.display(size: 30, weight: 750, relativeTo: .title1),
+            subtitleFont: OpenClawType.captionMedium,
             subtitleLineLimit: 1)
         {
             if let headerLeadingAction {
@@ -134,17 +137,17 @@ struct TalkProTab: View {
 
                 VStack(spacing: 5) {
                     Text(self.state.title)
-                        .font(.title3.weight(.bold))
+                        .font(OpenClawType.title3)
                         .multilineTextAlignment(.center)
                     Text(self.heroSubtitle)
-                        .font(.subheadline.weight(.medium))
+                        .font(OpenClawType.subheadMedium)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
 
                 Button(action: self.handlePrimaryAction) {
                     Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
-                        .font(.subheadline.weight(.bold))
+                        .font(OpenClawType.subheadBold)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
                 }
@@ -171,7 +174,7 @@ struct TalkProTab: View {
                     accessibilityIdentifier: "talk-background-listening-control")
                 Button(action: self.openVoiceSettings) {
                     Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(OpenClawType.headline)
                         .frame(width: 44, height: 44)
                 }
                 .buttonBorderShape(.circle)
@@ -194,7 +197,7 @@ struct TalkProTab: View {
             isOn.wrappedValue.toggle()
         } label: {
             Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .semibold))
+                .font(OpenClawType.headline)
                 .contentTransition(.symbolEffect(.replace))
                 .frame(width: 44, height: 44)
         }
@@ -518,7 +521,7 @@ private struct TalkProOrb: View {
                     .frame(width: 92, height: 44)
                     .opacity(self.showsWaveform ? 1 : 0)
                 Image(systemName: self.systemImage)
-                    .font(.system(size: 34, weight: .bold))
+                    .font(OpenClawType.title1)
                     .foregroundStyle(self.color)
                     .opacity(self.showsWaveform ? 0.20 : 1)
             }
