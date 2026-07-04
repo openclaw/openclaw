@@ -45,15 +45,22 @@ function isOAuthRefreshFailureMessage(message: string): boolean {
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
     lower.includes("authentication session could not be refreshed automatically") ||
-    // Claude CLI subprocess emits its own 401 message when its stored OAuth
-    // token expires. OpenClaw strips ANTHROPIC_API_KEY before spawning it, so
-    // a 401 here is unambiguously an OAuth-expiry signal — recognize it so the
-    // re-auth hint reaches channel replies instead of the generic failure text.
-    (lower.includes("failed to authenticate") && lower.includes("401"))
+    isClaudeCliOAuth401Message(lower)
+  );
+}
+
+function isClaudeCliOAuth401Message(lowercaseMessage: string): boolean {
+  return (
+    lowercaseMessage.includes("failed to authenticate") &&
+    lowercaseMessage.includes("api error") &&
+    /\b401\b/u.test(lowercaseMessage)
   );
 }
 
 function extractOAuthRefreshFailureProvider(message: string): string | null {
+  if (isClaudeCliOAuth401Message(message.toLowerCase())) {
+    return "claude-cli";
+  }
   const provider = message.match(OAUTH_REFRESH_FAILURE_PROVIDER_RE)?.[1]?.trim();
   return provider && provider.length > 0 ? provider : null;
 }
@@ -151,6 +158,14 @@ export function buildOAuthRefreshFailureLoginCommand(
   options?: { profileId?: string | null },
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  if (sanitizedProvider === "claude-cli") {
+    return [
+      "claude auth login",
+      formatCliCommand(
+        "openclaw models auth login --provider anthropic --method cli --set-default",
+      ),
+    ].join(" && ");
+  }
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
   return sanitizedProvider
     ? formatCliCommand(

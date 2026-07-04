@@ -7537,6 +7537,32 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces Claude CLI OAuth 401 failures with claude-cli reauth guidance", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError(
+        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        {
+          reason: "auth",
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          status: 401,
+        },
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Model login failed on the gateway for claude-cli. Please try again. If this keeps happening, re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli --set-default` in a terminal.",
+      );
+      expect(result.payload.text).not.toBe(PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE);
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(

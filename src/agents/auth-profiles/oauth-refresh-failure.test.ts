@@ -96,8 +96,11 @@ describe("oauth refresh failure hints", () => {
         "Failed to authenticate. API Error: 401 Invalid authentication credentials",
       ),
     ).toEqual({
-      provider: null,
+      provider: "claude-cli",
       reason: null,
     });
+    expect(buildOAuthRefreshFailureLoginCommand("claude-cli")).toBe(
+      "claude auth login && openclaw models auth login --provider anthropic --method cli --set-default",
+    );
   });
 });
