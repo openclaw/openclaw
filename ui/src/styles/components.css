@@ -933,6 +933,7 @@
   background: var(--card);
   border-radius: var(--radius-md);
   padding: 8px 12px;
+  height: 38px;
   outline: none;
   box-shadow: inset 0 1px 0 var(--card-highlight);
   transition:
