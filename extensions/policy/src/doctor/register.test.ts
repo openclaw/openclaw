@@ -1739,6 +1739,102 @@ describe("registerPolicyDoctorChecks", () => {
     });
   });
 
+  it("repairs automatic channel ingress narrowing findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          requireMention: false,
+          groups: {
+            ops: {
+              topics: {
+                incidents: { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+            requireMentionInGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const openGroups = await runPolicyRepairCheck(
+      "policy/ingress-open-groups-denied",
+      repairCtx(configPath, cfg),
+    );
+    const mentions = await runPolicyRepairCheck(
+      "policy/ingress-group-mention-required",
+      repairCtx(configPath, openGroups.config),
+    );
+
+    expect([...openGroups.changes, ...mentions.changes]).toEqual([
+      "Set channels.telegram.groupPolicy=allowlist for policy conformance.",
+      "Set channels.telegram.groups.ops.topics.incidents.requireMention=true for policy conformance.",
+      "Set channels.telegram.requireMention=true for policy conformance.",
+    ]);
+    expect(mentions.remainingFindings).toEqual([]);
+    expect(mentions.config).toMatchObject({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          requireMention: true,
+          groups: {
+            ops: {
+              topics: {
+                incidents: { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("does not repair channel ingress config without workspace repair opt-in", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: { telegram: { groupPolicy: "open" } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        ingress: {
+          channels: {
+            denyOpenGroups: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/ingress-open-groups-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("workspace repairs are disabled");
+    expect(result.changes).toEqual([
+      "Skipped policy config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace policy config.",
+    ]);
+    expect(result.config.channels?.telegram).toEqual({ groupPolicy: "open" });
+  });
+
   it("dry-runs required tool deny repairs without mutating config", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {

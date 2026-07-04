@@ -22,6 +22,8 @@ const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyToolsRequiredDenyMissing,
   CHECK_IDS.policyGatewayControlUiInsecure,
   CHECK_IDS.policyGatewayRemoteEnabled,
+  CHECK_IDS.policyIngressOpenGroupsDenied,
+  CHECK_IDS.policyIngressGroupMentionRequired,
   CHECK_IDS.policyDataHandlingRedactionDisabled,
   CHECK_IDS.policyDataHandlingTelemetryContentCapture,
 ]);
@@ -95,6 +97,10 @@ function applyAutomaticPatch(
       return disableInsecureControlUi(cfg, findings);
     case CHECK_IDS.policyGatewayRemoteEnabled:
       return disableRemoteGatewayMode(cfg, findings);
+    case CHECK_IDS.policyIngressOpenGroupsDenied:
+      return setFindingConfigValues(cfg, findings, "groupPolicy", "allowlist");
+    case CHECK_IDS.policyIngressGroupMentionRequired:
+      return setFindingConfigValues(cfg, findings, "requireMention", true);
     case CHECK_IDS.policyDataHandlingRedactionDisabled:
       if (hasScopedPolicyRequirement(findings)) {
         return skippedUnsafeScopedRepair(
@@ -245,6 +251,29 @@ function disableTelemetryContentCapture(cfg: OpenClawConfig): RepairPatch {
   };
 }
 
+function setFindingConfigValues(
+  cfg: OpenClawConfig,
+  findings: readonly HealthFinding[],
+  fieldName: string,
+  value: unknown,
+): RepairPatch {
+  const next = cloneConfig(cfg);
+  const changes: string[] = [];
+  for (const finding of findings) {
+    if (
+      finding.ocPath === undefined ||
+      configPathSegments(finding.ocPath).at(-1) !== fieldName ||
+      !setValueAtOcPath(next, finding.ocPath, value)
+    ) {
+      continue;
+    }
+    changes.push(`Set ${configPathLabel(finding.ocPath)}=${String(value)} for policy conformance.`);
+  }
+  return changes.length > 0
+    ? { config: next as OpenClawConfig, changes: uniqueStrings(changes) }
+    : { config: cfg, changes };
+}
+
 function cloneConfig(cfg: OpenClawConfig): ConfigRecord {
   return structuredClone(cfg) as ConfigRecord;
 }
@@ -298,7 +327,15 @@ function configPathSegments(ocPath: string): readonly string[] {
   if (!ocPath.startsWith(prefix)) {
     return [];
   }
-  return ocPath.slice(prefix.length).split("/").filter(Boolean);
+  return ocPath
+    .slice(prefix.length)
+    .split("/")
+    .filter(Boolean)
+    .map((segment) =>
+      segment.length >= 2 && segment.startsWith('"') && segment.endsWith('"')
+        ? segment.slice(1, -1)
+        : segment,
+    );
 }
 
 function configPathLabel(ocPath: string): string {
@@ -315,6 +352,40 @@ function configPathLabel(ocPath: string): string {
 
 function missingRequiredTool(finding: HealthFinding): string | undefined {
   return finding.message.match(/required tool '([^']+)'/)?.[1]?.trim();
+}
+
+function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): boolean {
+  const segments = configPathSegments(ocPath);
+  if (segments.length === 0) {
+    return false;
+  }
+  let current: unknown = cfg;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined || segment.startsWith("#")) {
+      return false;
+    }
+    if (!isRecord(current)) {
+      return false;
+    }
+    const existing = current[segment];
+    if (existing !== undefined && !isRecord(existing)) {
+      return false;
+    }
+    if (existing === undefined) {
+      current[segment] = {};
+    }
+    current = current[segment];
+  }
+  if (!isRecord(current)) {
+    return false;
+  }
+  const last = segments.at(-1);
+  if (last === undefined || last.startsWith("#") || current[last] === value) {
+    return false;
+  }
+  current[last] = value;
+  return true;
 }
 
 function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
