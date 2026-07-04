@@ -74,6 +74,7 @@ import {
   listPluginInteractiveHandlers,
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
+import { createJsonRpcManifestPluginDefinition } from "./json-rpc-manifest-runtime.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -2438,67 +2439,82 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      const loadEntry =
-        registrationPlan.loadSetupEntry && runtimeSetupEntry
-          ? runtimeSetupEntry
-          : runtimeCandidateEntry;
-      const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
-      const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
+      let mod: OpenClawPluginModule | null = null;
+      let safeSource = record.source;
+      let moduleLoadMs = 0;
       const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
         origin: candidate.origin,
         rootDir: candidate.rootDir,
         env,
       });
-      const opened = openRootFileSync({
-        absolutePath: moduleLoadSource,
-        rootPath: moduleRoot,
-        boundaryLabel: "plugin root",
-        rejectHardlinks,
-        skipLexicalRootCheck: true,
-      });
-      if (!opened.ok) {
-        pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
-        continue;
-      }
-      const safeSource = opened.path;
-      fs.closeSync(opened.fd);
-
-      let mod: OpenClawPluginModule | null = null;
-      let moduleLoadMs = 0;
-      let moduleLoadFailed = false;
-      const beforeModuleLoad = performance.now();
-      try {
-        // Track the plugin as imported once module evaluation begins. Top-level
-        // code may have already executed even if evaluation later throws.
-        recordImportedPluginId(record.id);
-        pluginLoadAttemptCount++;
-        logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
-        mod = withProfile(
-          { pluginId: record.id, source: safeSource },
-          registrationMode,
-          () => loadPluginModule(safeSource) as OpenClawPluginModule,
-        );
-      } catch (err) {
-        recordPluginError({
-          logger,
-          registry,
-          record,
-          seenIds,
-          pluginId,
-          origin: candidate.origin,
-          phase: "load",
-          error: err,
-          logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
-          diagnosticMessagePrefix: "failed to load plugin: ",
+      if (manifestRecord.jsonRpc) {
+        mod = createJsonRpcManifestPluginDefinition({
+          id: record.id,
+          name: record.name ?? record.id,
+          description: record.description ?? "",
+          kind: record.kind,
+          configSchema: { jsonSchema: manifestRecord.configSchema },
+          protocolVersion: manifestRecord.jsonRpc.protocolVersion,
+          process: manifestRecord.jsonRpc.process,
+          permissions: manifestRecord.jsonRpc.permissions,
+          registrations: manifestRecord.jsonRpc.registrations,
         });
-        moduleLoadFailed = true;
-        continue;
-      } finally {
-        moduleLoadMs = performance.now() - beforeModuleLoad;
-        detailPluginStartupTrace(options.startupTrace, record.id, [
-          ["loadMs", moduleLoadMs],
-          ["loadFailedCount", moduleLoadFailed ? 1 : 0],
-        ]);
+      } else {
+        const loadEntry =
+          registrationPlan.loadSetupEntry && runtimeSetupEntry
+            ? runtimeSetupEntry
+            : runtimeCandidateEntry;
+        const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
+        const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
+        const opened = openRootFileSync({
+          absolutePath: moduleLoadSource,
+          rootPath: moduleRoot,
+          boundaryLabel: "plugin root",
+          rejectHardlinks,
+          skipLexicalRootCheck: true,
+        });
+        if (!opened.ok) {
+          pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+          continue;
+        }
+        safeSource = opened.path;
+        fs.closeSync(opened.fd);
+
+        let moduleLoadFailed = false;
+        const beforeModuleLoad = performance.now();
+        try {
+          // Track the plugin as imported once module evaluation begins. Top-level
+          // code may have already executed even if evaluation later throws.
+          recordImportedPluginId(record.id);
+          pluginLoadAttemptCount++;
+          logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
+          mod = withProfile(
+            { pluginId: record.id, source: safeSource },
+            registrationMode,
+            () => loadPluginModule(safeSource) as OpenClawPluginModule,
+          );
+        } catch (err) {
+          recordPluginError({
+            logger,
+            registry,
+            record,
+            seenIds,
+            pluginId,
+            origin: candidate.origin,
+            phase: "load",
+            error: err,
+            logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
+            diagnosticMessagePrefix: "failed to load plugin: ",
+          });
+          moduleLoadFailed = true;
+          continue;
+        } finally {
+          moduleLoadMs = performance.now() - beforeModuleLoad;
+          detailPluginStartupTrace(options.startupTrace, record.id, [
+            ["loadMs", moduleLoadMs],
+            ["loadFailedCount", moduleLoadFailed ? 1 : 0],
+          ]);
+        }
       }
 
       if (registrationPlan.loadSetupEntry && manifestRecord.setupSource) {
@@ -3221,59 +3237,73 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-    const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir);
-    const sourceForCliMetadata =
-      candidate.origin === "bundled"
-        ? cliMetadataSource
-          ? safeRealpathOrResolve(cliMetadataSource)
-          : null
-        : (cliMetadataSource ?? candidate.source);
-    if (!sourceForCliMetadata) {
-      record.status = "loaded";
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      continue;
-    }
-    const opened = openRootFileSync({
-      absolutePath: sourceForCliMetadata,
-      rootPath: pluginRoot,
-      boundaryLabel: "plugin root",
-      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
-        origin: candidate.origin,
-        rootDir: candidate.rootDir,
-        env,
-      }),
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
-      continue;
-    }
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
-
     let mod: OpenClawPluginModule | null;
-    try {
-      mod = withProfile(
-        { pluginId: record.id, source: safeSource },
-        "cli-metadata",
-        () => loadPluginModule(safeSource) as OpenClawPluginModule,
-      );
-    } catch (err) {
-      recordPluginError({
-        logger,
-        registry,
-        record,
-        seenIds,
-        pluginId,
-        origin: candidate.origin,
-        phase: "load",
-        error: err,
-        logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
-        diagnosticMessagePrefix: "failed to load plugin: ",
+    if (manifestRecord.jsonRpc) {
+      mod = createJsonRpcManifestPluginDefinition({
+        id: record.id,
+        name: record.name ?? record.id,
+        description: record.description ?? "",
+        kind: record.kind,
+        configSchema: { jsonSchema: manifestRecord.configSchema },
+        protocolVersion: manifestRecord.jsonRpc.protocolVersion,
+        process: manifestRecord.jsonRpc.process,
+        permissions: manifestRecord.jsonRpc.permissions,
+        registrations: manifestRecord.jsonRpc.registrations,
       });
-      continue;
+    } else {
+      const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+      const cliMetadataSource = resolveCliMetadataEntrySource(candidate.rootDir);
+      const sourceForCliMetadata =
+        candidate.origin === "bundled"
+          ? cliMetadataSource
+            ? safeRealpathOrResolve(cliMetadataSource)
+            : null
+          : (cliMetadataSource ?? candidate.source);
+      if (!sourceForCliMetadata) {
+        record.status = "loaded";
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
+      const opened = openRootFileSync({
+        absolutePath: sourceForCliMetadata,
+        rootPath: pluginRoot,
+        boundaryLabel: "plugin root",
+        rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+          origin: candidate.origin,
+          rootDir: candidate.rootDir,
+          env,
+        }),
+        skipLexicalRootCheck: true,
+      });
+      if (!opened.ok) {
+        pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+        continue;
+      }
+      const safeSource = opened.path;
+      fs.closeSync(opened.fd);
+
+      try {
+        mod = withProfile(
+          { pluginId: record.id, source: safeSource },
+          "cli-metadata",
+          () => loadPluginModule(safeSource) as OpenClawPluginModule,
+        );
+      } catch (err) {
+        recordPluginError({
+          logger,
+          registry,
+          record,
+          seenIds,
+          pluginId,
+          origin: candidate.origin,
+          phase: "load",
+          error: err,
+          logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
+          diagnosticMessagePrefix: "failed to load plugin: ",
+        });
+        continue;
+      }
     }
 
     const resolved = resolvePluginModuleExport(mod);

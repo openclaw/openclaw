@@ -9,6 +9,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
+import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -21,6 +22,11 @@ import {
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import type {
+  OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawPluginHttpRouteAuth,
+  OpenClawPluginHttpRouteMatch,
+} from "./types.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -32,6 +38,14 @@ const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
 const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
 const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const MAX_JSON_RPC_VALUE_DEPTH = 32;
+const MAX_JSON_RPC_ARRAY_ITEMS = 4096;
+const MAX_JSON_RPC_OBJECT_KEYS = 4096;
+const MAX_JSON_RPC_FRAME_BYTES = 64 * 1024 * 1024;
+const MAX_JSON_RPC_PENDING_REQUESTS = 4096;
+const MAX_JSON_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+const JSON_RPC_HOST_CAPABILITY_RE =
+  /^(?:runtime|session|agent|runContext)(?:\.[A-Za-z][A-Za-z0-9_]*)+$/u;
 const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 
 type PluginManifestLoadCacheEntry = {
@@ -294,6 +308,85 @@ export type PluginManifestConfigContracts = {
   secretInputs?: PluginManifestSecretInputContracts;
 };
 
+export type PluginManifestJsonRpcJsonPrimitive = string | number | boolean | null;
+export type PluginManifestJsonRpcJsonValue =
+  | PluginManifestJsonRpcJsonPrimitive
+  | { [key: string]: PluginManifestJsonRpcJsonValue }
+  | PluginManifestJsonRpcJsonValue[];
+export type PluginManifestJsonRpcJsonObject = {
+  [key: string]: PluginManifestJsonRpcJsonValue;
+};
+
+export type PluginManifestJsonRpcProcess = {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  inheritEnv?: boolean;
+  timeoutMs?: number;
+  initializationTimeoutMs?: number;
+  maxFrameBytes?: number;
+  maxPendingRequests?: number;
+  logStderr?: boolean;
+};
+
+export type PluginManifestJsonRpcPermissions = {
+  host?: string[];
+};
+
+export type PluginManifestJsonRpcRegistration =
+  | {
+      type: "tool";
+      name: string;
+      description: string;
+      parameters?: PluginManifestJsonRpcJsonObject;
+      displaySummary?: string;
+      method?: string;
+      timeoutMs?: number;
+    }
+  | {
+      type: "hook";
+      hook: string;
+      description?: string;
+      options?: { priority?: number; timeoutMs?: number };
+      method?: string;
+      timeoutMs?: number;
+    }
+  | {
+      type: "httpRoute";
+      path: string;
+      auth: OpenClawPluginHttpRouteAuth;
+      match?: OpenClawPluginHttpRouteMatch;
+      gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+      nodeCapability?: {
+        surface: string;
+        ttlMs?: number;
+      };
+      replaceExisting?: boolean;
+      method?: string;
+      timeoutMs?: number;
+      maxBodyBytes?: number;
+    }
+  | {
+      type: "gatewayMethod";
+      method: string;
+      scope?: OperatorScope;
+      rpcMethod?: string;
+      timeoutMs?: number;
+    }
+  | {
+      type: "api";
+      method: string;
+      args: PluginManifestJsonRpcJsonValue[];
+    };
+
+export type PluginManifestJsonRpc = {
+  protocolVersion: 1;
+  process: PluginManifestJsonRpcProcess;
+  permissions?: PluginManifestJsonRpcPermissions;
+  registrations: PluginManifestJsonRpcRegistration[];
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -401,6 +494,8 @@ export type PluginManifest = {
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  /** Declarative JSON-RPC child-process runtime descriptors. */
+  jsonRpc?: PluginManifestJsonRpc;
 };
 
 export type PluginManifestContracts = {
@@ -570,6 +665,278 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
     normalized[key] = valueLocal;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeStringEnvRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, string> = Object.create(null);
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = normalizeOptionalString(rawKey) ?? "";
+    if (!key || isBlockedObjectKey(key) || typeof rawValue !== "string") {
+      continue;
+    }
+    normalized[key] = rawValue;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizePositiveInteger(value: unknown, maximum: number): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= maximum
+    ? Number(value)
+    : undefined;
+}
+
+function normalizeJsonRpcJsonObject(value: unknown): PluginManifestJsonRpcJsonObject | undefined {
+  const normalized = normalizeJsonRpcJsonValue(value);
+  return isRecord(normalized) ? (normalized as PluginManifestJsonRpcJsonObject) : undefined;
+}
+
+function normalizeJsonRpcJsonValue(
+  value: unknown,
+  depth = 0,
+): PluginManifestJsonRpcJsonValue | undefined {
+  if (depth > MAX_JSON_RPC_VALUE_DEPTH) {
+    return undefined;
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > MAX_JSON_RPC_ARRAY_ITEMS) {
+      return undefined;
+    }
+    const items = value.map((entry) => normalizeJsonRpcJsonValue(entry, depth + 1));
+    return items.every((entry) => entry !== undefined) ? items : undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_JSON_RPC_OBJECT_KEYS) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestJsonRpcJsonValue> = Object.create(null);
+  for (const [key, entry] of entries) {
+    if (isBlockedObjectKey(key)) {
+      return undefined;
+    }
+    const normalizedEntry = normalizeJsonRpcJsonValue(entry, depth + 1);
+    if (normalizedEntry === undefined) {
+      return undefined;
+    }
+    normalized[key] = normalizedEntry;
+  }
+  return normalized;
+}
+
+function normalizeJsonRpcProcess(value: unknown): PluginManifestJsonRpcProcess | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const command = normalizeOptionalString(value.command);
+  if (!command) {
+    return undefined;
+  }
+  const args = normalizeTrimmedStringList(value.args);
+  const cwd = normalizeOptionalString(value.cwd);
+  const env = normalizeStringEnvRecord(value.env);
+  const timeoutMs = normalizePositiveInteger(value.timeoutMs, MAX_JSON_RPC_TIMEOUT_MS);
+  const initializationTimeoutMs = normalizePositiveInteger(
+    value.initializationTimeoutMs,
+    MAX_JSON_RPC_TIMEOUT_MS,
+  );
+  const maxFrameBytes = normalizePositiveInteger(value.maxFrameBytes, MAX_JSON_RPC_FRAME_BYTES);
+  const maxPendingRequests = normalizePositiveInteger(
+    value.maxPendingRequests,
+    MAX_JSON_RPC_PENDING_REQUESTS,
+  );
+  return {
+    command,
+    ...(args.length > 0 ? { args } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(env ? { env } : {}),
+    ...(typeof value.inheritEnv === "boolean" ? { inheritEnv: value.inheritEnv } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(initializationTimeoutMs !== undefined ? { initializationTimeoutMs } : {}),
+    ...(maxFrameBytes !== undefined ? { maxFrameBytes } : {}),
+    ...(maxPendingRequests !== undefined ? { maxPendingRequests } : {}),
+    ...(typeof value.logStderr === "boolean" ? { logStderr: value.logStderr } : {}),
+  };
+}
+
+function normalizeJsonRpcPermissions(value: unknown): PluginManifestJsonRpcPermissions | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const host = normalizeTrimmedStringList(value.host).filter((entry) =>
+    JSON_RPC_HOST_CAPABILITY_RE.test(entry),
+  );
+  return host.length > 0 ? { host } : undefined;
+}
+
+function normalizeJsonRpcRegistration(
+  value: unknown,
+): PluginManifestJsonRpcRegistration | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (value.type === "tool") {
+    const name = normalizeOptionalString(value.name);
+    const description = normalizeOptionalString(value.description);
+    if (!name || !description) {
+      return undefined;
+    }
+    const method = normalizeOptionalString(value.method);
+    const displaySummary = normalizeOptionalString(value.displaySummary);
+    const parameters = normalizeJsonRpcJsonObject(value.parameters);
+    const timeoutMs = normalizeOptionalNumber(value.timeoutMs);
+    return {
+      type: "tool",
+      name,
+      description,
+      ...(parameters ? { parameters } : {}),
+      ...(displaySummary ? { displaySummary } : {}),
+      ...(method ? { method } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
+  }
+  if (value.type === "hook") {
+    const hook = normalizeOptionalString(value.hook);
+    if (!hook) {
+      return undefined;
+    }
+    const description = normalizeOptionalString(value.description);
+    const method = normalizeOptionalString(value.method);
+    const priority = isRecord(value.options)
+      ? normalizeOptionalNumber(value.options.priority)
+      : undefined;
+    const optionTimeoutMs = isRecord(value.options)
+      ? normalizeOptionalNumber(value.options.timeoutMs)
+      : undefined;
+    const options = isRecord(value.options)
+      ? {
+          ...(priority !== undefined ? { priority } : {}),
+          ...(optionTimeoutMs !== undefined ? { timeoutMs: optionTimeoutMs } : {}),
+        }
+      : undefined;
+    const timeoutMs = normalizeOptionalNumber(value.timeoutMs);
+    return {
+      type: "hook",
+      hook,
+      ...(description ? { description } : {}),
+      ...(options && Object.keys(options).length > 0 ? { options } : {}),
+      ...(method ? { method } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
+  }
+  if (value.type === "httpRoute") {
+    const pathValue = normalizeOptionalString(value.path);
+    const auth = value.auth === "gateway" || value.auth === "plugin" ? value.auth : undefined;
+    if (!pathValue || !auth) {
+      return undefined;
+    }
+    const match = value.match === "exact" || value.match === "prefix" ? value.match : undefined;
+    const gatewayRuntimeScopeSurface =
+      value.gatewayRuntimeScopeSurface === "write-default" ||
+      value.gatewayRuntimeScopeSurface === "trusted-operator"
+        ? value.gatewayRuntimeScopeSurface
+        : undefined;
+    const nodeCapabilityTtlMs = isRecord(value.nodeCapability)
+      ? normalizeOptionalNumber(value.nodeCapability.ttlMs)
+      : undefined;
+    const nodeCapability = isRecord(value.nodeCapability)
+      ? {
+          surface: normalizeOptionalString(value.nodeCapability.surface) ?? "",
+          ...(nodeCapabilityTtlMs !== undefined ? { ttlMs: nodeCapabilityTtlMs } : {}),
+        }
+      : undefined;
+    const method = normalizeOptionalString(value.method);
+    const timeoutMs = normalizeOptionalNumber(value.timeoutMs);
+    const maxBodyBytes = normalizeOptionalNumber(value.maxBodyBytes);
+    return {
+      type: "httpRoute",
+      path: pathValue,
+      auth,
+      ...(match ? { match } : {}),
+      ...(gatewayRuntimeScopeSurface ? { gatewayRuntimeScopeSurface } : {}),
+      ...(nodeCapability?.surface ? { nodeCapability } : {}),
+      ...(typeof value.replaceExisting === "boolean"
+        ? { replaceExisting: value.replaceExisting }
+        : {}),
+      ...(method ? { method } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    };
+  }
+  if (value.type === "gatewayMethod") {
+    const method = normalizeOptionalString(value.method);
+    if (!method) {
+      return undefined;
+    }
+    const rpcMethod = normalizeOptionalString(value.rpcMethod);
+    const timeoutMs = normalizeOptionalNumber(value.timeoutMs);
+    return {
+      type: "gatewayMethod",
+      method,
+      ...(isOperatorScope(value.scope) ? { scope: value.scope } : {}),
+      ...(rpcMethod ? { rpcMethod } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
+  }
+  if (value.type === "api") {
+    const method = normalizeOptionalString(value.method);
+    if (!method || !Array.isArray(value.args)) {
+      return undefined;
+    }
+    const args = value.args.map((entry) => normalizeJsonRpcJsonValue(entry));
+    if (args.some((entry) => entry === undefined)) {
+      return undefined;
+    }
+    return {
+      type: "api",
+      method,
+      args: args as PluginManifestJsonRpcJsonValue[],
+    };
+  }
+  return undefined;
+}
+
+function normalizeJsonRpcManifest(value: unknown): PluginManifestJsonRpc | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const process = normalizeJsonRpcProcess(value.process);
+  if (!process || !Array.isArray(value.registrations)) {
+    return undefined;
+  }
+  const protocolVersion = value.protocolVersion === 1 ? 1 : undefined;
+  if (protocolVersion === undefined) {
+    return undefined;
+  }
+  const permissions = normalizeJsonRpcPermissions(value.permissions);
+  const registrations = value.registrations
+    .map(normalizeJsonRpcRegistration)
+    .filter((registration): registration is PluginManifestJsonRpcRegistration =>
+      Boolean(registration),
+    );
+  if (registrations.length === 0) {
+    return undefined;
+  }
+  return {
+    protocolVersion,
+    process,
+    ...(permissions ? { permissions } : {}),
+    registrations,
+  };
 }
 
 const MEDIA_UNDERSTANDING_CAPABILITIES = new Set(["image", "audio", "video"]);
@@ -1816,6 +2183,7 @@ export function loadPluginManifest(
   const toolMetadata = normalizePluginToolMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
+  const jsonRpc = normalizeJsonRpcManifest(raw.jsonRpc);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
   if (isRecord(raw.uiHints)) {
@@ -1870,6 +2238,7 @@ export function loadPluginManifest(
       toolMetadata,
       configContracts,
       channelConfigs,
+      jsonRpc,
     },
     manifestPath,
   });

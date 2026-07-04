@@ -47,11 +47,13 @@ plugin runtime.
 - activation hints for control-plane surfaces
 - shorthand model-family ownership
 - static capability-ownership snapshots (`contracts`)
+- declarative JSON-RPC child-process tools, hooks, HTTP routes, and Gateway methods
 - QA runner metadata the shared `openclaw qa` host can inspect
 - channel-specific config metadata merged into catalog and validation surfaces
 
-**Do not use it for:** registering runtime behavior, declaring code entrypoints,
-or npm install metadata. Those belong in your plugin code and `package.json`.
+**Do not use it for:** arbitrary runtime behavior, JavaScript code entrypoints,
+or npm install metadata. Native JavaScript registration belongs in plugin code
+and `package.json`; JSON-RPC child-process registration uses `jsonRpc`.
 
 ## Minimal example
 
@@ -170,6 +172,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                        |
 | `providerRequest`                    | No       | `object`                         | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                          |
 | `secretProviderIntegrations`         | No       | `Record<string, object>`         | Declarative SecretRef exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                 |
+| `jsonRpc`                            | No       | `object`                         | Declarative stdio JSON-RPC child-process runtime. Use this when the plugin implementation lives in Rust, Python, Go, or another non-JavaScript runtime.                                                                                         |
 | `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                     |
 | `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                                          |
 | `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                            |
@@ -194,6 +197,183 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `icon`                               | No       | `string`                         | HTTPS image URL for marketplace/catalog cards. ClawHub accepts any valid `https://` URL and falls back to the default plugin icon when this is omitted or invalid.                                                                              |
 | `version`                            | No       | `string`                         | Informational plugin version.                                                                                                                                                                                                                   |
 | `uiHints`                            | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                               |
+
+## jsonRpc reference
+
+Use `jsonRpc` when the plugin implementation runs in Rust, Python, Go, or any
+other runtime that can speak newline-delimited JSON-RPC over stdio. The plugin
+does not need a TypeScript entry file. OpenClaw discovers the plugin from
+`openclaw.plugin.json` and registers each listed surface when the plugin loads.
+The declared child process starts lazily on the first tool, hook, HTTP route, or
+Gateway method dispatch.
+
+```json
+{
+  "id": "rust-tools",
+  "name": "Rust Tools",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  },
+  "contracts": {
+    "tools": ["rust_echo"]
+  },
+  "jsonRpc": {
+    "protocolVersion": 1,
+    "process": {
+      "command": "target/release/rust-tools",
+      "args": ["--stdio"],
+      "inheritEnv": false
+    },
+    "permissions": {
+      "host": ["runtime.state.openKeyedStore", "runtime.llm.complete"]
+    },
+    "registrations": [
+      {
+        "type": "tool",
+        "name": "rust_echo",
+        "description": "Echo text through the Rust plugin process."
+      }
+    ]
+  }
+}
+```
+
+`jsonRpc.process` fields:
+
+| Field                     | Required | Type                    | What it means                                                                                               |
+| ------------------------- | -------- | ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `command`                 | Yes      | `string`                | Executable to start. Commands containing `/` or `\` resolve from the plugin root; bare commands use `PATH`. |
+| `args`                    | No       | `string[]`              | Arguments passed to the executable.                                                                         |
+| `cwd`                     | No       | `string`                | Working directory. Relative paths resolve from the plugin root.                                             |
+| `env`                     | No       | `Record<string,string>` | Environment variables passed to the child process.                                                          |
+| `inheritEnv`              | No       | `boolean`               | Whether to inherit the OpenClaw process environment. Defaults to `false`.                                   |
+| `timeoutMs`               | No       | `number`                | Default request timeout.                                                                                    |
+| `initializationTimeoutMs` | No       | `number`                | Timeout for `openclaw.initialize`.                                                                          |
+| `maxFrameBytes`           | No       | `number`                | Maximum newline-delimited JSON frame size. Defaults to 8 MiB.                                               |
+| `maxPendingRequests`      | No       | `number`                | Maximum concurrent outbound requests. Defaults to 256.                                                      |
+| `logStderr`               | No       | `boolean`               | Forward child stderr to the plugin logger. Defaults to `true`.                                              |
+
+`jsonRpc.registrations` supports these `type` values:
+
+| Type            | Required fields       | Optional fields                                                                                                   |
+| --------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `tool`          | `name`, `description` | `parameters`, `displaySummary`, `method`, `timeoutMs`                                                             |
+| `hook`          | `hook`                | `description`, `options.priority`, `options.timeoutMs`, `method`, `timeoutMs`                                     |
+| `httpRoute`     | `path`, `auth`        | `match`, `gatewayRuntimeScopeSurface`, `nodeCapability`, `replaceExisting`, `method`, `timeoutMs`, `maxBodyBytes` |
+| `gatewayMethod` | `method`              | `scope`, `rpcMethod`, `timeoutMs`                                                                                 |
+| `api`           | `method`, `args`      | None. Calls an OpenClaw registration method with JSON descriptors.                                                |
+
+OpenClaw sends one JSON-RPC request per registered surface. The default method
+names are `openclaw.tool.execute`, `openclaw.hook.handle`,
+`openclaw.http.handle`, and `openclaw.gateway.handle`; set `method` or
+`rpcMethod` on a registration to override them. After startup, OpenClaw first
+sends `openclaw.initialize` with plugin identity metadata and the validated
+plugin config. The initialization payload also includes protocol version 1,
+enabled protocol features, and the exact host capabilities declared under
+`jsonRpc.permissions.host`.
+
+### Generic API registrations
+
+Use an `api` registration for callback-shaped plugin surfaces that do not have
+a shorthand descriptor. Replace function values with
+`{ "$rpc": "plugin.method" }`; OpenClaw materializes those references as
+callbacks that dispatch to the child process.
+
+```json
+{
+  "type": "api",
+  "method": "registerCommand",
+  "args": [
+    {
+      "name": "native-status",
+      "description": "Read status from the native plugin.",
+      "handler": { "$rpc": "plugin.command.status", "timeoutMs": 10000 }
+    }
+  ]
+}
+```
+
+Generic descriptors support asynchronous callbacks and static JSON metadata.
+OpenClaw accepts these registration methods and callback paths in protocol
+version 1:
+
+- `registerAgentEventSubscription`: `args[0].handle`
+- `registerAgentToolResultMiddleware`: `args[0]`
+- `registerCommand`: `args[0].handler`
+- `registerCompactionProvider`: `args[0].summarize`
+- `registerGatewayDiscoveryService`: `args[0].advertise`
+- `registerHostedMediaResolver`: `args[0]`
+- `registerInteractiveHandler`: `args[0].handler`
+- `registerNodeHostCommand` and `registerNodeInvokePolicy`: `args[0].handle`
+- `registerRuntimeLifecycle`: `args[0].cleanup`
+- `registerService`: `args[0].start` and `args[0].stop`
+- `registerSessionAction`: `args[0].handler`
+- `registerTool`: `args[0].execute`
+- `onConversationBindingResolved`: `args[0]`
+
+Static-only descriptors are also accepted for `registerControlUiDescriptor`,
+`registerReload`, `registerSessionExtension`, `registerSessionSchedulerJob`, and
+`registerToolMetadata`. OpenClaw rejects `$rpc` markers anywhere except the
+callback paths above. Contracts that require a synchronous return value,
+receive sensitive host state, or receive broad callable runtime objects are not
+available through protocol version 1. This includes speech-provider
+configuration probes, migration providers, security audit collectors, model
+catalog providers, and the `tool_result_persist` and `before_message_write`
+hooks.
+
+### Child-to-host calls
+
+The child process can call a permitted OpenClaw host capability with a JSON-RPC
+request:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "host-1",
+  "method": "openclaw.host.call",
+  "params": {
+    "method": "runtime.llm.complete",
+    "args": [{ "messages": [{ "role": "user", "content": "Summarize this." }] }]
+  }
+}
+```
+
+The requested method must appear exactly in `jsonRpc.permissions.host`.
+Supported roots are `runtime.*`, `session.*`, `agent.*`, and `runContext.*`.
+OpenClaw rejects undeclared or non-callable paths. Permissions do not sandbox
+the executable; installed plugins still run with the operating-system access of
+the OpenClaw process.
+
+### Callbacks, cancellation, and streams
+
+OpenClaw serializes callable host values as `{ "$callback": "id" }`. Invoke one
+with `openclaw.callback.invoke`, then release a retained callback with the
+`$/callback/release` notification. Remote callback arguments and results use
+the same value codec.
+
+When either side aborts a request, it sends `$/cancelRequest` with the original
+request id. Long-running handlers should stop work when their local JSON-RPC
+implementation receives that notification.
+
+Async iterables and Node readable streams cross the protocol as
+`{ "$stream": "id" }`. The consumer must send `$/stream/ready` with that id
+before the producer sends any values. The producer then sends `$/stream/chunk`,
+followed by `$/stream/end` or `$/stream/error`. This handshake prevents stream
+notifications from racing ahead of the JSON-RPC response that introduced the
+stream. OpenClaw bounds active streams to 256 and remote buffering to 256 unread
+values; consumers must drain streams instead of treating them as unbounded
+queues. A consumer that stops early sends `$/stream/cancel`; producers must stop
+work and release the matching iterator.
+
+OpenClaw also bounds child-to-host requests with `maxPendingRequests` and keeps
+at most 1,024 unreleased host callback handles. Children should still send
+`$/callback/release` as soon as a retained callback is no longer needed.
+
+Every message is one UTF-8 JSON-RPC 2.0 object followed by a newline. Request
+ids may be strings or numbers. Binary values should be base64-encoded or passed
+through a capability-specific file/media handle; raw binary frames are not part
+of protocol version 1.
 
 ## Generation provider metadata reference
 

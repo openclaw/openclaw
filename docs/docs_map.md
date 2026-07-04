@@ -5582,6 +5582,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal example
   - H2: Rich example
   - H2: Top-level field reference
+  - H2: jsonRpc reference
+  - H3: Generic API registrations
+  - H3: Child-to-host calls
+  - H3: Callbacks, cancellation, and streams
   - H2: Generation provider metadata reference
   - H2: Tool metadata reference
   - H2: providerAuthChoices reference
