@@ -38,7 +38,11 @@ import {
   normalizeContinuationTargetKey,
   normalizeContinuationTargetKeys,
 } from "./targeting.js";
-import type { PendingContinuationDelegate, StagedPostCompactionDelegate } from "./types.js";
+import type {
+  ChainState,
+  PendingContinuationDelegate,
+  StagedPostCompactionDelegate,
+} from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-store");
 
@@ -88,6 +92,15 @@ const PendingDelegateStateSchema = z
     // Restart recovery adds it to the (stale) child-entry chain cost so the
     // continuation cost cap is enforced against the post-run total (#1144).
     chainTokensFold: z.number().int().nonnegative().optional(),
+    persistedChainState: z
+      .object({
+        currentChainCount: z.number().int().nonnegative(),
+        chainStartedAt: z.number().int().nonnegative(),
+        accumulatedChainTokens: z.number().int().nonnegative(),
+        chainId: z.string().min(1).optional(),
+      })
+      .optional(),
+    persistedChainStateKind: z.enum(["advanced", "terminal"]).optional(),
     // Durable inherited policy for default-mode delayed delegates queued under
     // a silent/silent-wake parent chain. Recovery cannot reconstruct this from
     // the session key alone, so it must ride the TaskFlow row (#1158).
@@ -180,6 +193,10 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(delegate.model ? { model: delegate.model } : {}),
     ...(delegate.chainTokensFold !== undefined
       ? { chainTokensFold: delegate.chainTokensFold }
+      : {}),
+    ...(delegate.persistedChainState ? { persistedChainState: delegate.persistedChainState } : {}),
+    ...(delegate.persistedChainStateKind
+      ? { persistedChainStateKind: delegate.persistedChainStateKind }
       : {}),
     ...(delegate.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(delegate.inheritedWake ? { inheritedWake: true } : {}),
@@ -465,6 +482,10 @@ function flowToDelegate(
     ...(state.traceparent ? { traceparent: state.traceparent } : {}),
     ...(state.model ? { model: state.model } : {}),
     ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
+    ...(state.persistedChainState ? { persistedChainState: state.persistedChainState } : {}),
+    ...(state.persistedChainStateKind
+      ? { persistedChainStateKind: state.persistedChainStateKind }
+      : {}),
     ...(state.inheritedSilent ? { inheritedSilent: true } : {}),
     ...(state.inheritedWake ? { inheritedWake: true } : {}),
     ...(state.spawnRequesterSessionKey
@@ -685,6 +706,54 @@ export function markPendingDelegateFailed(
   return Boolean(failed.current && isTerminalDelegateFlow(failed.current));
 }
 
+export function markPendingDelegateChainStatePersistPlanned(
+  delegate: Pick<
+    PendingContinuationDelegate,
+    "flowId" | "expectedRevision" | "task" | "persistedChainState" | "persistedChainStateKind"
+  >,
+  chainState: ChainState,
+  kind: "advanced" | "terminal" = "advanced",
+): PendingContinuationDelegate {
+  if (!delegate.flowId || delegate.expectedRevision === undefined) {
+    log.warn(
+      "[continuation:delegate-chain-state-plan-missing-flow] cannot mark planned chain state because flow metadata is missing",
+    );
+    return {
+      task: delegate.task,
+      ...(delegate.persistedChainState
+        ? { persistedChainState: delegate.persistedChainState }
+        : {}),
+      ...(delegate.persistedChainStateKind
+        ? { persistedChainStateKind: delegate.persistedChainStateKind }
+        : {}),
+    };
+  }
+  const current = getTaskFlowById(delegate.flowId);
+  const state = current ? decodeDelegateState(current) : undefined;
+  const { chainTokensFold: _chainTokensFold, ...stateWithoutFold } =
+    state ??
+    ({ kind: "continuation_delegate", task: delegate.task } satisfies PendingDelegateState);
+  const nextState: PendingDelegateState = {
+    ...stateWithoutFold,
+    persistedChainState: chainState,
+    persistedChainStateKind: kind,
+  };
+  const planned = updateFlowRecordByIdExpectedRevision({
+    flowId: delegate.flowId,
+    expectedRevision: delegate.expectedRevision,
+    patch: {
+      stateJson: nextState,
+      updatedAt: Date.now(),
+    },
+  });
+  if (!planned.applied || !planned.flow) {
+    throw new Error(
+      `planned delegate chain-state marker was not committed for flow ${delegate.flowId}`,
+    );
+  }
+  return flowToDelegate(planned.flow, nextState);
+}
+
 /**
  * Peek the soonest `dueAt` (createdAt + delayMs) across queued, unmatured
  * pending delegates for a session.
@@ -777,9 +846,9 @@ export function annotateQueuedDelegatesChainTokensFold(
  * basis has been persisted to the child entry. Without this, later hedges reload
  * the already-folded entry and add the same fold again (#1158).
  */
-export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number {
+function clearDelegatesChainTokensFold(flows: readonly TaskFlowRecord[]): number {
   let cleared = 0;
-  for (const flow of listQueuedPendingFlows(sessionKey)) {
+  for (const flow of flows) {
     const state = decodeDelegateState(flow);
     if (!state?.chainTokensFold) {
       continue;
@@ -798,6 +867,16 @@ export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number 
     }
   }
   return cleared;
+}
+
+export function clearQueuedDelegatesChainTokensFold(sessionKey: string): number {
+  return clearDelegatesChainTokensFold(listQueuedPendingFlows(sessionKey));
+}
+
+export function clearRecoverableDelegatesChainTokensFold(sessionKey: string): number {
+  return clearDelegatesChainTokensFold(
+    listTaskFlowsForOwnerKey(sessionKey).filter(isRecoverablePendingFlow),
+  );
 }
 
 /**

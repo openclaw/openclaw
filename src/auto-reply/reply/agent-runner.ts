@@ -65,11 +65,8 @@ import {
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
 import {
-  consumeStagedPostCompactionDelegates,
   enqueuePendingDelegate,
-  finalizeStagedPostCompactionDelegates,
   pendingDelegateCount,
-  requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
 } from "../continuation-delegate-store.js";
@@ -132,10 +129,7 @@ import {
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
-import {
-  dispatchPostCompactionDelegates,
-  persistPendingPostCompactionDelegates,
-} from "./post-compaction-delegate-dispatch.js";
+import { dispatchPostCompactionDelegates } from "./post-compaction-delegate-dispatch.js";
 import {
   shouldWarnAboutPrivateMessageToolFinal,
   warnPrivateMessageToolFinal,
@@ -3209,52 +3203,10 @@ export async function runReplyAgent(replyParams: {
       }
     }
 
-    // Persist staged post-compaction delegates to the session entry so they
-    // survive to the next compaction seam — including when auto-compaction
-    // already fired this turn. dispatchPostCompactionDelegates (above) consumes
-    // only delegates staged BEFORE it ran; a bracket/tool `post-compaction`
-    // delegate staged later in this same turn is still queued here and targets
-    // the NEXT seam. Without persisting it now the finally-drain below would
-    // consume and silently discard it (C1).
-    if (continuationFeatureEnabled && sessionKey) {
-      const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey, {
-        claimFor: "next-seam-persist",
-      });
-      // consumeStagedPostCompactionDelegates claims the TaskFlow rows to
-      // `running`; capture their handles so the finalize below finishes ONLY
-      // these rows, never other running rows for the session (#1144).
-      const claimedFlowIds = stagedCompactionDelegates.map((delegate) => delegate.flowId);
-      if (stagedCompactionDelegates.length > 0) {
-        try {
-          await persistPendingPostCompactionDelegates({
-            sessionEntry: activeSessionEntry,
-            sessionStore: activeSessionStore,
-            sessionKey,
-            storePath,
-            delegates: stagedCompactionDelegates,
-          });
-        } catch (err) {
-          // Session-store persist failed. Re-stage the delegates as fresh queued
-          // TaskFlow rows NOW — before we finalize the claimed rows — so they are
-          // durably recoverable. Finalizing against only the volatile
-          // postCompactionDelegatesToPreserve list would drop them on a crash
-          // before the finally re-stage runs (#1144).
-          for (const delegate of stagedCompactionDelegates) {
-            if (!requeueReleasedPostCompactionDelegate(delegate)) {
-              stagePostCompactionDelegate(sessionKey, delegate);
-            }
-          }
-          defaultRuntime.log(
-            `Failed to persist post-compaction delegates for ${sessionKey}; re-staged ${stagedCompactionDelegates.length} to the durable queue: ${String(err)}`,
-          );
-        }
-        // Content is now durable (session store on success, re-staged queued rows
-        // on failure). Finish the claimed rows so they are not re-consumed; a
-        // crash before here leaves them recoverable via
-        // listRecoverableStagedPostCompactionDelegates.
-        finalizeStagedPostCompactionDelegates(claimedFlowIds);
-      }
-    }
+    // Post-compaction delegates staged after this turn's compaction release stay
+    // queued in TaskFlow for the NEXT seam. Do not consume them here: the consume
+    // API marks rows `running`, which startup recovery interprets as already
+    // released crash-orphans and would dispatch before the next compaction.
 
     // Consume and dispatch TaskFlow-backed delegates before silent returns so
     // delayed delegates still arm their quiet-channel hedge.

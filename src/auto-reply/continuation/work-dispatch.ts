@@ -103,7 +103,11 @@ function clearIdleRetryControllersForTests(): void {
   idleRetryControllers.clear();
 }
 
-function armWorkTimer(sessionKey: string, fireAt: number): void {
+function armWorkTimer(
+  sessionKey: string,
+  fireAt: number,
+  options: { includeIdleRetry?: boolean } = {},
+): void {
   clearWorkTimer(sessionKey);
   const fireIn = Math.max(0, fireAt - Date.now());
   log.info(
@@ -116,6 +120,7 @@ function armWorkTimer(sessionKey: string, fireAt: number): void {
       sessionKey,
       recoverRunning: true,
       includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
+      ...(options.includeIdleRetry ? { includeIdleRetry: true } : {}),
       includeRunningIdleRetry: true,
     })
       .then(() => undefined)

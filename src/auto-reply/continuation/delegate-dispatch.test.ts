@@ -26,6 +26,8 @@ const loadSessionStoreForRecoveryMock = vi.fn(
 const pendingSessionDeliveriesForRecovery: Record<string, unknown>[] = [];
 const updateSessionStoreForRecoveryOptions: Array<Record<string, unknown> | undefined> = [];
 let updateSessionStoreForRecoveryShouldThrow = false;
+let updateSessionStoreForRecoveryRequiredWriteCalls = 0;
+let updateSessionStoreForRecoveryThrowOnRequiredWriteCall: number | undefined;
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => spawnSubagentDirectMock(...args),
@@ -64,8 +66,15 @@ vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
     options?: Record<string, unknown>,
   ): Promise<T> => {
     updateSessionStoreForRecoveryOptions.push(options);
-    if (updateSessionStoreForRecoveryShouldThrow && options?.requireWriteSuccess === true) {
-      throw new Error("session store write failed");
+    if (options?.requireWriteSuccess === true) {
+      updateSessionStoreForRecoveryRequiredWriteCalls++;
+      if (
+        updateSessionStoreForRecoveryShouldThrow ||
+        updateSessionStoreForRecoveryRequiredWriteCalls ===
+          updateSessionStoreForRecoveryThrowOnRequiredWriteCall
+      ) {
+        throw new Error("session store write failed");
+      }
     }
     const store = recoveryStoreByPath.get(storePath) ?? {};
     recoveryStoreByPath.set(storePath, store);
@@ -283,6 +292,8 @@ beforeEach(() => {
   updateSessionStoreForRecoveryOptions.length = 0;
   updateSessionStoreForRecoveryShouldThrow = false;
   finishFlowShouldPersistFail = false;
+  updateSessionStoreForRecoveryRequiredWriteCalls = 0;
+  updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
   vi.useFakeTimers();
 });
 
@@ -300,6 +311,8 @@ afterEach(() => {
   updateSessionStoreForRecoveryOptions.length = 0;
   updateSessionStoreForRecoveryShouldThrow = false;
   finishFlowShouldPersistFail = false;
+  updateSessionStoreForRecoveryRequiredWriteCalls = 0;
+  updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
   vi.useRealTimers();
 });
 
@@ -1981,6 +1994,44 @@ describe("recoverPendingContinuationDelegates", () => {
     );
   });
 
+  it("keeps regular accepted rows recoverable when recovered chain-state persist fails", async () => {
+    const sessionKey = "agent:main:subagent:delegate-recover-persist-fail";
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: { sessionId: "session-child", continuationChainCount: 0 },
+    });
+    enqueuePendingDelegate(sessionKey, { task: "accepted before persist failure" });
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    const first = await recoverPendingContinuationDelegates({});
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(updateSessionStoreForRecoveryOptions).toContainEqual({ requireWriteSuccess: true });
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "running" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toBeUndefined();
+    expect(loggerRecords).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("delegate-recovery-chain-persist-failed"),
+      }),
+    );
+
+    const digest = crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    updateSessionStoreForRecoveryShouldThrow = false;
+    spawnSubagentDirectMock.mockClear();
+
+    const reconciled = await recoverPendingContinuationDelegates({});
+
+    expect(reconciled).toMatchObject({ sessions: 1, dispatched: 1, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 0,
+    });
+  });
+
   it("persists the folded chain state when a recovered delayed delegate's hedge fires (#1158)", async () => {
     // The finding: recovery opts into applyDelegateChainTokensFold but, for a
     // still-unmatured delayed delegate, only ARMS a hedge. Without a
@@ -2034,6 +2085,234 @@ describe("recoverPendingContinuationDelegates", () => {
     // so a later hop enforces the cap against the folded basis, not stale 100_000.
     expect(persisted?.continuationChainCount).toBe(2);
     expect(persisted?.continuationChainTokens).toBe(150_000);
+  });
+
+  it("recovers a hedge-claimed row after recovered chain-state persist fails", async () => {
+    const sessionKey = "agent:main:subagent:hedge-persist-fail-retry";
+    enqueuePendingDelegate(sessionKey, {
+      task: "delayed hop with transient persist failure",
+      delayMs: 60_000,
+      chainTokensFold: 50_000,
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 100_000,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "running" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toBeUndefined();
+
+    const digest = crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    updateSessionStoreForRecoveryShouldThrow = false;
+    spawnSubagentDirectMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 2,
+      continuationChainTokens: 150_000,
+    });
+  });
+
+  it("does not reapply a shared fold after a later recovered row persist fails", async () => {
+    const sessionKey = "agent:main:subagent:shared-fold-partial-persist";
+    enqueuePendingDelegate(sessionKey, { task: "first shared fold", chainTokensFold: 50_000 });
+    enqueuePendingDelegate(sessionKey, { task: "second shared fold", chainTokensFold: 50_000 });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 100_000,
+      },
+    });
+    updateSessionStoreForRecoveryThrowOnRequiredWriteCall = 2;
+
+    const first = await recoverPendingContinuationDelegates({});
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "running" });
+    const retriedState = mockFlows.get("flow-2")?.stateJson as Record<string, unknown> | undefined;
+    expect(retriedState?.chainTokensFold).toBe(undefined);
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 2,
+      continuationChainTokens: 150_000,
+    });
+
+    const digest = crypto.createHash("sha256").update("flow-2").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+    updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
+    spawnSubagentDirectMock.mockClear();
+
+    const reconciled = await recoverPendingContinuationDelegates({});
+
+    expect(reconciled).toMatchObject({ sessions: 1, dispatched: 1, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-2")).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 3,
+      continuationChainTokens: 150_000,
+    });
+  });
+
+  it("does not advance a recovered row whose planned chain state is already durable", async () => {
+    const sessionKey = "agent:main:subagent:planned-chain-state-recovery";
+    enqueuePendingDelegate(sessionKey, {
+      task: "accepted after planned persist",
+      chainTokensFold: 50_000,
+    });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.revision = 1;
+    flow!.stateJson = {
+      ...(flow!.stateJson as Record<string, unknown>),
+      chainTokensFold: undefined,
+      persistedChainState: {
+        currentChainCount: 2,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 150_000,
+        chainId: "chain-planned",
+      },
+    };
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 2,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 150_000,
+        continuationChainId: "chain-planned",
+      },
+    });
+    const digest = crypto.createHash("sha256").update("flow-1").digest("hex").slice(0, 32);
+    acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
+
+    const recovered = await recoverPendingContinuationDelegates({});
+
+    expect(recovered).toMatchObject({ sessions: 1, dispatched: 1, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 2,
+      continuationChainTokens: 150_000,
+      continuationChainId: "chain-planned",
+    });
+  });
+
+  it("keeps budget checks for planned chain-state rows without an accepted child", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:planned-chain-state-over-budget";
+    enqueuePendingDelegate(sessionKey, { task: "planned but not accepted" });
+    const flow = mockFlows.get("flow-1");
+    expect(flow).toBeDefined();
+    flow!.status = "running";
+    flow!.revision = 1;
+    flow!.stateJson = {
+      ...(flow!.stateJson as Record<string, unknown>),
+      persistedChainState: {
+        currentChainCount: 2,
+        chainStartedAt: 1_700_000_000_000,
+        accumulatedChainTokens: 600_000,
+        chainId: "chain-planned-over-budget",
+      },
+    };
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 2,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 600_000,
+        continuationChainId: "chain-planned-over-budget",
+      },
+    });
+
+    const recovered = await recoverPendingContinuationDelegates({});
+
+    expect(recovered).toMatchObject({ sessions: 1, dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+  });
+
+  it("does not reapply a folded cost-cap rejection after the first persist fails", async () => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 10,
+            maxDelegatesPerTurn: 5,
+            costCapTokens: 500_000,
+          },
+        },
+      },
+    });
+    const sessionKey = "agent:main:subagent:folded-rejection-persist-fail";
+    enqueuePendingDelegate(sessionKey, {
+      task: "folded rejection retry",
+      chainTokensFold: 250_000,
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 1,
+        continuationChainStartedAt: 1_700_000_000_000,
+        continuationChainTokens: 300_000,
+      },
+    });
+    updateSessionStoreForRecoveryShouldThrow = true;
+
+    const first = await recoverPendingContinuationDelegates({});
+
+    expect(first).toMatchObject({ sessions: 1, dispatched: 0, rejected: 0 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "running" });
+    const retryState = mockFlows.get("flow-1")?.stateJson as Record<string, unknown> | undefined;
+    expect(retryState?.chainTokensFold).toBe(undefined);
+    expect(retryState?.persistedChainState).toMatchObject({
+      currentChainCount: 1,
+      accumulatedChainTokens: 550_000,
+    });
+
+    updateSessionStoreForRecoveryShouldThrow = false;
+    const retried = await recoverPendingContinuationDelegates({});
+
+    expect(retried).toMatchObject({ sessions: 1, dispatched: 0, rejected: 1 });
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(mockFlows.get("flow-1")).toMatchObject({ status: "failed" });
+    expect(findPersistedRecoveryEntry(sessionKey)).toMatchObject({
+      continuationChainCount: 1,
+      continuationChainTokens: 550_000,
+    });
   });
 
   it("clears persisted chain-token folds so later delayed hedges do not reapply them (#1158)", async () => {

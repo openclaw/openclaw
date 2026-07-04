@@ -88,6 +88,14 @@ export type PendingContinuationDelegate = {
    */
   chainTokensFold?: number;
   /**
+   * Internal recovery marker: the chain state this claimed row already planned
+   * to persist before terminalizing. If the process exits after the session-store
+   * write but before the TaskFlow row is accepted/failed, restart recovery uses
+   * this marker instead of advancing the same delegate a second time.
+   */
+  persistedChainState?: ChainState;
+  persistedChainStateKind?: "advanced" | "terminal";
+  /**
    * Durable inherited return policy from a silent/silent-wake parent chain.
    * Used for default-mode delayed delegates that survive process restart before
    * their hedge fires.

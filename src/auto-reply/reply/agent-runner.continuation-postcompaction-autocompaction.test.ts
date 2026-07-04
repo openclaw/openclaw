@@ -1,10 +1,8 @@
 // C1 regression: a bracket [[CONTINUE_DELEGATE: ... | post-compaction]] staged
 // on a turn where auto-compaction ALSO fires must survive to the next compaction
-// seam. dispatchPostCompactionDelegates runs before staging, the persist step
-// used to be gated out by `!autoCompactionCount`, and the finally-drain then
-// consumed and silently discarded the staged delegate. This exercises the real
-// TaskFlow-backed delegate store (not a stage spy) so the survival is proven end
-// to end via the session store's pendingPostCompactionDelegates.
+// seam. dispatchPostCompactionDelegates runs before staging, and the staged
+// delegate must remain queued in the TaskFlow-backed post-compaction store until
+// the next seam consumes it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -20,6 +18,7 @@ import {
 } from "../../plugins/memory-state.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { stagedPostCompactionDelegateCount } from "../continuation-delegate-store.js";
 import { resetDelegateDispatchHedgesForTests } from "../continuation/delegate-dispatch.js";
 import { resetContinuationStateForTests } from "../continuation/state.js";
 import type { TemplateContext } from "../templating.js";
@@ -288,9 +287,8 @@ describe("runReplyAgent :: post-compaction delegate survives same-turn auto-comp
 
         await runDelegateTurn(run, sessionStore);
 
-        const survived = sessionStore[run.sessionKey]?.pendingPostCompactionDelegates ?? [];
-        expect(survived).toHaveLength(1);
-        expect(survived[0]?.task).toContain("lifeboat survival task");
+        expect(stagedPostCompactionDelegateCount(run.sessionKey)).toBe(1);
+        expect(sessionStore[run.sessionKey]?.pendingPostCompactionDelegates ?? []).toHaveLength(0);
       },
     );
   });
@@ -305,9 +303,8 @@ describe("runReplyAgent :: post-compaction delegate survives same-turn auto-comp
 
         await runDelegateTurn(run, sessionStore);
 
-        const survived = sessionStore[run.sessionKey]?.pendingPostCompactionDelegates ?? [];
-        expect(survived).toHaveLength(1);
-        expect(survived[0]?.task).toContain("lifeboat survival task");
+        expect(stagedPostCompactionDelegateCount(run.sessionKey)).toBe(1);
+        expect(sessionStore[run.sessionKey]?.pendingPostCompactionDelegates ?? []).toHaveLength(0);
       },
     );
   });
