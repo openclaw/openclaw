@@ -19531,7 +19531,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 822,
+      "line": 817,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop response",
       "surface": "apple",
@@ -19539,7 +19539,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 847,
+      "line": 842,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Send message",
       "surface": "apple",
@@ -19547,7 +19547,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 862,
+      "line": 857,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -19555,7 +19555,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 970,
+      "line": 965,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -19563,7 +19563,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 970,
+      "line": 965,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Gateway connected",
       "surface": "apple",
