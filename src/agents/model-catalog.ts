@@ -498,10 +498,17 @@ function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): bo
   if (!providers || typeof providers !== "object") {
     return false;
   }
-  return Object.entries(providers).some(
-    ([providerRaw, provider]) =>
-      Array.isArray(provider?.models) && normalizeProviderId(providerRaw) !== "openai",
-  );
+  return Object.entries(providers).some(([providerRaw, provider]) => {
+    if (!Array.isArray(provider?.models)) {
+      return false;
+    }
+    if (normalizeProviderId(providerRaw) === "openai") {
+      return false;
+    }
+    // Explicit compatible-provider model rows already declare their transport.
+    // They do not need plugin manifest metadata to be normalized.
+    return !normalizeOptionalString(provider.api);
+  });
 }
 
 function loadReadOnlyStaticModelCatalog(params?: {

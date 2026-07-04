@@ -31,18 +31,22 @@ export function buildGoogleAntigravityCliBackend(): CliBackendPlugin {
     },
     prepareExecution: (ctx) => {
       const forwarded = normalizeForwardedAntigravityCredential(ctx.authCredential);
-      return {
-        env: {
-          ...(forwarded.userDataDir ? { ANTIGRAVITY_USER_DATA_DIR: forwarded.userDataDir } : {}),
-        },
-        clearEnv: [
-          "GEMINI_API_KEY",
-          "GOOGLE_API_KEY",
-          "GOOGLE_APPLICATION_CREDENTIALS",
-          "GOOGLE_CLOUD_PROJECT",
-          "GOOGLE_CLOUD_PROJECT_ID",
-        ],
-      };
+      const clearEnv = [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_PROJECT_ID",
+      ];
+
+      if (forwarded.userDataDir) {
+        return {
+          env: { ANTIGRAVITY_USER_DATA_DIR: forwarded.userDataDir },
+          clearEnv,
+        };
+      }
+
+      return { clearEnv };
     },
     config: {
       command: "agy",
