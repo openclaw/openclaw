@@ -43,7 +43,7 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
     expect(sherpa?.install).toEqual({
       clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
       defaultChoice: "clawhub",
-      minHostVersion: ">=2026.6.9",
+      minHostVersion: ">=2026.6.11",
     });
   });
 

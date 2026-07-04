@@ -1695,7 +1695,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(sherpa)).toEqual({
       clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
       defaultChoice: "clawhub",
-      minHostVersion: ">=2026.6.9",
+      minHostVersion: ">=2026.6.11",
     });
     expect(
       getOfficialExternalPluginCatalogManifest(sherpa)?.contracts?.speechProviders,

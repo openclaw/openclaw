@@ -17,7 +17,7 @@
     "install": {
       "clawhubSpec": "clawhub:@openclaw/sherpa-onnx-tts",
       "defaultChoice": "clawhub",
-      "minHostVersion": ">=2026.6.9"
+      "minHostVersion": ">=2026.6.11"
     },
     "compat": {
       "pluginApi": ">=2026.6.11"
