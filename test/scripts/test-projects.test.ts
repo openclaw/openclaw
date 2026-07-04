@@ -4130,7 +4130,9 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    const toolingConfig = "test/vitest/vitest.tooling.config.ts";
     const plans = leafShardPlans;
+    const toolingPlans = plans.filter((plan) => plan.config === toolingConfig);
 
     if (leafShardHasGitGatewayListing) {
       expect(leafShardGatewayTreeReads).toEqual([]);
@@ -4142,7 +4144,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.unit-security.config.ts",
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
-      "test/vitest/vitest.tooling.config.ts",
+      ...toolingPlans.map(() => toolingConfig),
       "test/vitest/vitest.tooling-docker.config.ts",
       "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -4235,9 +4237,19 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
-    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+    const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
+    expect(toolingPlans.length).toBeGreaterThan(1);
+    expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 24)).toBe(true);
+    expect(new Set(toolingTargets).size).toBe(toolingTargets.length);
+    expect(toolingTargets).toContain("test/scripts/test-group-report.test.ts");
+    expect(toolingTargets).toContain("src/scripts/control-ui-i18n-report.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/docker-build-helper.test.ts");
+    expect(toolingTargets).not.toContain("test/scripts/openclaw-e2e-instance.test.ts");
+    expect(
+      plans.filter((plan) => plan.config !== gatewayServerConfig && plan.config !== toolingConfig),
+    ).toEqual(
       plans
-        .filter((plan) => plan.config !== gatewayServerConfig)
+        .filter((plan) => plan.config !== gatewayServerConfig && plan.config !== toolingConfig)
         .map((plan) => ({
           config: plan.config,
           forwardedArgs: [],

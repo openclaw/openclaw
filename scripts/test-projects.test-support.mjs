@@ -289,6 +289,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 24;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
@@ -2353,6 +2354,16 @@ function listBroadToolingScriptTestTargets(pattern, cwd) {
   );
 }
 
+function listToolingFullSuiteTestTargets(cwd) {
+  return uniqueOrdered(
+    [path.join(cwd, "test"), path.join(cwd, "src", "scripts")].flatMap((root) =>
+      fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
+    ),
+  )
+    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
   if (watchMode || config !== TOOLING_VITEST_CONFIG || !includePatterns) {
     return null;
@@ -4018,6 +4029,21 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
+      if (expandShard && targetArgs.length === 0 && config === TOOLING_VITEST_CONFIG) {
+        // Tooling tests spawn package managers and native helpers. Bound each
+        // Vitest process lifetime so a native crash cannot erase the whole inventory.
+        const targets = listToolingFullSuiteTestTargets(cwd);
+        const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
+        const chunks = splitTargetChunks(targets, chunkCount);
+        if (chunks.length > 0) {
+          return chunks.map((targets) => ({
+            config,
+            forwardedArgs: [...forwardedArgs, ...targets],
+            includePatterns: null,
+            watchMode: false,
+          }));
+        }
+      }
       if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
         const chunks = splitTargetChunks(
           resolveGatewayServerFullSuiteTargets(cwd),

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -1179,6 +1179,24 @@ describe("scripts/test-group-report child process guard", () => {
 });
 
 describe("scripts/test-group-report run plans", () => {
+  let serialFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
+  let parallelFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
+
+  beforeAll(() => {
+    withEnv(
+      {
+        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+      },
+      () => {
+        serialFullSuitePlans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+      },
+    );
+    withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, () => {
+      parallelFullSuitePlans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+    });
+  });
+
   it("isolates full-suite duration reports by default", () => {
     expect(resolveReportVitestArgs(parseTestGroupReportArgs(["--full-suite"]))).toEqual([
       "--isolate=true",
@@ -1258,40 +1276,27 @@ describe("scripts/test-group-report run plans", () => {
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
-    withEnv(
-      {
-        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
-      },
-      () => {
-        const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-
-        expect(plans.map((plan) => plan.config)).not.toContain(
-          "test/vitest/vitest.full-agentic.config.ts",
-        );
-        expect(plans.map((plan) => plan.config)).toContain(
-          "test/vitest/vitest.agents-tools.config.ts",
-        );
-      },
+    expect(serialFullSuitePlans.map((plan) => plan.config)).not.toContain(
+      "test/vitest/vitest.full-agentic.config.ts",
+    );
+    expect(serialFullSuitePlans.map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.agents-tools.config.ts",
     );
   });
 
   it("preserves full-suite shard file args and unique report labels", () => {
-    withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, () => {
-      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-      const gatewayServerPlans = plans.filter(
-        (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
-      );
+    const gatewayServerPlans = parallelFullSuitePlans.filter(
+      (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
+    );
 
-      expect(gatewayServerPlans.length).toBeGreaterThan(1);
-      expect(new Set(gatewayServerPlans.map((plan) => plan.label)).size).toBe(
-        gatewayServerPlans.length,
-      );
-      expect(gatewayServerPlans.every((plan) => plan.forwardedArgs.length > 0)).toBe(true);
-      expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
-        "src/gateway/server.node-pairing-authz.test.ts",
-      );
-    });
+    expect(gatewayServerPlans.length).toBeGreaterThan(1);
+    expect(new Set(gatewayServerPlans.map((plan) => plan.label)).size).toBe(
+      gatewayServerPlans.length,
+    );
+    expect(gatewayServerPlans.every((plan) => plan.forwardedArgs.length > 0)).toBe(true);
+    expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
+      "src/gateway/server.node-pairing-authz.test.ts",
+    );
   });
 });
 
