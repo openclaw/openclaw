@@ -237,6 +237,40 @@ export async function recoverStuckDiagnosticSession(
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
+        // When there is no active embedded run handle but the lane still has
+        // active tasks, the task is likely orphaned (its promise will never
+        // settle because the owning run was already cleaned up or abandoned).
+        // After the stale threshold, force-reset the lane to release it.
+        //
+        // Use params.ageMs directly rather than isActiveRunProgressStale()
+        // because that function requires queueDepth > 0 to detect staleness.
+        // Orphaned tasks typically have no queued work, so the queueDepth
+        // gate would prevent stale detection. ageMs reflects how long the
+        // session has been classified as stuck, which is an adequate proxy
+        // for how long the lane task has been orphaned.
+        const shouldForceReset =
+          params.allowActiveAbort === true || params.ageMs >= staleActiveProgressAbortMs;
+
+        if (shouldForceReset) {
+          const released = resetCommandLane(sessionLane);
+          const outcome: StuckSessionRecoveryOutcome = {
+            status: "released",
+            action: "release_lane",
+            reason: "stale_lane_task",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            lane: sessionLane,
+            released,
+            activeCount: laneSnapshot.activeCount,
+            queuedCount: laneSnapshot.queuedCount,
+          };
+          diag.warn(
+            `stuck session recovery force-reset stale lane: ${formatRecoveryContext(params)}` +
+              ` ageMs=${params.ageMs} threshold=${staleActiveProgressAbortMs} released=${released}`,
+          );
+          return outcome;
+        }
+
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "keep_lane",

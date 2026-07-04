@@ -298,4 +298,58 @@ describe("stuck session recovery integration", () => {
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
   });
+
+  it("force-resets lane with orphaned task when ageMs exceeds stale threshold (no embedded run)", async () => {
+    const sessionKey = "agent:cron:orphaned-task:run:run-1";
+    const sessionId = "orphaned-task-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+
+    // Orphaned task that will never settle (e.g. abandoned after EmbeddedAttemptSessionTakeoverError)
+    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    // Queued work that should be released after force-reset
+    const queued = enqueueCommandInLane(lane, async () => "released", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(getQueueSize(lane)).toBe(2);
+
+    await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 360_000, // >= 300s stale threshold
+      queueDepth: 0,
+    });
+
+    // After force-reset, the queued work should drain
+    await expect(Promise.race([queued, delay(500)])).resolves.toBe("released");
+    expect(getQueueSize(lane)).toBe(0);
+  });
+
+  it("keeps lane with orphaned task when ageMs is below stale threshold (no embedded run)", async () => {
+    const sessionKey = "agent:cron:recent-orphan:run:run-1";
+    const sessionId = "recent-orphan-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+
+    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    const queued = enqueueCommandInLane(lane, async () => "still-blocked", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(getQueueSize(lane)).toBe(2);
+
+    await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 60_000, // below 300s threshold
+      queueDepth: 0,
+    });
+
+    // Queued work still blocked — lane preserved for recently orphaned tasks
+    await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
+    expect(getQueueSize(lane)).toBe(2);
+  });
 });
