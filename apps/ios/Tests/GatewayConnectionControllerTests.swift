@@ -776,10 +776,85 @@ import UIKit
         #expect(!controller._test_didAutoConnect())
         #expect(appModel.activeGatewayConnectConfig == nil)
 
-        controller.cancelPendingConnectionAttempts()
-        probeResults.continuation.yield(.failure(.certificateUnavailable))
+        probeResults.continuation.yield(.fingerprint("explicit-fingerprint"))
         probeResults.continuation.finish()
         await connectTask.value
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "explicit-fingerprint")
+
+        controller.declinePendingTrustPrompt()
+        controller._test_triggerAutoReconnect()
+
+        #expect(!controller._test_didAutoConnect())
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func foregroundReconnectCannotReplaceQueuedExplicitHandoff() async {
+        let defaults = UserDefaults.standard
+        let updates: [String: Any?] = [
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": "192.168.1.20",
+            "gateway.manual.port": 18789,
+            "gateway.manual.tls": false,
+            "node.instanceId": "ios-test",
+        ]
+        var snapshot: [String: Any?] = [:]
+        for key in updates.keys {
+            snapshot[key] = defaults.object(forKey: key)
+        }
+        for (key, value) in updates {
+            defaults.set(value, forKey: key)
+        }
+        defer {
+            for (key, value) in snapshot {
+                if let value {
+                    defaults.set(value, forKey: key)
+                } else {
+                    defaults.removeObject(forKey: key)
+                }
+            }
+        }
+
+        let resetRelease = AsyncStream<Void>.makeStream()
+        let appModel = NodeAppModel()
+        defer {
+            resetRelease.continuation.finish()
+            appModel._test_setGatewaySessionResetTask(nil)
+            appModel.disconnectGateway()
+        }
+        let modelResetTask = Task {
+            for await _ in resetRelease.stream {
+                return
+            }
+        }
+        appModel._test_setGatewaySessionResetTask(modelResetTask)
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        defaults.set(true, forKey: "gateway.autoconnect")
+
+        let explicitStableID = "manual|192.168.1.41|18789"
+        await controller.connectManual(host: "192.168.1.41", port: 18789, useTLS: false)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+
+        controller._test_triggerAutoReconnect()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(controller._test_didAutoConnect())
+        #expect(appModel.activeGatewayConnectConfig == nil)
+
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.stableID != explicitStableID,
+              ContinuousClock().now < deadline
+        {
+            await Task.yield()
+        }
+
+        #expect(appModel.activeGatewayConnectConfig?.stableID == explicitStableID)
+        controller._test_triggerAutoConnect()
+        #expect(controller._test_didAutoConnect())
+        #expect(appModel.activeGatewayConnectConfig?.stableID == explicitStableID)
     }
 
     @Test @MainActor func clearingTrustPromptInvalidatesInFlightProbe() async {

@@ -147,6 +147,7 @@ final class GatewayConnectionController {
         let stableID: String
         let isManual: Bool
         let authOverride: ManualAuthOverride?
+        let controllerGeneration: UInt64
         let gatewayGeneration: UInt64?
     }
 
@@ -181,6 +182,7 @@ final class GatewayConnectionController {
     private var autoConnectSuppressionGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
+    @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
@@ -340,6 +342,7 @@ final class GatewayConnectionController {
                     stableID: stableID,
                     isManual: false,
                     authOverride: nil,
+                    controllerGeneration: connectAttempt.controllerGeneration,
                     gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
@@ -379,6 +382,7 @@ final class GatewayConnectionController {
             bootstrapToken: bootstrapToken,
             password: password,
             forceReconnect: forceReconnect,
+            suppressionGeneration: connectAttempt.controllerGeneration,
             expectedGeneration: connectAttempt.gatewayGeneration)
         return nil
     }
@@ -430,6 +434,7 @@ final class GatewayConnectionController {
                     stableID: stableID,
                     isManual: true,
                     authOverride: pendingAuthOverride,
+                    controllerGeneration: connectAttempt.controllerGeneration,
                     gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
@@ -471,6 +476,7 @@ final class GatewayConnectionController {
             bootstrapToken: bootstrapToken,
             password: password,
             forceReconnect: forceReconnect,
+            suppressionGeneration: connectAttempt.controllerGeneration,
             expectedGeneration: connectAttempt.gatewayGeneration)
     }
 
@@ -563,15 +569,18 @@ final class GatewayConnectionController {
             storeKey: pending.stableID)
 
         self.didAutoConnect = true
-        self.startAutoConnect(
+        let didStart = self.startAutoConnect(
             url: pending.url,
             gatewayStableID: pending.stableID,
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
+            suppressionGeneration: pending.controllerGeneration,
             expectedGeneration: pending.gatewayGeneration)
-        self.autoConnectSuppressionGeneration = nil
+        if !didStart, self.autoConnectSuppressionGeneration == pending.controllerGeneration {
+            self.autoConnectSuppressionGeneration = nil
+        }
     }
 
     func declinePendingTrustPrompt() {
@@ -784,6 +793,7 @@ final class GatewayConnectionController {
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel = self.appModel else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
+        guard self.autoConnectSuppressionGeneration == nil else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
         guard UserDefaults.standard.bool(forKey: "gateway.autoconnect") else { return }
@@ -846,6 +856,7 @@ final class GatewayConnectionController {
         GatewaySettingsStore.saveLastDiscoveredGatewayStableID(first.stableID)
     }
 
+    @discardableResult
     private func startAutoConnect(
         url: URL,
         gatewayStableID: String,
@@ -854,11 +865,12 @@ final class GatewayConnectionController {
         bootstrapToken: String?,
         password: String?,
         forceReconnect: Bool = false,
-        expectedGeneration: UInt64? = nil)
+        suppressionGeneration: UInt64? = nil,
+        expectedGeneration: UInt64? = nil) -> Bool
     {
-        guard let appModel else { return }
+        guard let appModel else { return false }
         if let expectedGeneration {
-            guard expectedGeneration == appModel.gatewayConnectGeneration else { return }
+            guard expectedGeneration == appModel.gatewayConnectGeneration else { return false }
         }
         let previousTask = self.pendingAutoConnectTask
         previousTask?.cancel()
@@ -866,6 +878,9 @@ final class GatewayConnectionController {
         // endpoint resolution or trust verification was suspended.
         let generation = appModel.beginGatewayConnectAttempt()
         self.pendingAutoConnectGeneration = generation
+        // An explicit target owns suppression until its queued handoff exits. Otherwise a
+        // foreground reconnect can replace it while reset or permission work is suspended.
+        self.pendingAutoConnectSuppressionGeneration = suppressionGeneration
         appModel.gatewayStatusText = "Connecting…"
         let task = Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
@@ -873,6 +888,12 @@ final class GatewayConnectionController {
                 if self.pendingAutoConnectGeneration == generation {
                     self.pendingAutoConnectTask = nil
                     self.pendingAutoConnectGeneration = nil
+                    self.pendingAutoConnectSuppressionGeneration = nil
+                }
+                if let suppressionGeneration,
+                   self.autoConnectSuppressionGeneration == suppressionGeneration
+                {
+                    self.autoConnectSuppressionGeneration = nil
                 }
             }
             await previousTask?.value
@@ -901,6 +922,7 @@ final class GatewayConnectionController {
                 expectedGeneration: generation)
         }
         self.pendingAutoConnectTask = task
+        return true
     }
 
     private func resolveDiscoveredTLSParams(
@@ -989,6 +1011,7 @@ final class GatewayConnectionController {
             !appModel.gatewayPairingPaused &&
             appModel.lastGatewayProblem?.pauseReconnect != true &&
             (previousTask != nil || appModel.hasGatewaySessionResetInFlight)
+        self.pendingAutoConnectSuppressionGeneration = nil
         self.pendingAutoConnectGeneration = generation
         // The barrier owns any superseded teardown until it finishes. If the replacement never
         // reaches handoff, restore the still-current route after that teardown completes.
@@ -1020,6 +1043,7 @@ final class GatewayConnectionController {
     private func finishConnectAttempt(_ generation: UInt64) {
         guard self.connectAttemptGeneration == generation else { return }
         guard self.pendingTrustPrompt == nil else { return }
+        guard self.pendingAutoConnectSuppressionGeneration != generation else { return }
         self.autoConnectSuppressionGeneration = nil
     }
 
@@ -1323,8 +1347,16 @@ extension GatewayConnectionController {
         self.maybeAutoConnect()
     }
 
+    func _test_triggerAutoReconnect() {
+        self.attemptAutoReconnectIfNeeded()
+    }
+
     func _test_didAutoConnect() -> Bool {
         self.didAutoConnect
+    }
+
+    func _test_isAutoConnectSuppressed() -> Bool {
+        self.autoConnectSuppressionGeneration != nil
     }
 
     func _test_resolveDiscoveredTLSParams(

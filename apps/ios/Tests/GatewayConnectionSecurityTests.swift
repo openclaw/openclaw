@@ -162,6 +162,29 @@ import os
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
     }
 
+    @Test @MainActor func staleTrustAcceptanceReleasesAutoConnectSuppression() async {
+        let host = "gateway-\(UUID().uuidString).example.com"
+        let port = 18789
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("abc123") })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+        _ = appModel.beginGatewayConnectAttempt()
+        await controller.acceptPendingTrustPrompt()
+
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+        #expect(!controller._test_isAutoConnectSuppressed())
+    }
+
     @Test @MainActor func manualFirstUseTLSProbeSkipsTLSWhenTCPIsUnreachable() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
