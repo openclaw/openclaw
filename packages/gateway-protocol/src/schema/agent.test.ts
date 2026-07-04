@@ -1,7 +1,7 @@
 // Gateway Protocol tests cover agent behavior.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { AgentParamsSchema } from "./agent.js";
+import { AgentParamsSchema, MessageActionParamsSchema } from "./agent.js";
 
 /**
  * Regression coverage for agent-run schema payloads that carry internal
@@ -79,5 +79,22 @@ describe("AgentParamsSchema", () => {
     } as unknown as AgentInternalEvent);
 
     expect(Value.Check(AgentParamsSchema, params)).toBe(false);
+  });
+});
+
+describe("MessageActionParamsSchema", () => {
+  it("rejects caller-supplied current chat classification", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        channel: "matrix",
+        action: "read",
+        params: {},
+        toolContext: {
+          currentChannelId: "!room:example.org",
+          currentChatType: "direct",
+        },
+        idempotencyKey: "idem-1",
+      }),
+    ).toBe(false);
   });
 });

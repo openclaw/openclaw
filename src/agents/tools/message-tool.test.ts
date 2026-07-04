@@ -9,6 +9,10 @@ import {
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
+import {
+  mintMessageActionTurnCapability,
+  resetMessageActionTurnCapabilitiesForTest,
+} from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
@@ -135,7 +139,13 @@ type RunMessageActionInput = {
     timeoutMs?: unknown;
   };
   params?: Record<string, unknown>;
+  requesterAccountId?: string;
   requesterSenderId?: string;
+  messageActionAuthorization?: {
+    requesterAccountId?: string;
+    requesterSenderId?: string;
+    toolContext?: RunMessageActionInput["toolContext"];
+  };
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
@@ -337,6 +347,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
+  resetMessageActionTurnCapabilitiesForTest();
   resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
@@ -3282,17 +3293,95 @@ describe("message tool sandbox passthrough", () => {
     expect(call?.sandboxRoot).toBe(expected);
   });
 
-  it("forwards trusted requesterSenderId to runMessageAction", async () => {
+  it("does not trust ambient current-turn identity without a capability", async () => {
     mockSendResult({ to: "discord:123" });
 
     const call = await executeSend({
-      toolOptions: { requesterSenderId: "1234567890" },
+      toolOptions: {
+        agentId: "main",
+        agentSessionKey: "agent:main:runtime-policy",
+        runId: "run-1",
+        sessionId: "session-1",
+        agentAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        currentChannelProvider: "discord",
+        currentChannelId: "forged-current",
+      },
       action: {
         target: "discord:123",
         message: "hi",
       },
     });
 
-    expect(call?.requesterSenderId).toBe("1234567890");
+    expect(call?.requesterAccountId).toBeUndefined();
+    expect(call?.requesterSenderId).toBeUndefined();
+    expect(call?.toolContext).toMatchObject({
+      currentChannelProvider: "discord",
+      currentChannelId: "forged-current",
+    });
+    expect(call?.messageActionAuthorization).toEqual({
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+      toolContext: undefined,
+    });
+  });
+
+  it("forwards capability-bound current-turn identity to local actions", async () => {
+    mockSendResult({ to: "discord:123" });
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:runtime-policy",
+      sessionId: "session-1",
+      requesterAccountId: "trusted-account",
+      requesterSenderId: "trusted-sender",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "trusted-current",
+        currentChatType: "channel",
+      },
+    });
+
+    const call = await executeSend({
+      toolOptions: {
+        agentId: "main",
+        agentSessionKey: "agent:main:runtime-policy",
+        runId: "run-1",
+        sessionId: "session-1",
+        messageActionTurnCapability: token,
+        agentAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        currentChannelProvider: "discord",
+        currentChannelId: "forged-current",
+      },
+      action: {
+        target: "discord:123",
+        message: "hi",
+      },
+    });
+
+    expect(call?.requesterAccountId).toBe("trusted-account");
+    expect(call?.requesterSenderId).toBe("trusted-sender");
+    expect(call?.toolContext).toMatchObject({
+      currentChannelProvider: "discord",
+      currentChannelId: "forged-current",
+    });
+    expect(call?.messageActionAuthorization).toMatchObject({
+      requesterAccountId: "trusted-account",
+      requesterSenderId: "trusted-sender",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "trusted-current",
+        currentChatType: "channel",
+      },
+    });
+    expect(call?.messageActionAuthorization?.toolContext).not.toMatchObject({
+      currentChannelId: "forged-current",
+    });
+    expect(call?.toolContext).toMatchObject({
+      currentChannelProvider: "discord",
+      currentChannelId: "forged-current",
+      skipCrossContextDecoration: true,
+    });
   });
 });

@@ -54,9 +54,7 @@ function readContextFields(ctx: FeishuReadContext): {
   }
   return {
     accountId: normalizeOptionalString(ctx.agentAccountId),
-    currentChannelId:
-      normalizeOptionalString(ctx.nativeChannelId) ??
-      normalizeOptionalString(ctx.deliveryContext?.to),
+    currentChannelId: normalizeOptionalString(ctx.nativeChannelId),
     currentProvider: normalizeOptionalString(ctx.messageChannel ?? ctx.deliveryContext?.channel),
     requesterAccountId: normalizeOptionalString(ctx.deliveryContext?.accountId),
     requesterSenderId: normalizeOptionalString(ctx.requesterSenderId),

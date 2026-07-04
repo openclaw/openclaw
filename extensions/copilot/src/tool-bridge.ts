@@ -366,6 +366,7 @@ function buildOpenClawCodingToolsOptions(
     messageTo: a.messageTo,
     messageThreadId: a.messageThreadId,
     nativeChannelId: a.chatId,
+    messageActionTurnCapability: a.messageActionTurnCapability,
     groupId: a.groupId,
     groupChannel: a.groupChannel,
     groupSpace: a.groupSpace,

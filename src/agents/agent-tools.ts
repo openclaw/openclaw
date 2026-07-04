@@ -330,6 +330,8 @@ export function createOpenClawCodingTools(options?: {
   messageThreadId?: string | number;
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   /**
@@ -942,6 +944,7 @@ export function createOpenClawCodingTools(options?: {
           agentTo: options?.messageTo,
           agentThreadId: options?.messageThreadId,
           nativeChannelId: options?.nativeChannelId,
+          messageActionTurnCapability: options?.messageActionTurnCapability,
           agentGroupId: options?.groupId ?? null,
           agentGroupChannel: options?.groupChannel ?? null,
           agentGroupSpace: options?.groupSpace ?? null,

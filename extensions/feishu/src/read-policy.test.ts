@@ -62,6 +62,51 @@ describe("Feishu read policy", () => {
     ).toThrow("Feishu read target is not allowed.");
   });
 
+  it("does not treat public delivery routing as trusted current-chat identity", () => {
+    const account = createAccount();
+
+    expect(() =>
+      assertFeishuChatReadAllowed({
+        cfg,
+        account,
+        chatId: "oc_unconfigured",
+        chatType: "group",
+        ctx: {
+          agentAccountId: "default",
+          messageChannel: "feishu",
+          deliveryContext: {
+            channel: "feishu",
+            to: "oc_unconfigured",
+            accountId: "default",
+          },
+        },
+      }),
+    ).toThrow("Feishu read target is not allowed.");
+  });
+
+  it("allows native Feishu ingress to identify the current chat", () => {
+    const account = createAccount();
+
+    expect(
+      assertFeishuChatReadAllowed({
+        cfg,
+        account,
+        chatId: "oc_current",
+        chatType: "group",
+        ctx: {
+          agentAccountId: "default",
+          messageChannel: "feishu",
+          nativeChannelId: "oc_current",
+          deliveryContext: {
+            channel: "feishu",
+            to: "oc_current",
+            accountId: "default",
+          },
+        },
+      }),
+    ).toBe("oc_current");
+  });
+
   it("does not treat wildcard group defaults as admission", () => {
     const account = createAccount();
     account.config = {

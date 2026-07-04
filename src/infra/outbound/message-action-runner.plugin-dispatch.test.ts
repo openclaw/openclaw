@@ -366,6 +366,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("dispatches messageId/chatId-based plugin actions through the shared runner", async () => {
+      const resolveAgentRuntimeIdentityToken = vi.fn(() => "unused-agent-runtime-token");
       await runMessageAction({
         cfg: {
           channels: {
@@ -378,6 +379,11 @@ describe("runMessageAction plugin dispatch", () => {
         params: {
           channel: "actionhub",
           messageId: "om_123",
+        },
+        gateway: {
+          resolveAgentRuntimeIdentityToken,
+          clientName: "gateway-client",
+          mode: "backend",
         },
         dryRun: false,
       });
@@ -412,6 +418,7 @@ describe("runMessageAction plugin dispatch", () => {
         { chatId: "oc_123" },
         "list pins call params",
       );
+      expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
@@ -476,6 +483,80 @@ describe("runMessageAction plugin dispatch", () => {
           "plugin tool context",
         );
       });
+    });
+
+    it("uses capability authorization instead of ambient routing for local plugin actions", async () => {
+      const cfg = {
+        channels: {
+          actionhub: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      await runMessageAction({
+        cfg,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          messageId: "om_123",
+        },
+        requesterAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        toolContext: {
+          currentChannelId: "forged-current",
+          currentChannelProvider: "actionhub",
+        },
+        messageActionAuthorization: {},
+        dryRun: false,
+      });
+
+      const untrustedCall = readPluginCall(handleAction, 0);
+      expect(untrustedCall.requesterAccountId).toBeUndefined();
+      expect(untrustedCall.requesterSenderId).toBeUndefined();
+      expect(untrustedCall.toolContext).toBeUndefined();
+
+      await runMessageAction({
+        cfg,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          messageId: "om_123",
+        },
+        requesterAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        toolContext: {
+          currentChannelId: "forged-current",
+          currentChannelProvider: "actionhub",
+        },
+        messageActionAuthorization: {
+          requesterAccountId: "trusted-account",
+          requesterSenderId: "trusted-sender",
+          toolContext: {
+            currentChannelId: "trusted-current",
+            currentChannelProvider: "actionhub",
+          },
+        },
+        dryRun: false,
+      });
+
+      const trustedCall = readPluginCall(handleAction, 1);
+      expectRecordFields(
+        trustedCall,
+        {
+          requesterAccountId: "trusted-account",
+          requesterSenderId: "trusted-sender",
+        },
+        "trusted plugin action call",
+      );
+      expectRecordFields(
+        readRecordField(trustedCall, "toolContext", "trusted plugin tool context"),
+        {
+          currentChannelId: "trusted-current",
+          currentChannelProvider: "actionhub",
+        },
+        "trusted plugin tool context",
+      );
     });
 
     it("preserves no-context owner Discord admin actions through the shared runner", async () => {
@@ -613,11 +694,12 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGateway.mockResolvedValue({
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         added: "✅",
       });
 
+      const resolveAgentRuntimeIdentityToken = vi.fn(() => "agent-runtime-token");
       const result = await runMessageAction({
         cfg: {
           channels: {
@@ -644,25 +726,26 @@ describe("runMessageAction plugin dispatch", () => {
           currentMessageId: "wamid.1",
         },
         gateway: {
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          resolveAgentRuntimeIdentityToken,
+          clientName: "cli",
+          mode: "cli",
         },
         dryRun: false,
       });
 
-      const gatewayCall = readMockCallArg(mocks.callGateway, "trusted gateway call");
-      expectRecordFields(
-        gatewayCall,
-        { method: "message.action", scopes: ["operator.admin"] },
-        "gateway call",
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
       );
+      expectRecordFields(gatewayCall, { method: "message.action" }, "gateway call");
+      expect(gatewayCall.agentRuntimeIdentityToken).toBe("agent-runtime-token");
+      expect(resolveAgentRuntimeIdentityToken).toHaveBeenCalledTimes(1);
       const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
       expectRecordFields(
         gatewayParams,
         {
           channel: "gatewaychat",
           action: "react",
-          requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
@@ -671,15 +754,9 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway call params",
       );
-      expectRecordFields(
-        readRecordField(gatewayParams, "toolContext", "gateway tool context"),
-        {
-          currentChannelProvider: "gatewaychat",
-          currentMessageId: "wamid.1",
-        },
-        "gateway tool context",
-      );
-      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      expect(gatewayParams).not.toHaveProperty("requesterAccountId");
+      expect(gatewayParams).not.toHaveProperty("requesterSenderId");
+      expect(gatewayParams).not.toHaveProperty("toolContext");
       expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,

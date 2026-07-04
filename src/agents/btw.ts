@@ -386,6 +386,7 @@ type RunBtwSideQuestionParams = {
   messageTo?: string;
   messageThreadId?: string | number;
   chatId?: string;
+  messageActionTurnCapability?: string;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;

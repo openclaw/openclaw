@@ -773,10 +773,14 @@ describe("createOpenClawCodingTools", () => {
       config: testConfig,
       chatType: "group",
       nativeChannelId: "oc_native_chat",
+      messageActionTurnCapability: "turn-capability-1",
     });
 
     expect(latestCreateOpenClawToolsOptions().nativeChannelId).toBe("oc_native_chat");
     expect(latestCreateOpenClawToolsOptions().currentChatType).toBe("group");
+    expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
+      "turn-capability-1",
+    );
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {

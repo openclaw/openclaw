@@ -420,6 +420,7 @@ describe("registerFeishuChatTools", () => {
     const tool = resolveRegisteredTool(registerTool, {
       agentAccountId: "b",
       deliveryAccountId: "b",
+      nativeChannelId: "oc_1",
     });
     chatGetMock.mockResolvedValueOnce({
       code: 0,

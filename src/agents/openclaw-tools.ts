@@ -126,6 +126,8 @@ export function createOpenClawTools(
     agentThreadId?: string | number;
     /** Trusted platform-native conversation id for the active inbound turn. */
     nativeChannelId?: string;
+    /** Opaque host-issued capability for current-turn channel message actions. */
+    messageActionTurnCapability?: string;
     agentDir?: string;
     sandboxRoot?: string;
     sandboxContainerWorkdir?: string;
@@ -394,6 +396,7 @@ export function createOpenClawTools(
         runId: options?.runId,
         agentId: sessionAgentId,
         sessionId: options?.sessionId,
+        messageActionTurnCapability: options?.messageActionTurnCapability,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,

@@ -67,7 +67,7 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Channel context injected into message actions so tools can reply in-place. */
+/** Caller-supplied routing hints. Authorization must use trusted runtime context. */
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),

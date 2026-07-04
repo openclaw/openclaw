@@ -748,6 +748,9 @@ function buildSideRunAttemptParams(
     ...(params.messageTo ? { messageTo: params.messageTo } : {}),
     ...(params.messageThreadId !== undefined ? { messageThreadId: params.messageThreadId } : {}),
     ...(params.chatId ? { chatId: params.chatId } : {}),
+    ...(params.messageActionTurnCapability
+      ? { messageActionTurnCapability: params.messageActionTurnCapability }
+      : {}),
     ...(params.groupId !== undefined ? { groupId: params.groupId } : {}),
     ...(params.groupChannel !== undefined ? { groupChannel: params.groupChannel } : {}),
     ...(params.groupSpace !== undefined ? { groupSpace: params.groupSpace } : {}),
@@ -852,6 +855,9 @@ async function createCodexSideToolBridge(input: {
         ? { messageThreadId: input.params.messageThreadId }
         : {}),
       ...(input.params.chatId ? { nativeChannelId: input.params.chatId } : {}),
+      ...(input.params.messageActionTurnCapability
+        ? { messageActionTurnCapability: input.params.messageActionTurnCapability }
+        : {}),
       ...(input.params.groupId !== undefined ? { groupId: input.params.groupId } : {}),
       ...(input.params.groupChannel !== undefined
         ? { groupChannel: input.params.groupChannel }
