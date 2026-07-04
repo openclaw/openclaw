@@ -3756,6 +3756,9 @@ export async function runEmbeddedAttempt(
             toolCallId: toolParams.toolCallId,
             args: toolParams.input,
             replaySafe: replaySafeTools.has(toolParams.tool as never),
+            hideFromChannelProgress:
+              "hideFromChannelProgress" in toolParams.tool &&
+              toolParams.tool.hideFromChannelProgress === true,
             execute: async () =>
               await toolParams.tool.execute(
                 toolParams.toolCallId,

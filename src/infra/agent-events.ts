@@ -2,9 +2,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
-import { createAbortError } from "./abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { createAbortError } from "./abort-signal.js";
 
 /** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
 export type AgentEventStream =
@@ -51,6 +51,8 @@ export type AgentItemEventData = {
   progressText?: string;
   /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
   suppressChannelProgress?: boolean;
+  /** Preserve activity telemetry without rendering this internal item in channel progress. */
+  hideFromChannelProgress?: boolean;
   approvalId?: string;
   approvalSlug?: string;
 };
