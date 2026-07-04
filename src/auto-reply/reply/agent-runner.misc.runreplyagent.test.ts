@@ -545,6 +545,57 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
+  it("keeps accepted child-session spawn completions silent", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+        },
+        finalAssistantVisibleText: "",
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "spawn child",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toBeUndefined();
+  });
+
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
     const sessionEntry = {

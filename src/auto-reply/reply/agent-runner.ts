@@ -8,6 +8,7 @@ import {
   resolveAgentConfig,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
@@ -254,12 +255,14 @@ function hasSuccessfulSideEffectDelivery(params: {
   didSendViaMessagingTool?: boolean;
   successfulCronAdds?: number;
   didSendDeterministicApprovalPrompt?: boolean;
+  acceptedSessionSpawns?: readonly unknown[];
 }): boolean {
   return (
     params.didSendViaMessagingTool === true ||
     hasSuccessfulSourceReplyDelivery(params) ||
     (params.successfulCronAdds ?? 0) > 0 ||
-    params.didSendDeterministicApprovalPrompt === true
+    params.didSendDeterministicApprovalPrompt === true ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns)
   );
 }
 
@@ -1965,6 +1968,7 @@ export async function runReplyAgent(params: {
       didSendViaMessagingTool: runResult.didSendViaMessagingTool,
       successfulCronAdds: runResult.successfulCronAdds,
       didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+      acceptedSessionSpawns: runResult.acceptedSessionSpawns,
     });
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,

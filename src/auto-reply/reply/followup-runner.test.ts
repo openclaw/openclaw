@@ -4627,6 +4627,23 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("does not emit the empty fallback after an accepted child-session spawn", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
+      },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("keeps message-tool-only empty followup completions silent", async () => {
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({

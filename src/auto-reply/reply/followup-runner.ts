@@ -7,6 +7,7 @@ import {
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
+import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
@@ -1460,6 +1461,7 @@ export function createFollowupRunner(params: {
               messagingToolSentTargets: runResult.messagingToolSentTargets,
               messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
             }) ||
+            hasAcceptedSessionSpawn(runResult.acceptedSessionSpawns) ||
             runResult.didSendDeterministicApprovalPrompt === true ||
             (runResult.successfulCronAdds ?? 0) > 0 ||
             didSendCompactionNoticePayload ||
