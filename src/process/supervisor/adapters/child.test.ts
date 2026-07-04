@@ -511,4 +511,29 @@ describe("createChildAdapter", () => {
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
   });
+
+  it("suppresses stream errors on stdout and stderr to prevent unhandled error crashes", async () => {
+    const { child } = createStubChild(6666);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    // Register stdout/stderr listeners to install the error handlers
+    adapter.onStdout(() => {});
+    adapter.onStderr(() => {});
+
+    // Emitting errors on the streams must not crash the process.
+    // If the noop error handlers were missing, Node would throw
+    // an unhandled 'error' event and crash the test runner.
+    const stdoutErr = new Error("simulated stdout pipe error");
+    const stderrErr = new Error("simulated stderr pipe error");
+
+    expect(() => child.stdout?.emit("error", stdoutErr)).not.toThrow();
+    expect(() => child.stderr?.emit("error", stderrErr)).not.toThrow();
+  });
 });
