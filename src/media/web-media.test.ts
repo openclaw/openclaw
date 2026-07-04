@@ -754,6 +754,27 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe(contentType);
   });
 
+  it("allows host-read EPUB files", async () => {
+    const epubFile = path.join(fixtureRoot, "book.epub");
+    const zip = new JSZip();
+    zip.file("mimetype", "application/epub+zip", { compression: "STORE" });
+    zip.file("META-INF/container.xml", "<container/>");
+    await fs.writeFile(
+      epubFile,
+      await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }),
+    );
+
+    const result = await loadWebMedia(epubFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/epub+zip");
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
     // Declared plain-text aliases must use the text validator path even when the

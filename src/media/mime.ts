@@ -37,6 +37,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/x-ms-wmv": ".wmv",
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
+  "application/epub+zip": ".epub",
   "application/vnd.android.package-archive": ".apk",
   "application/json": ".json",
   "application/yaml": ".yaml",

@@ -11,6 +11,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
+import { maxBytesForKind } from "../../media/constants.js";
 import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -48,8 +49,11 @@ function resolveReplyMediaMaxBytes(params: {
 }): number {
   const limitMb =
     resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
-  return typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0
-    ? Math.floor(limitMb * 1024 * 1024)
+  if (typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0) {
+    return Math.floor(limitMb * 1024 * 1024);
+  }
+  return params.channel?.trim().toLowerCase() === "telegram"
+    ? maxBytesForKind("document")
     : MEDIA_MAX_BYTES;
 }
 

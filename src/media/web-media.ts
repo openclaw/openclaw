@@ -137,6 +137,7 @@ const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/json",
+  "application/epub+zip",
   "application/vnd.android.package-archive",
   "application/yaml",
   "application/msword",
