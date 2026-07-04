@@ -351,9 +351,9 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
-        const csp = setHeader.mock.calls
-          .filter((call) => call[0] === "Content-Security-Policy")
-          .at(-1)?.[1];
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
@@ -380,9 +380,9 @@ describe("handleControlUiHttpRequest", () => {
           },
         );
         expect(handled).toBe(true);
-        const csp = setHeader.mock.calls
-          .filter((call) => call[0] === "Content-Security-Policy")
-          .at(-1)?.[1];
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
         expect(String(csp)).toContain("script-src 'self' 'wasm-unsafe-eval'");
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
       },
@@ -398,9 +398,9 @@ describe("handleControlUiHttpRequest", () => {
           config: { gateway: { terminal: { enabled: true } } },
           terminalEnabled: false,
         });
-        const csp = setHeader.mock.calls
-          .filter((call) => call[0] === "Content-Security-Policy")
-          .at(-1)?.[1];
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
         expect(String(csp)).not.toContain("'wasm-unsafe-eval'");
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
 
