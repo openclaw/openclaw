@@ -95,9 +95,10 @@ describe("compileSlackInteractiveReplies", () => {
     expect(result.interactive).toBeUndefined();
   });
 
-  it("handles button labels containing colons (e.g., times) by splitting at the last colon", () => {
+  it("handles button labels containing colons using new double-colon syntax", () => {
+    // New syntax: Label::value allows colons in labels (e.g., times like "9:00")
     const result = compileSlackInteractiveReplies({
-      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045]]",
+      text: "[[slack_buttons: Fr 10.07. 9:00::slot_fr_0900, Mo 13.07. 10:45::slot_mo_1045]]",
     });
 
     expect(result.interactive).toEqual({
@@ -119,10 +120,10 @@ describe("compileSlackInteractiveReplies", () => {
     });
   });
 
-  it("preserves style suffix when value contains a colon-like pattern", () => {
-    // Format is Label:value:style, so "Morning Meeting:slot_9am:primary" should work
+  it("preserves style suffix with double-colon syntax", () => {
+    // New syntax: Label::value:style
     const result = compileSlackInteractiveReplies({
-      text: "[[slack_buttons: Morning Meeting at 9:00:slot_9am:primary]]",
+      text: "[[slack_buttons: Morning Meeting at 9:00::slot_9am:primary]]",
     });
 
     expect(result.interactive).toEqual({
@@ -141,7 +142,8 @@ describe("compileSlackInteractiveReplies", () => {
     });
   });
 
-  it("handles single-colon entries unchanged for backward compatibility", () => {
+  it("preserves legacy single-colon syntax for backward compatibility", () => {
+    // Legacy syntax still works: Label:value keeps first-colon split
     const result = compileSlackInteractiveReplies({
       text: "[[slack_buttons: Retry:retry, Ignore:ignore]]",
     });
@@ -158,6 +160,48 @@ describe("compileSlackInteractiveReplies", () => {
             {
               label: "Ignore",
               value: "ignore",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("preserves existing multi-colon callback values (legacy syntax)", () => {
+    // Legacy behavior: splits at first colon, so callback values with colons are preserved
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Allow:pluginbind:approval-123:o]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow",
+              value: "pluginbind:approval-123:o",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("supports complex time labels with double-colon syntax and style", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Mon 15.07. 14:30-16:00::slot_mon_afternoon:secondary]]",
+    });
+
+    expect(result.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Mon 15.07. 14:30-16:00",
+              value: "slot_mon_afternoon",
+              style: "secondary",
             },
           ],
         },

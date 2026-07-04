@@ -27,43 +27,55 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
     return null;
   }
 
-  let style: SlackChoice["style"];
-  let workingString = trimmed;
+  // Support both legacy single-colon and new double-colon syntax
+  // New syntax: "Label::value[:style]" allows colons in labels (e.g., times like "9:00")
+  // Legacy syntax: "Label:value[:style]" for backward compatibility
 
-  // First, strip optional style suffix (e.g., ":primary", ":danger") from the end
+  let label: string;
+  let value: string;
+
+  // Try double-colon separator first (new explicit syntax)
+  const doubleColonIndex = trimmed.indexOf("::");
+  if (doubleColonIndex !== -1) {
+    // New syntax: split at ::
+    label = trimmed.slice(0, doubleColonIndex).trim();
+    value = trimmed.slice(doubleColonIndex + 2).trim();
+  } else {
+    // Legacy syntax: split at first colon (preserves existing behavior)
+    const delimiter = trimmed.indexOf(":");
+    if (delimiter === -1) {
+      return {
+        label: trimmed,
+        value: trimmed,
+      };
+    }
+    label = trimmed.slice(0, delimiter).trim();
+    value = trimmed.slice(delimiter + 1).trim();
+  }
+
+  if (!label || !value) {
+    return null;
+  }
+
+  let style: SlackChoice["style"];
   if (options?.allowStyle) {
-    const styleDelimiter = workingString.lastIndexOf(":");
+    const styleDelimiter = value.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = normalizeLowercaseStringOrEmpty(workingString.slice(styleDelimiter + 1));
+      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
         maybeStyle === "success" ||
         maybeStyle === "danger"
       ) {
-        const potentialLabel = workingString.slice(0, styleDelimiter).trim();
-        if (potentialLabel) {
-          workingString = potentialLabel;
+        const unstyledValue = value.slice(0, styleDelimiter).trim();
+        if (unstyledValue) {
+          value = unstyledValue;
           style = maybeStyle;
         }
       }
     }
   }
-
-  // Now split the remaining string at the last colon to support labels containing colons (e.g., times)
-  const delimiter = workingString.lastIndexOf(":");
-  if (delimiter === -1) {
-    return {
-      label: workingString,
-      value: workingString,
-    };
-  }
-  const label = workingString.slice(0, delimiter).trim();
-  const value = workingString.slice(delimiter + 1).trim();
-  if (!label || !value) {
-    return null;
-  }
-
   return style ? { label, value, style } : { label, value };
 }
 
