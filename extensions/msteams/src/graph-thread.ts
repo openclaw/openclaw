@@ -142,7 +142,7 @@ export async function fetchThreadReplies(
   // back to arrival order (Graph returns oldest-first) when any timestamp is missing.
   const allTimestamped = items.every((m) => Number.isFinite(Date.parse(m.createdDateTime ?? "")));
   const ordered = allTimestamped
-    ? [...items].sort((a, b) => Date.parse(a.createdDateTime ?? "") - Date.parse(b.createdDateTime ?? ""))
+    ? items.toSorted((a, b) => Date.parse(a.createdDateTime ?? "") - Date.parse(b.createdDateTime ?? ""))
     : items;
   return ordered.slice(-want);
 }
