@@ -721,12 +721,7 @@ struct OpenClawChatComposer: View {
     }
 
     private func slashCommandRow(_ command: OpenClawChatCommandChoice) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: command.source == .skill ? "sparkle.magnifyingglass" : "terminal")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
-
+        HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(command.displayInvocation)
                     .font(OpenClawChatTypography.mono(
