@@ -43,6 +43,7 @@ const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
 const TURN_MAINTENANCE_TASK_TASK = "Deferred context-engine maintenance after turn.";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
+const TURN_MAINTENANCE_STALE_TIMEOUT_MS = 300_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
   "openclaw.contextEngineTurnMaintenanceAbortState",
 );
@@ -401,6 +402,28 @@ async function executeContextEngineMaintenance(params: {
   return result;
 }
 
+async function runDeferredTurnMaintenanceWithTimeout<T>(work: Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `deferred context engine maintenance timed out after ${TURN_MAINTENANCE_STALE_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, TURN_MAINTENANCE_STALE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function runDeferredTurnMaintenanceWorker(params: {
   contextEngine: ContextEngine;
   sessionId: string;
@@ -456,19 +479,21 @@ async function runDeferredTurnMaintenanceWorker(params: {
       }
     }, TURN_MAINTENANCE_LONG_WAIT_MS);
 
-    const result = await executeContextEngineMaintenance({
-      contextEngine: params.contextEngine,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      reason: "turn",
-      sessionManager: params.sessionManager,
-      runtimeContext: params.runtimeContext,
-      runtimeSettings: params.runtimeSettings,
-      agentId: params.agentId,
-      config: params.config,
-      executionMode: "background",
-    });
+    const result = await runDeferredTurnMaintenanceWithTimeout(
+      executeContextEngineMaintenance({
+        contextEngine: params.contextEngine,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        reason: "turn",
+        sessionManager: params.sessionManager,
+        runtimeContext: params.runtimeContext,
+        runtimeSettings: params.runtimeSettings,
+        agentId: params.agentId,
+        config: params.config,
+        executionMode: "background",
+      }),
+    );
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
       longRunningTimer = null;

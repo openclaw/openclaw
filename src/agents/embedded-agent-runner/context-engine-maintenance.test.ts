@@ -770,6 +770,76 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("fails and surfaces deferred maintenance that never settles", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-timeout-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-timeout";
+        const maintain = vi.fn(
+          async () =>
+            await new Promise<never>(() => {
+              // Intentionally never settles; timeout handling owns completion.
+            }),
+        );
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+        let deferredPromise: Promise<void> | undefined;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-timeout",
+          sessionKey,
+          sessionFile: "/tmp/session-timeout.jsonl",
+          reason: "turn",
+          onDeferredMaintenance: (promise) => {
+            deferredPromise = promise;
+          },
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        await vi.advanceTimersByTimeAsync(10_000);
+        await waitForAssertion(() => {
+          const task = listTasksForOwnerKey(sessionKey).find(
+            (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+          );
+          expect(task?.notifyPolicy).toBe("state_changes");
+          expect(task?.progressSummary).toContain("still running");
+        });
+
+        await vi.advanceTimersByTimeAsync(300_000);
+        if (!deferredPromise) {
+          throw new Error("expected deferred maintenance promise");
+        }
+        await deferredPromise;
+
+        const task = listTasksForOwnerKey(sessionKey).find(
+          (candidate) => candidate.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(task?.status).toBe("failed");
+        expect(task?.notifyPolicy).toBe("state_changes");
+        expect(String(task?.error)).toContain("deferred context engine maintenance timed out");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("queues a follow-up maintenance run when a new turn finishes during an active deferred run", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-rerun-", async () => {
       vi.useFakeTimers();
