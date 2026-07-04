@@ -12189,6 +12189,26 @@
       "translated": "Stoppen"
     },
     {
+      "id": "native.apple.9d4bdedcbf74d86c",
+      "source": "Loading commands",
+      "translated": "Opdrachten laden"
+    },
+    {
+      "id": "native.apple.fdd34aa94629c962",
+      "source": "Commands unavailable",
+      "translated": "Opdrachten niet beschikbaar"
+    },
+    {
+      "id": "native.apple.a1953e3e9be8b8d5",
+      "source": "Retry",
+      "translated": "Opnieuw proberen"
+    },
+    {
+      "id": "native.apple.0f942ca442f88936",
+      "source": "No matching commands",
+      "translated": "Geen overeenkomende opdrachten"
+    },
+    {
       "id": "native.apple.afd8a2b9e3bf6d60",
       "source": "Stop response",
       "translated": "Antwoord stoppen"

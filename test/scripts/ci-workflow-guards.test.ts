@@ -916,7 +916,10 @@ describe("ci workflow guards", () => {
     expect(runStep.run).not.toContain("--allow-failures");
     expect(runStep.run).toContain("qa_exit_code=0");
     expect(runStep.run).toContain('exit "$qa_exit_code"');
-    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
+    expect(runStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(runStep.run).toContain("--max-old-space-size=12288");
+    expect(runStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
     expect(runStep.run).not.toContain("OPENAI_API_KEY");
     expect(runStep.run).toMatch(
       /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,

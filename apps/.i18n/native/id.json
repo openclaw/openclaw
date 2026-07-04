@@ -12189,6 +12189,26 @@
       "translated": "Hentikan"
     },
     {
+      "id": "native.apple.9d4bdedcbf74d86c",
+      "source": "Loading commands",
+      "translated": "Memuat perintah"
+    },
+    {
+      "id": "native.apple.fdd34aa94629c962",
+      "source": "Commands unavailable",
+      "translated": "Perintah tidak tersedia"
+    },
+    {
+      "id": "native.apple.a1953e3e9be8b8d5",
+      "source": "Retry",
+      "translated": "Coba lagi"
+    },
+    {
+      "id": "native.apple.0f942ca442f88936",
+      "source": "No matching commands",
+      "translated": "Tidak ada perintah yang cocok"
+    },
+    {
       "id": "native.apple.afd8a2b9e3bf6d60",
       "source": "Stop response",
       "translated": "Hentikan respons"

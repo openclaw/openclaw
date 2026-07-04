@@ -12189,6 +12189,26 @@
       "translated": "停止"
     },
     {
+      "id": "native.apple.9d4bdedcbf74d86c",
+      "source": "Loading commands",
+      "translated": "正在加载命令"
+    },
+    {
+      "id": "native.apple.fdd34aa94629c962",
+      "source": "Commands unavailable",
+      "translated": "命令不可用"
+    },
+    {
+      "id": "native.apple.a1953e3e9be8b8d5",
+      "source": "Retry",
+      "translated": "重试"
+    },
+    {
+      "id": "native.apple.0f942ca442f88936",
+      "source": "No matching commands",
+      "translated": "没有匹配的命令"
+    },
+    {
       "id": "native.apple.afd8a2b9e3bf6d60",
       "source": "Stop response",
       "translated": "停止响应"

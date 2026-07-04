@@ -955,6 +955,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/net-policy",
     packageDir: "net-policy",
+    subpath: "url-protocol",
+    srcFile: "url-protocol.ts",
+    distFile: "url-protocol.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
     subpath: "url-userinfo",
     srcFile: "url-userinfo.ts",
     distFile: "url-userinfo.mjs",
