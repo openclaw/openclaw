@@ -5,7 +5,6 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Api, Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -1930,16 +1929,12 @@ function buildMissingProviderModelRegistrationHint(params: {
   if (agentRuntimeId) {
     return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;
   }
-  // Bundled providers (and legacy aliases like openai-codex) register models
-  // automatically at startup; if a model is missing, the most likely cause is a
-  // missing or expired auth profile, not a missing models.providers[] config entry.
-  // Pointing operators at config is actively harmful: the config validator rejects
-  // overlays without baseUrl for non-bundled ids, creating contradictory guidance
-  // (#100066).
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const isBundledOrLegacyAlias =
-    isBuiltInModelProviderOverlayId(normalizedProvider) || normalizedProvider === "openai-codex";
-  if (isBundledOrLegacyAlias) {
+  // Legacy openai-codex is folded into the openai bundled provider. Its models
+  // register automatically at startup, so a missing-model error here is almost
+  // always a missing auth profile, not a missing config entry. Pointing operators
+  // at models.providers[] is actively harmful: the config validator rejects the
+  // overlay without baseUrl, creating contradictory guidance (#100066).
+  if (normalizeProviderId(params.provider) === "openai-codex") {
     return `Found agents.defaults.models["${agentModelKey}"], but the bundled provider "${params.provider}" has no registered model "${params.modelId}". This usually means the provider has no authenticated profile — run \`openclaw models status\` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.`;
   }
   const providerConfig = findNormalizedProviderValue(

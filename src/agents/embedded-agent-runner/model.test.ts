@@ -2829,7 +2829,7 @@ describe("resolveModel", () => {
     );
   });
 
-  it("keeps config suggestion for non-bundled legacy alias provider", async () => {
+  it("keeps config registration hint for built-in providers other than openai-codex", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -2849,7 +2849,7 @@ describe("resolveModel", () => {
     });
 
     expect(result.error).toBe(
-      'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but the bundled provider "microsoft-foundry" has no registered model "Kimi-K2.6-1". This usually means the provider has no authenticated profile — run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+      'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but no matching models.providers["microsoft-foundry"].models[] entry. Add { "id": "Kimi-K2.6-1", "name": "Kimi-K2.6-1" } to models.providers["microsoft-foundry"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 
