@@ -207,6 +207,8 @@ export async function setupSkills(
     reason: SkillInstallSkipReason;
   }> = [];
   for (const skill of candidateInstallable) {
+    // Onboarding intentionally executes only the primary recipe below. Keep
+    // readiness aligned with that recipe instead of silently changing methods.
     const primaryInstall = skill.install[0];
     if (!primaryInstall) {
       continue;

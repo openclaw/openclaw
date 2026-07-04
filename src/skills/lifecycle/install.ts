@@ -305,6 +305,14 @@ async function runBestEffortCommand(
   await runCommandSafely(argv, optionsOrTimeout);
 }
 
+const APT_GO_INSTALL_ARGV = ["apt-get", "install", "-y", "golang-go"];
+const APT_GO_UPDATE_ARGV = ["apt-get", "update", "-qq"];
+const SUDO_APT_GO_INSTALL_CHECK_ARGV = ["sudo", "-n", "-l", ...APT_GO_INSTALL_ARGV];
+
+async function checkSudoGoAptInstallPermission(): Promise<CommandResult> {
+  return runCommandSafely(SUDO_APT_GO_INSTALL_CHECK_ARGV, { timeoutMs: 5_000 });
+}
+
 function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
   const formula = spec.formula ?? "this package";
   if (process.platform === "linux" && getSkillsInstallDeps().isContainerEnvironment()) {
@@ -349,16 +357,14 @@ async function ensureUvInstalled(params: {
 }
 
 async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | undefined> {
-  const aptInstallArgv = ["apt-get", "install", "-y", "golang-go"];
-  const aptUpdateArgv = ["apt-get", "update", "-qq"];
   const aptFailureMessage =
     "go not installed — automatic install via apt failed. Install manually: https://go.dev/doc/install";
 
   const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   if (isRoot) {
     // Best effort: fresh containers often need package indexes populated.
-    await runBestEffortCommand(aptUpdateArgv, { timeoutMs });
-    const aptResult = await runCommandSafely(aptInstallArgv, { timeoutMs });
+    await runBestEffortCommand(APT_GO_UPDATE_ARGV, { timeoutMs });
+    const aptResult = await runCommandSafely(APT_GO_INSTALL_ARGV, { timeoutMs });
     if (aptResult.code === 0) {
       return undefined;
     }
@@ -375,9 +381,7 @@ async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | 
     });
   }
 
-  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], {
-    timeoutMs: 5_000,
-  });
+  const sudoCheck = await checkSudoGoAptInstallPermission();
   if (sudoCheck.code !== 0) {
     return createInstallFailure({
       message:
@@ -387,8 +391,8 @@ async function installGoViaApt(timeoutMs: number): Promise<SkillInstallResult | 
   }
 
   // Best effort: fresh containers often need package indexes populated.
-  await runBestEffortCommand(["sudo", ...aptUpdateArgv], { timeoutMs });
-  const aptResult = await runCommandSafely(["sudo", ...aptInstallArgv], {
+  await runBestEffortCommand(["sudo", ...APT_GO_UPDATE_ARGV], { timeoutMs });
+  const aptResult = await runCommandSafely(["sudo", ...APT_GO_INSTALL_ARGV], {
     timeoutMs,
   });
   if (aptResult.code === 0) {
@@ -479,7 +483,7 @@ async function canRunAptGetAsPrivileged(): Promise<boolean> {
   if (!getSkillsInstallDeps().hasBinary("sudo")) {
     return false;
   }
-  const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], { timeoutMs: 5_000 });
+  const sudoCheck = await checkSudoGoAptInstallPermission();
   return sudoCheck.code === 0;
 }
 

@@ -61,9 +61,14 @@ function mockAvailableBinaries(binaries: string[]) {
 }
 
 function assertNoAptGetFallbackCalls() {
-  const aptCalls = runCommandWithTimeoutMock.mock.calls.filter(
-    (call) => Array.isArray(call[0]) && (call[0] as string[]).includes("apt-get"),
-  );
+  const aptCalls = runCommandWithTimeoutMock.mock.calls.filter((call) => {
+    if (!Array.isArray(call[0])) {
+      return false;
+    }
+    const argv = call[0] as string[];
+    const isPermissionCheck = argv[0] === "sudo" && argv[1] === "-n" && argv[2] === "-l";
+    return argv.includes("apt-get") && !isPermissionCheck;
+  });
   expect(aptCalls).toHaveLength(0);
 }
 
@@ -165,7 +170,15 @@ describe("skills-install fallback edge cases", () => {
       expect(result.ok, testCase.label).toBe(false);
       testCase.assert(result);
       const sudoCall = commandCallAt(0);
-      expect(sudoCall?.[0], testCase.label).toEqual(["sudo", "-n", "true"]);
+      expect(sudoCall?.[0], testCase.label).toEqual([
+        "sudo",
+        "-n",
+        "-l",
+        "apt-get",
+        "install",
+        "-y",
+        "golang-go",
+      ]);
       expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
       assertNoAptGetFallbackCalls();
     }
@@ -328,7 +341,15 @@ describe("skills-install fallback edge cases", () => {
         runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(commandCallAt(0)[0]).toEqual(["sudo", "-n", "true"]);
+        expect(commandCallAt(0)[0]).toEqual([
+          "sudo",
+          "-n",
+          "-l",
+          "apt-get",
+          "install",
+          "-y",
+          "golang-go",
+        ]);
         expect(commandCallAt(1)[0]).toEqual(["apt-cache", "policy", "golang-go"]);
       });
     });
