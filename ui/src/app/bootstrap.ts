@@ -39,6 +39,7 @@ import type {
   ApplicationTheme,
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { createNativeChatDrafts } from "./native-bridge.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadLocalUserIdentity,
@@ -49,6 +50,7 @@ import {
 } from "./settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
+import { createWebPushCapability } from "./web-push.ts";
 
 function normalizeInitialApplicationLocation(
   location: RouteLocation,
@@ -485,6 +487,8 @@ export function bootstrapApplication(): ApplicationRuntime {
   const overlays = createApplicationOverlays(gateway);
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
+  const nativeChatDrafts = createNativeChatDrafts();
+  const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
   applyStartupPresentation(settings);
   const identity = loadLocalUserIdentity();
@@ -554,6 +558,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     overlays,
     navigation,
     theme,
+    nativeChatDrafts,
+    webPush,
     skillWorkshopRevision,
     navigate: (routeId, options) => {
       void router
@@ -596,6 +602,8 @@ export function bootstrapApplication(): ApplicationRuntime {
       runtimeConfig.dispose();
       overlays.dispose();
       theme.dispose();
+      nativeChatDrafts.dispose();
+      webPush.dispose();
       skillWorkshopRevision.clear();
     },
   };

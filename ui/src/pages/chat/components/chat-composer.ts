@@ -21,7 +21,6 @@ import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import type { CompactionStatus, FallbackStatus } from "../../../ui/app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
@@ -33,6 +32,7 @@ import type { RealtimeTalkCatalogProvider } from "../realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 import { renderRealtimeTalkOptions, type RealtimeTalkOptions } from "./chat-realtime-controls.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;

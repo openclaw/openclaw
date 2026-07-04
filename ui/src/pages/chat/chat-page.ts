@@ -154,7 +154,7 @@ export class ChatPage extends LitElement {
       historyLoad,
       sessionsRefresh,
       previousSessionsResult,
-      () => flushChatQueueForEvent(state),
+      () => void flushChatQueueForEvent(state),
     );
     void subscriptionSync;
     void historyLoad;
@@ -364,6 +364,16 @@ export class ChatPage extends LitElement {
     if (this.data?.draft !== undefined) {
       this.state.handleChatDraftChange(this.data.draft);
     }
+    chatState.addCleanup(
+      this.context.nativeChatDrafts.subscribe((draft) => {
+        const state = this.state;
+        if (!state) {
+          return;
+        }
+        state.handleChatDraftChange(draft);
+        state.requestUpdate?.();
+      }),
+    );
     chatState.startComposerPersistence();
     chatState.addCleanup(
       this.context.gateway.subscribe((snapshot) => {

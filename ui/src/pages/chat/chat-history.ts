@@ -48,7 +48,7 @@ import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
-} from "../../ui/control-ui-performance.ts";
+} from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -422,7 +422,7 @@ export type ChatState = {
   chatError?: string | null;
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
-  chatReplyTarget?: unknown | null;
+  chatReplyTarget?: unknown;
   agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;

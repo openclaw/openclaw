@@ -1,6 +1,7 @@
 // Control UI view renders overview screen content.
 import { html } from "lit";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type {
   AttentionItem,
   CronJob,
@@ -12,11 +13,10 @@ import type {
 } from "../../api/types.ts";
 import type { NavigationRouteId } from "../../app-navigation.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
+import { icons } from "../../components/icons.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
-import type { GatewayHelloOk } from "../../ui/gateway.ts";
 import { renderOverviewAttention } from "./attention.ts";
 import { renderOverviewCards } from "./cards.ts";
 import { renderOverviewEventLog } from "./event-log.ts";

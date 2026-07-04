@@ -124,9 +124,10 @@ export function startAppRouter(
 
 export function inferBasePathFromPathname(pathname: string): string {
   const normalizedPath = normalizePath(pathname);
-  const normalized = normalizedPath.toLowerCase().endsWith("/index.html")
-    ? normalizePath(normalizedPath.slice(0, -"/index.html".length))
-    : normalizedPath;
+  if (normalizedPath.toLowerCase().endsWith("/index.html")) {
+    return normalizeBasePath(normalizedPath.slice(0, -"/index.html".length));
+  }
+  const normalized = normalizedPath;
   if (normalized === "/") {
     return "";
   }

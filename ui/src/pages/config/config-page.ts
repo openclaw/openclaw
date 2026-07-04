@@ -115,6 +115,7 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
     case "config":
       return { activeSection: null, activeSubsection: null };
   }
+  throw new Error("Unknown config page");
 }
 
 function asConfigRecord(value: unknown): Record<string, unknown> | null {
@@ -329,6 +330,7 @@ export class ConfigPage extends LitElement {
       this.context.overlays.subscribe(() => this.requestUpdate()),
       this.context.config.subscribe(() => this.requestUpdate()),
       this.context.gateway.subscribe(() => this.requestUpdate()),
+      this.context.webPush.subscribe(() => this.requestUpdate()),
     ];
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
@@ -485,7 +487,7 @@ export class ConfigPage extends LitElement {
 
   private renderAdvancedConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
-    const state = runtimeConfig.state;
+    const configState = runtimeConfig.state;
     const includeSections = this.includeSections();
     const excludeSections =
       this.pageId === "config"
@@ -506,24 +508,26 @@ export class ConfigPage extends LitElement {
     const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
     const activeSubsection = this.pageId === "mcp" ? null : selection.activeSubsection;
     const props: ConfigProps = {
-      raw: state.configRaw,
-      originalRaw: state.configRawOriginal,
-      valid: state.configValid,
-      issues: state.configIssues,
-      loading: state.configLoading,
-      saving: state.configSaving,
-      applying: state.configApplying,
+      raw: configState.configRaw,
+      originalRaw: configState.configRawOriginal,
+      valid: configState.configValid,
+      issues: configState.configIssues,
+      loading: configState.configLoading,
+      saving: configState.configSaving,
+      applying: configState.configApplying,
       updating: this.context.overlays.snapshot.updateRunning,
-      connected: state.connected,
-      schema: state.configSchema,
-      schemaLoading: state.configSchemaLoading,
-      uiHints: state.configUiHints,
+      connected: configState.connected,
+      schema: configState.configSchema,
+      schemaLoading: configState.configSchemaLoading,
+      uiHints: configState.configUiHints,
       formMode: this.formModes[this.pageId],
       viewState: this.configViewState,
-      rawAvailable: Boolean(state.configSnapshot?.config || state.configForm || state.configRaw),
+      rawAvailable: Boolean(
+        configState.configSnapshot?.config || configState.configForm || configState.configRaw,
+      ),
       showModeToggle: this.pageId === "config",
-      formValue: state.configForm,
-      originalValue: state.configFormOriginal,
+      formValue: configState.configForm,
+      originalValue: configState.configFormOriginal,
       searchQuery: this.searchQueries[this.pageId],
       activeSection,
       activeSubsection,
@@ -572,7 +576,7 @@ export class ConfigPage extends LitElement {
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName:
         this.context.config.current.assistantIdentity.name || this.context.assistantName,
-      configPath: state.configSnapshot?.path ?? null,
+      configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "config" ? undefined : configPageTitle(this.pageId),
       showRootTab: !includeSections?.length,
       includeSections: includeSections ? [...includeSections] : undefined,
@@ -580,17 +584,20 @@ export class ConfigPage extends LitElement {
       includeVirtualSections: this.pageId === "communications" || this.pageId === "appearance",
       settingsLayout: this.pageId === "config" ? "accordion" : undefined,
       onBackToQuick: this.pageId === "config" ? () => (this.settingsMode = "quick") : undefined,
-      webPush: undefined,
+      webPush: this.context.webPush.snapshot,
+      onWebPushSubscribe: () => void this.context.webPush.enable(),
+      onWebPushUnsubscribe: () => void this.context.webPush.disable(),
+      onWebPushTest: () => void this.context.webPush.sendTest(),
     };
     if (this.pageId !== "mcp") {
       return renderConfig(props);
     }
     return renderMcp({
       configObject,
-      configDirty: state.configFormDirty,
-      configSaving: state.configSaving,
-      configApplying: state.configApplying,
-      connected: state.connected,
+      configDirty: configState.configFormDirty,
+      configSaving: configState.configSaving,
+      configApplying: configState.configApplying,
+      connected: configState.connected,
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
       onServerEnabledChange: (name, enabled) => runtimeConfig.setMcpServerEnabled(name, enabled),

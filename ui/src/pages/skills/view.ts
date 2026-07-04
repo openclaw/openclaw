@@ -7,6 +7,7 @@ import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../.
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { clampText } from "../../lib/format.ts";
+import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
@@ -22,7 +23,6 @@ import {
   type SkillMessageMap,
 } from "../../lib/skills/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { resolveSafeExternalUrl } from "../../ui/open-external-url.ts";
 
 function safeExternalHref(raw?: string): string | null {
   if (!raw) {

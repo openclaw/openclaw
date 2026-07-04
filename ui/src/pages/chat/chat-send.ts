@@ -26,9 +26,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { resetToolStream } from "../../ui/app-tool-stream.ts";
-import { formatConnectError } from "../../ui/connect-error.ts";
-import { controlUiNowMs, roundedControlUiDurationMs } from "../../ui/control-ui-performance.ts";
 import {
   discardChatAttachmentDataUrls,
   getChatAttachmentDataUrl,
@@ -62,6 +59,7 @@ import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
+import { formatConnectError } from "./connect-error.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -72,6 +70,7 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./input-history.ts";
+import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import {
   handleAbortChat,
   isChatBusy,
@@ -79,6 +78,7 @@ import {
   reconcileChatRunLifecycle,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
+import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type ChatHost = ChatInputHistoryState & {

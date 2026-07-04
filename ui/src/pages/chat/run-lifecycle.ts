@@ -4,14 +4,10 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { scopedAgentParamsForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-// Control UI chat module implements run lifecycle behavior.
-import {
-  resetToolStream,
-  type CompactionStatus,
-  type FallbackStatus,
-} from "../../ui/app-tool-stream.ts";
-import { formatConnectError } from "../../ui/connect-error.ts";
+import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
+// Control UI chat module implements run lifecycle behavior.
+import { resetToolStream, type CompactionStatus, type FallbackStatus } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 

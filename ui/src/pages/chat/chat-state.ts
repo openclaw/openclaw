@@ -37,15 +37,6 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import {
-  handleAgentEvent,
-  handleSessionOperationEvent,
-  resetToolStream,
-  type CompactionStatus,
-  type FallbackStatus,
-  type ToolStreamEntry,
-} from "../../ui/app-tool-stream.ts";
-import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import {
@@ -96,6 +87,7 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "./input-history.ts";
+import { applyModelCatalogResult, loadModels } from "./models.ts";
 import {
   handleAbortChat,
   reconcileChatRunFromCurrentSessionRow,
@@ -104,6 +96,14 @@ import {
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
 import { cacheChatMessages, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  handleAgentEvent,
+  handleSessionOperationEvent,
+  resetToolStream,
+  type CompactionStatus,
+  type FallbackStatus,
+  type ToolStreamEntry,
+} from "./tool-stream.ts";
 
 type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
@@ -597,7 +597,7 @@ export async function refreshChat(
     historyRefresh,
     sessionsRefresh,
     previousSessionsResult,
-    () => flushChatQueueForEvent(host),
+    () => void flushChatQueueForEvent(host),
   );
   const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
     requestUpdate,
@@ -705,13 +705,15 @@ function finishSessionMessageRunReconcile(
     return false;
   }
   clearPendingQueueItemsForRun(state, runId ?? undefined);
-  void loadChatHistory(state).finally(() => {
-    if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
-      return;
-    }
-    flushChatQueueForEvent(state);
-    state.requestUpdate?.();
-  });
+  void loadChatHistory(state)
+    .finally(() => {
+      if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
+        return;
+      }
+      void flushChatQueueForEvent(state);
+      state.requestUpdate?.();
+    })
+    .catch(() => undefined);
   return true;
 }
 
@@ -906,7 +908,6 @@ export function createPageState(
     chatQueueBySession: {} as Record<string, ChatQueueItem[]>,
     chatMessagesBySession: new Map<string, unknown[]>(),
     eventLogBuffer: [] as unknown[],
-    eventLog: [] as unknown[],
     tab: "chat",
     basePath: context.basePath,
     chatNewMessagesBelow: false,

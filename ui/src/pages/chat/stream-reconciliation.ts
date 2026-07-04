@@ -15,7 +15,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
-import { resetToolStream } from "../../ui/app-tool-stream.ts";
+import { resetToolStream } from "./tool-stream.ts";
 
 export type StreamReconciliationState = {
   chatStream: string | null;

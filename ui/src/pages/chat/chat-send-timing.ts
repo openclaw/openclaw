@@ -1,14 +1,14 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import type { ChatEventPayload } from "./chat-history.ts";
+import { readChatQueueForSession } from "./chat-queue.ts";
+import type { ChatHost, ChatSendAck } from "./chat-send.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
   scheduleControlUiAfterPaint,
-} from "../../ui/control-ui-performance.ts";
-import type { ChatEventPayload } from "./chat-history.ts";
-import { readChatQueueForSession } from "./chat-queue.ts";
-import type { ChatHost, ChatSendAck } from "./chat-send.ts";
+} from "./performance.ts";
 
 export type ChatSendTimingPhase =
   | "pending-visible"

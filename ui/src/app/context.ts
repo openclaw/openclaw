@@ -11,8 +11,10 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
+import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { ApplicationOverlays } from "./overlays.ts";
 import type { ThemeMode } from "./theme.ts";
+import type { WebPushCapability } from "./web-push.ts";
 
 export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
@@ -93,6 +95,8 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
+  readonly nativeChatDrafts: NativeChatDrafts;
+  readonly webPush: WebPushCapability;
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;

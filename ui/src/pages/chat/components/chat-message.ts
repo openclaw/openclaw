@@ -17,9 +17,9 @@ import type {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
-import { openExternalUrlSafe } from "../../../ui/open-external-url.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 export { resolveAssistantTextAvatar } from "../../../lib/agents/display.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";

@@ -51,6 +51,7 @@ export type WebPushUiState = {
   permission: NotificationPermission | "unsupported";
   subscribed: boolean;
   loading: boolean;
+  error?: string | null;
 };
 
 type ConfigFormMode = "form" | "raw";
@@ -1009,6 +1010,7 @@ function renderNotificationsSection(props: ConfigProps) {
                   `
                 : nothing}
           </div>
+          ${push.error ? html`<div class="callout danger">${push.error}</div>` : nothing}
         </div>
       </section>
     </div>
