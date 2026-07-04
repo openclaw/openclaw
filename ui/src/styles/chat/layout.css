@@ -1517,6 +1517,13 @@
     min-width: 0;
   }
 
+  /* The borderless trigger is 30px on desktop; keep a >=40px touch target
+     inside the mobile composer grid. */
+  .agent-chat__composer-controls .chat-controls__inline-select-trigger {
+    height: 40px;
+    min-height: 40px;
+  }
+
   /* Desktop restores the quota pill in the composer flex row (#93041); the mobile composer is a
      fixed 2-col grid (model | settings), so the pill would push the settings chip to a new row. */
   .agent-chat__composer-controls .chat-controls__quota {
