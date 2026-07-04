@@ -260,6 +260,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    // Exposed as a stable shared entry so agents runtime paths (shell-utils, bash-executor,
+    // session rendering) can import one ANSI stripper instead of duplicating the regex.
+    "agents/utils/ansi": "src/agents/utils/ansi.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
