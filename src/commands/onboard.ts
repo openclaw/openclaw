@@ -24,19 +24,40 @@ import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
 /**
- * Interactive onboarding defaults to the bootstrap flow (inference-first, then
- * the Crestodian conversation). Explicit step flags keep the classic wizard —
- * those flags are a public automation contract. `--modern` never reaches this
+ * Interactive onboarding defaults to the Crestodian conversation. Any explicit
+ * setup flag beyond this allowlist keeps the classic wizard — those flags are
+ * a public automation contract and the conversation does not honor them.
+ * Boolean false and undefined mean "not passed" (Commander coerces unset
+ * booleans to false); explicit `--no-install-daemon` arrives as `false` via
+ * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
  * dispatch; it routes straight to Crestodian in the command layer.
  */
+const CONVERSATIONAL_SAFE_ONBOARD_KEYS = new Set([
+  "workspace",
+  "acceptRisk",
+  "reset",
+  "resetScope",
+  "nonInteractive",
+  "classic",
+]);
+
 export function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
-  return (
-    opts.classic === true ||
-    opts.flow !== undefined ||
-    opts.mode === "remote" ||
-    opts.importFrom !== undefined ||
-    opts.authChoice !== undefined
-  );
+  if (opts.classic === true) {
+    return true;
+  }
+  if (opts.installDaemon !== undefined) {
+    return true;
+  }
+  for (const [key, value] of Object.entries(opts)) {
+    if (CONVERSATIONAL_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
+      continue;
+    }
+    if (value === undefined || value === false) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 /** Runs the onboard command after normalizing legacy flags and setup mode. */

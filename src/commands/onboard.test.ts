@@ -182,7 +182,11 @@ describe("setupWizardCommand", () => {
   it("routes flagless interactive onboarding to the bootstrap flow", async () => {
     const runtime = makeRuntime();
 
-    await setupWizardCommand({}, runtime);
+    // Unset Commander booleans arrive as false and must not force classic.
+    await setupWizardCommand(
+      { skipChannels: false, skipSkills: false, acceptRisk: false, json: false },
+      runtime,
+    );
 
     expect(mocks.runConversationalOnboarding).toHaveBeenCalledOnce();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
@@ -195,6 +199,12 @@ describe("setupWizardCommand", () => {
     ["--mode remote", { mode: "remote" as const }],
     ["--import-from", { importFrom: "hermes" }],
     ["--auth-choice", { authChoice: "skip" }],
+    ["--gateway-port", { gatewayPort: 19001 }],
+    ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
+    ["--skip-bootstrap", { skipBootstrap: true }],
+    ["--no-install-daemon", { installDaemon: false }],
+    ["--daemon-runtime", { daemonRuntime: "node" as const }],
+    ["a provider auth flag", { mistralApiKey: "sk-x" }],
   ])("keeps the classic interactive wizard for %s", async (_label, opts) => {
     const runtime = makeRuntime();
 
