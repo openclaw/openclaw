@@ -308,13 +308,16 @@ export function isSilentReplyPrefixText(
   if (normalized.includes("_")) {
     return true;
   }
-  // For tokens without underscore, only allow bare "NO" as a partial prefix
-  // for NO_REPLY (NO_REPLY streaming can transiently emit that fragment).
-  // Custom tokens containing non-letter characters (digits, hyphens) are safe
-  // for partial prefix matching because their prefixes won't match natural
-  // language words. Full-token match is also safe for any token.
-  if (normalized === tokenUpper || /[^A-Z_]/.test(tokenUpper)) {
+  // Full-token match is safe for any token.
+  if (normalized === tokenUpper) {
     return true;
+  }
+  // For custom tokens containing non-letter characters (digits, hyphens),
+  // only match if the prefix includes at least one non-letter character
+  // from the token. Otherwise, a pure-letter prefix like "HE" for "HELP-QUIET"
+  // would suppress natural language that happens to share that prefix (#100007).
+  if (/[^A-Z_]/.test(tokenUpper)) {
+    return [...tokenUpper].some((ch) => /[^A-Z_]/.test(ch) && normalized.includes(ch));
   }
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }
