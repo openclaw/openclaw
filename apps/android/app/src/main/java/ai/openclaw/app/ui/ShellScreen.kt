@@ -1459,9 +1459,19 @@ private fun SettingsShellScreen(
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)),
+          rows = listOf(SettingsRow("Sign Out", "Return to setup", Icons.AutoMirrored.Filled.ExitToApp)),
           onOpen = { },
-          onAction = { viewModel.disconnect() },
+          onAction = { viewModel.pairNewGateway() },
+        )
+      }
+
+      item {
+        SettingsSectionTitle("Licenses")
+      }
+      item {
+        SettingsGroup(
+          rows = listOf(SettingsRow("Licenses", "", Icons.Default.Storage, route = SettingsRoute.Licenses)),
+          onOpen = onRouteChange,
         )
       }
 
@@ -1643,6 +1653,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     SettingsRoute.Profile,
     SettingsRoute.Appearance,
     SettingsRoute.About,
+    SettingsRoute.Licenses,
     -> "Profile & device"
 
     SettingsRoute.Health -> "Diagnostics"
@@ -1713,6 +1724,7 @@ private fun SettingsGroup(
       rows.forEachIndexed { index, row ->
         SettingsListRow(
           row = row,
+          showDisclosure = row.route != null || onAction != null,
           onClick = {
             val rowRoute = row.route
             if (rowRoute == null) {
@@ -1733,6 +1745,7 @@ private fun SettingsGroup(
 @Composable
 private fun SettingsListRow(
   row: SettingsRow,
+  showDisclosure: Boolean,
   onClick: () -> Unit,
 ) {
   Row(
@@ -1749,14 +1762,16 @@ private fun SettingsListRow(
     Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
     Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      if (row.value.isNotBlank()) {
+        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }
-      if (row.route != null) {
+      if (showDisclosure) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = "Open ${row.title}",
+          contentDescription = if (row.route != null) "Open ${row.title}" else row.title,
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )

@@ -58,6 +58,11 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(text)).toBe(text);
   });
 
+  it("preserves bare ambient envelope rows", () => {
+    const text = "#35676 Keśava: No wtf";
+    expect(stripInboundMetadata(text)).toBe(text);
+  });
+
   it("fast-path: returns empty string unchanged", () => {
     expect(stripInboundMetadata("")).toBe("");
   });
@@ -65,6 +70,20 @@ describe("stripInboundMetadata", () => {
   it("strips a single Conversation info block", () => {
     const input = `${CONV_BLOCK}\n\nWhat is the weather today?`;
     expect(stripInboundMetadata(input)).toBe("What is the weather today?");
+  });
+
+  it("strips explicit bot mention notes with conversation info", () => {
+    const input = `Conversation info (untrusted metadata):
+\`\`\`json
+{
+  "explicitly_mentioned_bot": true,
+  "explicit_bot_mention_note": "The incoming message explicitly mentions your channel identity @SirPinchALotBot. Treat that mention as addressed to you, even if your persona name differs."
+}
+\`\`\`
+
+Actual user message`;
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
 
   it("strips multiple chained metadata blocks", () => {

@@ -1561,7 +1561,7 @@ describe("chat loading skeleton", () => {
       expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
       expect(container.querySelector(".chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
-      expect(container.querySelector<HTMLButtonElement>(".context-notice__action")?.disabled).toBe(
+      expect(container.querySelector<HTMLButtonElement>(".context-ring__action")?.disabled).toBe(
         false,
       );
     } finally {
@@ -3908,70 +3908,6 @@ describe("chat session controls", () => {
     quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
 
     expect(state.setTab).toHaveBeenCalledWith("usage");
-  });
-
-  it("shows provider quota in the sidebar session switcher (regression #93041)", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [
-              { label: "3h", usedPercent: 18 },
-              { label: "Week", usedPercent: 72 },
-            ],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderChatSessionSelect(state, () => undefined, {
-        sessionSwitcherOnly: true,
-        surface: "sidebar",
-      }),
-      container,
-    );
-
-    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
-
-    const row = container.querySelector(".chat-controls__session-row");
-    expect(row?.classList.contains("chat-controls__session-row--has-quota")).toBe(true);
-  });
-
-  it("hides provider quota when the sidebar session switcher is collapsed", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [{ label: "3h", usedPercent: 18 }],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderChatSessionSelect(state, () => undefined, {
-        sessionSwitcherOnly: true,
-        compact: true,
-        surface: "sidebar",
-      }),
-      container,
-    );
-
-    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {

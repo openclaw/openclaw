@@ -115,7 +115,8 @@ import Testing
             subcommand: "rpc",
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "openclaw", "rpc"]))
     }
@@ -129,7 +130,8 @@ import Testing
             extraArgs: ["--json", "--timeout", "5"],
             defaults: defaults,
             configRoot: [:],
-            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path],
+            projectRoot: tmp)
 
         #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "openclaw", "health", "--json"]))
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
@@ -167,6 +169,7 @@ import Testing
         #expect(cmd.contains("StrictHostKeyChecking=yes"))
         #expect(!cmd.contains("StrictHostKeyChecking=accept-new"))
         #expect(cmd.contains("UpdateHostKeys=yes"))
+        #expect(cmd.contains("ControlPath=none"))
         #expect(cmd.contains("-i"))
         #expect(cmd.contains("/tmp/id_ed25519"))
         if let script = cmd.last {
@@ -177,6 +180,78 @@ import Testing
             #expect(script.contains("--json"))
             #expect(script.contains("CLI="))
         }
+    }
+
+    @Test func `explicit SSH config host key policy omits strict override`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("gateway-alias", forKey: remoteTargetKey)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshHostKeyPolicy": "openssh",
+                        "sshTarget": "gateway-alias",
+                    ],
+                ],
+            ])
+
+        #expect(cmd.first == "/usr/bin/ssh")
+        #expect(!cmd.contains { $0.hasPrefix("StrictHostKeyChecking=") })
+        #expect(cmd.contains("ControlPath=none"))
+    }
+
+    @Test func `OpenSSH host key opt in does not transfer to a different effective target`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("new-gateway-alias", forKey: remoteTargetKey)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshHostKeyPolicy": "openssh",
+                        "sshTarget": "old-gateway-alias",
+                    ],
+                ],
+            ])
+
+        #expect(cmd.contains("StrictHostKeyChecking=yes"))
+        #expect(cmd.contains("UpdateHostKeys=yes"))
+    }
+
+    @Test func `invalid SSH host key policy fails closed`() {
+        let settings = CommandResolver.connectionSettings(configRoot: [
+            "gateway": [
+                "mode": "remote",
+                "remote": ["sshHostKeyPolicy": " OPENSSH "],
+            ],
+        ])
+
+        #expect(settings.sshHostKeyPolicy == .strict)
+    }
+
+    @Test func `remote gateway probe applies SSH host key policy`() throws {
+        let strict = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+            target: "gateway-alias",
+            hostKeyPolicy: .strict))
+        let openssh = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+            target: "gateway-alias",
+            hostKeyPolicy: .openssh))
+
+        #expect(strict.contains("StrictHostKeyChecking=yes"))
+        #expect(strict.contains("UpdateHostKeys=yes"))
+        #expect(strict.contains("ControlPath=none"))
+        #expect(!openssh.contains { $0.hasPrefix("StrictHostKeyChecking=") })
+        #expect(!openssh.contains { $0.hasPrefix("UpdateHostKeys=") })
+        #expect(openssh.contains("ControlPath=none"))
     }
 
     @Test func `empty remote defaults fall back to config remote values`() {

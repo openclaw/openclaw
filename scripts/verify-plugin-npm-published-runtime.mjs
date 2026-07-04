@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-
 // Verifies published plugin npm packages include built runtime entries and
 // metadata expected by OpenClaw.
+
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as tar from "tar";
+import { sleep } from "./lib/sleep.mjs";
 
 const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -269,12 +270,6 @@ export function parseNpmReadmeMetadata(raw) {
 
 function npmViewReadme(spec) {
   return runPluginNpmCommand(["view", spec, "readme", "--json", "--prefer-online"]);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function packPublishedPackage(spec, destinationDir) {

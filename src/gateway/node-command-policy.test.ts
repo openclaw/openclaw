@@ -8,7 +8,11 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
@@ -37,6 +41,7 @@ describe("gateway/node-command-policy", () => {
       },
     });
     setActivePluginRegistry(registry);
+    return registry;
   }
 
   it("normalizes declared node commands against the allowlist", () => {
@@ -107,6 +112,34 @@ describe("gateway/node-command-policy", () => {
 
     expect(allowlist.has("canvas.snapshot")).toBe(true);
     expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("keeps plugin node defaults from the pinned Gateway registry", () => {
+    const startupRegistry = installCanvasPluginDefaults();
+    pinActivePluginChannelRegistry(startupRegistry);
+    const transientRegistry = createEmptyPluginRegistry();
+    const startupPolicy = startupRegistry.nodeInvokePolicies?.[0];
+    if (!startupPolicy) {
+      throw new Error("expected canvas node policy");
+    }
+    (transientRegistry.nodeInvokePolicies ??= []).push({
+      ...startupPolicy,
+      pluginId: "transient",
+      policy: {
+        ...startupPolicy.policy,
+        commands: ["transient.read"],
+      },
+    });
+    setActivePluginRegistry(transientRegistry);
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "macos",
+      deviceFamily: "Mac",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.present")).toBe(true);
+    expect(allowlist.has("transient.read")).toBe(false);
   });
 
   it("does not grant host command defaults for platform prefix aliases", () => {

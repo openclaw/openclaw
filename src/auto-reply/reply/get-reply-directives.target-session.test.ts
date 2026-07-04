@@ -8,6 +8,7 @@ import { buildTestCtx } from "./test-ctx.js";
 const mocks = vi.hoisted(() => ({
   createModelSelectionState: vi.fn(),
   applyInlineDirectiveOverrides: vi.fn(),
+  listAgentEntries: vi.fn(),
   resolveFastModeState: vi.fn(),
   resolveReplyExecOverrides: vi.fn(),
 }));
@@ -145,6 +146,8 @@ async function resolveHelloWithModelDefaults(params: {
   body?: string;
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
+  agentEntries?: Array<{ id?: string; thinkingDefault?: "off" | "low" }>;
+  hasConfiguredThinkingDefault?: boolean;
   commandAuthorized?: boolean;
   hasOneTurnModelOverride?: boolean;
   selectedProvider?: string;
@@ -156,6 +159,7 @@ async function resolveHelloWithModelDefaults(params: {
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
+  mocks.listAgentEntries.mockReturnValue(params.agentEntries ?? []);
   mocks.createModelSelectionState.mockResolvedValueOnce({
     provider: params.selectedProvider ?? "openai",
     model: params.selectedModel ?? "gpt-4o-mini",
@@ -163,6 +167,7 @@ async function resolveHelloWithModelDefaults(params: {
     allowedModelCatalog: [],
     resetModelOverride: false,
     resolveDefaultThinkingLevel,
+    hasConfiguredThinkingDefault: params.hasConfiguredThinkingDefault,
     resolveDefaultReasoningLevel,
   });
 
@@ -210,7 +215,7 @@ async function resolveHelloWithModelDefaults(params: {
 }
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentEntries: vi.fn(() => []),
+  listAgentEntries: (...args: unknown[]) => mocks.listAgentEntries(...args),
 }));
 
 vi.mock("../../agents/defaults.js", () => ({
@@ -296,9 +301,11 @@ describe("resolveReplyDirectives", () => {
   beforeEach(() => {
     mocks.createModelSelectionState.mockReset();
     mocks.applyInlineDirectiveOverrides.mockReset();
+    mocks.listAgentEntries.mockReset();
     mocks.resolveFastModeState.mockReset();
     mocks.resolveReplyExecOverrides.mockReset();
 
+    mocks.listAgentEntries.mockReturnValue([]);
     mocks.createModelSelectionState.mockResolvedValue({
       provider: "openai",
       model: "gpt-4o-mini",
@@ -547,6 +554,48 @@ describe("resolveReplyDirectives", () => {
       defaultThinking: "off",
       defaultReasoning: "on",
       sessionEntry: makeSessionEntry({ thinkingLevel: "off" }),
+    });
+
+    expectContinueResult(result, {
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable model reasoning when thinking override explicitly disables thinking", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      opts: { thinkingLevelOverride: "off" },
+    });
+
+    expectContinueResult(result, {
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable model reasoning when per-agent thinking default disables thinking", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentEntries: [{ id: "main", thinkingDefault: "off" }],
+    });
+
+    expectContinueResult(result, {
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable model reasoning when per-model thinking config disables thinking", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      hasConfiguredThinkingDefault: true,
     });
 
     expectContinueResult(result, {

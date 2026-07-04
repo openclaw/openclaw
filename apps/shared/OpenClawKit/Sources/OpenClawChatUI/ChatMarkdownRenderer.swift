@@ -233,7 +233,7 @@ private struct InlineImageList: View {
                             .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
             } else {
                 Text(item.label.isEmpty ? "Image" : item.label)
-                    .font(.footnote)
+                    .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
             }
         }

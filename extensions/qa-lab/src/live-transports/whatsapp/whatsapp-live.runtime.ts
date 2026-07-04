@@ -2201,6 +2201,10 @@ export const WHATSAPP_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardSce
   scenarios: WHATSAPP_QA_SCENARIOS,
 });
 
+export function listWhatsAppQaScenarioCatalog() {
+  return WHATSAPP_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
+}
+
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
   const value = env[key]?.trim();
   if (!value) {

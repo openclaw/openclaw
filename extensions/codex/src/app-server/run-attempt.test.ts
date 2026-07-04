@@ -1594,11 +1594,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", () => {
+  it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
     const tools = [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
       createRuntimeDynamicTool("heartbeat_respond"),
+      createRuntimeDynamicTool("agents_list"),
       createRuntimeDynamicTool("sessions_spawn"),
       createRuntimeDynamicTool("sessions_yield"),
     ];
@@ -1612,6 +1613,7 @@ describe("runCodexAppServerAttempt", () => {
     const message = specs.find((tool) => tool.name === "message");
     const webSearch = specs.find((tool) => tool.name === "web_search");
     const heartbeat = specs.find((tool) => tool.name === "heartbeat_respond");
+    const agentsList = specs.find((tool) => tool.name === "agents_list");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -1621,13 +1623,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(webSearch?.deferLoading).toBe(true);
     expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
     expect(heartbeat?.deferLoading).toBe(true);
-    expect(sessionsSpawn?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
-    expect(sessionsSpawn?.deferLoading).toBe(true);
+    expect(agentsList).not.toHaveProperty("namespace");
+    expect(agentsList).not.toHaveProperty("deferLoading");
+    expect(sessionsSpawn).not.toHaveProperty("namespace");
+    expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
-  it("registers heartbeat response durably without advertising it on normal turns", async () => {
+  it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
       ...(options?.enableHeartbeatTool === true
@@ -1640,11 +1644,9 @@ describe("runCodexAppServerAttempt", () => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
+      params.sourceReplyDeliveryMode = "message_tool_only";
       if (trigger) {
         params.trigger = trigger;
-      }
-      if (trigger === "heartbeat") {
-        params.sourceReplyDeliveryMode = "message_tool_only";
       }
       return params;
     };
@@ -1661,30 +1663,76 @@ describe("runCodexAppServerAttempt", () => {
     const normalInstructions = testing.buildDeveloperInstructions(createRunParams(), {
       dynamicTools: normalBridge.availableSpecs,
     });
+    const heartbeatParams = createRunParams("heartbeat");
+    const heartbeatBridge = createCodexToolBridgeForTest(
+      heartbeatParams,
+      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
+      registeredTools,
+    );
+    const heartbeatInstructions = testing.buildDeveloperInstructions(heartbeatParams, {
+      dynamicTools: heartbeatBridge.availableSpecs,
+    });
+    const nextNormalParams = createRunParams();
+    const nextNormalBridge = createCodexToolBridgeForTest(
+      nextNormalParams,
+      [createRuntimeDynamicTool("message")],
+      registeredTools,
+    );
     const registeredToolNames = specNames(normalBridge.specs);
 
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
-    expect(normalInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: message.",
-    );
     expect(normalInstructions).not.toContain(
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
-
-    const heartbeatBridge = createCodexToolBridgeForTest(
-      createRunParams("heartbeat"),
-      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
-      registeredTools,
+    expect(heartbeatInstructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
     );
-    const nextNormalBridge = createCodexToolBridgeForTest(
-      createRunParams(),
-      [createRuntimeDynamicTool("message")],
-      registeredTools,
+    for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
+      const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
+        (tool) => tool.name === "heartbeat_respond",
+      );
+      expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+      expect(heartbeat?.deferLoading).toBe(true);
+    }
+    expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
+    );
+    expect(codexDynamicToolsFingerprint(nextNormalBridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
     );
 
-    expect(specNames(heartbeatBridge.specs)).toEqual(registeredToolNames);
-    expect(specNames(nextNormalBridge.specs)).toEqual(registeredToolNames);
+    let startedThreadId: string | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        startedThreadId = "thread-stable-heartbeat";
+        return threadStartResult(startedThreadId);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult(startedThreadId);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const turns = [
+      { params: createRunParams(), bridge: normalBridge },
+      { params: heartbeatParams, bridge: heartbeatBridge },
+      { params: nextNormalParams, bridge: nextNormalBridge },
+    ];
+    for (const turn of turns) {
+      await startOrResumeThread({
+        client: { request } as never,
+        params: turn.params,
+        cwd: workspaceDir,
+        dynamicTools: turn.bridge.specs,
+        appServer: createThreadLifecycleAppServerOptions(),
+      });
+    }
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/resume",
+      "thread/resume",
+    ]);
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {

@@ -238,6 +238,130 @@ describe("memory-wiki existing-page read retry", () => {
     }
   });
 
+  it("leaves imported source pages unchanged after a persistent existing-page read failure", async () => {
+    const suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
+    const sourcePath = path.join(suiteRoot, "imported-persistent.txt");
+    const pagePath = "sources/imported-persistent.md";
+    const absPage = path.join(suiteRoot, pagePath);
+    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
+      entries: {},
+      version: 1,
+    };
+
+    try {
+      await fs.writeFile(sourcePath, "first body", "utf8");
+      await writeImportedSourcePage({
+        vaultRoot: suiteRoot,
+        syncKey: "bridge:imported-persistent",
+        sourcePath,
+        sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
+        sourceSize: 10,
+        renderFingerprint: "fp-1",
+        pagePath,
+        group: "bridge",
+        state,
+        buildRendered: buildSourcePage,
+      });
+      const before = await fs.readFile(absPage, "utf8");
+
+      securityRuntimeMock.failReadTextAlwaysFor = pagePath;
+
+      await fs.writeFile(sourcePath, "second body changed", "utf8");
+      await expect(
+        writeImportedSourcePage({
+          vaultRoot: suiteRoot,
+          syncKey: "bridge:imported-persistent",
+          sourcePath,
+          sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
+          sourceSize: 19,
+          renderFingerprint: "fp-2",
+          pagePath,
+          group: "bridge",
+          state,
+          buildRendered: buildSourcePage,
+        }),
+      ).rejects.toThrow("persistent existing-page read failure");
+
+      expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+      await expect(fs.readFile(absPage, "utf8")).resolves.toBe(before);
+    } finally {
+      await fs.rm(suiteRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("updates ingested source pages when the existing page stays missing across retry", async () => {
+    const rootDir = await createTempDir("memory-wiki-reingest-persistent-read-");
+    const inputPath = path.join(rootDir, "roadmap.txt");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    await fs.writeFile(inputPath, "v1 content\n", "utf8");
+    await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
+    await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
+    const originalReadFile = fs.readFile.bind(fs);
+    let remainingExistingPageReadFailures = 2;
+    vi.spyOn(fs, "readFile").mockImplementation(
+      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+        if (remainingExistingPageReadFailures > 0 && args[0] === pagePath && args[1] === "utf8") {
+          remainingExistingPageReadFailures -= 1;
+          throw Object.assign(new Error("page disappeared"), { code: "ENOENT" });
+        }
+        return originalReadFile(...args);
+      },
+    );
+
+    const result = await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+    });
+
+    expect(result.created).toBe(false);
+    expect(remainingExistingPageReadFailures).toBe(0);
+    await expect(originalReadFile(pagePath, "utf8")).resolves.toContain("v2 content updated");
+  });
+
+  it("leaves ingested source pages unchanged after a persistent existing-page read failure", async () => {
+    const rootDir = await createTempDir("memory-wiki-reingest-persistent-read-");
+    const inputPath = path.join(rootDir, "roadmap.txt");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    await fs.writeFile(inputPath, "v1 content\n", "utf8");
+    await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
+    const before = await fs.readFile(pagePath, "utf8");
+    await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
+    const originalReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation(
+      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+        if (args[0] === pagePath && args[1] === "utf8") {
+          throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+        }
+        return originalReadFile(...args);
+      },
+    );
+
+    await expect(
+      ingestMemoryWikiSource({
+        config,
+        inputPath,
+        nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+      }),
+    ).rejects.toMatchObject({ code: "EBUSY" });
+
+    await expect(originalReadFile(pagePath, "utf8")).resolves.toBe(before);
+  });
+
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-read-retry-" });
 

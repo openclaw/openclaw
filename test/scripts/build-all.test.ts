@@ -389,6 +389,7 @@ describe("resolveBuildAllSteps", () => {
       expect.arrayContaining([
         "scripts/write-plugin-sdk-entry-dts.ts",
         "scripts/lib/plugin-sdk-entrypoints.json",
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
       ]),
     );
     expect(step.cache?.inputs).not.toContain("src/plugin-sdk");

@@ -1364,6 +1364,9 @@ export const fr: TranslationMap = {
     updateNow: "Mettre à jour maintenant",
     dismissUpdateBanner: "Ignorer la bannière de mise à jour",
     switchedSession: "Passage à {session}",
+    sidebar: {
+      allSessions: "Toutes les sessions",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

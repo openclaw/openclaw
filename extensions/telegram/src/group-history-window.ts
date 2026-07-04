@@ -1,6 +1,9 @@
 // Telegram plugin module implements group history window behavior.
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
+import type {
+  TelegramAmbientTranscriptWatermark,
+  TelegramPromptContextEntry,
+} from "./bot-message-context.types.js";
 
 const TELEGRAM_GROUP_HISTORY_SELF_SUFFIX = " (you)";
 
@@ -33,6 +36,42 @@ function telegramHistoryEntryKey(entry: HistoryEntry): string | undefined {
     return `text:${entry.timestamp}:${entry.body.trim()}`;
   }
   return undefined;
+}
+
+function numericMessageId(value: string | undefined): number | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function isTelegramHistoryEntryAfterAmbientWatermark(
+  entry: Pick<HistoryEntry, "messageId" | "timestamp">,
+  watermark: TelegramAmbientTranscriptWatermark | undefined,
+): boolean {
+  if (!watermark) {
+    return true;
+  }
+  // Exclusive boundary: entries at or before this point are transcript-owned.
+  if (entry.timestamp !== undefined && watermark.timestampMs !== undefined) {
+    if (entry.timestamp !== watermark.timestampMs) {
+      return entry.timestamp > watermark.timestampMs;
+    }
+    const entryMessageId = numericMessageId(entry.messageId);
+    const watermarkMessageId = numericMessageId(watermark.messageId);
+    return (
+      entryMessageId !== undefined &&
+      watermarkMessageId !== undefined &&
+      entryMessageId > watermarkMessageId
+    );
+  }
+  const entryMessageId = numericMessageId(entry.messageId);
+  const watermarkMessageId = numericMessageId(watermark.messageId);
+  if (entryMessageId !== undefined && watermarkMessageId !== undefined) {
+    return entryMessageId > watermarkMessageId;
+  }
+  return entry.messageId !== watermark.messageId;
 }
 
 function telegramChatWindowPayload(

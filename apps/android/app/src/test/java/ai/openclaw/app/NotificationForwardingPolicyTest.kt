@@ -78,6 +78,25 @@ class NotificationForwardingPolicyTest {
   }
 
   @Test
+  fun allowsPackage_neverForwardsSelfPackageEvenInAllowlist() {
+    val policy =
+      NotificationForwardingPolicy(
+        enabled = true,
+        mode = NotificationPackageFilterMode.Allowlist,
+        packages = setOf("ai.openclaw.app", "com.other.app"),
+        quietHoursEnabled = false,
+        quietStart = "22:00",
+        quietEnd = "07:00",
+        maxEventsPerMinute = 20,
+        sessionKey = null,
+        selfPackageName = "ai.openclaw.app",
+      )
+
+    assertFalse(policy.allowsPackage("ai.openclaw.app"))
+    assertTrue(policy.allowsPackage("com.other.app"))
+  }
+
+  @Test
   fun isWithinQuietHours_handlesWindowCrossingMidnight() {
     val policy =
       NotificationForwardingPolicy(

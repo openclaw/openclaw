@@ -50,9 +50,10 @@ temporary directories. They make ownership explicit and keep cleanup in the same
 test lifecycle:
 
 ```ts
+import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("uses a temp workspace", () => {
   const workspace = tempDirs.make("openclaw-example-");
@@ -60,7 +61,7 @@ it("uses a temp workspace", () => {
 });
 ```
 
-`useAutoCleanupTempDirTracker()` intentionally exposes no manual cleanup method; Vitest
+`useAutoCleanupTempDirTracker(afterEach)` intentionally exposes no manual cleanup method; Vitest
 owns cleanup after each test. Existing lower-level helpers remain for tests that
 have not moved yet, but new and migrated tests should use the auto-cleaning
 tracker. Avoid new manual `makeTempDir`, `cleanupTempDirs`, or

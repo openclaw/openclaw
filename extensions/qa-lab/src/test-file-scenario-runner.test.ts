@@ -523,20 +523,23 @@ describe("qa test file scenario runner", () => {
         "utf8",
       );
 
+      const commandTimeoutMs = 3_000;
       const run = runQaTestFileScenarios({
         repoRoot,
         outputDir: path.join(tempRoot, "out"),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
         scenarios: [makeTestFileScenario("script", scriptPath)],
-        commandTimeoutMs: 500,
+        commandTimeoutMs,
       });
-      descendantPid = await readPid(descendantPidPath, 2_000);
+      descendantPid = await readPid(descendantPidPath, commandTimeoutMs - 250);
 
       const result = await run;
 
       expect(result.results[0]?.status).toBe("fail");
-      expect(result.results[0]?.failureMessage).toMatch(/timed out after 500ms/u);
+      expect(result.results[0]?.failureMessage).toMatch(
+        new RegExp(`timed out after ${commandTimeoutMs}ms`, "u"),
+      );
       await waitForDead(descendantPid, 2_000);
     } finally {
       if (descendantPid !== undefined && isProcessRunning(descendantPid)) {
