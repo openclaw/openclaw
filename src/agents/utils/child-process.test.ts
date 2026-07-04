@@ -1,6 +1,7 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import type { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { type ChildProcess, spawn, type ChildProcessByStdio } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough, type Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForChildProcess } from "./child-process.js";
 
 describe.skipIf(process.platform === "win32")("waitForChildProcess", () => {
@@ -49,22 +50,29 @@ describe.skipIf(process.platform === "win32")("waitForChildProcess", () => {
   });
 
   it("bounds draining from a continuously writing descendant", async () => {
-    child = spawn(
-      "/bin/sh",
-      ["-c", 'printf "HEAD\\n"; ( while :; do printf "TICK\\n"; sleep 0.03; done ) &'],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      },
-    );
-    let output = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString();
-    });
+    vi.useFakeTimers();
+    try {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const fakeChild = Object.assign(new EventEmitter(), {
+        stdout,
+        stderr,
+      }) as ChildProcess;
+      let output = "";
+      stdout.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
 
-    const startedAt = Date.now();
-    await expect(waitForChildProcess(child)).resolves.toBe(0);
-    expect(output).toContain("TICK");
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
+      const completion = waitForChildProcess(fakeChild);
+      fakeChild.emit("exit", 0);
+      const writer = setInterval(() => stdout.write("TICK\n"), 30);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(completion).resolves.toBe(0);
+      clearInterval(writer);
+      expect(output).toContain("TICK");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
