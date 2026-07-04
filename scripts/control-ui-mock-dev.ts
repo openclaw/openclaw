@@ -338,7 +338,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
     ],
     [
-      "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      "ui/src/e2e/chat-flow.e2e.test.ts",
       "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
     ],
   ]);
@@ -510,7 +510,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
                   {
                     kind: "file",
                     name: "chat-flow.e2e.test.ts",
-                    path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
                     size: 24950,
                     updatedAtMs: baseTime - 25_000,
                   },

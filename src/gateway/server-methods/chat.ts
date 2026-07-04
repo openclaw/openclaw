@@ -159,6 +159,10 @@ import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
+  isDashboardSessionTitleCandidate,
+  maybeGenerateDashboardSessionTitle,
+} from "../dashboard-session-title.js";
+import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
@@ -4100,6 +4104,39 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       respond(true, ackPayload, undefined, { runId: clientRunId });
       const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
+      const titleSource = stripInlineDirectiveTagsForDisplay(rawMessage).text;
+      if (isDashboardSessionTitleCandidate({ sessionKey, userMessage: titleSource })) {
+        void (async () => {
+          const titleEntry =
+            entry?.sessionId === admittedSessionId
+              ? entry
+              : loadSessionEntry(sessionKey, sessionLoadOptions).entry;
+          const titleSessionId = titleEntry?.sessionId;
+          if (!titleSessionId) {
+            return;
+          }
+          const updated = await maybeGenerateDashboardSessionTitle({
+            cfg,
+            agentId,
+            entry: titleEntry,
+            sessionId: titleSessionId,
+            sessionKey,
+            storePath,
+            userMessage: titleSource,
+          });
+          if (updated) {
+            emitSessionsChanged(context, {
+              sessionKey,
+              agentId,
+              reason: "chat.title",
+            });
+          }
+        })().catch((err: unknown) => {
+          context.logGateway.warn(
+            `dashboard session title generation failed: ${formatForLog(err)}`,
+          );
+        });
+      }
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isUiTestTarget, isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
@@ -31,7 +31,6 @@ export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
-const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -744,16 +743,10 @@ export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
   if (testTargets.length > 0 && testTargets.every(isToolingTestTarget)) {
     return withImplicitVitestConfig(argv, TOOLING_VITEST_CONFIG);
   }
-  if (testTargets.length === 0 || !testTargets.every(isUnitUiTestTarget)) {
-    if (
-      testTargets.length > 0 &&
-      testTargets.every((target) => isUiTestTarget(target) && !isUnitUiTestTarget(target))
-    ) {
-      return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
-    }
-    return argv;
+  if (testTargets.length > 0 && testTargets.every(isUiTestTarget)) {
+    return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
   }
-  return withImplicitVitestConfig(argv, UNIT_UI_VITEST_CONFIG);
+  return argv;
 }
 
 function spawnVitestProcess({ pnpmArgs, spawnParams }) {
