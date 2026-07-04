@@ -312,10 +312,10 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
       : typeof agentsDefaults?.thinkingLevel === "string"
         ? agentsDefaults.thinkingLevel
         : "off";
+  const resolvedFastMode =
+    activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults?.fastMode;
   const fastMode =
-    typeof activeSession?.fastMode === "boolean"
-      ? activeSession.fastMode
-      : agentsDefaults?.fastMode === true;
+    resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean" ? resolvedFastMode : false;
 
   const common: Omit<
     ConfigProps,
@@ -592,6 +592,7 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
           assistantName: state.assistantName,
           version: state.hello?.server?.version ?? "",
           configObject: config as Record<string, unknown>,
+          savedConfigObject: (state.configSnapshot?.config as Record<string, unknown> | null) ?? {},
           configDirty: state.configFormDirty,
           configSaving: state.configSaving,
           configApplying: state.configApplying,
