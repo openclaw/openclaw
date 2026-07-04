@@ -635,13 +635,10 @@ import UIKit
     }
 
     @Test @MainActor func newConnectWaitsForSupersededForcedReset() async {
-        let forceHost = "force-reset.gateway.invalid"
-        let forceStableID = "manual|\(forceHost)|443"
-        defer { GatewayTLSStore.clearFingerprint(stableID: forceStableID) }
-        GatewayTLSStore.saveFingerprint("force-reset-fingerprint", stableID: forceStableID)
+        let forceHost = "192.168.1.39"
 
-        let resetFinished = AsyncStream<Void>.makeStream()
         let resetRelease = AsyncStream<Void>.makeStream()
+        var resetStarted = false
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
         let currentConfig = Self.makeGatewayConnectConfig(
@@ -653,15 +650,18 @@ import UIKit
             startDiscovery: false,
             forceReconnectReset: { appModel in
                 await appModel.resetGatewaySessionsForForcedReconnect()
-                resetFinished.continuation.yield()
+                resetStarted = true
                 for await _ in resetRelease.stream {
                     return
                 }
             })
-        var finishedIterator = resetFinished.stream.makeAsyncIterator()
 
-        await controller.connectManual(host: forceHost, port: 443, useTLS: true, forceReconnect: true)
-        _ = await finishedIterator.next()
+        await controller.connectManual(host: forceHost, port: 18789, useTLS: false, forceReconnect: true)
+        let resetStartDeadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while !resetStarted, ContinuousClock().now < resetStartDeadline {
+            await Task.yield()
+        }
+        #expect(resetStarted)
         await controller.connectManual(host: "192.168.1.40", port: 18789, useTLS: false)
 
         #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true)
