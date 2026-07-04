@@ -75,15 +75,18 @@ struct OnboardingWizardView: View {
     let allowSkip: Bool
     let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
+    let onComplete: () -> Void
 
     init(
         allowSkip: Bool,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
-        onClose: @escaping () -> Void)
+        onClose: @escaping () -> Void,
+        onComplete: @escaping () -> Void)
     {
         self.allowSkip = allowSkip
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
+        self.onComplete = onComplete
         _step = State(
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
     }
@@ -646,24 +649,16 @@ struct OnboardingWizardView: View {
                 .foregroundStyle(OpenClawBrand.textPrimary)
                 .padding(.bottom, 8)
 
-            let server = self.appModel.gatewayServerName ?? "gateway"
-            Text(server)
+            Text(self.successEndpoint)
                 .font(OpenClawType.subhead)
                 .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
-
-            if let addr = self.appModel.gatewayRemoteAddress {
-                Text(addr)
-                    .font(OpenClawType.subhead)
-                    .foregroundStyle(.secondary)
-            }
 
             Spacer()
 
             Button {
-                self.onClose()
+                self.onComplete()
             } label: {
-                Text("Open OpenClaw")
+                Label("Go to Chat", systemImage: "bubble.left.and.bubble.right.fill")
                     .font(OpenClawType.headline)
             }
             .font(OpenClawType.headline)
@@ -995,6 +990,15 @@ extension OnboardingWizardView {
     private var canConnectManual: Bool {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         return !host.isEmpty && self.manualPort > 0 && self.manualPort <= 65535
+    }
+
+    private var successEndpoint: String {
+        let serverName = self.appModel.gatewayServerName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !serverName.isEmpty {
+            return serverName
+        }
+        let remoteAddress = self.appModel.gatewayRemoteAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return remoteAddress.isEmpty ? "gateway" : remoteAddress
     }
 
     private func initializeState() {

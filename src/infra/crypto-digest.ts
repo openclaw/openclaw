@@ -11,6 +11,14 @@ export function sha256Base64(input: DigestInput): string {
   return createHash("sha256").update(input).digest("base64");
 }
 
+export function sha256Base64Url(input: DigestInput): string {
+  return createHash("sha256").update(input).digest("base64url");
+}
+
+export function sha256Base64UrlPrefix(input: DigestInput, length: number): string {
+  return sha256Base64Url(input).slice(0, length);
+}
+
 export function sha256HexPrefix(input: DigestInput, length: number): string {
   return sha256Hex(input).slice(0, length);
 }

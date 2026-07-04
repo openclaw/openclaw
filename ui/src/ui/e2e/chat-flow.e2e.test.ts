@@ -1123,7 +1123,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
       await page
-        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
         .click();
       const historyRequest = await gateway.waitForRequest("chat.history");
       expect(requireRecord(historyRequest.params)).toMatchObject({
@@ -1288,7 +1290,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       );
 
       await page
-        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-b"]')
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-b"] a.sidebar-recent-session__link',
+        )
         .click();
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
@@ -1297,7 +1301,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await page
-        .locator('a.sidebar-recent-session[data-session-key="agent:main:session-a"]')
+        .locator(
+          '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+        )
         .click();
       await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
         timeout: 10_000,

@@ -12,7 +12,7 @@ import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
-import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type { SkillWorkshopState } from "./controllers/skill-workshop.ts";
@@ -93,6 +93,8 @@ export type AppViewState = {
   userAvatar?: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
+  /** Whether the gateway advertises the operator terminal as enabled. */
+  terminalEnabled: boolean;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
   sessionKey: string;
@@ -142,6 +144,8 @@ export type AppViewState = {
   chatSessionPickerError: string | null;
   chatSessionPickerResult: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
+  sessionsResultShowArchived?: boolean;
+  selectedChatSessionArchived?: boolean;
   chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
@@ -188,6 +192,10 @@ export type AppViewState = {
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
+  devicePairSetupOpen: boolean;
+  devicePairSetupLoading: boolean;
+  devicePairSetupError: string | null;
+  devicePairSetup: DevicePairSetup | null;
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;

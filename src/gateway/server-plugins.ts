@@ -27,7 +27,7 @@ import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
+import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -284,21 +284,6 @@ function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boo
 
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
-}
-
-function normalizeRuntimeNodeInvokeScopes(
-  scopes: string[] | undefined,
-): OperatorScope[] | undefined {
-  if (!Array.isArray(scopes)) {
-    return undefined;
-  }
-  const normalized: OperatorScope[] = [];
-  for (const scope of scopes) {
-    if (isOperatorScope(scope) && !normalized.includes(scope)) {
-      normalized.push(scope);
-    }
-  }
-  return normalized;
 }
 
 function canTrustedOfficialPluginRequestScopes(params: {
@@ -737,7 +722,7 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
         pluginId,
         pluginOrigin: scope?.pluginOrigin,
         pluginTrustedOfficialInstall: scope?.pluginTrustedOfficialInstall,
-        requestedScopes: normalizeRuntimeNodeInvokeScopes(params.scopes),
+        requestedScopes: normalizeOperatorScopeList(params.scopes),
       });
       const payload = await dispatchGatewayMethod<unknown>(
         "node.invoke",

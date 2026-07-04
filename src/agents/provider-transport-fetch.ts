@@ -18,6 +18,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
+import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
   mergeSsrFPolicies,
@@ -550,12 +551,6 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
-const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
-  (held) => {
-    void held.finalize();
-  },
-);
-
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -569,53 +564,18 @@ function buildManagedResponse(
     void release().finally(finalizeLocalServiceLease);
     return response;
   }
-  const source = response.body;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let released = false;
-  const cleanupRegistrationToken = {};
-  const finalize = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
-    try {
-      await reader?.cancel().catch(() => undefined);
-      await release().catch(() => undefined);
-    } finally {
-      finalizeLocalServiceLease();
-    }
-  };
-  const wrappedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
+  const wrappedBody = wrapGuardedBodyStream({
+    body: response.body,
+    // Lease release must survive a failed guard release so local services do not leak.
+    cleanup: async () => {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          await finalize();
-          return;
-        }
-        refreshTimeout?.();
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        await finalize();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader?.cancel(reason);
+        await release().catch(() => undefined);
       } finally {
-        await finalize();
+        finalizeLocalServiceLease();
       }
     },
+    refreshTimeout,
   });
-  // Stream consumers should cancel deterministically; this catches abandoned
-  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
-  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,

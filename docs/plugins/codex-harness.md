@@ -103,6 +103,46 @@ Restart the gateway after changing plugin config. If an existing chat already
 has a session, use `/new` or `/reset` before testing runtime changes so the next
 turn resolves the harness from current config.
 
+## Share threads with Codex Desktop and CLI
+
+The default `appServer.homeScope: "agent"` keeps each OpenClaw agent isolated
+from the operator's native Codex state. To let an owner ask OpenClaw to inspect
+and manage the same native threads shown by Codex Desktop and the Codex CLI,
+opt into the user Codex home:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            homeScope: "user",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+User-home mode is available only with local stdio transport. It uses
+`$CODEX_HOME` when set and `~/.codex` otherwise, including that home's native
+Codex auth, config, plugins, and thread store. OpenClaw does not inject an
+OpenClaw auth profile into this app-server.
+
+Owner turns gain the `codex_threads` tool. It can list, search, read, fork,
+rename, archive, and restore native threads. Ask the agent to fork a thread when
+you want to continue it in OpenClaw; the fork is attached to the current
+OpenClaw session and remains visible to other native Codex clients. Archive
+requires explicit confirmation that the thread is closed elsewhere.
+
+Do not resume or write the same thread concurrently from OpenClaw and another
+Codex client. Codex coordinates live writers inside one app-server process, not
+across independent Desktop, CLI, and OpenClaw processes. Forking creates a
+separate continuation and is the safe coexistence path.
+
 ## Configuration
 
 The quickstart config is the minimum viable Codex harness config. Set Codex
@@ -451,7 +491,7 @@ Get the thread id from the completed `/diagnostics` reply, `/codex binding`, or
 For upload mechanics and runtime-level diagnostics boundaries, see
 [Codex harness runtime](/plugins/codex-harness-runtime#codex-feedback-upload).
 
-Auth is selected in this order:
+In the default per-agent home, auth is selected in this order:
 
 1. Ordered OpenAI auth profiles for the agent, preferably under
    `auth.order.openai`. Run `openclaw doctor --fix` to migrate older
@@ -490,6 +530,8 @@ thread state do not read or write the operator's personal `~/.codex` by
 default. OpenClaw preserves the normal process `HOME`; Codex-run subprocesses
 can still find user-home config and tokens, and Codex may discover shared
 `$HOME/.agents/skills` and `$HOME/.agents/plugins/marketplace.json` entries.
+With `appServer.homeScope: "user"`, OpenClaw instead uses the native user Codex
+home and its existing account without injecting an OpenClaw auth profile.
 
 If a deployment needs additional environment isolation, add those variables to
 `appServer.clearEnv`:
@@ -513,8 +555,8 @@ If a deployment needs additional environment isolation, add those variables to
 
 `appServer.clearEnv` only affects the spawned Codex app-server child process.
 OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
-normalization: `CODEX_HOME` stays per-agent, and `HOME` stays inherited so
-subprocesses can use normal user-home state.
+normalization: `CODEX_HOME` stays pointed at the selected agent or user scope,
+and `HOME` stays inherited so subprocesses can use normal user-home state.
 
 Codex dynamic tools default to `searchable` loading. OpenClaw does not expose
 dynamic tools that duplicate Codex-native workspace operations: `read`, `write`,
@@ -561,12 +603,13 @@ Supported `appServer` fields:
 | Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `transport`                                   | `"stdio"`                                              | `"stdio"` spawns Codex; `"websocket"` connects to `url`.                                                                                                                                                                                                                                                                                                                                        |
+| `homeScope`                                   | `"agent"`                                              | `"agent"` isolates Codex state per OpenClaw agent. `"user"` shares the native `$CODEX_HOME` or `~/.codex`, uses native auth, and enables owner-only thread management. User scope requires stdio.                                                                                                                                                                                               |
 | `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary; set it only for an explicit override.                                                                                                                                                                                                                                                                                    |
 | `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
 | `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
 | `authToken`                                   | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                              |
 | `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
-| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps per-agent `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                                                              |
+| `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. OpenClaw keeps the selected `CODEX_HOME` and inherited `HOME` for local launches.                                                                                                                                                                           |
 | `codeModeOnly`                                | `false`                                                | Opt into Codex's code-mode-only tool surface. OpenClaw dynamic tools remain registered with Codex so nested `tools.*` calls return through the app-server `item/tool/call` bridge.                                                                                                                                                                                                              |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |

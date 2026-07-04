@@ -198,6 +198,15 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
+  it("restarts the gateway for operator terminal config changes", () => {
+    // The terminal drives the Control UI CSP + bootstrap (both document-load
+    // time) and live PTYs, none of which hot-update a connected client, so a
+    // change restarts the gateway (clients reconnect with a fresh page/CSP).
+    const plan = buildGatewayReloadPlan(["gateway.terminal.enabled", "gateway.terminal.shell"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("gateway.terminal.enabled");
+  });
+
   it("restarts the gateway for browser plugin config changes", () => {
     const plan = buildGatewayReloadPlan(["browser.enabled"]);
     expect(plan.restartGateway).toBe(true);

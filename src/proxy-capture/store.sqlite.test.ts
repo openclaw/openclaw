@@ -171,6 +171,7 @@ describe("DebugProxyCaptureStore", () => {
       bfree: 1,
       bavail: 1,
       files: 0,
+      frsize: 1024,
       ffree: 0,
     });
 

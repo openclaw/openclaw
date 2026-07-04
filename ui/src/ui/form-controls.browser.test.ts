@@ -51,7 +51,6 @@ function controlsHtml() {
         <input type="text" value="inline usage input" />
       </div>
       <div class="agent-chat__composer-combobox"><textarea>chat composer</textarea></div>
-      <div class="chat-compose"><label class="chat-compose__field"><textarea>chat compose</textarea></label></div>
     </main>
   `;
 }
@@ -106,7 +105,6 @@ describeBrowserLayout("touch-primary form controls", () => {
           '.usage-filters-inline input[type="text"]',
           ".usage-filters-inline select",
           ".agent-chat__composer-combobox > textarea",
-          ".chat-compose .chat-compose__field textarea",
         ];
         return {
           touchPrimary: matchMedia("(hover: none) and (pointer: coarse)").matches,

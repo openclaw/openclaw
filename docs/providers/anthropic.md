@@ -206,6 +206,77 @@ Related Anthropic docs:
 
 </Note>
 
+## Safety refusal fallback (Claude Fable 5)
+
+<Warning>
+Using Claude Fable 5 means also using Claude Opus 4.8. Fable 5 ships with
+safety classifiers that can decline a request, and Anthropic's sanctioned
+recovery is to have `claude-opus-4-8` serve that turn. OpenClaw opts into this
+automatically for direct API-key requests, so some Fable turns are answered
+and billed as Claude Opus 4.8. If your policy or budget cannot accept
+Opus-served turns, do not select `anthropic/claude-fable-5`.
+</Warning>
+
+### Why this exists
+
+Fable 5 classifiers return `stop_reason: "refusal"` on requests in restricted
+domains, and they also false-positive on benign-adjacent work (security
+tooling, life sciences, or even asking the model to reproduce its raw
+reasoning). Without a fallback, the turn dies with an error even though
+another Claude model would happily serve it — Anthropic's own refusal message
+tells API integrators to configure a fallback model.
+
+### How it works
+
+1. For every direct API-key request to `anthropic/claude-fable-5`, OpenClaw
+   sends Anthropic's server-side fallback opt-in: the
+   `server-side-fallback-2026-06-01` beta header plus
+   `fallbacks: [{"model": "claude-opus-4-8"}]`. Claude Opus 4.8 is the only
+   fallback target Anthropic permits for Fable 5.
+2. Only a safety-classifier decline triggers the fallback. Rate limits,
+   overloads, and server errors behave exactly as before and go through
+   OpenClaw's normal [model failover](/concepts/model-failover).
+3. The rescue happens inside the same call. A decline before any output is
+   invisible apart from latency; the whole answer comes from Opus 4.8. On a
+   mid-stream decline the partial text is kept as the prefix the fallback
+   model continues from, while the declined model's reasoning and tool calls
+   are discarded per Anthropic's replay rules (they must not be echoed back or
+   executed).
+4. If Claude Opus 4.8 declines as well, the turn surfaces the refusal as an
+   error, exactly like before this feature.
+
+The fallback happens at the Anthropic API level, so `claude-opus-4-8` does not
+need to be in your configured model list or fallback chain — a Fable-capable
+API key can always serve Opus.
+
+### Observability and billing
+
+- A fallback-served turn records a `provider_fallback` diagnostic on the
+  assistant message naming `fromModel` and `toModel`, and the message's
+  `responseModel` reports `claude-opus-4-8`.
+- Anthropic bills per attempt: a decline before output is free, and the rescue
+  bills at Claude Opus 4.8 rates (currently half of Fable 5 rates). OpenClaw's
+  per-turn cost estimate prices fallback-served turns at Opus rates to match.
+- A mid-stream decline additionally bills the already-streamed Fable partial
+  on Anthropic's side; that portion is reported in the API's per-attempt
+  usage but not folded into OpenClaw's per-turn estimate.
+
+### Scope
+
+Applies to `anthropic/claude-fable-5` with API-key auth against
+`api.anthropic.com`. OAuth (Claude CLI subscription reuse), proxy base URLs,
+Bedrock, Vertex, and Foundry requests are unchanged and still surface
+refusals as errors there.
+
+Verified live: a benign prompt asking Fable 5 to reproduce its raw chain of
+thought is declined with `category: "reasoning_extraction"` when sent without
+fallbacks, and the same prompt through OpenClaw returns a normal Opus-served
+answer with the `provider_fallback` diagnostic attached.
+
+See Anthropic's [refusals and fallback
+guide](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
+for the underlying behavior.
+
 ## Prompt caching
 
 OpenClaw supports Anthropic's prompt caching feature for API-key auth.

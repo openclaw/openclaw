@@ -1793,6 +1793,82 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
   });
 
+  it("keeps the startup deadline when the request timeout is disabled", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let err: unknown;
+
+    const promise = callGateway({ method: "health", timeoutMs: null }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({ kind: "timeout", timeoutMs: 10_000 });
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("disables the request and wrapper deadline when timeout is null", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let releaseRequest: (() => void) | undefined;
+
+    testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            await new Promise<void>((resolve) => {
+              releaseRequest = resolve;
+            });
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {},
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      loadDeviceAuthToken: loadDeviceAuthTokenMock,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    let settled = false;
+    const promise = callGateway({ method: "health", timeoutMs: null }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
+    if (!releaseRequest) {
+      throw new Error("Expected request release callback to be initialized");
+    }
+    releaseRequest();
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
   it("forwards caller abort signal and accepted callback to client requests", async () => {
     setLocalLoopbackGatewayConfig();
     const controller = new AbortController();

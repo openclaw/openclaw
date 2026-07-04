@@ -127,6 +127,13 @@ const SLACK_REASONING_TAG_RE =
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
 const SLACK_THINKING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Thinking\.{0,3}(?=\s*(?:\n|_))/iu;
 
+const SLACK_THREAD_LOADING_MESSAGES = [
+  "Reading the thread...",
+  "Checking context...",
+  "Working through the request...",
+  "Putting it all together...",
+];
+
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
   return resolveSlackTimestampMs(ts);
@@ -625,6 +632,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channelId: message.channel,
           threadTs: statusThreadTs,
           status: "is typing...",
+          loadingMessages: SLACK_THREAD_LOADING_MESSAGES,
         });
         if (typingReaction && message.ts) {
           await reactSlackMessage(message.channel, message.ts, typingReaction, {

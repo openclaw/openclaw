@@ -152,6 +152,30 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("surfaces terminal compaction failures instead of reporting a skip", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.compact") {
+        return {
+          ok: false,
+          compacted: false,
+          reason: "codex app-server compaction timed out",
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "compact",
+      "",
+    );
+
+    expect(result).toEqual({
+      content: "Compaction failed: codex app-server compaction timed out",
+    });
+  });
+
   it("uses the local model catalog to qualify raw /model overrides when the patch response omits provider", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {

@@ -492,6 +492,7 @@ export function recordScheduleComputeError(params: {
   state: CronServiceState;
   job: CronJob;
   err: unknown;
+  deferredAutoDisableNotifications?: Array<() => void>;
 }): boolean {
   const { state, job, err } = params;
   const errorCount = (job.state.scheduleErrorCount ?? 0) + 1;
@@ -508,20 +509,27 @@ export function recordScheduleComputeError(params: {
       "cron: auto-disabled job after repeated schedule errors",
     );
 
-    // Notify the user so the auto-disable is not silent (#28861).
     const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
-    state.deps.enqueueSystemEvent(notifyText, {
-      agentId: job.agentId,
-      sessionKey: job.sessionKey,
-      contextKey: `cron:${job.id}:auto-disabled`,
-    });
-    state.deps.requestHeartbeat({
-      source: "cron",
-      intent: "event",
-      reason: `cron:${job.id}:auto-disabled`,
-      agentId: job.agentId,
-      sessionKey: job.sessionKey,
-    });
+    const notify = () => {
+      state.deps.enqueueSystemEvent(notifyText, {
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+        contextKey: `cron:${job.id}:auto-disabled`,
+      });
+      state.deps.requestHeartbeat({
+        source: "cron",
+        intent: "event",
+        reason: `cron:${job.id}:auto-disabled`,
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+      });
+    };
+    if (params.deferredAutoDisableNotifications) {
+      params.deferredAutoDisableNotifications.push(notify);
+    } else {
+      // Notify the user so the auto-disable is not silent (#28861).
+      notify();
+    }
   } else {
     state.deps.log.warn(
       { jobId: job.id, name: job.name, errorCount, err: errText },
@@ -617,7 +625,12 @@ function walkSchedulableJobs(
   return changed;
 }
 
-function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob; nowMs: number }) {
+function recomputeJobNextRunAtMs(params: {
+  state: CronServiceState;
+  job: CronJob;
+  nowMs: number;
+  deferredAutoDisableNotifications?: Array<() => void>;
+}) {
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
@@ -644,7 +657,14 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       changed = true;
     }
   } catch (err) {
-    if (recordScheduleComputeError({ state: params.state, job: params.job, err })) {
+    if (
+      recordScheduleComputeError({
+        state: params.state,
+        job: params.job,
+        err,
+        deferredAutoDisableNotifications: params.deferredAutoDisableNotifications,
+      })
+    ) {
       changed = true;
     }
   }
@@ -682,10 +702,18 @@ export function recomputeNextRunsForMaintenance(
     recomputeExpired?: boolean;
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
+    deferredAutoDisableNotifications?: Array<() => void>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
+  const recomputeJob = (job: CronJob, nowMs: number) =>
+    recomputeJobNextRunAtMs({
+      state,
+      job,
+      nowMs,
+      deferredAutoDisableNotifications: opts?.deferredAutoDisableNotifications,
+    });
   const deferralIds = state.pendingCatchupDeferralJobIds;
   // Drop deferral markers for jobs that no longer exist in the store or
   // are disabled. They will not fire, so no deferral is needed.
@@ -715,7 +743,7 @@ export function recomputeNextRunsForMaintenance(
       }
 
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        if (recomputeJob(job, now)) {
           changed = true;
         }
       } else if (
@@ -723,7 +751,7 @@ export function recomputeNextRunsForMaintenance(
         !deferralIds.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
-        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+        if (recomputeJob(job, now)) {
           changed = true;
         }
       } else if (
@@ -745,7 +773,7 @@ export function recomputeNextRunsForMaintenance(
           now < backoffUntilMs &&
           job.state.nextRunAtMs < backoffUntilMs;
         if (alreadyExecutedSlot || isStaleBackoffSlot) {
-          if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          if (recomputeJob(job, now)) {
             changed = true;
           }
         }

@@ -940,6 +940,12 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
+  const { TerminalSessionManager } = await import("./terminal/session-manager.js");
+  // One PTY store per gateway. Emits each session's bytes only to the owning
+  // connection so terminals stay private to the operator that opened them.
+  const terminalSessions = new TerminalSessionManager({
+    emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+  });
   applyGatewayLaneConcurrency(cfgAtStart);
 
   runtimeState = createGatewayServerLiveState({
@@ -1446,6 +1452,7 @@ export async function startGatewayServer(
             });
           },
           nodeRegistry,
+          terminalSessions,
           agentRunSeq,
           chatAbortControllers,
           chatAbortedRuns: chatRunState.abortedRuns,
@@ -1812,6 +1819,8 @@ export async function startGatewayServer(
     close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
+        // Kill any live operator shells before the socket layer tears down.
+        terminalSessions.disposeAll();
         await stopRegisteredGatewayLifetimeSidecars();
         await stopRegisteredPostReadySidecars();
         // Run gateway_stop plugin hook before shutdown
