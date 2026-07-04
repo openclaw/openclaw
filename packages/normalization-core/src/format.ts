@@ -1,17 +1,16 @@
 type ByteSizeUnit = "byte" | "kilo" | "mega" | "giga" | "tera";
-type ByteSizeStyle = "si" | "iec" | "legacy-binary";
+type ByteSizeStyle = "iec" | "legacy-binary";
 
 type ByteSizeFormatOptions = {
   style: ByteSizeStyle;
   maxUnit: ByteSizeUnit;
   separator: "" | " ";
   fractionDigits: number | ((value: number, unit: ByteSizeUnit) => number | null);
-  rounding?: "round" | "floor" | ((value: number, unit: ByteSizeUnit) => "round" | "floor");
+  floorUnits?: readonly ByteSizeUnit[];
 };
 
 const BYTE_SIZE_UNITS: readonly ByteSizeUnit[] = ["byte", "kilo", "mega", "giga", "tera"];
 const BYTE_SIZE_STYLES = {
-  si: { base: 1000, labels: ["B", "kB", "MB", "GB", "TB"] },
   iec: { base: 1024, labels: ["B", "KiB", "MiB", "GiB", "TiB"] },
   "legacy-binary": { base: 1024, labels: ["B", "KB", "MB", "GB", "TB"] },
 } as const satisfies Record<ByteSizeStyle, { base: number; labels: readonly string[] }>;
@@ -35,9 +34,7 @@ export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): s
   if (fractionDigits === null) {
     return `${value}${options.separator}${labels[unitIndex]}`;
   }
-  const rounding =
-    typeof options.rounding === "function" ? options.rounding(value, unit) : options.rounding;
-  if (rounding === "floor") {
+  if (options.floorUnits?.includes(unit)) {
     value = Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits;
   }
   return `${value.toFixed(fractionDigits)}${options.separator}${labels[unitIndex]}`;

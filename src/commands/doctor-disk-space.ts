@@ -34,7 +34,7 @@ export function formatBytes(bytes: number): string {
     maxUnit: "giga",
     separator: " ",
     fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "giga" ? 1 : 0),
-    rounding: (_value, unit) => (unit === "kilo" || unit === "mega" ? "floor" : "round"),
+    floorUnits: ["kilo", "mega"],
   });
 }
 
