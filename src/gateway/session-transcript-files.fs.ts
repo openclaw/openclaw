@@ -410,7 +410,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
     }
   }
   topicArchives.sort(
-    (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+    (left, right) => left.timestamp - right.timestamp || left.name.localeCompare(right.name),
   );
   return uniqueStrings([
     ...archives.map((archive) => archive.archivePath),

@@ -486,6 +486,29 @@ describe("gateway server chat", () => {
       await fs.writeFile(
         path.join(
           sessionDir,
+          ancestorSessionId + "-topic-789.jsonl.reset.2026-01-18T04-40-00.000Z",
+        ),
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id: ancestorSessionId,
+            timestamp: "2026-01-18T04:40:00.000Z",
+            cwd: sessionDir,
+          }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "newer owned topic ancestor context" }],
+              timestamp: startedAt - 20_000,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(
+          sessionDir,
           ancestorSessionId + "-topic-no-header.jsonl.reset.2026-01-18T04-45-00.000Z",
         ),
         JSON.stringify({
@@ -538,10 +561,18 @@ describe("gateway server chat", () => {
       const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
       expect(familyHistory).toContain("ancestor thread context");
       expect(familyHistory).toContain("owned topic ancestor context");
+      expect(familyHistory).toContain("newer owned topic ancestor context");
       expect(familyHistory).toContain("current thread context");
       expect(familyHistory).not.toContain("unrelated topic context");
       expect(familyHistory).not.toContain("headerless topic context");
       expect(familyHistory).not.toContain("stale active announce reply");
+
+      const limitedFamilyHistory = JSON.stringify(
+        await fetchHistoryMessages(ws, { includeFamily: true, limit: 2 }),
+      );
+      expect(limitedFamilyHistory).toContain("newer owned topic ancestor context");
+      expect(limitedFamilyHistory).toContain("current thread context");
+      expect(limitedFamilyHistory).not.toContain("owned topic ancestor context");
     });
   });
 

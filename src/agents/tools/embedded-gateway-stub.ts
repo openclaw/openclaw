@@ -379,7 +379,13 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
       params.includeFamily && isCurrentSession && activeFile
         ? Math.max(0, targetLimit - 1)
         : targetLimit;
-    for (const file of archivedFiles) {
+    const archivedFilesForTargets =
+      params.includeFamily && archiveTargetLimit < archivedFiles.length
+        ? archiveTargetLimit > 0
+          ? archivedFiles.slice(-archiveTargetLimit)
+          : []
+        : archivedFiles;
+    for (const file of archivedFilesForTargets) {
       if (
         !pushTarget(
           targetCollection,

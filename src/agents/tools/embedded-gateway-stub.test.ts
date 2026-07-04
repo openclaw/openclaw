@@ -296,6 +296,84 @@ describe("embedded gateway stub", () => {
     });
   });
 
+  it("keeps newer embedded topic archives when family history is limited", async () => {
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-topic-limit-")),
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const currentActive = path.join(sessionsDir, "current-topic-limit-session.jsonl");
+    const oldTopicArchive = path.join(
+      sessionsDir,
+      "current-topic-limit-session-topic-old.jsonl.reset.2026-06-04T01-00-00.000Z",
+    );
+    const newTopicArchive = path.join(
+      sessionsDir,
+      "current-topic-limit-session-topic-new.jsonl.reset.2026-06-04T02-00-00.000Z",
+    );
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    for (const archive of [oldTopicArchive, newTopicArchive]) {
+      fs.writeFileSync(
+        archive,
+        `${JSON.stringify({ type: "session", version: 1, id: "current-topic-limit-session" })}\n`,
+        "utf8",
+      );
+    }
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: "current-topic-limit-session",
+        sessionFile: currentActive,
+        usageFamilySessionIds: ["current-topic-limit-session"],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(
+      async (scope: { sessionId: string; sessionFile?: string }) => [
+        { role: "user", content: path.basename(scope.sessionFile ?? scope.sessionId) },
+      ],
+    );
+    runtime.projectRecentChatDisplayMessages.mockImplementationOnce((messages, opts) =>
+      messages.slice(-(opts?.maxMessages ?? messages.length)),
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true, limit: 2 },
+    });
+
+    const rendered = JSON.stringify(result.messages);
+    expect(result.includeFamily).toBe(true);
+    expect(rendered).toContain(path.basename(newTopicArchive));
+    expect(rendered).toContain(path.basename(currentActive));
+    expect(rendered).not.toContain(path.basename(oldTopicArchive));
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      1,
+      {
+        agentId: "main",
+        sessionFile: newTopicArchive,
+        sessionId: "current-topic-limit-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).toHaveBeenNthCalledWith(
+      2,
+      {
+        agentId: "main",
+        sessionFile: currentActive,
+        sessionId: "current-topic-limit-session",
+        storePath,
+      },
+      expect.any(Object),
+    );
+    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionFile: oldTopicArchive }),
+      expect.any(Object),
+    );
+  });
+
   it("preserves ancestor announce rows in embedded family history", async () => {
     const sessionsDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-announce-")),
