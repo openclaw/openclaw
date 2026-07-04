@@ -93,11 +93,10 @@ describe("detectZaiEndpoint", () => {
     delete process.env.OPENCLAW_VERSION;
   });
 
-  it("sends a User-Agent header on the probe so z.ai does not 429 it (#98100)", async () => {
-    // z.ai's edge rejects User-Agent-less requests with HTTP 429 (code 1305),
-    // which makes detectZaiEndpoint return null even for valid Coding Plan
-    // keys. Node's fetch (undici) does not add a default User-Agent, so the
-    // probe must set one explicitly.
+  it("sends an explicit OpenClaw User-Agent header on the probe so z.ai does not 429 it (#98100)", async () => {
+    // z.ai's edge can reject probes without an explicit OpenClaw User-Agent
+    // with HTTP 429 (code 1305), which makes detectZaiEndpoint return null
+    // even for valid Coding Plan keys.
     process.env.OPENCLAW_VERSION = "2026.6.11";
     let capturedHeaders: Record<string, string> | undefined;
     const fetchFn = (async (url: string, init?: RequestInit) => {

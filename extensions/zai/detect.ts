@@ -44,7 +44,7 @@ const ZAI_DETECT_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
  * Resolves the version string embedded in the probe User-Agent. Mirrors the
  * `openclaw/${version || "dev"}` pattern used by other bare-fetch probes such
  * as the ChatGPT usage cooldown probe. Falls back to "dev" when the runtime
- * version cannot be resolved (dev/undici-only environments).
+ * version cannot be resolved.
  */
 function resolveOpenClawUserAgentVersion(): string {
   const fromEnv = process.env.OPENCLAW_VERSION?.trim();
@@ -106,10 +106,9 @@ async function probeZaiChatCompletions(params: {
         headers: {
           authorization: `Bearer ${params.apiKey}`,
           "content-type": "application/json",
-          // z.ai's edge rejects requests without a User-Agent with HTTP 429
-          // (code 1305). Node's fetch (undici) does not add a default
-          // User-Agent, so without this header every endpoint probe fails and
-          // Coding Plan onboarding cannot auto-select the coding endpoint.
+          // z.ai's edge can reject detection probes without an explicit
+          // OpenClaw User-Agent with HTTP 429 (code 1305), which prevents
+          // Coding Plan onboarding from auto-selecting the coding endpoint.
           // See https://github.com/openclaw/openclaw/issues/98100
           "user-agent": `openclaw/${resolveOpenClawUserAgentVersion()}`,
         },
