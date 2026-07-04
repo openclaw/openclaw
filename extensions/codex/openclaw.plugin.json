@@ -6,6 +6,7 @@
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
+    "tools": ["codex_threads"],
     "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
@@ -140,6 +141,11 @@
             "type": "string",
             "enum": ["stdio", "websocket"],
             "default": "stdio"
+          },
+          "homeScope": {
+            "type": "string",
+            "enum": ["agent", "user"],
+            "default": "agent"
           },
           "command": { "type": "string" },
           "args": {
@@ -364,6 +370,11 @@
     "appServer.transport": {
       "label": "Transport",
       "help": "Use stdio to spawn Codex locally, or websocket to connect to an already-running app-server.",
+      "advanced": true
+    },
+    "appServer.homeScope": {
+      "label": "Codex Home Scope",
+      "help": "Use agent for isolated Codex state, or user to share native Codex threads, config, and authentication with Codex Desktop and the CLI.",
       "advanced": true
     },
     "appServer.command": {

@@ -13,6 +13,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
   resolveTrustedGroupId,
+  sessionKeyNamesGroupConversation,
 } from "./agent-tools.policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
@@ -185,14 +186,18 @@ export function resolveConversationCapabilityProfile(
     spawnedBy: params.spawnedBy,
     groupId: params.groupId,
   });
+  // Group channel/space labels have no session-bound counterpart to verify
+  // against; mask them whenever the trust check dropped the caller group id.
+  const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
+  const trustedGroupSpace = trustedGroup.dropped ? null : params.groupSpace;
   const groupPolicy = resolveGroupToolPolicy({
     config: params.config,
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: messageProvider ?? undefined,
     groupId: trustedGroup.groupId,
-    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+    groupChannel: trustedGroupChannel,
+    groupSpace: trustedGroupSpace,
     accountId: params.agentAccountId,
     senderId: params.senderId,
     senderName: params.senderName,
@@ -263,7 +268,14 @@ export function resolveConversationCapabilityProfile(
       hasVision: params.modelHasVision,
     },
     conversation: {
-      scope: resolveConversationScope(params),
+      scope: resolveConversationScope({
+        chatType: params.chatType,
+        sessionKey: params.sessionKey,
+        runSessionKey: params.runSessionKey,
+        trustedGroup,
+        groupChannel: trustedGroupChannel,
+        groupSpace: trustedGroupSpace,
+      }),
       chatType: normalizeChatType(params.chatType),
       sessionKey: params.runSessionKey ?? params.sessionKey,
       policySessionKey: params.sessionKey,
@@ -278,8 +290,8 @@ export function resolveConversationCapabilityProfile(
       currentThreadTs: params.currentThreadTs,
       currentMessageId: params.currentMessageId,
       groupId: trustedGroup.groupId,
-      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+      groupChannel: trustedGroupChannel,
+      groupSpace: trustedGroupSpace,
       memberRoleIds: params.memberRoleIds,
       spawnedBy: params.spawnedBy,
     },
@@ -338,12 +350,14 @@ export function resolveConversationCapabilityProfile(
   };
 }
 
-function resolveConversationScope(
-  params: Pick<
-    ConversationCapabilityProfileParams,
-    "chatType" | "groupId" | "groupChannel" | "groupSpace"
-  >,
-): ConversationCapabilityScope {
+function resolveConversationScope(params: {
+  chatType?: string;
+  sessionKey?: string;
+  runSessionKey?: string;
+  trustedGroup: { groupId: string | null | undefined; dropped: boolean };
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+}): ConversationCapabilityScope {
   const chatType = normalizeChatType(params.chatType);
   if (chatType === "direct") {
     return "direct";
@@ -351,7 +365,23 @@ function resolveConversationScope(
   if (chatType === "group" || chatType === "channel") {
     return "shared";
   }
-  return params.groupId?.trim() || params.groupChannel?.trim() || params.groupSpace?.trim()
+  // Without a live chat type, classify only from server-derived session keys
+  // and trust-checked group facts. A caller-supplied group id that
+  // resolveTrustedGroupId dropped must not flip an unknown-audience
+  // conversation to "shared": downstream audience and credential decisions
+  // read this field, and the profile already publishes that group as null.
+  if (
+    sessionKeyNamesGroupConversation(params.runSessionKey) ||
+    sessionKeyNamesGroupConversation(params.sessionKey)
+  ) {
+    return "shared";
+  }
+  if (params.trustedGroup.dropped) {
+    return "unknown";
+  }
+  return params.trustedGroup.groupId?.trim() ||
+    params.groupChannel?.trim() ||
+    params.groupSpace?.trim()
     ? "shared"
     : "unknown";
 }
