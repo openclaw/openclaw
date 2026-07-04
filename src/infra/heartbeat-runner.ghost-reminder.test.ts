@@ -720,4 +720,68 @@ describe("Ghost reminder bug (issue #13317)", () => {
       });
     });
   });
+
+  describe("system event handling", () => {
+    it("uses system event prompt when a Slack-like interaction is pending on a hook wake", async () => {
+      const { result, calledCtx, sendTelegram } = await runHeartbeatCase({
+        tmpPrefix: "openclaw-system-event-",
+        replyText: "Handled the interaction",
+        reason: "hook:wake",
+        enqueue: (sessionKey) => {
+          enqueueSystemEvent('Slack interaction: {"actionId":"reply_button","userId":"U123"}', {
+            sessionKey,
+            contextKey: "slack:interaction:C1:100.200:openclaw:reply_button",
+          });
+        },
+      });
+      expect(result.status).toBe("ran");
+      expect(calledCtx?.Provider).toBe("system-event");
+      expect(calledCtx?.Body).toContain("A system event was received");
+      expect(calledCtx?.Body).toContain("Slack interaction");
+      expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
+      expect(sendTelegram).toHaveBeenCalled();
+    });
+
+    it("renders multiple system events together and consumes them all", async () => {
+      const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+        tmpPrefix: "openclaw-system-multi-",
+        replyText: "Got the events",
+        reason: "hook:wake",
+        enqueue: (key) => {
+          enqueueSystemEvent('Slack interaction: {"actionId":"test"}', {
+            sessionKey: key,
+            contextKey: "slack:interaction:C1:100:test",
+          });
+          enqueueSystemEvent("Plugin notification: config reloaded", {
+            sessionKey: key,
+            contextKey: "notification:config-reload",
+          });
+        },
+      });
+      expect(result.status).toBe("ran");
+      expect(calledCtx?.Provider).toBe("system-event");
+      // Both non-exec, non-cron system events are rendered together
+      expect(calledCtx?.Body).toContain("Slack interaction");
+      expect(calledCtx?.Body).toContain("Plugin notification: config reloaded");
+      // Both are consumed after the run
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    });
+
+    it("does not render heartbeat noise events as system events", async () => {
+      const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+        tmpPrefix: "openclaw-system-noise-",
+        replyText: "Regular heartbeat",
+        reason: "hook:wake",
+        enqueue: (key) => {
+          enqueueSystemEvent("HEARTBEAT_OK", { sessionKey: key });
+        },
+      });
+      expect(result.status).toBe("ran");
+      // HEARTBEAT_OK is classified as noise, not a system event
+      expect(calledCtx?.Provider).toBe("heartbeat");
+      expect(calledCtx?.Body).not.toContain("A system event was received");
+      // Noise should still be consumed (existing behavior via else fallback)
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    });
+  });
 });

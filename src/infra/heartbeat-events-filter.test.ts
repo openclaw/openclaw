@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  buildSystemEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isGenericSystemEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
@@ -127,6 +129,49 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
   });
+  it.each([
+    {
+      name: "builds user-relay system event prompt by default",
+      events: ['Slack interaction: {"actionId":"test"}'],
+      expected: ["A system event was received", "Slack interaction", "Relay relevant information"],
+      unexpected: ["Handle this event internally"],
+    },
+    {
+      name: "builds internal-only system event prompt when delivery is disabled",
+      events: ['Slack interaction: {"actionId":"test"}'],
+      opts: { deliverToUser: false },
+      expected: ["A system event was received", "Handle this event internally"],
+      unexpected: ["Relay relevant information"],
+    },
+    {
+      name: "falls back when system event content is empty",
+      events: ["", "   "],
+      expected: ["no event content was found", "Reply HEARTBEAT_OK"],
+      unexpected: ["Handle this event internally", "Relay relevant information"],
+    },
+    {
+      name: "uses internal empty-content fallback when delivery is disabled",
+      events: ["", "   "],
+      opts: { deliverToUser: false },
+      expected: ["Handle this internally", "HEARTBEAT_OK when nothing needs user-facing follow-up"],
+      unexpected: ["Relay relevant information"],
+    },
+    {
+      name: "uses heartbeat_respond for empty system events in response-tool mode",
+      events: [""],
+      opts: { useHeartbeatResponseTool: true },
+      expected: ["heartbeat_respond", "notify=false"],
+      unexpected: ["HEARTBEAT_OK"],
+    },
+  ])("$name", ({ events, opts, expected, unexpected }) => {
+    const prompt = buildSystemEventPrompt(events, opts);
+    for (const part of expected) {
+      expect(prompt).toContain(part);
+    }
+    for (const part of unexpected) {
+      expect(prompt).not.toContain(part);
+    }
+  });
 });
 
 describe("heartbeat event classification", () => {
@@ -209,5 +254,27 @@ describe("isExecCompletionEvent", () => {
     // Parenthesized false positive from review feedback — must not match mid-string
     expect(isExecCompletionEvent("Nightly backup exec failed (see logs)")).toBe(false);
     expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
+  });
+});
+
+describe("isGenericSystemEvent", () => {
+  it.each([
+    { evt: "Reminder: check results", contextKey: undefined, expected: true },
+    { evt: "Node connected", contextKey: undefined, expected: true },
+    {
+      evt: 'Slack interaction: {"actionId":"test"}',
+      contextKey: "slack:interaction:C1:100.200:reply_button",
+      expected: true,
+    },
+    { evt: "Cron: rotate logs", contextKey: "cron:rotate-logs", expected: false },
+    { evt: "Cron: maintenance", contextKey: "cron:maintenance", expected: false },
+    { evt: "", contextKey: undefined, expected: false },
+    { evt: "   ", contextKey: undefined, expected: false },
+    { evt: "HEARTBEAT_OK", contextKey: undefined, expected: false },
+    { evt: "heartbeat poll: noop", contextKey: undefined, expected: false },
+    { evt: "exec finished: ok", contextKey: undefined, expected: false },
+    { evt: "Exec completed (abc12345, code 0)", contextKey: undefined, expected: false },
+  ])("classifies $evt (contextKey=$contextKey) as $expected", ({ evt, contextKey, expected }) => {
+    expect(isGenericSystemEvent(evt, contextKey)).toBe(expected);
   });
 });

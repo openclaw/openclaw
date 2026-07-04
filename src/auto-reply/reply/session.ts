@@ -275,7 +275,10 @@ function resolveInitSessionStateAttemptContext(
   const { cfg, ctx } = params;
   // Automated system events must not reset sessions or retarget conversation bindings.
   const isSystemEvent =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+    ctx.Provider === "heartbeat" ||
+    ctx.Provider === "cron-event" ||
+    ctx.Provider === "exec-event" ||
+    ctx.Provider === "system-event";
   const conversationBindingContext = isSystemEvent
     ? null
     : resolveSessionConversationBindingContext(cfg, ctx);

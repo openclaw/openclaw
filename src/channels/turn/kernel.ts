@@ -277,7 +277,10 @@ function resolveObserveOnlyDispatchResult<TDispatchResult>(
 
 function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
   return (
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event"
+    ctx.Provider === "heartbeat" ||
+    ctx.Provider === "cron-event" ||
+    ctx.Provider === "exec-event" ||
+    ctx.Provider === "system-event"
   );
 }
 

@@ -36,7 +36,12 @@ export type EffectiveReplyRoute = {
 
 /** Returns true for synthetic providers that should not define a user channel route. */
 export function isSystemEventProvider(provider?: string): boolean {
-  return provider === "heartbeat" || provider === "cron-event" || provider === "exec-event";
+  return (
+    provider === "heartbeat" ||
+    provider === "cron-event" ||
+    provider === "exec-event" ||
+    provider === "system-event"
+  );
 }
 
 function isSessionsSendInterSessionHandoff(inputProvenance: InputProvenance | undefined): boolean {

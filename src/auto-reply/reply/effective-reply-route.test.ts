@@ -403,6 +403,7 @@ describe("isSystemEventProvider", () => {
     expect(isSystemEventProvider("heartbeat")).toBe(true);
     expect(isSystemEventProvider("cron-event")).toBe(true);
     expect(isSystemEventProvider("exec-event")).toBe(true);
+    expect(isSystemEventProvider("system-event")).toBe(true);
     expect(isSystemEventProvider("slack")).toBe(false);
     expect(isSystemEventProvider(undefined)).toBe(false);
   });

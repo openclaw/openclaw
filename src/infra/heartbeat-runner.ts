@@ -117,8 +117,10 @@ import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  buildSystemEventPrompt,
   isCronSystemEvent,
   isExecCompletionEvent,
+  isGenericSystemEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
@@ -1130,6 +1132,7 @@ type HeartbeatPromptResolution = {
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasSystemEvents: boolean;
   hasDueCommitments: boolean;
   usesHeartbeatResponseTool: boolean;
 };
@@ -1238,10 +1241,19 @@ function resolveHeartbeatRunPrompt(params: {
         .filter((event) => isExecCompletionEvent(event.text))
         .map((event) => event.text)
     : [];
+  // Non-exec, non-cron-tagged system events (plugin interactions, etc.) that
+  // would otherwise fall through to the generic heartbeat prompt and be silently
+  // drained without their value reaching the model.
+  const systemEvents = pendingEventEntries
+    .filter(
+      (event) => isGenericSystemEvent(event.text, event.contextKey) && !params.preflight.isCronWake,
+    )
+    .map((event) => event.text);
   const hasExecCompletion = execEvents.length > 0;
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
+  const hasSystemEvents = systemEvents.length > 0;
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -1254,6 +1266,7 @@ function resolveHeartbeatRunPrompt(params: {
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasSystemEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1263,6 +1276,7 @@ function resolveHeartbeatRunPrompt(params: {
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasSystemEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
@@ -1287,6 +1301,7 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasSystemEvents: false,
         hasDueCommitments: false,
         usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
@@ -1297,6 +1312,7 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasSystemEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1306,6 +1322,7 @@ ${completionInstruction}`;
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasSystemEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
@@ -1322,9 +1339,14 @@ ${completionInstruction}`;
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : baseUsesHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+      : hasSystemEvents
+        ? buildSystemEventPrompt(systemEvents, {
+            deliverToUser: params.canRelayToUser,
+            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+          })
+        : baseUsesHeartbeatResponseTool
+          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+          : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const basePromptWithHint = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
   const basePromptWithDirectives = appendHeartbeatFileDirectives(
     basePromptWithHint,
@@ -1339,6 +1361,7 @@ ${completionInstruction}`;
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasSystemEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
@@ -1348,6 +1371,7 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   preflight: HeartbeatPreflight;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasSystemEvents: boolean;
 }): SystemEvent[] {
   const { preflight } = params;
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
@@ -1361,6 +1385,11 @@ function selectSystemEventsConsumedByHeartbeat(params: {
       (event) =>
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
+    );
+  }
+  if (params.hasSystemEvents) {
+    return preflight.pendingEventEntries.filter(
+      (event) => isGenericSystemEvent(event.text, event.contextKey) && !preflight.isCronWake,
     );
   }
   return preflight.pendingEventEntries;
@@ -1634,6 +1663,7 @@ export async function runHeartbeatOnce(opts: {
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasSystemEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool,
   } = resolveHeartbeatRunPrompt({
@@ -1655,6 +1685,7 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     hasExecCompletion,
     hasCronEvents,
+    hasSystemEvents,
   });
 
   // If no tasks are due, skip heartbeat entirely
@@ -1823,7 +1854,13 @@ export async function runHeartbeatOnce(opts: {
     OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
     AccountId: delivery.accountId,
     MessageThreadId: delivery.threadId,
-    Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+    Provider: hasExecCompletion
+      ? "exec-event"
+      : hasCronEvents
+        ? "cron-event"
+        : hasSystemEvents
+          ? "system-event"
+          : "heartbeat",
     SessionKey: runSessionKey,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {

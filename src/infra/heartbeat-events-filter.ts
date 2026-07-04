@@ -169,6 +169,47 @@ export function buildExecEventPrompt(
   );
 }
 
+// Build a dynamic prompt for generic system events (non-exec, non-cron) such as plugin
+// interactions, so the event value reaches the model instead of being silently drained.
+export function buildSystemEventPrompt(
+  pendingEvents: string[],
+  opts?: {
+    deliverToUser?: boolean;
+    useHeartbeatResponseTool?: boolean;
+  },
+): string {
+  const deliverToUser = opts?.deliverToUser ?? true;
+  const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
+  const eventText = pendingEvents.join("\n").trim();
+  if (!eventText) {
+    if (useHeartbeatResponseTool) {
+      return (
+        "A system event was received, but no event content was found. " +
+        HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
+      );
+    }
+    if (!deliverToUser) {
+      return (
+        "A system event was received, but no event content was found. " +
+        "Handle this internally and reply HEARTBEAT_OK when nothing needs user-facing follow-up."
+      );
+    }
+    return "A system event was received, but no event content was found. Reply HEARTBEAT_OK.";
+  }
+  if (!deliverToUser) {
+    return (
+      "A system event was received. The event details are:\n\n" +
+      eventText +
+      "\n\nHandle this event internally. Do not relay it to the user unless explicitly requested."
+    );
+  }
+  return (
+    "A system event was received. The event details are:\n\n" +
+    eventText +
+    "\n\nPlease handle this event appropriately. Relay relevant information to the user if needed."
+  );
+}
+
 const HEARTBEAT_OK_PREFIX = normalizeLowercaseStringOrEmpty(HEARTBEAT_TOKEN);
 
 // Detect heartbeat-specific noise so cron reminders don't trigger on non-reminder events.
@@ -215,4 +256,12 @@ export function isCronSystemEvent(evt: string) {
     return false;
   }
   return !isHeartbeatNoiseEvent(evt) && !isExecCompletionEvent(evt);
+}
+
+// Returns true when a system event is a real event (non-empty, non-noise, non-exec)
+// but is NOT tagged as a cron event. These are generic system events like plugin
+// interactions that should be rendered into the heartbeat prompt via buildSystemEventPrompt.
+export function isGenericSystemEvent(evt: string, contextKey?: string | null): boolean {
+  if (!isCronSystemEvent(evt)) return false;
+  return !(contextKey?.startsWith("cron:") ?? false);
 }
