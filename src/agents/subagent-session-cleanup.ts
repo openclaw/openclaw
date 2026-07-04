@@ -55,13 +55,23 @@ export async function deleteSubagentSessionForCleanup(
 ): Promise<void> {
   const [
     { hasLiveOrRecentlyDispatchedContinuationWork },
-    { hasRecoverablePendingDelegate },
+    { failStagedPostCompactionDelegatesForCleanup, hasRecoverablePendingDelegate },
     { countActiveDescendantRuns },
   ] = await Promise.all([
     import("../auto-reply/continuation/work-store.js"),
     import("../auto-reply/continuation/delegate-store.js"),
     import("./subagent-registry-runtime.js"),
   ]);
+  const failedPostCompactionDelegates = failStagedPostCompactionDelegatesForCleanup(
+    params.childSessionKey,
+    "Post-compaction delegate was staged by a delete-mode child session during cleanup; the completed child will not receive a future compaction seam.",
+  );
+  if (failedPostCompactionDelegates > 0) {
+    log.warn(
+      `[subagent-session-cleanup-post-compaction-delegates-dropped] child=${params.childSessionKey} count=${failedPostCompactionDelegates}`,
+    );
+  }
+
   // A continuation_work TaskFlow, an in-flight continuation delegate, or an
   // accepted child run that still uses this session as requester owns
   // same-session re-entry. Keep the child session entry until they drain, then

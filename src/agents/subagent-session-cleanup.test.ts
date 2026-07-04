@@ -7,6 +7,7 @@ import {
 
 const hasLiveOrRecentlyDispatchedContinuationWorkMock = vi.hoisted(() => vi.fn(() => false));
 const hasRecoverablePendingDelegateMock = vi.hoisted(() => vi.fn(() => false));
+const failStagedPostCompactionDelegatesForCleanupMock = vi.hoisted(() => vi.fn(() => 0));
 const countActiveDescendantRunsMock = vi.hoisted(() => vi.fn(() => 0));
 const logWarnMock = vi.hoisted(() => vi.fn());
 
@@ -21,6 +22,7 @@ vi.mock("../auto-reply/continuation/work-store.js", () => ({
 }));
 
 vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
+  failStagedPostCompactionDelegatesForCleanup: failStagedPostCompactionDelegatesForCleanupMock,
   hasRecoverablePendingDelegate: hasRecoverablePendingDelegateMock,
 }));
 
@@ -34,6 +36,7 @@ describe("deleteSubagentSessionForCleanup", () => {
     resetSubagentSessionCleanupForTests();
     hasLiveOrRecentlyDispatchedContinuationWorkMock.mockReset().mockReturnValue(false);
     hasRecoverablePendingDelegateMock.mockReset().mockReturnValue(false);
+    failStagedPostCompactionDelegatesForCleanupMock.mockReset().mockReturnValue(0);
     countActiveDescendantRunsMock.mockReset().mockReturnValue(0);
     logWarnMock.mockReset();
   });
@@ -85,6 +88,41 @@ describe("deleteSubagentSessionForCleanup", () => {
     expect(callGateway).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5_000);
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:post-compaction-owner",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("drops post-compaction rows owned by completed delete-mode children before cleanup gating", async () => {
+    const callGateway = vi.fn(async function mockCallGateway<T = Record<string, unknown>>(
+      _opts: CallGatewayOptions,
+    ): Promise<T> {
+      return { ok: true } as T;
+    }) as typeof defaultCallGateway;
+    failStagedPostCompactionDelegatesForCleanupMock.mockReturnValueOnce(1);
+    hasRecoverablePendingDelegateMock.mockReturnValue(false);
+
+    await deleteSubagentSessionForCleanup({
+      callGateway,
+      childSessionKey: "agent:main:subagent:post-compaction-owner",
+    });
+
+    expect(failStagedPostCompactionDelegatesForCleanupMock).toHaveBeenCalledWith(
+      "agent:main:subagent:post-compaction-owner",
+      expect.stringContaining("will not receive a future compaction seam"),
+    );
+    expect(hasRecoverablePendingDelegateMock).toHaveBeenCalledWith(
+      "agent:main:subagent:post-compaction-owner",
+    );
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("[subagent-session-cleanup-post-compaction-delegates-dropped]"),
+    );
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
