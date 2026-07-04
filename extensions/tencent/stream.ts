@@ -24,6 +24,8 @@ const TENCENT_REASONING_EFFORT_MAP: Readonly<Record<string, string>> = Object.fr
   xhigh: "high",
 });
 
+const TOKENHUB_HY3_PREVIEW_REASONING_EFFORTS = new Set(["none", "low", "high"]);
+
 function resolveRequestedEffort(
   thinkingLevel: OpenAICompatibleThinkingLevel,
   options: StreamOptions,
@@ -41,14 +43,16 @@ function mapEffortForTencent(model: StreamModel, effort: string | undefined): st
   if (!effort) {
     return undefined;
   }
-  // TokenHub hy3-preview advertises low reasoning; mapping it to none would
-  // silently discard the user-selected preview effort.
   if (
     (model as { provider?: unknown }).provider === TOKENHUB_PROVIDER_ID &&
-    (model as { id?: unknown }).id === "hy3-preview" &&
-    effort === "low"
+    (model as { id?: unknown }).id === "hy3-preview"
   ) {
-    return "low";
+    if (effort === "off") {
+      return "none";
+    }
+    // Preview supports low directly. Leave unsupported requests to the shared
+    // model fallback that already normalized the underlying payload.
+    return TOKENHUB_HY3_PREVIEW_REASONING_EFFORTS.has(effort) ? effort : undefined;
   }
   return TENCENT_REASONING_EFFORT_MAP[effort];
 }

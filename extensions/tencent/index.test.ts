@@ -34,6 +34,7 @@ function hyReasoningModel(params: {
   provider: "tencent-tokenhub" | "tencent-tokenplan";
   id: "hy3" | "hy3-preview";
   baseUrl: string;
+  supportedReasoningEfforts?: string[];
 }): OpenAICompletionsModel {
   return {
     provider: params.provider,
@@ -49,7 +50,7 @@ function hyReasoningModel(params: {
     compat: {
       supportsUsageInStreaming: true,
       supportsReasoningEffort: true,
-      supportedReasoningEfforts: ["none", "high"],
+      supportedReasoningEfforts: params.supportedReasoningEfforts ?? ["none", "high"],
     },
   } as OpenAICompletionsModel;
 }
@@ -60,8 +61,8 @@ function captureTencentPayload(params: {
   reasoning: string;
 }) {
   let captured: Record<string, unknown> | undefined;
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    const payload = { reasoning_effort: "high" };
+  const baseStreamFn: StreamFn = (_model, context, options) => {
+    const payload = buildOpenAICompletionsParams(_model as OpenAICompletionsModel, context, options);
     options?.onPayload?.(payload, _model);
     captured = payload;
     return {} as ReturnType<StreamFn>;
@@ -214,6 +215,7 @@ describe("tencent provider plugin", () => {
       provider: "tencent-tokenhub",
       id: "hy3-preview",
       baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      supportedReasoningEfforts: ["none", "low", "high"],
     });
     const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } as Context;
 
@@ -228,6 +230,7 @@ describe("tencent provider plugin", () => {
       provider: "tencent-tokenhub",
       id: "hy3-preview",
       baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      supportedReasoningEfforts: ["none", "low", "high"],
     });
 
     const payload = captureTencentPayload({
@@ -237,5 +240,52 @@ describe("tencent provider plugin", () => {
     });
 
     expect(payload?.reasoning_effort).toBe("low");
+  });
+
+  it("keeps TokenHub hy3 explicit high and none reasoning_effort unchanged", async () => {
+    const provider = await getTokenHubProvider();
+    const model = hyReasoningModel({
+      provider: "tencent-tokenhub",
+      id: "hy3",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+    });
+
+    const highPayload = captureTencentPayload({
+      provider,
+      model,
+      reasoning: "high",
+    });
+    const nonePayload = captureTencentPayload({
+      provider,
+      model,
+      reasoning: "none",
+    });
+
+    expect(highPayload?.reasoning_effort).toBe("high");
+    expect(nonePayload?.reasoning_effort).toBe("none");
+  });
+
+  it("keeps TokenHub hy3-preview unsupported efforts on the model fallback path", async () => {
+    const provider = await getTokenHubProvider();
+    const model = hyReasoningModel({
+      provider: "tencent-tokenhub",
+      id: "hy3-preview",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      supportedReasoningEfforts: ["none", "low", "high"],
+    });
+
+    const minimalPayload = captureTencentPayload({
+      provider,
+      model,
+      reasoning: "minimal",
+    });
+    const mediumPayload = captureTencentPayload({
+      provider,
+      model,
+      reasoning: "medium",
+    });
+
+    expect(minimalPayload?.reasoning_effort).toBe("low");
+    expect(mediumPayload?.reasoning_effort).toBe("low");
   });
 });
