@@ -257,7 +257,9 @@ describe("qa scenario catalog", () => {
     const scenarioLanes = [
       ["openai-compatible-chat-tools", "openai-chat-tools"],
       ["openai-web-search-minimal", "openai-web-search-minimal"],
+      ["openai-web-search-native-assertions", "openai-web-search-minimal"],
       ["openwebui-openai-compatible", "openwebui"],
+      ["plugin-lifecycle-probe", "plugin-lifecycle-matrix"],
       ["packaged-bundled-plugin-install-uninstall", "bundled-plugin-install-uninstall"],
     ] as const;
 
@@ -269,23 +271,6 @@ describe("qa scenario catalog", () => {
       }
       expect(execution.path).toBe("test/e2e/qa-lab/runtime/docker-e2e-lane.ts");
       expect(execution.args).toStrictEqual(["--lane", lane]);
-    }
-  });
-
-  it("keeps smoke-linked Docker assertions on focused Vitest evidence", () => {
-    const scenarioFiles = [
-      [
-        "openai-web-search-native-assertions",
-        "test/e2e/qa-lab/runtime/openai-web-search-minimal-assertions.e2e.test.ts",
-      ],
-      ["plugin-lifecycle-probe", "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts"],
-    ] as const;
-
-    for (const [scenarioId, testPath] of scenarioFiles) {
-      expect(readQaScenarioById(scenarioId).execution).toMatchObject({
-        kind: "vitest",
-        path: testPath,
-      });
     }
   });
 
