@@ -148,4 +148,89 @@ describe("ClickClack HTTP client", () => {
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
   });
+
+  it("POSTs durable activity rows with kind and turn_id", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ message: { id: "msg_9" } }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    const message = await client.createActivityMessage({
+      channelId: "chn_1",
+      body: "ran bash",
+      kind: "agent_tool",
+      turnId: "t1",
+    });
+
+    expect(message.id).toBe("msg_9");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/channels/chn_1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      body: "ran bash",
+      kind: "agent_tool",
+      turn_id: "t1",
+    });
+  });
+
+  it("routes DM activity rows through the conversation create path", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: { id: "msg_10" } }), {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.createActivityMessage({
+      conversationId: "dcn_1",
+      body: "thinking about it",
+      kind: "agent_commentary",
+      turnId: "t1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/dms/dcn_1/messages",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("PATCHes message bodies for activity row coalescing", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ message: { id: "msg_9", body: "longer" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.updateMessageBody("msg_9", "longer");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/messages/msg_9",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(JSON.parse(String(init?.body))).toEqual({ body: "longer" });
+  });
 });

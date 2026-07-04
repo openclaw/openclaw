@@ -88,6 +88,7 @@ function createAgentAccount(
     defaultTo: "channel:general",
     allowFrom: ["*"],
     reconnectMs: 1_500,
+    agentActivity: false,
     config: {
       allowFrom: ["*"],
     },
@@ -151,6 +152,7 @@ describe("handleClickClackInbound", () => {
       defaultTo: "channel:general",
       allowFrom: ["*"],
       reconnectMs: 1_500,
+      agentActivity: false,
       config: {},
     } satisfies ResolvedClickClackAccount;
 
@@ -249,6 +251,46 @@ describe("handleClickClackInbound", () => {
         })
       | undefined;
     expect(dispatchParams?.toolsAllow).toEqual(["message"]);
+  });
+
+  it("wires durable activity reply options only when the account opts in", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount(),
+      config: cfg,
+      message: createMessage(),
+    });
+    await handleClickClackInbound({
+      account: createAgentAccount({ agentActivity: true }),
+      config: cfg,
+      message: createMessage({ id: "msg_2" }),
+    });
+
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply).toHaveBeenCalledTimes(2);
+    const withoutOptIn = dispatchReply.mock.calls[0]?.[0] as { replyOptions?: unknown };
+    const withOptIn = dispatchReply.mock.calls[1]?.[0] as {
+      replyOptions?: {
+        onItemEvent?: unknown;
+        commentaryProgressEnabled?: unknown;
+        suppressDefaultToolProgressMessages?: unknown;
+      };
+    };
+    expect(withoutOptIn.replyOptions).toBeUndefined();
+    expect(withOptIn.replyOptions?.commentaryProgressEnabled).toBe(true);
+    // Channel-owned progress rendering: item events must flow even when
+    // session verbose mode is off.
+    expect(withOptIn.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(typeof withOptIn.replyOptions?.onItemEvent).toBe("function");
   });
 
   it("accepts ClickClack DM target syntax in allowFrom", async () => {

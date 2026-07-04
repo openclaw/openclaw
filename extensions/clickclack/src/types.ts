@@ -20,6 +20,8 @@ export type ClickClackAccountConfig = {
   defaultTo?: string;
   allowFrom?: string[];
   reconnectMs?: number;
+  /** Opt-in: publish durable agent activity (commentary + tool) rows. */
+  agentActivity?: boolean;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
@@ -54,6 +56,7 @@ export type ResolvedClickClackAccount = {
   defaultTo: string;
   allowFrom: string[];
   reconnectMs: number;
+  agentActivity: boolean;
   config: ClickClackAccountConfig;
 };
 

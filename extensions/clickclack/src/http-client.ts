@@ -115,6 +115,35 @@ export function createClickClackClient(options: ClientOptions) {
       });
       return data.conversation;
     },
+    /**
+     * POSTs a durable agent activity row (agent_commentary / agent_tool)
+     * through the normal message create path. Requires a bot token carrying
+     * the agent_activity:write scope on the ClickClack side.
+     */
+    createActivityMessage: async (params: {
+      channelId?: string;
+      conversationId?: string;
+      body: string;
+      kind: "agent_commentary" | "agent_tool";
+      turnId?: string;
+    }): Promise<ClickClackMessage> => {
+      const path = params.channelId
+        ? `/api/channels/${encodeURIComponent(params.channelId)}/messages`
+        : `/api/dms/${encodeURIComponent(params.conversationId ?? "")}/messages`;
+      const data = await request<{ message: ClickClackMessage }>(path, {
+        method: "POST",
+        body: JSON.stringify({ body: params.body, kind: params.kind, turn_id: params.turnId }),
+      });
+      return data.message;
+    },
+    /** PATCHes the body of an existing message (activity row coalescing). */
+    updateMessageBody: async (messageId: string, body: string): Promise<ClickClackMessage> => {
+      const data = await request<{ message: ClickClackMessage }>(
+        `/api/messages/${encodeURIComponent(messageId)}`,
+        { method: "PATCH", body: JSON.stringify({ body }) },
+      );
+      return data.message;
+    },
     createDirectMessage: async (
       conversationId: string,
       body: string,

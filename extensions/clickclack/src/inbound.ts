@@ -4,6 +4,8 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
+import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
+import { createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -125,6 +127,28 @@ export async function handleClickClackInbound(params: {
     });
     return;
   }
+  // Durable activity rows (streamed commentary + tool progress) are a
+  // per-account opt-in: they need a ClickClack bot token carrying the
+  // agent_activity:write scope. Publishing is best-effort and must never
+  // break final text delivery.
+  let activity: ClickClackActivityPublisher | undefined;
+  if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
+    activity = createClickClackActivityPublisher({
+      client: createClickClackClient({
+        baseUrl: params.account.baseUrl,
+        token: params.account.token,
+      }),
+      target: message.channel_id
+        ? { channelId: message.channel_id }
+        : { conversationId: message.direct_conversation_id },
+      turnId: message.id,
+      onError: (error) => {
+        runtime.logging
+          .getChildLogger({ plugin: "clickclack", feature: "agent-activity" })
+          .warn(`clickclack activity publish failed: ${String(error)}`);
+      },
+    });
+  }
   const senderName = message.author?.display_name || message.author_id;
   const previousTimestamp = runtime.channel.session.readSessionUpdatedAt({
     storePath: runtime.channel.session.resolveStorePath(params.config.session?.store, {
@@ -173,7 +197,7 @@ export async function handleClickClackInbound(params: {
     OriginatingTo: target,
     CommandAuthorized: access.commandAuthorized,
   });
-  await runtime.channel.inbound.dispatchReply({
+  const dispatchPromise = runtime.channel.inbound.dispatchReply({
     cfg: params.config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
@@ -185,6 +209,16 @@ export async function handleClickClackInbound(params: {
     dispatchReplyWithBufferedBlockDispatcher:
       runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     toolsAllow: params.account.toolsAllow,
+    replyOptions: activity
+      ? {
+          onItemEvent: activity.onItemEvent,
+          commentaryProgressEnabled: true,
+          // The durable activity rows are ClickClack's own progress
+          // rendering, so item events must flow even when session verbose
+          // mode is off and the default tool-progress texts stay suppressed.
+          suppressDefaultToolProgressMessages: true,
+        }
+      : undefined,
     delivery: {
       deliver: async (payload) => {
         const text =
@@ -218,4 +252,9 @@ export async function handleClickClackInbound(params: {
       },
     },
   });
+  try {
+    await dispatchPromise;
+  } finally {
+    await activity?.finalize();
+  }
 }
