@@ -15,20 +15,25 @@ struct GatewayTrustPromptAlert: ViewModifier {
                 }),
             presenting: self.gatewayController.pendingTrustPrompt)
         { _ in
-            Button("Cancel", role: .cancel) {
+            Button(role: .cancel) {
                 self.gatewayController.declinePendingTrustPrompt()
+            } label: {
+                Text("Cancel")
+                    .font(OpenClawType.subheadSemiBold)
             }
-            Button("Trust and connect") {
+            Button {
                 Task { await self.gatewayController.acceptPendingTrustPrompt() }
+            } label: {
+                Text("Trust and connect")
+                    .font(OpenClawType.subheadSemiBold)
             }
         } message: { prompt in
-            Text(
-                """
-                First-time TLS connection.
-
-                Verify this SHA-256 fingerprint out-of-band before trusting:
-                \(prompt.fingerprintSha256)
-                """)
+            Text(String(
+                format: NSLocalizedString(
+                    "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n%@",
+                    comment: "Gateway certificate trust instructions"),
+                prompt.fingerprintSha256))
+                .font(OpenClawType.subhead)
         }
     }
 }

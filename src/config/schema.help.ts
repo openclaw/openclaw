@@ -92,6 +92,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+  "gateway.terminal":
+    "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
+  "gateway.terminal.enabled":
+    "Enables the operator terminal for admin-scope clients when true (default). Disable to remove the browser/mobile shell surface entirely; an authenticated admin operator can already drive host commands, so treat this as a convenience-versus-exposure trade-off. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
+  "gateway.terminal.shell":
+    "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
@@ -166,6 +172,8 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "gateway.remote.sshHostKeyPolicy":
+    'macOS SSH host-key verification policy. "strict" requires an already trusted host key; "openssh" explicitly delegates to effective OpenSSH configuration.',
   "talk.provider": 'Active Talk provider id (for example "acme-speech").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
@@ -567,11 +575,11 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.push":
     "Push-delivery settings used by the gateway when it needs to wake or notify paired devices. Configure relay-backed APNs here for official iOS builds; direct APNs auth remains env-based for local/manual builds.",
   "gateway.push.apns":
-    "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official/TestFlight builds that register through the external push relay.",
+    "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official App Store builds that register through the external push relay.",
   "gateway.push.apns.relay":
     "External relay settings for relay-backed APNs sends. The gateway uses the hosted OpenClaw relay by default, or this custom relay for push.test, wake nudges, and reconnect wakes after a paired official iOS build publishes a relay-backed registration.",
   "gateway.push.apns.relay.baseUrl":
-    "Optional custom base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
+    "Optional custom base HTTPS URL for the external APNs relay service used by official App Store iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
   "gateway.push.apns.relay.timeoutMs":
     "Timeout in milliseconds for relay send requests from the gateway to the APNs relay (default: 10000). Increase for slower relays or networks, or lower to fail wake attempts faster.",
   "gateway.http.endpoints.chatCompletions.enabled":
@@ -1989,7 +1997,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.statusReactions":
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
-    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram and WhatsApp require this to be true before lifecycle reactions are used.",
+    "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used.",
   "messages.statusReactions.emojis":
     "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.statusReactions.timing":

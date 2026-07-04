@@ -15,6 +15,8 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   abortTrackedChatRunById,
   type ChatAbortControllerEntry,
+  isChatAbortControllerEntryAbortable,
+  removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
 import {
@@ -406,10 +408,13 @@ async function markActiveRunsForRestartRecovery(
 function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
   let aborted = 0;
   for (const [runId, entry] of listUnabortedRestartRuns(params.chatAbortControllers)) {
+    if (!isChatAbortControllerEntryAbortable(entry)) {
+      continue;
+    }
     if (entry.projectSessionActive === false) {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
-      params.chatAbortControllers.delete(runId);
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
       params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);

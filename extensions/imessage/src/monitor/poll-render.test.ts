@@ -14,6 +14,10 @@ describe("renderIMessagePollBody", () => {
     expect(out).toContain("Favorite color?");
     expect(out).toContain("1) Red");
     expect(out).toContain("2) Blue");
+    // Must cue the vote action so the agent votes instead of replying in prose;
+    // the 📊 Poll prefix matches agents' vote-instruction trigger.
+    expect(out).toContain("poll-vote");
+    expect(out).toContain("\u{1F4CA} Poll");
   });
 
   it("folds in vote tallies", () => {

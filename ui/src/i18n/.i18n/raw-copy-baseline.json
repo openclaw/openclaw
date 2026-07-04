@@ -307,6 +307,13 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Faster"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/session-controls.ts",
       "text": "Model"
     },
     {
@@ -315,6 +322,13 @@
       "name": "text",
       "path": "ui/src/ui/chat/session-controls.ts",
       "text": "Reasoning"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/session-controls.ts",
+      "text": "Smarter"
     },
     {
       "count": 1,

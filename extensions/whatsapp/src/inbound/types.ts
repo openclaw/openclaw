@@ -207,6 +207,10 @@ type WebInboundCallbackMessageCommon = {
   quote?: WhatsAppInboundQuote;
   group?: WhatsAppInboundGroupContext;
   wasMentioned?: boolean;
+  groupMention?: {
+    wasMentioned: boolean;
+    requireMention: boolean;
+  };
 };
 
 type WebInboundCallbackAdmissionFields =

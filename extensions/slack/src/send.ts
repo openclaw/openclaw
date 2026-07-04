@@ -114,6 +114,8 @@ type SlackSendOpts = {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  /** Persist each concrete platform send before any later chunk can fail. */
+  onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
 };
 
 type SlackWebApiErrorData = {
@@ -773,6 +775,10 @@ async function sendMessageSlackQueuedInner(params: {
         accountId: account.accountId,
         token,
       });
+  const reportDelivery = async (result: SlackSendResult) => {
+    await opts.onDeliveryResult?.(result);
+    return result;
+  };
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
@@ -796,7 +802,7 @@ async function sendMessageSlackQueuedInner(params: {
     const deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
     const deliveredThreadTs =
       resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs);
-    return {
+    return await reportDelivery({
       messageId,
       channelId: deliveredChannelId,
       threadTs: deliveredThreadTs,
@@ -806,7 +812,7 @@ async function sendMessageSlackQueuedInner(params: {
         kind: "card",
         threadTs: deliveredThreadTs,
       }),
-    };
+    });
   }
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
     fallbackLimit: SLACK_TEXT_LIMIT,
@@ -852,6 +858,17 @@ async function sendMessageSlackQueuedInner(params: {
       maxBytes: mediaMaxBytes,
     });
     sentMessageIds.push(lastMessageId);
+    await reportDelivery({
+      messageId: lastMessageId,
+      channelId,
+      threadTs: normalizeSlackThreadTsCandidate(opts.threadTs),
+      receipt: createSlackSendReceipt({
+        platformMessageIds: [lastMessageId],
+        channelId,
+        kind: "media",
+        threadTs: normalizeSlackThreadTsCandidate(opts.threadTs),
+      }),
+    });
     chunksToPost = rest;
   } else {
     chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
@@ -873,6 +890,20 @@ async function sendMessageSlackQueuedInner(params: {
     canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
     if (response.ts) {
       sentMessageIds.push(response.ts);
+      await reportDelivery({
+        messageId: response.ts,
+        channelId: deliveredChannelId,
+        threadTs:
+          resolvePostedMessageThreadTs(response) ?? normalizeSlackThreadTsCandidate(opts.threadTs),
+        receipt: createSlackSendReceipt({
+          platformMessageIds: [response.ts],
+          channelId: deliveredChannelId,
+          kind: "text",
+          threadTs:
+            resolvePostedMessageThreadTs(response) ??
+            normalizeSlackThreadTsCandidate(opts.threadTs),
+        }),
+      });
     }
   }
 

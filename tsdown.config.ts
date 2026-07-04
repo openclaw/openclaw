@@ -387,6 +387,7 @@ function buildNetPolicyDistEntries(): Record<string, string> {
     ip: "packages/net-policy/src/ip.ts",
     ipv4: "packages/net-policy/src/ipv4.ts",
     "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-protocol": "packages/net-policy/src/url-protocol.ts",
     "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
   };
 }
@@ -434,6 +435,7 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
 function buildNormalizationCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/normalization-core/src/index.ts",
+    "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
     "number-coercion": "packages/normalization-core/src/number-coercion.ts",
     "record-coerce": "packages/normalization-core/src/record-coerce.ts",
     "string-coerce": "packages/normalization-core/src/string-coerce.ts",
@@ -453,7 +455,6 @@ function buildMediaCoreDistEntries(): Record<string, string> {
     "media-source-url": "packages/media-core/src/media-source-url.ts",
     mime: "packages/media-core/src/mime.ts",
     "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-    "read-response-with-limit": "packages/media-core/src/read-response-with-limit.ts",
   };
 }
 

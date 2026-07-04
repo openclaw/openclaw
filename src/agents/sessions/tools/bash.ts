@@ -304,6 +304,7 @@ export function createBashToolDefinition(
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
       const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
+      let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
       let updateDirty = false;
       let lastUpdateAt = 0;
@@ -353,11 +354,15 @@ export function createBashToolDefinition(
       }
 
       const handleData = (data: Buffer) => {
+        if (!acceptingOutput) {
+          return;
+        }
         output.append(data);
         scheduleOutputUpdate();
       };
 
       const finishOutput = async () => {
+        acceptingOutput = false;
         output.finish();
         clearUpdateTimer();
         emitOutputUpdate();

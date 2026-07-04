@@ -19,6 +19,24 @@ struct GatewayProblemPrimaryActionTests {
         #expect(title == "Update app")
     }
 
+    @Test func `reset-suggesting problem uses reset title when provided`() {
+        let problem = GatewayConnectionProblem(
+            kind: .gatewayAuthTokenMismatch,
+            owner: .iphone,
+            title: "Stored gateway token rejected",
+            message: "Reset onboarding to pair again.",
+            retryable: false,
+            pauseReconnect: true)
+
+        let title = GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry",
+            resetTitle: "Reset onboarding",
+            nonRetryableTitle: "Open Settings")
+
+        #expect(title == "Reset onboarding")
+    }
+
     @Test func `retryable problem uses mapped action label`() {
         let problem = GatewayConnectionProblem(
             kind: .timeout,

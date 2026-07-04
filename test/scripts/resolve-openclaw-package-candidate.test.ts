@@ -219,7 +219,14 @@ describe("resolve-openclaw-package-candidate", () => {
       ["--package-sha256", [...requiredArgs, "--package-sha256", "", "--package-sha256", "abc123"]],
       [
         "--source",
-        ["--source", "npm", "--source", "artifact", "--output-dir", ".artifacts/docker-e2e-package"],
+        [
+          "--source",
+          "npm",
+          "--source",
+          "artifact",
+          "--output-dir",
+          ".artifacts/docker-e2e-package",
+        ],
       ],
       [
         "--trusted-source-id",
@@ -227,7 +234,13 @@ describe("resolve-openclaw-package-candidate", () => {
       ],
       [
         "--trusted-source-policy",
-        [...requiredArgs, "--trusted-source-policy", "one.json", "--trusted-source-policy", "two.json"],
+        [
+          ...requiredArgs,
+          "--trusted-source-policy",
+          "one.json",
+          "--trusted-source-policy",
+          "two.json",
+        ],
       ],
     ] satisfies Array<[string, string[]]>;
 
@@ -616,8 +629,12 @@ describe("resolve-openclaw-package-candidate", () => {
         "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
         "setInterval(() => {}, 1000);",
       ].join("");
+      // Accelerate only the module-level 5s forwarded-signal failsafe in this disposable runner.
       const runnerScript = [
-        `import { runCommandForTest } from ${JSON.stringify(scriptUrl)};`,
+        "const realSetTimeout = globalThis.setTimeout;",
+        "globalThis.setTimeout = (callback, delay, ...args) =>",
+        "  realSetTimeout(callback, delay === 5000 ? 25 : delay, ...args);",
+        `const { runCommandForTest } = await import(${JSON.stringify(scriptUrl)});`,
         `await runCommandForTest(process.execPath, ['-e', ${JSON.stringify(parentScript)}], { timeoutMs: 60000 });`,
       ].join("\n");
       const runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
@@ -1336,8 +1353,17 @@ describe("resolve-openclaw-package-candidate", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
     tempDirs.push(dir);
 
-    for (let index = 0; index <= ARTIFACT_TARBALL_SCAN_MAX_ENTRIES; index += 1) {
-      await writeFile(path.join(dir, `not-a-package-${index}.txt`), "x");
+    // Keep the real 10,001-entry proof while avoiding serial filesystem setup.
+    const indexes = Array.from(
+      { length: ARTIFACT_TARBALL_SCAN_MAX_ENTRIES + 1 },
+      (_, index) => index,
+    );
+    for (let start = 0; start < indexes.length; start += 128) {
+      await Promise.all(
+        indexes
+          .slice(start, start + 128)
+          .map((index) => writeFile(path.join(dir, `not-a-package-${index}.txt`), "x")),
+      );
     }
 
     await expect(findSingleTarballForTest(dir)).rejects.toThrow(

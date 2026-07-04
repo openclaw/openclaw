@@ -201,6 +201,49 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(usage?.total).toBe(200);
   });
 
+  it("uses current-attempt usage when the persisted assistant snapshot is zeroed", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1", "Response 2"],
+        lastAssistant: makeAssistantMessage({
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+          } as unknown as AssistantMessage["usage"],
+        }),
+        currentAttemptAssistant: makeAssistantMessage({
+          usage: { input: 150, output: 50, total: 200 } as unknown as AssistantMessage["usage"],
+        }),
+        attemptUsage: { input: 250, output: 100, total: 350 },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-zeroed-persisted-usage",
+    });
+
+    expect(result.meta.agentMeta?.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 200,
+    });
+    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
+      input: 150,
+      output: 50,
+      total: 200,
+    });
+    expect(result.meta.agentMeta?.promptTokens).toBe(150);
+  });
+
   it("reports the resolved model provider when OpenClaw marks the assistant message as the native runtime", async () => {
     mockedResolveModelAsync.mockResolvedValueOnce({
       model: {

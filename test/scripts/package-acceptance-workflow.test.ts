@@ -378,7 +378,7 @@ describe("package acceptance workflow", () => {
     );
   });
 
-  it("keeps default Crabbox capacity on the Azure credit-backed lane", () => {
+  it("defaults Crabbox proof to Blacksmith while keeping direct jobs on Azure", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       aws?: { region?: string };
       capacity?: {
@@ -388,22 +388,30 @@ describe("package acceptance workflow", () => {
         regions?: string[];
       };
       jobs?: {
-        changed?: { command?: string; market?: string; shell?: boolean; type?: string };
-        prewarm?: { market?: string; type?: string };
+        changed?: {
+          command?: string;
+          market?: string;
+          provider?: string;
+          shell?: boolean;
+          type?: string;
+        };
+        prewarm?: { market?: string; provider?: string; type?: string };
       };
       provider?: string;
       ssh?: { port?: string; user?: string };
     };
 
-    expect(crabboxConfig.provider).toBe("azure");
+    expect(crabboxConfig.provider).toBe("blacksmith-testbox");
     expect(crabboxConfig.capacity?.market).toBe("on-demand");
     expect(crabboxConfig.capacity?.fallback).toBeUndefined();
     expect(crabboxConfig.capacity?.regions).toBeUndefined();
     expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
     expect(crabboxConfig.aws?.region).toBe("eu-west-1");
     expect(crabboxConfig.jobs?.prewarm?.market).toBe("on-demand");
+    expect(crabboxConfig.jobs?.prewarm?.provider).toBe("azure");
     expect(crabboxConfig.jobs?.prewarm?.type).toBe("Standard_D4ads_v6");
     expect(crabboxConfig.jobs?.changed?.market).toBe("on-demand");
+    expect(crabboxConfig.jobs?.changed?.provider).toBe("azure");
     expect(crabboxConfig.jobs?.changed?.type).toBe("Standard_D4ads_v6");
     expect(crabboxConfig.jobs?.changed?.shell).toBe(true);
     expect(crabboxConfig.jobs?.changed?.command).toContain("set -euo pipefail");
@@ -541,7 +549,7 @@ describe("package acceptance workflow", () => {
     );
     expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
     expect(workflow).toContain(
-      '[[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
+      '[[ ( "$CHILD_WORKFLOW_REF" == release-ci/* || "$CHILD_WORKFLOW_REF" =~ ^extended-stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33$ ) && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
     );
     expect(workflow).toContain(
       'gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"',
@@ -561,7 +569,7 @@ describe("package acceptance workflow", () => {
     );
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
-      "Dispatch Full Release Validation from a ref pinned to the target SHA",
+      "Dispatch Full Release Validation from a release-ci or extended-stable ref pinned to the target SHA",
     );
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
@@ -2140,7 +2148,7 @@ describe("package artifact reuse", () => {
       "uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
     );
     expect(clawHubWorkflow).toContain(
-      "family: ${{ contains(fromJson('[\"@openclaw/acpx\",\"@openclaw/diffs\",\"@openclaw/feishu\",\"@openclaw/qqbot\"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}",
+      'family: ${{ contains(fromJson(\'["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]\'), matrix.plugin.packageName) && \'bundle-plugin\' || \'\' }}',
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");

@@ -1,18 +1,22 @@
 // Normalizes env flag values and logs env warnings lazily.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 
 let log: SubsystemLogger | null = null;
-let logPromise: Promise<SubsystemLogger> | null = null;
+const loadLog = createLazyPromise(
+  () =>
+    import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
+      createSubsystemLogger("env"),
+    ),
+  { cacheRejections: true },
+);
 const loggedEnv = new Set<string>();
 const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
 
 async function getLog(): Promise<SubsystemLogger> {
   if (!log) {
-    logPromise ??= import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
-      createSubsystemLogger("env"),
-    );
-    log = await logPromise;
+    log = await loadLog();
   }
   return log;
 }

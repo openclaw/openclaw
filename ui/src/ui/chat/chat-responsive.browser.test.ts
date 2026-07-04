@@ -1,10 +1,13 @@
 // Control UI tests cover chat responsive behavior.
 import { chromium, type Browser, type Page } from "playwright";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
+  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
+  startControlUiE2eServer,
+  type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
@@ -23,12 +26,16 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 const pageBrowsers = new WeakMap<Page, Browser>();
+let realChatServer: ControlUiE2eServer | null = null;
 
 type ControlRect = {
   x: number;
   y: number;
   width: number;
   height: number;
+  clientHeight?: number;
+  scrollHeight?: number;
+  scrollTop?: number;
   text?: string;
   display?: string;
 };
@@ -183,7 +190,14 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
+function chatHtml(
+  opts: {
+    composerAttachment?: boolean;
+    sideResult?: boolean;
+    singleAgent?: boolean;
+    slashMenu?: boolean;
+  } = {},
+) {
   return `
     <div class="shell shell--chat" data-chat-responsive-fixture>
       <header class="topbar">
@@ -235,6 +249,43 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
               : ""
           }
           <div class="agent-chat__input">
+            ${
+              opts.slashMenu
+                ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
+                    <div class="slash-menu-group">
+                      <div class="slash-menu-group__label">Commands</div>
+                      <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
+                        <span class="slash-menu-icon">${iconSvg()}</span>
+                        <span class="slash-menu-name">/plan</span>
+                        <span class="slash-menu-desc">Create a plan</span>
+                      </div>
+                      <div class="slash-menu-item" role="option">
+                        <span class="slash-menu-icon">${iconSvg()}</span>
+                        <span class="slash-menu-name">/review</span>
+                        <span class="slash-menu-desc">Review changes</span>
+                      </div>
+                      <div class="slash-menu-item" role="option">
+                        <span class="slash-menu-icon">${iconSvg()}</span>
+                        <span class="slash-menu-name">/fix</span>
+                        <span class="slash-menu-desc">Fix current issue</span>
+                      </div>
+                    </div>
+                  </div>`
+                : ""
+            }
+            ${
+              opts.composerAttachment
+                ? `<div class="chat-attachments-preview">
+                    <div class="chat-attachment-thumb chat-attachment-thumb--file">
+                      <div class="chat-attachment-file">
+                        <span class="chat-attachment-file__icon">${iconSvg()}</span>
+                        <span class="chat-attachment-file__name">landscape-proof-attachment.txt</span>
+                      </div>
+                      <button class="chat-attachment-remove" type="button" aria-label="Remove attachment">&times;</button>
+                    </div>
+                  </div>`
+                : ""
+            }
             <div class="agent-chat__composer-combobox">
               <textarea rows="1">Queued follow-up for the active operator session</textarea>
             </div>
@@ -260,7 +311,12 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
 async function openFixture(
   width: number,
   height: number,
-  opts: { sideResult?: boolean; singleAgent?: boolean } = {},
+  opts: {
+    composerAttachment?: boolean;
+    sideResult?: boolean;
+    singleAgent?: boolean;
+    slashMenu?: boolean;
+  } = {},
 ) {
   const page = await openBrowserPage(width, height);
   try {
@@ -366,6 +422,11 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 describeBrowserLayout("chat responsive browser layout", () => {
+  afterAll(async () => {
+    await realChatServer?.close();
+    realChatServer = null;
+  });
+
   it.each([
     [1120, 740],
     [1366, 900],
@@ -622,6 +683,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
           };
           return {
             input: rectFor(".agent-chat__input"),
+            thread: rectFor(".chat-thread"),
+            textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             left: rectFor(".agent-chat__toolbar-left"),
             model: rectFor(".chat-composer-model-control"),
             settings: rectFor(".chat-settings-chip"),
@@ -631,6 +694,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
         });
 
         const input = expectControlRect(controls.input, "composer");
+        const thread = expectControlRect(controls.thread, "chat thread");
+        const textarea = expectControlRect(controls.textarea, "composer textarea");
         const left = expectControlRect(controls.left, "composer left controls");
         const model = expectControlRect(controls.model, "composer model control");
         const settings = expectControlRect(controls.settings, "composer settings control");
@@ -647,11 +712,285 @@ describeBrowserLayout("chat responsive browser layout", () => {
         expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(settingsLabel.display).toBe("none");
+
+        if (width > height && height <= 500) {
+          expect(input.height).toBeLessThanOrEqual(height * 0.38);
+          expect(thread.height).toBeGreaterThanOrEqual(height * 0.4 - 1);
+          expect(textarea.height).toBeLessThanOrEqual(56);
+        }
       } finally {
         await closeBrowserPage(page);
       }
     },
   );
+
+  it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
+    const page = await openFixture(568, 320, { composerAttachment: true });
+    try {
+      await page
+        .locator(".agent-chat__composer-combobox > textarea")
+        .fill(
+          Array.from(
+            { length: 10 },
+            (_value, index) =>
+              `Landscape proof line ${index + 1}: keep transcript visible while this long draft scrolls inside the bounded composer.`,
+          ).join("\n"),
+        );
+
+      const initial = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const node = document.querySelector(selector) as HTMLElement | null;
+          if (!node) {
+            return null;
+          }
+          const rect = node.getBoundingClientRect();
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            clientHeight: node.clientHeight,
+            scrollHeight: node.scrollHeight,
+            scrollTop: node.scrollTop,
+          };
+        };
+        return {
+          input: rectFor(".agent-chat__input"),
+          thread: rectFor(".chat-thread"),
+          textarea: rectFor(".agent-chat__composer-combobox > textarea"),
+        };
+      });
+
+      const input = expectControlRect(initial.input, "composer");
+      const thread = expectControlRect(initial.thread, "chat thread");
+      const textarea = expectControlRect(initial.textarea, "composer textarea");
+      expect(input.height).toBeLessThanOrEqual(320 * 0.38);
+      expect(thread.height).toBeGreaterThanOrEqual(320 * 0.4 - 1);
+      if (
+        input.scrollHeight === undefined ||
+        input.clientHeight === undefined ||
+        textarea.scrollHeight === undefined ||
+        textarea.clientHeight === undefined
+      ) {
+        throw new Error("Expected scroll metrics for short-landscape composer");
+      }
+      expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
+      expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+
+      const scrolled = await page.evaluate(() => {
+        const composer = document.querySelector(".agent-chat__input") as HTMLElement | null;
+        if (composer) {
+          composer.scrollTop = composer.scrollHeight;
+        }
+        const rectFor = (selector: string) => {
+          const node = document.querySelector(selector) as HTMLElement | null;
+          if (!node) {
+            return null;
+          }
+          const rect = node.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        return {
+          input: rectFor(".agent-chat__input"),
+          left: rectFor(".agent-chat__toolbar-left"),
+          model: rectFor(".chat-composer-model-control"),
+          settings: rectFor(".chat-settings-chip"),
+          send: rectFor(".chat-send-btn"),
+        };
+      });
+
+      const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
+      for (const [label, control] of [
+        ["composer left controls", scrolled.left],
+        ["composer model control", scrolled.model],
+        ["composer settings control", scrolled.settings],
+        ["composer send control", scrolled.send],
+      ] as const) {
+        const rect = expectControlRect(control, label);
+        expect(rect.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
+        expect(rect.y + rect.height).toBeLessThanOrEqual(
+          scrolledInput.y + scrolledInput.height + 1,
+        );
+      }
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps short-landscape slash menu visible inside the bounded composer", async () => {
+    const page = await openFixture(568, 320, {
+      composerAttachment: true,
+      slashMenu: true,
+    });
+    try {
+      await page.locator(".agent-chat__composer-combobox > textarea").fill("/review");
+
+      const initial = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const node = document.querySelector(selector) as HTMLElement | null;
+          if (!node) {
+            return null;
+          }
+          const rect = node.getBoundingClientRect();
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            clientHeight: node.clientHeight,
+            scrollHeight: node.scrollHeight,
+            scrollTop: node.scrollTop,
+          };
+        };
+        return {
+          input: rectFor(".agent-chat__input"),
+          menu: rectFor(".slash-menu"),
+          textarea: rectFor(".agent-chat__composer-combobox > textarea"),
+          toolbar: rectFor(".agent-chat__toolbar"),
+        };
+      });
+
+      const input = expectControlRect(initial.input, "composer");
+      const menu = expectControlRect(initial.menu, "slash menu");
+      const textarea = expectControlRect(initial.textarea, "composer textarea");
+      expect(input.height).toBeLessThanOrEqual(320 * 0.38);
+      if (input.scrollHeight === undefined || input.clientHeight === undefined) {
+        throw new Error("Expected scroll metrics for slash-menu composer");
+      }
+      expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
+      expect(menu.y).toBeGreaterThanOrEqual(input.y - 1);
+      expect(menu.y + menu.height).toBeLessThanOrEqual(input.y + input.height + 1);
+      expect(menu.height).toBeGreaterThanOrEqual(48);
+      expect(menu.height).toBeLessThanOrEqual(89);
+      expect(textarea.y).toBeGreaterThan(menu.y);
+
+      const scrolled = await page.evaluate(() => {
+        const composer = document.querySelector(".agent-chat__input") as HTMLElement | null;
+        if (composer) {
+          composer.scrollTop = composer.scrollHeight;
+        }
+        const rectFor = (selector: string) => {
+          const node = document.querySelector(selector) as HTMLElement | null;
+          if (!node) {
+            return null;
+          }
+          const rect = node.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        return {
+          input: rectFor(".agent-chat__input"),
+          toolbar: rectFor(".agent-chat__toolbar"),
+        };
+      });
+
+      const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
+      const toolbar = expectControlRect(scrolled.toolbar, "composer toolbar");
+      expect(toolbar.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
+      expect(toolbar.y + toolbar.height).toBeLessThanOrEqual(
+        scrolledInput.y + scrolledInput.height + 1,
+      );
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("scrolls the keyboard-active slash option into view in short landscape", async () => {
+    realChatServer ??= await startControlUiE2eServer();
+    const page = await openBrowserPage(568, 320);
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [
+            {
+              text: "Short landscape slash command keyboard regression fixture.",
+              type: "text",
+            },
+          ],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+    try {
+      await page.goto(`${realChatServer.baseUrl}chat`);
+      await page
+        .getByText("Short landscape slash command keyboard regression fixture.")
+        .waitFor({ timeout: 10_000 });
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await textarea.fill("/");
+      await textarea.focus();
+
+      const initiallyHidden = await page.evaluate(() => {
+        const menu = document.querySelector<HTMLElement>(".slash-menu");
+        const options = Array.from(
+          document.querySelectorAll<HTMLElement>(".slash-menu-item[role='option']"),
+        );
+        const hiddenOption = options.find((option) => {
+          const menuRect = menu?.getBoundingClientRect();
+          const optionRect = option.getBoundingClientRect();
+          return Boolean(menuRect && optionRect.bottom > menuRect.bottom + 1);
+        });
+        if (!menu || !hiddenOption) {
+          throw new Error("Expected an initially hidden slash option");
+        }
+        menu.scrollTop = 0;
+        const menuRect = menu.getBoundingClientRect();
+        const itemRect = hiddenOption.getBoundingClientRect();
+        return {
+          id: hiddenOption.id,
+          index: options.indexOf(hiddenOption),
+          visible: itemRect.top >= menuRect.top - 1 && itemRect.bottom <= menuRect.bottom + 1,
+        };
+      });
+      expect(initiallyHidden.visible).toBe(false);
+
+      for (let index = 0; index < initiallyHidden.index; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      await page.waitForFunction((expectedId) => {
+        const input = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        return input?.getAttribute("aria-activedescendant") === expectedId;
+      }, initiallyHidden.id);
+      await page.waitForFunction((expectedId) => {
+        const active = document.getElementById(expectedId);
+        const menu = active?.closest<HTMLElement>(".slash-menu");
+        if (!active || !menu) {
+          return false;
+        }
+        const menuRect = menu.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        return activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1;
+      }, initiallyHidden.id);
+
+      const result = await page.evaluate(() => {
+        const input = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const menu = document.querySelector<HTMLElement>(".slash-menu");
+        const active = document.querySelector<HTMLElement>(".slash-menu-item--active");
+        if (!input || !menu || !active) {
+          throw new Error("Expected active slash option after keyboard navigation");
+        }
+        const menuRect = menu.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        return {
+          activeDescendant: input.getAttribute("aria-activedescendant"),
+          focusedTag: document.activeElement?.tagName,
+          scrollTop: menu.scrollTop,
+          visible: activeRect.top >= menuRect.top - 1 && activeRect.bottom <= menuRect.bottom + 1,
+        };
+      });
+
+      expect(result.focusedTag).toBe("TEXTAREA");
+      expect(result.activeDescendant).toBe(initiallyHidden.id);
+      expect(result.scrollTop).toBeGreaterThan(0);
+      expect(result.visible).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });

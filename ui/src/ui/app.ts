@@ -101,7 +101,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
-import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
   WikiImportInsights,
@@ -255,6 +255,7 @@ export class OpenClawApp extends LitElement {
   @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "strict";
+  @state() terminalEnabled = true;
   @state() allowExternalEmbedUrls = false;
   @state() chatMessageMaxWidth: string | null = null;
   @state() serverVersion: string | null = null;
@@ -371,6 +372,10 @@ export class OpenClawApp extends LitElement {
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
+  @state() devicePairSetupOpen = false;
+  @state() devicePairSetupLoading = false;
+  @state() devicePairSetupError: string | null = null;
+  @state() devicePairSetup: DevicePairSetup | null = null;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;
@@ -498,6 +503,8 @@ export class OpenClawApp extends LitElement {
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
+  @state() sessionsResultShowArchived = false;
+  @state() selectedChatSessionArchived = false;
   @state() sessionsError: string | null = null;
   @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
   @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
@@ -810,9 +817,9 @@ export class OpenClawApp extends LitElement {
       }
     }
     if (this.chatSessionPickerOpen) {
-      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
-        (node) => path.includes(node),
-      );
+      const insidePicker = Array.from(
+        this.querySelectorAll(".chat-controls__session-picker, .sidebar-session-search"),
+      ).some((node) => path.includes(node));
       if (!insidePicker) {
         this.chatSessionPickerOpen = false;
         this.chatSessionPickerSurface = null;

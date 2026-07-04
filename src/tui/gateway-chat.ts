@@ -28,6 +28,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
@@ -93,12 +94,6 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
   const retryAfterMs =
     typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
   return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function nonEmptyString(value: unknown): string | undefined {

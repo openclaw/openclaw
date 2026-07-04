@@ -229,6 +229,7 @@ vi.mock("../utils.js", async (importOriginal) => {
       typeof value === "object" && value !== null && !Array.isArray(value),
     pathExists: (...args: unknown[]) => pathExists(...args),
     resolveConfigDir: () => "/tmp/openclaw-config",
+    sleep: vi.fn(async () => undefined),
   };
 });
 
@@ -680,6 +681,7 @@ describe("update-cli", () => {
     bfree: params.bavail,
     bavail: params.bavail,
     files: 0,
+    frsize: params.bsize ?? 1024,
     ffree: 0,
   });
 

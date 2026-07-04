@@ -99,6 +99,15 @@ import type { TypingController } from "./typing.js";
 
 type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
+function resolveFollowupAbortSignal(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): AbortSignal | undefined {
+  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  return signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+}
+
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
@@ -167,7 +176,7 @@ async function forwardFollowupProgressEvent(params: {
     return;
   }
 
-  if (evt.stream === "tool") {
+  if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
     const phase = readStringValue(evt.data.phase) ?? "";
     const name = readStringValue(evt.data.name);
     if (phase === "start" || phase === "update") {
@@ -193,7 +202,9 @@ async function forwardFollowupProgressEvent(params: {
     evt.stream === "item" &&
     evt.data.suppressChannelProgress === true &&
     Boolean(opts?.onToolStart);
-  if (evt.stream === "item" && !suppressItemChannelProgress) {
+  const hideItemFromChannelProgress =
+    evt.stream === "item" && evt.data.hideFromChannelProgress === true;
+  if (evt.stream === "item" && !suppressItemChannelProgress && !hideItemFromChannelProgress) {
     await opts?.onItemEvent?.({
       itemId: readStringValue(evt.data.itemId),
       toolCallId: readStringValue(evt.data.toolCallId),
@@ -482,6 +493,10 @@ export function createFollowupRunner(params: {
       !routedAnyCrossChannelPayloadToOrigin &&
       opts?.onBlockReply
     ) {
+      if (queued.currentInboundEventKind === "room_event") {
+        logVerbose("followup queue: cross-channel failure notice suppressed for room_event");
+        return;
+      }
       await sendDispatcherPayload({
         text:
           "Follow-up completed, but OpenClaw could not deliver it to the originating " +
@@ -560,6 +575,7 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+      const isRoomEventFollowup = () => queued.currentInboundEventKind === "room_event";
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
         if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
@@ -595,10 +611,12 @@ export function createFollowupRunner(params: {
       const admission = await admitReplyTurn({
         sessionId: effectiveQueued.admissionSessionId ?? run.sessionId,
         sessionKey: replySessionKey ?? "",
+        expectedSessionId: activeSessionEntry?.sessionId,
+        storePath,
         kind: "queued_followup",
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
-        upstreamAbortSignal: queued.abortSignal,
+        upstreamAbortSignal: resolveFollowupAbortSignal(queued),
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -653,6 +671,10 @@ export function createFollowupRunner(params: {
           modelId: fallbackModel,
         },
       ) => {
+        if (isRoomEventFollowup()) {
+          logVerbose("followup queue: compaction notice suppressed for room_event");
+          return;
+        }
         const noticePayloads = resolveFollowupDeliveryPayloads({
           cfg: runtimeConfig,
           payloads: [payload],
@@ -719,6 +741,12 @@ export function createFollowupRunner(params: {
           includeDetails: run.verboseLevel === "on" || run.verboseLevel === "full",
         });
         if (preflightCompactionFailureText) {
+          if (isRoomEventFollowup()) {
+            logVerbose(
+              "followup queue: preflight compaction failure notice suppressed for room_event",
+            );
+            return;
+          }
           await sendFollowupPayloads(
             [
               markReplyPayloadForSourceSuppressionDelivery({
@@ -932,6 +960,11 @@ export function createFollowupRunner(params: {
             // summary tracker so both runners deliver identical durable summaries.
             const deliverFollowupToolSummary = (payload: ReplyPayload) =>
               enqueueProgressDelivery(async () => {
+                // room_event turns are ambient; only an explicit message tool call
+                // may post back into the source chat.
+                if (isRoomEventFollowup()) {
+                  return;
+                }
                 if (
                   run.sourceReplyDeliveryMode === "message_tool_only" &&
                   !shouldEmitToolResultProgress()
@@ -1013,6 +1046,11 @@ export function createFollowupRunner(params: {
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
                     await enqueueProgressDelivery(async () => {
+                      // Mirrors direct dispatch progress suppression: ambient
+                      // room events never get automatic fast-mode notices.
+                      if (isRoomEventFollowup()) {
+                        return;
+                      }
                       await sendFollowupPayloads(
                         [payload],
                         effectiveQueued,
@@ -1077,6 +1115,7 @@ export function createFollowupRunner(params: {
                     silentReplyPromptMode: run.silentReplyPromptMode,
                     allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: run.extraSystemPromptStatic,
+                    cliSessionBindingFacts: run.cliSessionBindingFacts,
                     ownerNumbers: run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
@@ -1203,6 +1242,7 @@ export function createFollowupRunner(params: {
                 timeoutMs: run.timeoutMs,
                 runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                 runId,
+                isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                 abortSignal: runAbortSignal,
                 deferTerminalLifecycle: true,
                 onExecutionStarted: (info) => {
@@ -1276,6 +1316,15 @@ export function createFollowupRunner(params: {
           settledLifecycleTerminal?.emit("end", runResult);
           throw runAbortSignal.reason;
         }
+        if (
+          replyOperation.result?.kind === "aborted" &&
+          replyOperation.result.code === "aborted_by_user"
+        ) {
+          settledLifecycleTerminal?.emit("end", runResult);
+          await drainProgressDeliveries();
+          return;
+        }
+        replyOperation.freezeAbort();
         const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
           if (settledLifecycleTerminal) {
             settledLifecycleTerminal.emit("error", error, extraData);
@@ -1328,7 +1377,20 @@ export function createFollowupRunner(params: {
           });
         }
       } catch (err) {
+        if (
+          replyOperation.result?.kind === "aborted" &&
+          replyOperation.result.code === "aborted_by_user"
+        ) {
+          pendingLifecycleTerminal?.backstop.emit("error", err);
+          pendingLifecycleTerminal = undefined;
+          if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+            clearAgentRunContext(runId, lifecycleGeneration);
+          }
+          await drainProgressDeliveries();
+          return;
+        }
         const message = formatErrorMessage(err);
+        replyOperation.freezeAbort();
         replyOperation.fail("run_failed", err);
         pendingLifecycleTerminal?.backstop.emit("error", err);
         pendingLifecycleTerminal = undefined;

@@ -440,7 +440,7 @@ releases.
     | Heartbeat wake, event, and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
-    | In-memory dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
+    | In-memory and persistent-backed dedupe caches | `openclaw/plugin-sdk/dedupe-runtime` |
     | Safe local-file/media path helpers | `openclaw/plugin-sdk/file-access-runtime` |
     | Dispatcher-aware fetch | `openclaw/plugin-sdk/runtime-fetch` |
     | Proxy and guarded fetch helpers | `openclaw/plugin-sdk/fetch-runtime` |
@@ -567,7 +567,7 @@ releases.
   | `plugin-sdk/heartbeat-runtime` | Heartbeat helpers | Heartbeat wake, event, and visibility helpers |
   | `plugin-sdk/delivery-queue-runtime` | Delivery queue helpers | `drainPendingDeliveries` |
   | `plugin-sdk/channel-activity-runtime` | Channel activity helpers | `recordChannelActivity` |
-  | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory dedupe caches |
+  | `plugin-sdk/dedupe-runtime` | Dedupe helpers | In-memory and persistent-backed dedupe caches |
   | `plugin-sdk/file-access-runtime` | File access helpers | Safe local-file/media path helpers |
   | `plugin-sdk/transport-ready-runtime` | Transport readiness helpers | `waitForTransportReady` |
   | `plugin-sdk/exec-approvals-runtime` | Exec approval policy helpers | `loadExecApprovals`, `resolveExecApprovalsFromFile`, `ExecApprovalsFile` |

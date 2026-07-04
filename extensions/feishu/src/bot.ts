@@ -1441,6 +1441,7 @@ export async function handleFeishuMessage(params: {
           mentions: {
             canDetectMention: isGroup,
             wasMentioned,
+            requireMention,
           },
           commands: {
             authorized: commandAuthorized,

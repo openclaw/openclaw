@@ -72,6 +72,7 @@ type CreateUserTurnTranscriptRecorderParams = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   errorContext?: string;
   onPersistenceError?: (error: unknown) => void;
+  onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
 };
 
 type ResolvePersistedUserTurnTextOptions = {
@@ -273,6 +274,19 @@ function isBeforeAgentRunBlockedMessage(message: AgentMessage): boolean {
   return marker !== undefined;
 }
 
+function userMessageHasImageContent(message: AgentMessage): boolean {
+  return (
+    isUserMessage(message) &&
+    Array.isArray(message.content) &&
+    message.content.some(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "image",
+    )
+  );
+}
+
 // Runtime messages may lack transcript metadata because channel adapters prepare
 // display text separately. Merge only safe user messages, never block markers.
 export function mergePreparedUserTurnMessageForRuntime(params: {
@@ -289,6 +303,9 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   return {
     ...(params.runtimeMessage as unknown as Record<string, unknown>),
     ...(params.preparedMessage as unknown as Record<string, unknown>),
+    ...(userMessageHasImageContent(params.runtimeMessage)
+      ? { content: params.runtimeMessage.content }
+      : {}),
   } as unknown as AgentMessage;
 }
 
@@ -496,6 +513,7 @@ export function createUserTurnTranscriptRecorder(
   let runtimePersistencePromise: Promise<void> | undefined;
   let selfPersistencePromise: Promise<UserTurnTranscriptPersistResult | undefined> | undefined;
   let resolvedMessagePromise: Promise<PersistedUserTurnMessage | undefined> | undefined;
+  let persistedMessageNotified = false;
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -535,6 +553,21 @@ export function createUserTurnTranscriptRecorder(
       })();
     }
     return await resolvedMessagePromise;
+  };
+
+  const notifyMessagePersisted = (persistedMessage?: PersistedUserTurnMessage) => {
+    const notificationMessage = persistedMessage ?? persistedResult?.message ?? message;
+    if (!notificationMessage || persistedMessageNotified || !params.onMessagePersisted) {
+      return;
+    }
+    persistedMessageNotified = true;
+    try {
+      void Promise.resolve(params.onMessagePersisted(notificationMessage)).catch(
+        handlePersistenceError,
+      );
+    } catch (error) {
+      handlePersistenceError(error);
+    }
   };
 
   const waitForRuntimePersistence = async () => {
@@ -600,6 +633,7 @@ export function createUserTurnTranscriptRecorder(
       if (result) {
         persisted = true;
         persistedResult = result;
+        notifyMessagePersisted(result.message);
       }
       return result;
     })();
@@ -625,6 +659,7 @@ export function createUserTurnTranscriptRecorder(
           message: persistedMessage,
         };
       }
+      notifyMessagePersisted(persistedMessage);
     },
     markBlocked: () => {
       blocked = true;

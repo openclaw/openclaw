@@ -9,6 +9,7 @@ import {
   isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -845,12 +846,6 @@ function isProcessLikelyAlive(pid: number): boolean {
     // EPERM and unknown errors are treated as alive to avoid stealing active locks.
     return true;
   }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
