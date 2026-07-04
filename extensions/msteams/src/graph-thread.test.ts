@@ -8,19 +8,12 @@ import {
   resolveTeamGroupId,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
-import { fetchGraphJson } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson } from "./graph.js";
 
 vi.mock("./graph.js", () => ({
   fetchGraphJson: vi.fn(),
+  fetchAllGraphPages: vi.fn(),
 }));
-
-const firstGraphPath = () => {
-  const [call] = vi.mocked(fetchGraphJson).mock.calls;
-  if (!call) {
-    throw new Error("expected Graph fetch call");
-  }
-  return call[0].path;
-};
 
 describe("stripHtmlFromTeamsMessage", () => {
   it("preserves @mention display names from <at> tags", () => {
@@ -163,41 +156,65 @@ describe("fetchChannelMessage", () => {
 
 describe("fetchThreadReplies", () => {
   beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
+    vi.mocked(fetchAllGraphPages).mockReset();
   });
 
+  const firstPagesPath = () => {
+    const [call] = vi.mocked(fetchAllGraphPages).mock.calls;
+    if (!call) {
+      throw new Error("expected Graph pages call");
+    }
+    return (call[0] as { path: string }).path;
+  };
+
   it("fetches replies with correct path and default limit", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
-      value: [{ id: "reply-1" }, { id: "reply-2" }],
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: [{ id: "reply-1" }, { id: "reply-2" }],
+      truncated: false,
     } as never);
 
     const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1");
 
     expect(result).toHaveLength(2);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
+    expect(fetchAllGraphPages).toHaveBeenCalledWith({
       token: "tok",
       path: "/teams/group-1/channels/channel-1/messages/msg-1/replies?$top=50&$select=id,from,body,createdDateTime",
+      maxPages: 50,
     });
   });
 
-  it("clamps limit to 50 maximum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+  it("follows pagination and keeps the newest replies (Graph returns oldest-first)", async () => {
+    const replies = Array.from({ length: 60 }, (_, i) => ({ id: `reply-${i + 1}` }));
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({
+      items: replies,
+      truncated: false,
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 50);
+
+    expect(result).toHaveLength(50);
+    expect(result[0]?.id).toBe("reply-11");
+    expect(result.at(-1)?.id).toBe("reply-60");
+  });
+
+  it("clamps per-page $top to 50 maximum", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
 
     await fetchThreadReplies("tok", "g", "c", "m", 200);
 
-    expect(firstGraphPath()).toContain("$top=50");
+    expect(firstPagesPath()).toContain("$top=50");
   });
 
-  it("clamps limit to 1 minimum", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ value: [] } as never);
+  it("clamps per-page $top to 1 minimum", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
 
     await fetchThreadReplies("tok", "g", "c", "m", 0);
 
-    expect(firstGraphPath()).toContain("$top=1");
+    expect(firstPagesPath()).toContain("$top=1");
   });
 
-  it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+  it("returns empty array when there are no replies", async () => {
+    vi.mocked(fetchAllGraphPages).mockResolvedValueOnce({ items: [], truncated: false } as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toStrictEqual([]);
