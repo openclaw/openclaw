@@ -22,8 +22,9 @@ import type {
   PluginCommandResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-type ClaudeCommandOptions = {
+export type ClaudeCommandOptions = {
   pluginConfig?: unknown;
+  resolvePluginConfig?: () => unknown;
 };
 
 export function createClaudeCommand(
@@ -68,7 +69,7 @@ function parseSubcommand(raw: string | undefined): {
 
 export async function handleClaudeCommand(
   ctx: PluginCommandContext,
-  _options: ClaudeCommandOptions = {},
+  options: ClaudeCommandOptions = {},
 ): Promise<PluginCommandResult> {
   const { sub, rest } = parseSubcommand(ctx.args);
   try {
@@ -81,7 +82,7 @@ export async function handleClaudeCommand(
       case "threads":
         return await handlers.handleThreads(ctx);
       case "conversations":
-        return await handlers.handleConversations(ctx);
+        return await handlers.handleConversations(ctx, options);
       case "resume":
         return await handlers.handleResume(ctx, rest);
       case "thread-pop":

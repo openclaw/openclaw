@@ -11,6 +11,8 @@ import {
   type ConversationSessionEntry,
   formatConversationsList,
   isConversationSessionKey,
+  isExcludedByCustomFilter,
+  resolveConversationsExcludePatterns,
 } from "./command-handlers.js";
 
 describe("isConversationSessionKey", () => {
@@ -179,6 +181,112 @@ describe("formatConversationsList", () => {
     const text = formatConversationsList(rows, 17);
     expect(text).toContain("Showing 15 of 17");
     expect(text).toContain("2 more not shown");
+  });
+});
+
+describe("resolveConversationsExcludePatterns", () => {
+  it("reads a valid string array off the plugin config", () => {
+    const patterns = resolveConversationsExcludePatterns({
+      conversations: { excludePatterns: ["cio-agent-heartbeats", "standup"] },
+    });
+    expect(patterns).toEqual(["cio-agent-heartbeats", "standup"]);
+  });
+
+  it("drops non-string and blank entries", () => {
+    const patterns = resolveConversationsExcludePatterns({
+      conversations: { excludePatterns: ["real", "", "  ", 42, null, "also-real"] },
+    });
+    expect(patterns).toEqual(["real", "also-real"]);
+  });
+
+  it("returns an empty array for absent, malformed, or non-object config", () => {
+    expect(resolveConversationsExcludePatterns(undefined)).toEqual([]);
+    expect(resolveConversationsExcludePatterns({})).toEqual([]);
+    expect(resolveConversationsExcludePatterns({ conversations: {} })).toEqual([]);
+    expect(
+      resolveConversationsExcludePatterns({ conversations: { excludePatterns: "not-an-array" } }),
+    ).toEqual([]);
+    expect(resolveConversationsExcludePatterns("garbage")).toEqual([]);
+  });
+});
+
+describe("isExcludedByCustomFilter", () => {
+  it("matches case-insensitively against the session key", () => {
+    const row = {
+      sessionKey: "agent:tank:slack:channel:c0b2eddpw95:thread:123",
+      label: "some-thread",
+    };
+    expect(isExcludedByCustomFilter(row, ["C0B2EDDPW95"])).toBe(true);
+  });
+
+  it("matches case-insensitively against the display label", () => {
+    const row = {
+      sessionKey: "agent:tank:slack:channel:c0b2eddpw95:thread:123",
+      label: "#CIO-Agent-Heartbeats",
+    };
+    expect(isExcludedByCustomFilter(row, ["cio-agent-heartbeats"])).toBe(true);
+  });
+
+  it("does not exclude when no pattern matches", () => {
+    const row = { sessionKey: "agent:tank:direct:eddie", label: "Eddie Abrams" };
+    expect(isExcludedByCustomFilter(row, ["cio-agent-heartbeats", "standup"])).toBe(false);
+  });
+
+  it("never excludes anything when no patterns are configured", () => {
+    const row = {
+      sessionKey: "agent:tank:slack:channel:cio-agent-heartbeats:thread:1",
+      label: "anything",
+    };
+    expect(isExcludedByCustomFilter(row, [])).toBe(false);
+  });
+});
+
+describe("custom filter composed with buildConversationRows (the real /claude conversations pipeline)", () => {
+  it("hides a matching conversation while keeping others visible", async () => {
+    const heartbeatBinding = {
+      schemaVersion: 1,
+      threadId: "thr_heartbeat",
+      cwd: "/tmp",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const realBinding = {
+      schemaVersion: 1,
+      threadId: "thr_real",
+      cwd: "/tmp",
+      createdAt: 1,
+      updatedAt: 3,
+    };
+    const entries: ConversationSessionEntry[] = [
+      {
+        sessionKey: "agent:tank:slack:channel:c0b2eddpw95:thread:1782258999.399789",
+        entry: { sessionId: "heartbeat-session", origin: { label: "#cio-agent-heartbeats" } },
+      },
+      {
+        sessionKey: "agent:tank:direct:eddie",
+        entry: { sessionId: "real-session", origin: { label: "Eddie Abrams" } },
+      },
+    ];
+    const bindingsBySessionId: Record<string, typeof heartbeatBinding> = {
+      "heartbeat-session": heartbeatBinding,
+      "real-session": realBinding,
+    };
+    const { rows } = await buildConversationRows(entries, {
+      resolveSessionFile: (entry) => entry.sessionId,
+      readBinding: async (sessionFile) => bindingsBySessionId[sessionFile] ?? null,
+    });
+    expect(rows).toHaveLength(2);
+
+    const excludePatterns = resolveConversationsExcludePatterns({
+      conversations: { excludePatterns: ["cio-agent-heartbeats"] },
+    });
+    const visibleRows = rows.filter((row) => !isExcludedByCustomFilter(row, excludePatterns));
+    expect(visibleRows).toHaveLength(1);
+    expect(visibleRows[0]?.label).toBe("Eddie Abrams");
+
+    const text = formatConversationsList(visibleRows, rows.length);
+    expect(text).not.toContain("cio-agent-heartbeats");
+    expect(text).toContain("Eddie Abrams");
   });
 });
 
