@@ -177,7 +177,7 @@ describe("sessionsTailCommand", () => {
       }),
     ]);
 
-    await sessionsTailCommand({ store: storePath, sessionKey, tail: "2" }, runtime);
+    await sessionsTailCommand({ store: storePath, sessionKey, tail: 2 }, runtime);
 
     const output = vi
       .mocked(runtime.log)
@@ -191,7 +191,7 @@ describe("sessionsTailCommand", () => {
   it("rejects tail counts that exceed JavaScript safe integer precision", async () => {
     const runtime = makeRuntime();
 
-    await sessionsTailCommand({ store: storePath, sessionKey, tail: "9007199254740992" }, runtime);
+    await sessionsTailCommand({ store: storePath, sessionKey, tail: 9007199254740992 }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "--tail must be a non-negative integer, for example --tail 25.",
@@ -249,7 +249,7 @@ describe("sessionsTailCommand", () => {
     });
 
     const run = sessionsTailCommand(
-      { store: storePath, sessionKey, tail: "1", follow: true },
+      { store: storePath, sessionKey, tail: 1, follow: true },
       runtime,
     );
     try {
@@ -291,7 +291,7 @@ describe("sessionsTailCommand", () => {
     });
 
     const run = sessionsTailCommand(
-      { store: storePath, sessionKey, tail: "1", follow: true },
+      { store: storePath, sessionKey, tail: 1, follow: true },
       runtime,
     );
     try {

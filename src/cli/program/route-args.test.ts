@@ -163,6 +163,20 @@ describe("route-args", () => {
       parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit", "all"])
         ?.limit,
     ).toBe("all");
+    // route-first --limit ALL (case-insensitive)
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit", "ALL"])
+        ?.limit,
+    ).toBe("all");
+    // route-first equals-form flags
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--active=60"])
+        ?.active,
+    ).toBe(60);
+    expect(
+      parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--limit=all"])
+        ?.limit,
+    ).toBe("all");
     // route-first invalid values => undefined
     expect(
       parseSessionsRouteArgs(["node", "openclaw", "sessions", "--agent", "x", "--active", "abc"])

@@ -86,13 +86,13 @@ export function writeStore(data: unknown, prefix = "sessions"): string {
 
 export async function runSessionsJson<T>(
   run: (
-    opts: { json?: boolean; store?: string; active?: string; limit?: string | number },
+    opts: { json?: boolean; store?: string; active?: number; limit?: number | "all" },
     runtime: RuntimeEnv,
   ) => Promise<void>,
   store: string,
   options?: {
-    active?: string;
-    limit?: string | number;
+    active?: number;
+    limit?: number | "all";
   },
 ): Promise<T> {
   const { runtime, logs } = makeRuntime();
