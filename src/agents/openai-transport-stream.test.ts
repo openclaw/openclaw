@@ -8138,6 +8138,38 @@ describe("openai transport stream", () => {
     expect(params.enable_thinking).toBeUndefined();
   });
 
+  it("respects explicit zai reasoning effort opt-out for GLM-5.2 (#97772)", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "glm-5.2",
+        name: "GLM 5.2",
+        api: "openai-completions",
+        provider: "zai",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+        compat: { thinkingFormat: "zai", supportsReasoningEffort: false },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { apiKey: "test-key", reasoning: "medium" } as never,
+    ) as {
+      thinking?: { type: string };
+      reasoning_effort?: string;
+      enable_thinking?: boolean;
+    };
+
+    expect(params.thinking).toEqual({ type: "enabled" });
+    expect(params.reasoning_effort).toBeUndefined();
+    expect(params.enable_thinking).toBeUndefined();
+  });
+
   it("disables zai thinking when reasoning effort is off (#97772)", () => {
     const params = buildOpenAICompletionsParams(
       {

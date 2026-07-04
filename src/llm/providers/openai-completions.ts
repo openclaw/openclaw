@@ -92,8 +92,9 @@ function isThinkingContentBlock(block: { type: string }): block is ThinkingConte
 
 function supportsZaiReasoningEffort(model: Model<"openai-completions">): boolean {
   return (
-    model.id.trim().toLowerCase().startsWith("glm-5.2") ||
-    model.compat?.supportsReasoningEffort === true
+    model.compat?.supportsReasoningEffort !== false &&
+    (model.id.trim().toLowerCase().startsWith("glm-5.2") ||
+      model.compat?.supportsReasoningEffort === true)
   );
 }
 
