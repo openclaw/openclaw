@@ -466,6 +466,21 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 }
 
 describe("doctor health contributions", () => {
+  async function withProcessPlatform<T>(
+    platform: NodeJS.Platform,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      return await run();
+    } finally {
+      if (original) {
+        Object.defineProperty(process, "platform", original);
+      }
+    }
+  }
+
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.registerBundledHealthChecks.mockReset();
@@ -1480,18 +1495,20 @@ describe("doctor health contributions", () => {
       checksRun: 0,
       checksSkipped: 1,
     });
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/systemd-linger"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [
-        expect.objectContaining({
-          checkId: "core/doctor/systemd-linger",
-          fixHint: "Run: sudo loginctl enable-linger alice",
-          target: "systemd.user.alice",
-        }),
-      ],
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/systemd-linger"] }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/systemd-linger",
+            fixHint: "Run: sudo loginctl enable-linger alice",
+            target: "systemd.user.alice",
+          }),
+        ],
+      });
     });
   });
 
@@ -1509,15 +1526,17 @@ describe("doctor health contributions", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     } as const;
 
-    await expect(
-      runDoctorLintChecks(ctx, {
-        checks: [systemdLingerCheck!],
-        onlyIds: ["core/doctor/systemd-linger"],
-      }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [],
+    await withProcessPlatform("linux", async () => {
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [systemdLingerCheck!],
+          onlyIds: ["core/doctor/systemd-linger"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [],
+      });
     });
     expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
   });
