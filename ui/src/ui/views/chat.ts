@@ -27,8 +27,8 @@ import { exportChatMarkdown } from "../chat/export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
-  renderReadingIndicatorGroup,
-  renderStreamingGroup,
+  renderStreamGroup,
+  type StreamGroupPart,
 } from "../chat/grouped-render.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
@@ -680,6 +680,37 @@ function buildCachedChatItems(input: BuildChatItemsProps): ReturnType<typeof bui
   cached.input = input;
   cached.items = items;
   return items;
+}
+
+type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type StreamRunRenderItem = { kind: "stream-run"; key: string; parts: StreamGroupPart[] };
+
+// Fold each contiguous run of in-flight stream/reading-indicator items into a
+// single group so segmented replies render under one assistant avatar instead
+// of one bubble per segment (#63956). Any message/group/divider breaks the run,
+// so interleaved tool calls keep their own groups.
+function coalesceStreamRuns(
+  items: ReturnType<typeof buildChatItems>,
+): Array<RenderChatItem | StreamRunRenderItem> {
+  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
+  let run: StreamGroupPart[] = [];
+  const flush = () => {
+    const [first] = run;
+    if (first) {
+      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      run = [];
+    }
+  };
+  for (const item of items) {
+    if (item.kind === "stream" || item.kind === "reading-indicator") {
+      run.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
+  return result;
 }
 
 function deletedChatItemsSignature(
@@ -1784,6 +1815,29 @@ function getActiveSlashMenuOptionLabel(): string {
   return `${command} ${cmd.description}`;
 }
 
+function scrollActiveSlashMenuOptionIntoView(): void {
+  const activeId = getActiveSlashMenuOptionId();
+  if (!activeId) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const activeOption = document.getElementById(activeId);
+    const menu = activeOption?.closest<HTMLElement>(".slash-menu");
+    if (!activeOption || !menu) {
+      return;
+    }
+    const menuBounds = menu.getBoundingClientRect();
+    const optionBounds = activeOption.getBoundingClientRect();
+    // scrollIntoView also moves the short-landscape composer and page. Keep
+    // keyboard navigation owned by the menu so textarea focus stays stable.
+    if (optionBounds.top < menuBounds.top) {
+      menu.scrollTop -= menuBounds.top - optionBounds.top;
+    } else if (optionBounds.bottom > menuBounds.bottom) {
+      menu.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    }
+  });
+}
+
 function tokenEstimate(draft: string): string | null {
   if (draft.length < 100) {
     return null;
@@ -2339,7 +2393,7 @@ export function renderChat(props: ChatProps) {
           ],
           () =>
             repeat(
-              chatItems,
+              coalesceStreamRuns(chatItems),
               (item) => item.key,
               (item) => {
                 if (item.kind === "divider") {
@@ -2376,23 +2430,13 @@ export function renderChat(props: ChatProps) {
                     </div>
                   `;
                 }
-                if (item.kind === "reading-indicator") {
-                  return renderReadingIndicatorGroup(
-                    assistantIdentity,
-                    props.basePath,
-                    props.assistantAttachmentAuthToken ?? null,
-                  );
-                }
-                if (item.kind === "stream") {
-                  return renderStreamingGroup(
-                    item.text,
-                    item.startedAt,
-                    item.isStreaming,
-                    props.onOpenSidebar,
-                    assistantIdentity,
-                    props.basePath,
-                    props.assistantAttachmentAuthToken ?? null,
-                  );
+                if (item.kind === "stream-run") {
+                  return renderStreamGroup(item.parts, {
+                    onOpenSidebar: props.onOpenSidebar,
+                    assistant: assistantIdentity,
+                    basePath: props.basePath,
+                    authToken: props.assistantAttachmentAuthToken ?? null,
+                  });
                 }
                 if (item.kind === "group") {
                   if (deleted.has(item.key)) {
@@ -2486,11 +2530,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -2517,11 +2563,13 @@ export function renderChat(props: ChatProps) {
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex + 1) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "ArrowUp":
           e.preventDefault();
           vs.slashMenuIndex = (vs.slashMenuIndex - 1 + len) % len;
           requestUpdate();
+          scrollActiveSlashMenuOptionIntoView();
           return;
         case "Tab":
           e.preventDefault();
@@ -2702,13 +2750,7 @@ export function renderChat(props: ChatProps) {
         : nothing}
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
-        ${renderCompactionIndicator(props.compactionStatus)}
-        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
-          compactBusy,
-          compactDisabled: !props.connected || isBusy || showAbortableUi,
-          onCompact: props.onCompact,
-        })}
-        ${renderChatGoal(activeSession?.goal)}
+        ${renderCompactionIndicator(props.compactionStatus)} ${renderChatGoal(activeSession?.goal)}
       </div>
 
       <input
@@ -2853,6 +2895,11 @@ export function renderChat(props: ChatProps) {
         ${composerControls && composerControls !== nothing
           ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
           : nothing}
+        ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
+          compactBusy,
+          compactDisabled: !props.connected || isBusy || showAbortableUi,
+          onCompact: props.onCompact,
+        })}
         ${renderChatRunControls({
           canAbort: showAbortableUi,
           connected: props.connected,

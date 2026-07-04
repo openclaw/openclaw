@@ -11,6 +11,7 @@ import {
   type InteractiveReply,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -32,12 +33,7 @@ import { resolveSlackThreadTsValue } from "./thread-ts.js";
 const SLACK_MAX_BLOCKS = 50;
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
-let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
-
-async function loadSlackSendRuntime() {
-  slackSendRuntimePromise ??= import("./send.runtime.js");
-  return await slackSendRuntimePromise;
-}
+const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
 
 function resolveRenderedInteractiveBlocks(
   interactive?: InteractiveReply,
@@ -84,6 +80,9 @@ async function sendSlackOutboundMessage(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
+  onDeliveryResult?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendText"]>
+  >[0]["onDeliveryResult"];
 }) {
   const send =
     resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
@@ -107,6 +106,11 @@ async function sendSlackOutboundMessage(params: {
       : {}),
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
+    onDeliveryResult: params.onDeliveryResult
+      ? async (progress) => {
+          await params.onDeliveryResult?.(attachChannelToResult("slack", progress));
+        }
+      : undefined,
   });
   return result;
 }
@@ -232,6 +236,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
             replyToId: ctx.replyToId,
             threadId: ctx.threadId,
             identity: ctx.identity,
+            onDeliveryResult: ctx.onDeliveryResult,
           }),
         finalize: async () =>
           await sendSlackOutboundMessage({
@@ -247,13 +252,24 @@ export const slackOutbound: ChannelOutboundAdapter = {
             replyToId: ctx.replyToId,
             threadId: ctx.threadId,
             identity: ctx.identity,
+            onDeliveryResult: ctx.onDeliveryResult,
           }),
       }),
     );
   },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, identity }) =>
+    sendText: async ({
+      cfg,
+      to,
+      text,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      identity,
+      onDeliveryResult,
+    }) =>
       await sendSlackOutboundMessage({
         cfg,
         to,
@@ -263,6 +279,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
         identity,
+        onDeliveryResult,
       }),
     sendMedia: async ({
       cfg,
@@ -277,6 +294,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       identity,
+      onDeliveryResult,
     }) =>
       await sendSlackOutboundMessage({
         cfg,
@@ -291,6 +309,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         replyToId,
         threadId,
         identity,
+        onDeliveryResult,
       }),
   }),
 };

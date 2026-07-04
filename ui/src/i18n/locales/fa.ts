@@ -1351,6 +1351,9 @@ export const fa: TranslationMap = {
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
     switchedSession: "به {session} جابه‌جا شد",
+    sidebar: {
+      allSessions: "همهٔ نشست‌ها",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1377,6 +1380,11 @@ export const fa: TranslationMap = {
       retry: "تلاش دوباره",
       retrySend: "تلاش دوباره برای ارسال",
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
+    },
+    pairingQrExpired: {
+      title: "کد QR جفت‌سازی منقضی شد",
+      reason: "برای ساخت کد راه‌اندازی جدید، دوباره /pair qr را اجرا کنید.",
+      badge: "منقضی‌شده",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

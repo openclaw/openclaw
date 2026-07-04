@@ -1314,6 +1314,9 @@ export const zh_TW: TranslationMap = {
     updateNow: "立即更新",
     dismissUpdateBanner: "關閉更新橫幅",
     switchedSession: "已切換至 {session}",
+    sidebar: {
+      allSessions: "所有工作階段",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1340,6 +1343,11 @@ export const zh_TW: TranslationMap = {
       retry: "重試",
       retrySend: "重新傳送",
       retryQueuedMessage: "重試佇列中的訊息",
+    },
+    pairingQrExpired: {
+      title: "配對 QR 碼已過期",
+      reason: "請再次執行 /pair qr 以產生新的設定碼。",
+      badge: "已過期",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

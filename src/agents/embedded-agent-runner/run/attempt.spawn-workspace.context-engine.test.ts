@@ -1931,7 +1931,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             "visible_reply_contract: message_tool_only",
             "Room context:\n#2001 Alice: lunch at 2?\n#2002 Bob: works",
             "Current event:\n#2003 Bob: hey claw summarize the plan",
-            "Treat this as observed room activity. Decide whether to act.",
+            "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.",
           ].join("\n\n"),
         },
         suppressNextUserMessagePersistence: true,

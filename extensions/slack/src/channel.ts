@@ -13,6 +13,7 @@ import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/cha
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
+  attachChannelToResult,
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
@@ -175,12 +176,6 @@ function getTokenForOperation(
 
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
 
-let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
-let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undefined;
-let slackProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
-let slackMonitorModulePromise: Promise<typeof import("./monitor.js")> | undefined;
-let slackDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
-
 const loadSlackDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
 );
@@ -189,30 +184,15 @@ const loadSlackResolveChannelsModule = createLazyRuntimeModule(
 );
 const loadSlackResolveUsersModule = createLazyRuntimeModule(() => import("./resolve-users.js"));
 
-async function loadSlackActionRuntime() {
-  slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
-  return await slackActionRuntimePromise;
-}
+const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
-async function loadSlackSendRuntime() {
-  slackSendRuntimePromise ??= import("./send.runtime.js");
-  return await slackSendRuntimePromise;
-}
+const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
 
-async function loadSlackProbeModule() {
-  slackProbeModulePromise ??= import("./probe.js");
-  return await slackProbeModulePromise;
-}
+const loadSlackProbeModule = createLazyRuntimeModule(() => import("./probe.js"));
 
-async function loadSlackMonitorModule() {
-  slackMonitorModulePromise ??= import("./monitor.js");
-  return await slackMonitorModulePromise;
-}
+const loadSlackMonitorModule = createLazyRuntimeModule(() => import("./monitor.js"));
 
-async function loadSlackDirectoryLiveModule() {
-  slackDirectoryLiveModulePromise ??= import("./directory-live.js");
-  return await slackDirectoryLiveModulePromise;
-}
+const loadSlackDirectoryLiveModule = createLazyRuntimeModule(() => import("./directory-live.js"));
 
 async function resolveSlackSendContext(params: {
   cfg: Parameters<typeof resolveSlackAccount>[0]["cfg"];
@@ -475,7 +455,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, onDeliveryResult }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -487,6 +467,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         cfg,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("slack", result));
+            }
+          : undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
     },
@@ -500,6 +485,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       cfg,
+      onDeliveryResult,
     }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
@@ -514,6 +500,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         mediaLocalRoots,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("slack", result));
+            }
+          : undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
     },
@@ -696,11 +687,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (!token) {
           return { ok: false, error: "missing token" };
         }
-        return await (await loadSlackProbeModule()).probeSlack(token, timeoutMs);
+        return await (
+          await loadSlackProbeModule()
+        ).probeSlack(token, timeoutMs, {
+          accountId: account.accountId,
+        });
       },
       formatCapabilitiesProbe: ({ probe }) => {
         const slackProbe = probe as SlackProbe | undefined;
         const lines = [];
+        if (slackProbe?.warning) {
+          lines.push({ text: `Warning: ${slackProbe.warning}`, tone: "warn" } as const);
+        }
         if (slackProbe?.bot?.name) {
           lines.push({ text: `Bot: @${slackProbe.bot.name}` });
         }

@@ -1028,6 +1028,77 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("persists streamed usage when the final assistant snapshot is zeroed", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, reasoningTokens: 2, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: "Done." }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+      },
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+      usage: {
+        input: 7,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: 2,
+        totalTokens: 12,
+      },
+    });
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 7,
+        output: 5,
+        reasoningTokens: 2,
+        totalTokens: 12,
+      }),
+    );
+  });
+
+  it("keeps authoritative final usage instead of pending stream usage", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+      usage: {
+        input: 11,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+      },
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
+  });
+
   it("warns when assistant text only pretends to call a registered tool", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({

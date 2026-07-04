@@ -19,7 +19,7 @@ import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -253,7 +253,7 @@ export async function start(state: CronServiceState) {
   if (state.stopped) {
     return;
   }
-  const deferredCatchupJobIds = await runMissedJobs(state, {
+  await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
     deferAgentTurnJobs: true,
   });
@@ -266,10 +266,7 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const changed = recomputeNextRunsForMaintenance(state, {
-      recomputeExpired: true,
-      skipFutureRepairJobIds: deferredCatchupJobIds,
-    });
+    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     if (changed) {
       await persist(state);
     }
@@ -353,7 +350,8 @@ function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsSchedule
     opts?.scheduleKind === "all" ||
     opts?.scheduleKind === "at" ||
     opts?.scheduleKind === "every" ||
-    opts?.scheduleKind === "cron"
+    opts?.scheduleKind === "cron" ||
+    opts?.scheduleKind === "on-exit"
   ) {
     return opts.scheduleKind;
   }
@@ -642,6 +640,11 @@ type PreparedManualRun =
     }
   | { ok: false };
 
+type ManualRunOptions = {
+  runId?: string;
+  payload?: CronPayload;
+};
+
 type ManualRunDisposition =
   | Extract<PreparedManualRun, { ran: false }>
   | { ok: true; runnable: true };
@@ -850,7 +853,7 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-  opts?: { runId?: string },
+  opts?: ManualRunOptions,
 ): Promise<PreparedManualRun> {
   const preflight = await inspectManualRunPreflight(state, id, mode);
   if (!preflight.ok) {
@@ -897,6 +900,9 @@ async function prepareManualRun(
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const executionJob = structuredClone(job);
+    if (opts?.payload) {
+      executionJob.payload = structuredClone(opts.payload);
+    }
     return {
       ok: true,
       ran: true,
@@ -1046,7 +1052,7 @@ export async function run(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
-  opts?: { runId?: string },
+  opts?: ManualRunOptions,
 ) {
   const prepared = await prepareManualRun(state, id, mode, opts);
   if (!prepared.ok || !prepared.ran) {

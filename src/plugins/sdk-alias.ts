@@ -766,6 +766,20 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/normalization-core",
     packageDir: "normalization-core",
+    subpath: "boolean-coercion",
+    srcFile: "boolean-coercion.ts",
+    distFile: "boolean-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
+    subpath: "error-coercion",
+    srcFile: "error-coercion.ts",
+    distFile: "error-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
     subpath: "number-coercion",
     srcFile: "number-coercion.ts",
     distFile: "number-coercion.mjs",
@@ -944,6 +958,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
     subpath: "redact-sensitive-url",
     srcFile: "redact-sensitive-url.ts",
     distFile: "redact-sensitive-url.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "url-protocol",
+    srcFile: "url-protocol.ts",
+    distFile: "url-protocol.mjs",
   },
   {
     packageName: "@openclaw/net-policy",

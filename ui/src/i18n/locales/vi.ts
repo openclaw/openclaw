@@ -1341,6 +1341,9 @@ export const vi: TranslationMap = {
     updateNow: "Cập nhật ngay",
     dismissUpdateBanner: "Bỏ qua banner cập nhật",
     switchedSession: "Đã chuyển sang {session}",
+    sidebar: {
+      allSessions: "Tất cả phiên",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",
@@ -1367,6 +1370,11 @@ export const vi: TranslationMap = {
       retry: "Thử lại",
       retrySend: "Thử gửi lại",
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
+    },
+    pairingQrExpired: {
+      title: "Mã QR ghép nối đã hết hạn",
+      reason: "Chạy /pair qr một lần nữa để tạo mã thiết lập mới.",
+      badge: "Đã hết hạn",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

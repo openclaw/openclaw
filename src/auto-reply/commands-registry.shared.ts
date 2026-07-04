@@ -1,7 +1,7 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
-import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -29,6 +29,7 @@ type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
+  nativeProviders?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -57,6 +58,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     nativeName: command.nativeName,
     nativeAliases: command.nativeAliases
       ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
+    nativeProviders: command.nativeProviders
+      ? normalizeStringEntries(command.nativeProviders)
       : undefined,
     description: command.description,
     acceptsArgs,
@@ -263,6 +267,23 @@ export function buildBuiltinChatCommands(
           description: "Optional note for Codex feedback upload",
           type: "string",
           captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "login",
+      nativeName: "login",
+      nativeProviders: ["telegram"],
+      description: "Pair Codex login.",
+      textAlias: "/login",
+      category: "management",
+      tier: "standard",
+      args: [
+        {
+          name: "provider",
+          description: "Provider to pair",
+          type: "string",
+          choices: ["codex", "openai"],
         },
       ],
     }),

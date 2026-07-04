@@ -1049,10 +1049,14 @@ async function finalizeCronRun(params: {
     });
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
+      const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
         const { clearCliSession } = await loadCliRunnerRuntime();
         clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
+      } else if (cliSessionBinding?.sessionId?.trim()) {
+        const { setCliSessionBinding } = await loadCliRunnerRuntime();
+        setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
       } else if (cliSessionId) {
         const { setCliSessionId } = await loadCliRunnerRuntime();
         setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
@@ -1574,6 +1578,12 @@ export async function runCronIsolatedAgentTurn(params: {
     return prepared.context.withRunSession({
       status: "error",
       error,
+      // Carry the already-resolved run model into the error/timeout row so
+      // cron_run_logs keeps provider/model attribution instead of looking like
+      // an un-attributed cron timeout. finalizeCronRun does the same via
+      // telemetry on the aborted path; this catch never reaches it.
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
       diagnostics: mergeCronRunDiagnostics(
         prepared.context.preflightDiagnostics,
         createCronRunDiagnosticsFromError(

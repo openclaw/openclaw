@@ -1,6 +1,9 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
-import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import type {
+  ResponseStreamEvent,
+  Tool as OpenAIResponsesTool,
+} from "openai/resources/responses/responses.js";
+import { describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -11,6 +14,7 @@ import {
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
   resolveResponsesReasoningEffort,
+  runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -22,6 +26,20 @@ async function* streamResponsesEvents(
   for (const event of events) {
     yield event;
   }
+}
+
+function createNeverYieldingResponsesStream<
+  T extends OpenAIResponsesStreamEvent = OpenAIResponsesStreamEvent,
+>(): AsyncIterable<T> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          return new Promise<IteratorResult<T>>(() => {});
+        },
+      };
+    },
+  };
 }
 
 function createCapturedAssistantMessageEventStream(): {
@@ -69,6 +87,8 @@ const gpt56SolModel = {
   name: "GPT-5.6 Sol",
   thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
+
+const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 
 function createAssistantOutput(): AssistantMessage {
   return {
@@ -284,7 +304,7 @@ describe("Responses reasoning effort", () => {
 });
 
 describe("convertResponsesMessages", () => {
-  const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+  const allowedToolCallProviders = testAllowedToolCallProviders;
 
   it("adds explicit message item types for system and user input items", () => {
     const input = convertResponsesMessages(
@@ -620,6 +640,53 @@ describe("convertResponsesMessages", () => {
     ]);
   });
 
+  it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_audio",
+            toolName: "audio",
+            content: [{ type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as unknown as Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const functionOutput = input.find((item) => item.type === "function_call_output");
+    expect(functionOutput).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_audio",
+      output: "(see attached audio)",
+    });
+    expect(functionOutput?.output).not.toBe("(see attached image)");
+    expect(functionOutput?.output).not.toBe("(no output)");
+  });
+
   it("keeps encrypted reasoning replay item ids when requested", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -666,9 +733,109 @@ describe("convertResponsesMessages", () => {
       summary: [],
     });
   });
+
+  it("serializes structured tool results as text instead of image placeholders", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_structured",
+            toolName: "session_status",
+            content: [
+              {
+                type: "json",
+                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
+              },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as unknown as Context,
+      testAllowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+    expect(input).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_structured",
+      output: expect.stringContaining('"type":"json"'),
+    });
+  });
 });
 
 describe("processResponsesStream", () => {
+  it("aborts the Responses request signal when the first SSE event never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | undefined;
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = runResponsesStreamLifecycle({
+        stream,
+        model: nativeOpenAIModel,
+        output,
+        options: { firstEventTimeoutMs: 5, onFirstEventTimeout },
+        createClient: () => ({
+          responses: {
+            create: (_params, requestOptions) => {
+              requestSignal = requestOptions.signal;
+              return {
+                withResponse: async () => ({
+                  data: createNeverYieldingResponsesStream<ResponseStreamEvent>(),
+                  response: new Response(null, { status: 200 }),
+                }),
+              };
+            },
+          },
+        }),
+        buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+        formatError: (error) => (error instanceof Error ? error.message : String(error)),
+      });
+
+      await vi.advanceTimersByTimeAsync(5);
+      await resultPromise;
+
+      expect(output.stopReason).toBe("error");
+      expect(requestSignal?.aborted).toBe(true);
+      expect(requestSignal?.reason).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(requestSignal?.reason);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails when streaming headers arrive but no first SSE event follows", async () => {
+    vi.useFakeTimers();
+    try {
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const abortFirstEventStream = vi.fn();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = processResponsesStream(
+        createNeverYieldingResponsesStream(),
+        output,
+        stream,
+        nativeOpenAIModel,
+        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /responses HTTP stream opened but did not deliver a first SSE event within 5ms/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["omits arguments", undefined],
     ["sends empty arguments", ""],
