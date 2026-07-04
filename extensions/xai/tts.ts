@@ -31,6 +31,13 @@ type XaiTtsWebSocketFactory = (
   url: string,
   options: XaiTtsWebSocketOptions,
 ) => XaiTtsWebSocket | Promise<XaiTtsWebSocket>;
+type XaiTtsNodeWebSocketInit = {
+  headers: Record<string, string>;
+};
+type XaiTtsNodeWebSocketConstructor = new (
+  url: string,
+  options: XaiTtsNodeWebSocketInit,
+) => XaiTtsWebSocket;
 
 function isClosedXaiTtsWebSocket(ws: XaiTtsWebSocket): boolean {
   return ws.readyState === XAI_TTS_WS_CLOSED;
@@ -405,11 +412,10 @@ async function createXaiTtsWebSocket(
   url: string,
   options: XaiTtsWebSocketOptions,
 ): Promise<XaiTtsWebSocket> {
-  const { WebSocket } = await import("ws");
-  return new WebSocket(url, {
+  const NodeWebSocket = WebSocket as unknown as XaiTtsNodeWebSocketConstructor;
+  return new NodeWebSocket(url, {
     headers: options.headers,
-    handshakeTimeout: options.handshakeTimeout,
-  }) as XaiTtsWebSocket;
+  });
 }
 
 function isPromiseLikeXaiTtsWebSocket(
