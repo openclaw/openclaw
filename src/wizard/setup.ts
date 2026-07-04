@@ -25,7 +25,7 @@ import type {
 import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -74,11 +74,11 @@ function resolveQuickstartGatewayAuthMode(config: OpenClawConfig): GatewayAuthMo
   return "token";
 }
 
-function canUseAgentAssistedGatewayPolicy(
+async function canUseAgentAssistedGatewayPolicy(
   config: OpenClawConfig,
   resolveGatewayProbeUrl: () => string,
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
+): Promise<boolean> {
   const auth = config.gateway?.auth;
   const authMode = resolveQuickstartGatewayAuthMode(config);
   if (authMode !== "none" && auth?.rateLimit?.exemptLoopback === false) {
@@ -94,10 +94,17 @@ function canUseAgentAssistedGatewayPolicy(
   if (authMode !== "trusted-proxy") {
     return true;
   }
-  return (
-    hasConfiguredSecretInput(auth?.password, config.secrets?.defaults) ||
-    Boolean(normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD))
-  );
+  try {
+    const configuredPassword = await resolveSetupSecretInputString({
+      config,
+      value: auth?.password,
+      path: "gateway.auth.password",
+      env,
+    });
+    return Boolean(configuredPassword ?? normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD));
+  } catch {
+    return false;
+  }
 }
 
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
@@ -444,7 +451,7 @@ async function runSetupWizardOnce(
     flow === "quickstart" &&
     baseConfig.gateway?.mode !== "remote" &&
     !hasExplicitFullWizardIntent(opts) &&
-    canUseAgentAssistedGatewayPolicy(
+    (await canUseAgentAssistedGatewayPolicy(
       baseConfig,
       () =>
         onboardHelpers.resolveControlUiLinks({
@@ -454,7 +461,7 @@ async function runSetupWizardOnce(
           basePath: baseConfig.gateway?.controlUi?.basePath,
           tlsEnabled: baseConfig.gateway?.tls?.enabled === true,
         }).wsUrl,
-    );
+    ));
 
   if (snapshot.exists && !useAgentAssistedSetup) {
     await prompter.note(

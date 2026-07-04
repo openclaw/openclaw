@@ -58,6 +58,7 @@ export function registerSetupCommand(program: Command): void {
       "Agent workspace directory (default: ~/.openclaw/workspace; stored as agents.defaults.workspace)",
     )
     .option("--wizard", "Run interactive onboarding", false)
+    .option("--modern", "Use the conversational setup/repair assistant", false)
     .option(
       "--baseline",
       "Create baseline config/workspace/session folders without onboarding",
@@ -116,6 +117,16 @@ export function registerSetupCommand(program: Command): void {
         if (opts.baseline || shouldRunBaselineSetup(commandRuntime, opts)) {
           const { setupCommand } = await import("../../commands/setup.js");
           await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
+          return;
+        }
+        if (opts.modern) {
+          const { runCrestodian } = await import("../../crestodian/crestodian.js");
+          await runCrestodian({
+            message: opts.nonInteractive ? "overview" : undefined,
+            yes: false,
+            json: Boolean(opts.json),
+            interactive: !opts.nonInteractive,
+          });
           return;
         }
         const installDaemon = resolveInstallDaemonFlag(commandRuntime, {

@@ -778,6 +778,58 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps trusted-proxy auth with an unresolved password SecretRef out of assisted setup", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_MISSING_GATEWAY_PASSWORD",
+            },
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          authMode: "trusted-proxy",
+        }),
+      }),
+    );
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
   it("keeps auth policies that cannot be safely probed out of assisted setup", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
