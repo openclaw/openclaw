@@ -136,7 +136,7 @@ type RegisteredHandler = (args: {
     response_url?: string;
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-    message?: { ts?: string; text?: string; blocks?: unknown[] };
+    message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
