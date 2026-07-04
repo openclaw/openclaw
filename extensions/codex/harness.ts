@@ -98,7 +98,9 @@ export function createCodexAppServerAgentHarness(options?: {
             timeoutMs: runtime.requestTimeoutMs,
           },
         );
-        return response.account || response.requiresOpenaiAuth === false
+        return response.account ||
+          response.requiresOpenaiAuth === false ||
+          ctx.providerAuthAvailable
           ? { ready: true }
           : { ready: false, reason: "Codex app-server authentication is required" };
       } catch {

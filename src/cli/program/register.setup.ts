@@ -11,9 +11,12 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
 import { parsePort } from "../shared/parse-port.js";
-import { pickOnboardAuthOptionValues, registerOnboardAuthOptions } from "./register.onboard.js";
+import {
+  pickOnboardAuthOptionValues,
+  registerOnboardAuthOptions,
+  shouldRunBaselineSetup,
+} from "./register.onboard.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -35,16 +38,6 @@ function resolveInstallDaemonFlag(
     return Boolean(opts.installDaemon);
   }
   return undefined;
-}
-
-function shouldRunBaselineSetup(command: Command, opts: { skipUi?: boolean }): boolean {
-  if (opts.skipUi !== true || command.getOptionValueSource("skipUi") !== "cli") {
-    return false;
-  }
-  const onboardingOptionNames = command.options
-    .map((option) => option.attributeName())
-    .filter((name) => name !== "skipUi" && name !== "workspace");
-  return !hasExplicitOptions(command, onboardingOptionNames);
 }
 
 /** Register the `setup` command as an onboarding alias. */

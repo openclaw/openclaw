@@ -132,7 +132,11 @@ const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const replaceConfigFile = vi.hoisted(() => vi.fn(async () => ({ config: {} })));
 const resolveGatewayPort = vi.hoisted(() =>
-  vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+  vi.fn((cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+    const configuredPort = (cfg as { gateway?: { port?: unknown } } | undefined)?.gateway?.port;
+    if (typeof configuredPort === "number" && Number.isFinite(configuredPort)) {
+      return configuredPort;
+    }
     const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
     const port = raw ? Number.parseInt(raw, 10) : Number.NaN;
     return Number.isFinite(port) && port > 0 ? port : 18789;
@@ -630,6 +634,62 @@ describe("runSetupWizard", () => {
         quickstartGateway: expect.objectContaining({
           authMode: "none",
           bind: "loopback",
+        }),
+      }),
+    );
+    vi.clearAllMocks();
+  });
+
+  it("uses the default Gateway port after resetting an existing custom port", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          port: 19001,
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    configureGatewayForSetup.mockClear();
+
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "reset";
+      }
+      if (opts.message === "Reset scope") {
+        return "config";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({ select }),
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localPort: 18789,
+        quickstartGateway: expect.objectContaining({
+          port: 18789,
         }),
       }),
     );

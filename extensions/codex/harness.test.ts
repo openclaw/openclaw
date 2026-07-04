@@ -76,49 +76,60 @@ describe("Codex agent harness supports()", () => {
   it.each([
     {
       response: { account: { type: "apiKey" }, requiresOpenaiAuth: true },
+      providerAuthAvailable: false,
       expected: { ready: true },
     },
     {
       response: { account: null, requiresOpenaiAuth: false },
+      providerAuthAvailable: false,
       expected: { ready: true },
     },
     {
       response: { account: null, requiresOpenaiAuth: true },
+      providerAuthAvailable: false,
       expected: { ready: false, reason: "Codex app-server authentication is required" },
     },
-  ])("checks Codex app-server runtime and auth readiness", async ({ response, expected }) => {
-    mocks.request.mockResolvedValueOnce(response);
-    if (!harness.checkReadiness) {
-      throw new Error("expected Codex readiness probe");
-    }
-    const signal = new AbortController().signal;
+    {
+      response: { account: null, requiresOpenaiAuth: true },
+      providerAuthAvailable: true,
+      expected: { ready: true },
+    },
+  ])(
+    "checks Codex app-server runtime and auth readiness",
+    async ({ response, providerAuthAvailable, expected }) => {
+      mocks.request.mockResolvedValueOnce(response);
+      if (!harness.checkReadiness) {
+        throw new Error("expected Codex readiness probe");
+      }
+      const signal = new AbortController().signal;
 
-    await expect(
-      harness.checkReadiness({
-        config: {},
-        agentId: "main",
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        modelId: "gpt-5.5",
-        providerAuthAvailable: true,
-        signal,
-      }),
-    ).resolves.toEqual(expected);
+      await expect(
+        harness.checkReadiness({
+          config: {},
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          modelId: "gpt-5.5",
+          providerAuthAvailable,
+          signal,
+        }),
+      ).resolves.toEqual(expected);
 
-    expect(mocks.createClient).toHaveBeenCalledWith(
-      expect.objectContaining({ abandonSignal: signal }),
-    );
-    expect(mocks.request).toHaveBeenCalledWith(
-      "account/read",
-      { refreshToken: false },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
-    expect(mocks.closeAndWait).toHaveBeenCalledWith({
-      exitTimeoutMs: 2_000,
-      forceKillDelayMs: 250,
-    });
-  });
+      expect(mocks.createClient).toHaveBeenCalledWith(
+        expect.objectContaining({ abandonSignal: signal }),
+      );
+      expect(mocks.request).toHaveBeenCalledWith(
+        "account/read",
+        { refreshToken: false },
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      );
+      expect(mocks.closeAndWait).toHaveBeenCalledWith({
+        exitTimeoutMs: 2_000,
+        forceKillDelayMs: 250,
+      });
+    },
+  );
 
   it("closes the isolated app-server after a failed readiness request", async () => {
     mocks.request.mockRejectedValueOnce(new Error("request failed"));
