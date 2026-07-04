@@ -28,11 +28,12 @@ export type OpenAIToolProjection = {
   readonly diagnostics: readonly OpenAIToolProjectionDiagnostic[];
 };
 
-type OpenAIResponsesToolChoice = ResponseCreateParamsStreaming["tool_choice"];
+type OpenAIResponsesSdkToolChoice = ResponseCreateParamsStreaming["tool_choice"];
 type OpenAIResponsesAllowedToolChoice = Extract<
-  OpenAIResponsesToolChoice,
+  OpenAIResponsesSdkToolChoice,
   { type: "allowed_tools" }
 >;
+export type OpenAIResponsesToolChoice = Exclude<OpenAIResponsesSdkToolChoice, { type: "custom" }>;
 type OpenAICompletionsSdkToolChoice =
   OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming["tool_choice"];
 type OpenAICompletionsAllowedToolChoice = Extract<
@@ -151,7 +152,7 @@ function requireProjectedFunction(
 
 /** Keeps Responses tool choices aligned with surviving function schemas. */
 export function reconcileOpenAIResponsesToolChoice(
-  choice: OpenAIResponsesToolChoice,
+  choice: OpenAIResponsesSdkToolChoice,
   projection: OpenAIToolProjection,
 ): OpenAIResponsesToolChoice | undefined {
   if (choice === "auto") {
@@ -169,6 +170,11 @@ export function reconcileOpenAIResponsesToolChoice(
     return choice;
   }
   const choiceType = choice.type;
+  if (choiceType === "custom") {
+    throw new Error(
+      "OpenAI Responses custom tool_choice is unsupported because this adapter emits function tools only",
+    );
+  }
   if (choiceType === "function") {
     const functionName = choice.name;
     if (typeof functionName !== "string") {
@@ -188,7 +194,10 @@ export function reconcileOpenAIResponsesToolChoice(
   }
   const normalizedAllowedTools: OpenAIResponsesAllowedToolChoice["tools"] = [];
   for (const tool of tools) {
-    if (!isRecord(tool) || tool.type !== "function") {
+    if (!isRecord(tool) || tool.type === "custom") {
+      continue;
+    }
+    if (tool.type !== "function") {
       normalizedAllowedTools.push(tool);
       continue;
     }

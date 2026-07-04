@@ -215,6 +215,29 @@ describe("OpenAI tool projection", () => {
     ).toBe("none");
   });
 
+  it("filters out custom tools from Responses allowed_tools", () => {
+    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
+
+    expect(
+      reconcileOpenAIResponsesToolChoice(
+        {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [
+            { type: "custom", name: "shell" } as never,
+            { type: "function", name: "lookup" },
+            { type: "web_search_preview" },
+          ],
+        },
+        projection,
+      ),
+    ).toEqual({
+      type: "allowed_tools",
+      mode: "required",
+      tools: [{ type: "function", name: "lookup" }, { type: "web_search_preview" }],
+    });
+  });
+
   it("filters official Chat Completions allowed_tools without broadening access", () => {
     const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
 
@@ -279,5 +302,13 @@ describe("OpenAI tool projection", () => {
     expect(reconcileOpenAIResponsesToolChoice({ type: "web_search_preview" }, projection)).toEqual({
       type: "web_search_preview",
     });
+  });
+
+  it("rejects unsupported Responses custom choices", () => {
+    const projection = projectOpenAITools([{ name: "lookup", parameters: {} }]);
+
+    expect(() =>
+      reconcileOpenAIResponsesToolChoice({ type: "custom", name: "shell" } as never, projection),
+    ).toThrow("custom tool_choice is unsupported");
   });
 });

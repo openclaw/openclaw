@@ -83,6 +83,7 @@ import {
   reconcileOpenAICompletionsToolChoice,
   reconcileOpenAIResponsesToolChoice,
   type OpenAICompletionsToolChoice,
+  type OpenAIResponsesToolChoice,
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import {
@@ -212,7 +213,7 @@ type OpenAIResponsesOptions = BaseStreamOptions & {
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
   replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  toolChoice?: ResponseCreateParamsStreaming["tool_choice"];
+  toolChoice?: OpenAIResponsesToolChoice;
 };
 
 type OpenAIResponsesReplayContext = {
