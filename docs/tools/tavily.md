@@ -134,15 +134,61 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
   <Accordion title="API key resolution order">
     The Tavily client looks up its API key in this order:
 
-    1. `plugins.entries.tavily.config.webSearch.apiKey` (resolved through SecretRefs).
+    1. `plugins.entries.tavily.config.webSearch.apiKey`.
     2. `TAVILY_API_KEY` from the gateway environment.
 
     `tavily_extract` raises a setup error if neither is present.
 
   </Accordion>
 
+  <Accordion title="Broker a SecretRef for Tavily tools">
+    `tavily_search` and `tavily_extract` can execute with an opaque,
+    conversation-scoped request handle when `apiKey` is a structured SecretRef.
+    The resolved value stays inside the host broker and is removed from the
+    plugin tool factory's config snapshots.
+
+    Tavily's default-enabled tools preserve their normal access when the active
+    profile has no restrictive allowlist. If a profile narrows tool access, use
+    `alsoAllow` to preserve that profile while adding the two tools:
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          tavily: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "TAVILY_API_KEY",
+                },
+              },
+            },
+          },
+        },
+      },
+      tools: {
+        alsoAllow: ["tavily_search", "tavily_extract"],
+      },
+    }
+    ```
+
+    The prepared run must include agent, conversation, channel, and sender
+    identity. Sender, group, agent, sandbox, and inherited deny policies still
+    win. Handles are single-use, expire after 30 seconds, and do not survive a
+    Gateway restart.
+
+    This broker path applies to the explicit plugin tools. Generic `web_search`,
+    literal config values, and the environment fallback keep their existing
+    client path. OpenClaw never falls back from a configured structured
+    SecretRef to a plaintext value for a brokered operation.
+
+  </Accordion>
+
   <Accordion title="Custom base URL">
-    Override `plugins.entries.tavily.config.webSearch.baseUrl` if you front Tavily through a proxy. The default is `https://api.tavily.com`.
+    Override `plugins.entries.tavily.config.webSearch.baseUrl` if you front Tavily through a proxy. Existing `TAVILY_BASE_URL` deployments remain supported as a fallback. The default is `https://api.tavily.com`.
   </Accordion>
 
   <Accordion title="`chunks_per_source` requires `query`">

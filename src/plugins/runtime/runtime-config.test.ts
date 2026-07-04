@@ -53,6 +53,25 @@ describe("createRuntimeConfig", () => {
     );
   });
 
+  it("uses a host-prepared getter for an isolated discovery runtime", () => {
+    const configSnapshot = {
+      plugins: {
+        entries: {
+          brokered: {
+            config: {
+              token: { source: "env", provider: "default", id: "BROKERED_TOKEN" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const configApi = createRuntimeConfig(() => configSnapshot);
+
+    expect(configApi.current()).toBe(configSnapshot);
+    expect(configApi.loadConfig()).toBe(configSnapshot);
+    expect(getRuntimeConfigMock).not.toHaveBeenCalled();
+  });
+
   it("attributes deprecated loadConfig warnings to the active plugin scope", () => {
     const runtimeConfig = { plugins: { entries: {} } };
     getRuntimeConfigMock.mockReturnValue(runtimeConfig);

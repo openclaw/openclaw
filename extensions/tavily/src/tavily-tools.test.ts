@@ -24,6 +24,7 @@ type TavilyExtractParams = {
   urls?: string[];
   query?: string;
   chunksPerSource?: number;
+  requiresCredentialBroker?: boolean;
 };
 
 vi.mock("./tavily-client.js", () => ({
@@ -288,12 +289,14 @@ describe("tavily tools", () => {
     >;
     expect(searchParams.cfg).toBe(runtimeConfig);
     expect(searchParams.query).toBe("openclaw");
+    expect(searchParams.requiresCredentialBroker).toBe(true);
     const extractParams = requireFirstMockArg(
       runTavilyExtract,
       "Tavily extract params",
     ) as TavilyExtractParams;
     expect(extractParams.cfg).toBe(runtimeConfig);
     expect(extractParams.urls).toEqual(["https://example.com"]);
+    expect(extractParams.requiresCredentialBroker).toBe(true);
   });
 
   it("drops empty domain arrays and forwards query-scoped chunking", async () => {

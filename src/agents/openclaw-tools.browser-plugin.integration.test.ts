@@ -1,15 +1,28 @@
 // Verifies OpenClaw plugin tools are resolved with browser/runtime context.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  applyMergePatchToPairedRuntimeConfig,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 
 const hoisted = vi.hoisted(() => ({
   resolvePluginTools: vi.fn(),
 }));
 
+const BROKER_CAPABILITY_PROFILE = {
+  serviceIdentity: { agentId: "main" },
+  conversation: { sessionKey: "agent:main:discord:direct:alice", messageChannel: "discord" },
+  sender: { id: "alice" },
+};
+
 vi.mock("../plugins/tools.js", () => ({
+  copyPluginToolMeta: vi.fn(),
+  getPluginToolMeta: vi.fn(),
   resolvePluginTools: (...args: unknown[]) => hoisted.resolvePluginTools(...args),
 }));
 
@@ -277,6 +290,237 @@ describe("createOpenClawTools browser plugin integration", () => {
     });
 
     expect(capturedRuntimeConfig).toBe(resolvedRunConfig);
+  });
+
+  it("pairs scoped resolved config with its authored SecretRef for the credential broker", () => {
+    const secretRef = { source: "env", provider: "default", id: "TAVILY_API_KEY" } as const;
+    const sourceConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: secretRef } } } },
+      },
+      tools: { alsoAllow: ["tavily_search"] },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "resolved-value" } } } },
+      },
+      tools: { alsoAllow: ["tavily_search"] },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    const scopedRuntimeConfig = applyMergePatchToPairedRuntimeConfig({
+      runtimeConfig,
+      patch: { tools: { alsoAllow: ["tavily_search", "tavily_extract"] } },
+    });
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: scopedRuntimeConfig,
+        conversationCapabilityProfile: BROKER_CAPABILITY_PROFILE as never,
+      },
+      resolvedConfig: scopedRuntimeConfig,
+    });
+
+    const brokerContext = firstResolvePluginToolsParams().credentialBrokerContext as {
+      sourceConfig: OpenClawConfig;
+      runtimeConfig: OpenClawConfig;
+    };
+    expect(
+      (
+        brokerContext.sourceConfig.plugins?.entries?.tavily?.config as {
+          webSearch?: { apiKey?: unknown };
+        }
+      ).webSearch?.apiKey,
+    ).toEqual(secretRef);
+    expect(
+      (
+        brokerContext.runtimeConfig.plugins?.entries?.tavily?.config as {
+          webSearch?: { apiKey?: unknown };
+        }
+      ).webSearch?.apiKey,
+    ).toBe("resolved-value");
+    expect(brokerContext.sourceConfig.tools?.alsoAllow).toEqual([
+      "tavily_search",
+      "tavily_extract",
+    ]);
+  });
+
+  it("retains a prepared config's SecretRef pairing across a runtime snapshot refresh", () => {
+    const firstSecretRef = {
+      source: "env",
+      provider: "default",
+      id: "FIRST_TAVILY_API_KEY",
+    } as const;
+    const firstSourceConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: firstSecretRef } } } },
+      },
+    } as OpenClawConfig;
+    const firstRuntimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "first-resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(firstRuntimeConfig, firstSourceConfig);
+
+    const nextSourceConfig = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "NEXT_TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const nextRuntimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "next-resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(nextRuntimeConfig, nextSourceConfig);
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: firstRuntimeConfig,
+        conversationCapabilityProfile: BROKER_CAPABILITY_PROFILE as never,
+      },
+      resolvedConfig: firstRuntimeConfig,
+    });
+
+    const brokerContext = firstResolvePluginToolsParams().credentialBrokerContext as {
+      sourceConfig: OpenClawConfig;
+      runtimeConfig: OpenClawConfig;
+    };
+    expect(
+      (
+        brokerContext.sourceConfig.plugins?.entries?.tavily?.config as {
+          webSearch?: { apiKey?: unknown };
+        }
+      ).webSearch?.apiKey,
+    ).toEqual(firstSecretRef);
+    expect(brokerContext.runtimeConfig).toBe(firstRuntimeConfig);
+  });
+
+  it("does not associate an unrelated literal config with the active SecretRef snapshot", () => {
+    const secretRef = { source: "env", provider: "default", id: "TAVILY_API_KEY" } as const;
+    const sourceConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: secretRef } } } },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "active-resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    const explicitConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "explicit-literal-value" } } } },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: explicitConfig,
+        conversationCapabilityProfile: BROKER_CAPABILITY_PROFILE as never,
+      },
+      resolvedConfig: explicitConfig,
+    });
+
+    const brokerContext = firstResolvePluginToolsParams().credentialBrokerContext as {
+      sourceConfig: OpenClawConfig;
+      runtimeConfig?: OpenClawConfig;
+    };
+    expect(brokerContext.runtimeConfig).toBeUndefined();
+    expect(
+      (
+        brokerContext.sourceConfig.plugins?.entries?.tavily?.config as {
+          webSearch?: { apiKey?: unknown };
+        }
+      ).webSearch?.apiKey,
+    ).toBe("explicit-literal-value");
+  });
+
+  it("omits brokered tools when the prepared profile lacks sender scope", () => {
+    const secretRef = { source: "env", provider: "default", id: "TAVILY_API_KEY" } as const;
+    const sourceConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: secretRef } } } },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    resolveOpenClawPluginToolsForOptions({
+      options: {
+        config: runtimeConfig,
+        conversationCapabilityProfile: {
+          ...BROKER_CAPABILITY_PROFILE,
+          sender: {},
+        } as never,
+      },
+      resolvedConfig: runtimeConfig,
+    });
+
+    const params = firstResolvePluginToolsParams();
+    expect(params.credentialBrokerContext).toBeUndefined();
+    expect(params.omitCredentialBrokerToolsWithoutContext).toBe(true);
+  });
+
+  it("prepares a fail-closed capability profile for direct tool assembly", () => {
+    hoisted.resolvePluginTools.mockReturnValue([]);
+    const secretRef = { source: "env", provider: "default", id: "TAVILY_API_KEY" } as const;
+    const sourceConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: secretRef } } } },
+      },
+      tools: { alsoAllow: ["tavily_search"] },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "resolved-value" } } } },
+      },
+      tools: { alsoAllow: ["tavily_search"] },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    createOpenClawTools({
+      config: runtimeConfig,
+      agentSessionKey: "agent:main:discord:direct:alice",
+      agentChannel: "discord",
+      requesterAgentIdOverride: "main",
+      requesterSenderId: "alice",
+      pluginToolAllowlist: ["tavily_search"],
+      wrapBeforeToolCallHook: false,
+    });
+
+    const brokerContext = firstResolvePluginToolsParams().credentialBrokerContext as {
+      profile: {
+        conversation: { sessionKey?: string; messageChannel?: string };
+        sender: { id?: string | null };
+      };
+      sourceConfig: OpenClawConfig;
+    };
+    expect(brokerContext.profile.conversation).toMatchObject({
+      sessionKey: "agent:main:discord:direct:alice",
+      messageChannel: "discord",
+    });
+    expect(brokerContext.profile.sender.id).toBe("alice");
+    expect(
+      (
+        brokerContext.sourceConfig.plugins?.entries?.tavily?.config as {
+          webSearch?: { apiKey?: unknown };
+        }
+      ).webSearch?.apiKey,
+    ).toEqual(secretRef);
   });
 
   it("does not let a source-less pinned config snapshot override explicit plugin tool config", () => {

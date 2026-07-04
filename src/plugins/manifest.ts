@@ -32,7 +32,23 @@ const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
 const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
 const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const MAX_CREDENTIAL_BROKER_OPERATIONS = 64;
+const MAX_CREDENTIAL_BROKER_REQUEST_BYTES = 1024 * 1024;
+const MAX_CREDENTIAL_BROKER_RESPONSE_BYTES = 64 * 1024 * 1024;
+const MAX_CREDENTIAL_BROKER_TIMEOUT_MS = 120_000;
 const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
+const CREDENTIAL_BROKER_CONFIG_PATH_PATTERN = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
+const CREDENTIAL_BROKER_ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
+const CREDENTIAL_BROKER_OPERATION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const CREDENTIAL_BROKER_HEADER_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
+const CREDENTIAL_BROKER_SCHEME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/;
+const CREDENTIAL_BROKER_SAFE_STATIC_HEADERS = new Set([
+  "accept",
+  "accept-language",
+  "user-agent",
+  "x-client-source",
+  "x-client-version",
+]);
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -294,6 +310,27 @@ export type PluginManifestConfigContracts = {
   secretInputs?: PluginManifestSecretInputContracts;
 };
 
+export type PluginManifestCredentialBrokerOperation = {
+  id: string;
+  tool: string;
+  secretInputPath: string;
+  baseUrlConfigPath?: string;
+  baseUrlEnv?: string;
+  defaultBaseUrl: string;
+  path: string;
+  method: "POST";
+  credentialHeader: "Authorization" | "X-Api-Key";
+  credentialScheme?: string;
+  headers?: Record<string, string>;
+  maxRequestBodyBytes: number;
+  maxResponseBodyBytes: number;
+  timeoutMs: number;
+};
+
+export type PluginManifestCredentialBroker = {
+  operations: PluginManifestCredentialBrokerOperation[];
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -398,6 +435,8 @@ export type PluginManifest = {
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap plugin-tool availability metadata without importing plugin runtime. */
   toolMetadata?: Record<string, PluginManifestToolMetadata>;
+  /** Manifest-declared credentialed operations available only through the scoped broker. */
+  credentialBroker?: PluginManifestCredentialBroker;
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
@@ -839,6 +878,143 @@ function normalizePluginToolMetadata(
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+type CredentialBrokerHeadersNormalizationResult =
+  | { ok: true; value?: Record<string, string> }
+  | { ok: false };
+
+function normalizeCredentialBrokerHeaders(
+  value: unknown,
+): CredentialBrokerHeadersNormalizationResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (!isRecord(value)) {
+    return { ok: false };
+  }
+  const headers: Record<string, string> = {};
+  for (const [rawName, rawValue] of Object.entries(value)) {
+    const name = rawName.trim();
+    if (
+      !CREDENTIAL_BROKER_HEADER_NAME_PATTERN.test(name) ||
+      !CREDENTIAL_BROKER_SAFE_STATIC_HEADERS.has(name.toLowerCase()) ||
+      typeof rawValue !== "string" ||
+      rawValue.length > 512 ||
+      /[\r\n]/u.test(rawValue)
+    ) {
+      return { ok: false };
+    }
+    headers[name] = rawValue;
+  }
+  return Object.keys(headers).length > 0 ? { ok: true, value: headers } : { ok: true };
+}
+
+type CredentialBrokerNormalizationResult =
+  | { ok: true; value?: PluginManifestCredentialBroker }
+  | { ok: false };
+
+function normalizeManifestCredentialBroker(
+  value: unknown,
+  declaredTools: ReadonlySet<string>,
+  declaredSecretInputs: ReadonlySet<string>,
+): CredentialBrokerNormalizationResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.operations) ||
+    value.operations.length === 0 ||
+    value.operations.length > MAX_CREDENTIAL_BROKER_OPERATIONS
+  ) {
+    return { ok: false };
+  }
+  const operations: PluginManifestCredentialBrokerOperation[] = [];
+  const seen = new Set<string>();
+  for (const rawOperation of value.operations) {
+    if (!isRecord(rawOperation)) {
+      return { ok: false };
+    }
+    const id = normalizeOptionalString(rawOperation.id) ?? "";
+    const tool = normalizeOptionalString(rawOperation.tool) ?? "";
+    const secretInputPath = normalizeOptionalString(rawOperation.secretInputPath) ?? "";
+    const baseUrlConfigPath = normalizeOptionalString(rawOperation.baseUrlConfigPath);
+    const baseUrlEnv = normalizeOptionalString(rawOperation.baseUrlEnv);
+    const defaultBaseUrl = normalizeOptionalString(rawOperation.defaultBaseUrl) ?? "";
+    const pathLocal = normalizeOptionalString(rawOperation.path) ?? "";
+    const credentialHeaderRaw = normalizeOptionalString(rawOperation.credentialHeader) ?? "";
+    const credentialHeader =
+      credentialHeaderRaw.toLowerCase() === "authorization"
+        ? "Authorization"
+        : credentialHeaderRaw.toLowerCase() === "x-api-key"
+          ? "X-Api-Key"
+          : undefined;
+    const credentialScheme = normalizeOptionalString(rawOperation.credentialScheme);
+    const maxRequestBodyBytes = normalizeManifestPositiveInteger(
+      rawOperation.maxRequestBodyBytes,
+      MAX_CREDENTIAL_BROKER_REQUEST_BYTES,
+    );
+    const maxResponseBodyBytes = normalizeManifestPositiveInteger(
+      rawOperation.maxResponseBodyBytes,
+      MAX_CREDENTIAL_BROKER_RESPONSE_BYTES,
+    );
+    const timeoutMs = normalizeManifestPositiveInteger(
+      rawOperation.timeoutMs,
+      MAX_CREDENTIAL_BROKER_TIMEOUT_MS,
+    );
+    let parsedDefaultBaseUrl: URL | undefined;
+    try {
+      parsedDefaultBaseUrl = new URL(defaultBaseUrl);
+    } catch {}
+    if (
+      !CREDENTIAL_BROKER_OPERATION_ID_PATTERN.test(id) ||
+      seen.has(id) ||
+      !declaredTools.has(tool) ||
+      !declaredSecretInputs.has(secretInputPath) ||
+      !CREDENTIAL_BROKER_CONFIG_PATH_PATTERN.test(secretInputPath) ||
+      (baseUrlConfigPath && !CREDENTIAL_BROKER_CONFIG_PATH_PATTERN.test(baseUrlConfigPath)) ||
+      (baseUrlEnv && !CREDENTIAL_BROKER_ENV_NAME_PATTERN.test(baseUrlEnv)) ||
+      rawOperation.method !== "POST" ||
+      !credentialHeader ||
+      (credentialScheme && !CREDENTIAL_BROKER_SCHEME_PATTERN.test(credentialScheme)) ||
+      !parsedDefaultBaseUrl ||
+      parsedDefaultBaseUrl.protocol !== "https:" ||
+      parsedDefaultBaseUrl.username ||
+      parsedDefaultBaseUrl.password ||
+      parsedDefaultBaseUrl.search ||
+      parsedDefaultBaseUrl.hash ||
+      !pathLocal.startsWith("/") ||
+      pathLocal.startsWith("//") ||
+      !maxRequestBodyBytes ||
+      !maxResponseBodyBytes ||
+      !timeoutMs
+    ) {
+      return { ok: false };
+    }
+    seen.add(id);
+    const headers = normalizeCredentialBrokerHeaders(rawOperation.headers);
+    if (!headers.ok) {
+      return { ok: false };
+    }
+    operations.push({
+      id,
+      tool,
+      secretInputPath,
+      ...(baseUrlConfigPath ? { baseUrlConfigPath } : {}),
+      ...(baseUrlEnv ? { baseUrlEnv } : {}),
+      defaultBaseUrl: parsedDefaultBaseUrl.toString(),
+      path: pathLocal,
+      method: "POST",
+      credentialHeader,
+      ...(credentialScheme ? { credentialScheme } : {}),
+      ...(headers.value ? { headers: headers.value } : {}),
+      maxRequestBodyBytes,
+      maxResponseBodyBytes,
+      timeoutMs,
+    });
+  }
+  return { ok: true, value: { operations } };
 }
 
 function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
@@ -1815,6 +1991,19 @@ export function loadPluginManifest(
   );
   const toolMetadata = normalizePluginToolMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
+  const credentialBrokerResult = normalizeManifestCredentialBroker(
+    raw.credentialBroker,
+    new Set(contracts?.tools ?? []),
+    new Set(configContracts?.secretInputs?.paths.map((entry) => entry.path) ?? []),
+  );
+  if (!credentialBrokerResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: "plugin manifest credentialBroker is invalid",
+      manifestPath,
+    });
+  }
+  const credentialBroker = credentialBrokerResult.value;
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
   let uiHints: Record<string, PluginConfigUiHint> | undefined;
@@ -1868,6 +2057,7 @@ export function loadPluginManifest(
       videoGenerationProviderMetadata,
       musicGenerationProviderMetadata,
       toolMetadata,
+      credentialBroker,
       configContracts,
       channelConfigs,
     },

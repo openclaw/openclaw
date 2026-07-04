@@ -1,5 +1,9 @@
 // Tavily plugin module implements tavily client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  BrokeredCredentialRequestHandle,
+  OpenClawCredentialBroker,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -40,6 +44,9 @@ export type TavilySearchParams = {
   includeDomains?: string[];
   excludeDomains?: string[];
   timeoutSeconds?: number;
+  credentialBroker?: OpenClawCredentialBroker;
+  requiresCredentialBroker?: boolean;
+  signal?: AbortSignal;
 };
 
 export type TavilyExtractParams = {
@@ -50,6 +57,9 @@ export type TavilyExtractParams = {
   chunksPerSource?: number;
   includeImages?: boolean;
   timeoutSeconds?: number;
+  credentialBroker?: OpenClawCredentialBroker;
+  requiresCredentialBroker?: boolean;
+  signal?: AbortSignal;
 };
 
 function resolveEndpoint(baseUrl: string, pathname: string): string {
@@ -72,11 +82,23 @@ async function postTavilyJson(params: {
   baseUrl: string;
   pathname: "/extract" | "/search";
   timeoutSeconds: number;
-  apiKey: string;
+  apiKey?: string;
+  credentialRequest?: BrokeredCredentialRequestHandle;
+  signal?: AbortSignal;
   body: Record<string, unknown>;
   errorLabel: string;
   responseMaxBytes?: number;
 }): Promise<Record<string, unknown>> {
+  if (params.credentialRequest) {
+    const result = await params.credentialRequest.execute({ signal: params.signal });
+    if (!result.body || typeof result.body !== "object" || Array.isArray(result.body)) {
+      throw new Error(`${params.errorLabel}: malformed JSON response`);
+    }
+    return result.body as Record<string, unknown>;
+  }
+  if (!params.apiKey) {
+    throw new Error(`${params.errorLabel}: missing API key`);
+  }
   return postTrustedWebToolsJson(
     {
       url: resolveEndpoint(params.baseUrl, params.pathname),
@@ -85,6 +107,7 @@ async function postTavilyJson(params: {
       body: params.body,
       errorLabel: params.errorLabel,
       extraHeaders: { "X-Client-Source": "openclaw" },
+      signal: params.signal,
     },
     async (response) =>
       readTavilyJsonResponse(response, params.errorLabel, {
@@ -104,8 +127,12 @@ async function readTavilyJsonResponse(
 export async function runTavilySearch(
   params: TavilySearchParams,
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveTavilyApiKey(params.cfg);
-  if (!apiKey) {
+  const usesCredentialBroker = params.credentialBroker?.isConfigured("search") === true;
+  if (params.requiresCredentialBroker && !usesCredentialBroker) {
+    throw new Error("web_search (tavily) requires a conversation-scoped credential broker.");
+  }
+  const apiKey = usesCredentialBroker ? undefined : resolveTavilyApiKey(params.cfg);
+  if (!usesCredentialBroker && !apiKey) {
     throw new Error(
       "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
     );
@@ -116,25 +143,6 @@ export async function runTavilySearch(
       : DEFAULT_SEARCH_COUNT;
   const timeoutSeconds = resolveTavilySearchTimeoutSeconds(params.timeoutSeconds);
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
-
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      type: "tavily-search",
-      q: params.query,
-      count,
-      baseUrl,
-      searchDepth: params.searchDepth,
-      topic: params.topic,
-      includeAnswer: params.includeAnswer,
-      timeRange: params.timeRange,
-      includeDomains: params.includeDomains,
-      excludeDomains: params.excludeDomains,
-    }),
-  );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
 
   const body: Record<string, unknown> = {
     query: params.query,
@@ -158,6 +166,29 @@ export async function runTavilySearch(
   if (params.excludeDomains?.length) {
     body.exclude_domains = params.excludeDomains;
   }
+  const credentialRequest = usesCredentialBroker
+    ? params.credentialBroker!.createRequest({ operationId: "search", body })
+    : undefined;
+
+  const cacheKey = normalizeCacheKey(
+    JSON.stringify({
+      type: "tavily-search",
+      q: params.query,
+      count,
+      baseUrl,
+      searchDepth: params.searchDepth,
+      topic: params.topic,
+      includeAnswer: params.includeAnswer,
+      timeRange: params.timeRange,
+      includeDomains: params.includeDomains,
+      excludeDomains: params.excludeDomains,
+    }),
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey);
+  if (cached) {
+    credentialRequest?.revoke();
+    return { ...cached.value, cached: true };
+  }
 
   const start = Date.now();
   const payload = await postTavilyJson({
@@ -167,6 +198,8 @@ export async function runTavilySearch(
     apiKey,
     body,
     errorLabel: "Tavily Search",
+    credentialRequest,
+    signal: params.signal,
   });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];
@@ -211,30 +244,18 @@ export async function runTavilySearch(
 export async function runTavilyExtract(
   params: TavilyExtractParams,
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveTavilyApiKey(params.cfg);
-  if (!apiKey) {
+  const usesCredentialBroker = params.credentialBroker?.isConfigured("extract") === true;
+  if (params.requiresCredentialBroker && !usesCredentialBroker) {
+    throw new Error("tavily_extract requires a conversation-scoped credential broker.");
+  }
+  const apiKey = usesCredentialBroker ? undefined : resolveTavilyApiKey(params.cfg);
+  if (!usesCredentialBroker && !apiKey) {
     throw new Error(
       "tavily_extract needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
     );
   }
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
   const timeoutSeconds = resolveTavilyExtractTimeoutSeconds(params.timeoutSeconds);
-
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      type: "tavily-extract",
-      urls: params.urls,
-      baseUrl,
-      query: params.query,
-      extractDepth: params.extractDepth,
-      chunksPerSource: params.chunksPerSource,
-      includeImages: params.includeImages,
-    }),
-  );
-  const cached = readCache(EXTRACT_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
 
   const body: Record<string, unknown> = { urls: params.urls };
   if (params.query) {
@@ -249,6 +270,26 @@ export async function runTavilyExtract(
   if (params.includeImages) {
     body.include_images = true;
   }
+  const credentialRequest = usesCredentialBroker
+    ? params.credentialBroker!.createRequest({ operationId: "extract", body })
+    : undefined;
+
+  const cacheKey = normalizeCacheKey(
+    JSON.stringify({
+      type: "tavily-extract",
+      urls: params.urls,
+      baseUrl,
+      query: params.query,
+      extractDepth: params.extractDepth,
+      chunksPerSource: params.chunksPerSource,
+      includeImages: params.includeImages,
+    }),
+  );
+  const cached = readCache(EXTRACT_CACHE, cacheKey);
+  if (cached) {
+    credentialRequest?.revoke();
+    return { ...cached.value, cached: true };
+  }
 
   const start = Date.now();
   const payload = await postTavilyJson({
@@ -260,6 +301,8 @@ export async function runTavilyExtract(
     errorLabel: "Tavily Extract",
     // Extract can include raw page content and image lists, unlike search metadata.
     responseMaxBytes: TAVILY_EXTRACT_RESPONSE_MAX_BYTES,
+    credentialRequest,
+    signal: params.signal,
   });
 
   const rawResults = Array.isArray(payload.results) ? payload.results : [];

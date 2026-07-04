@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -28,6 +29,8 @@ export type OpenClawPluginToolOptions = {
   senderIsOwner?: boolean;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  /** Prepared conversation-scoped facts used by host-owned security boundaries. */
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   /**
    * Explicit one-shot local CLI runs should not keep plugin-owned process
    * resources alive after emitting their result.

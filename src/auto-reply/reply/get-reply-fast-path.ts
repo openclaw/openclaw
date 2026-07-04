@@ -6,7 +6,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
+import { getRuntimeConfigSourcePair } from "../../config/runtime-snapshot.js";
+import { applyMergePatchToPairedRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore } from "../../config/sessions/store.js";
@@ -117,7 +118,17 @@ export function resolveGetReplyConfig(params: {
   if (isCompleteReplyConfig(configOverride)) {
     return configOverride;
   }
-  return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
+  const runtimeConfig = params.getRuntimeConfig();
+  if (
+    configOverride === runtimeConfig ||
+    getRuntimeConfigSourcePair(configOverride) !== undefined
+  ) {
+    return configOverride;
+  }
+  return applyMergePatchToPairedRuntimeConfig({
+    runtimeConfig,
+    patch: configOverride,
+  });
 }
 
 export function shouldUseReplyFastTestBootstrap(params: {

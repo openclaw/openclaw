@@ -3,6 +3,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
+import { loadManifestContractSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
@@ -19,6 +21,11 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  getRuntimeConfigSourceSnapshot: vi.fn(() => undefined),
+}));
+
+vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestContractSnapshot: vi.fn(() => ({ index: {}, plugins: [] })),
 }));
 
 const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
@@ -124,6 +131,8 @@ describe("tools.catalog handler", () => {
     pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
     getActivePluginRegistryMock.mockReturnValue(null);
     vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
+    vi.mocked(getRuntimeConfigSourceSnapshot).mockReturnValue(undefined);
+    vi.mocked(loadManifestContractSnapshot).mockReturnValue({ index: {}, plugins: [] } as never);
   });
 
   it("rejects invalid params", async () => {
@@ -189,6 +198,7 @@ describe("tools.catalog handler", () => {
 
     const resolveArgs = firstMockArg(vi.mocked(resolvePluginTools), "resolvePluginTools args") as {
       allowGatewaySubagentBinding?: boolean;
+      omitCredentialBrokerToolsWithoutContext?: boolean;
       suppressNameConflicts?: boolean;
       toolAllowlist?: string[];
       context?: {
@@ -199,6 +209,7 @@ describe("tools.catalog handler", () => {
       existingToolNames?: Set<string>;
     };
     expect(resolveArgs.allowGatewaySubagentBinding).toBe(true);
+    expect(resolveArgs.omitCredentialBrokerToolsWithoutContext).toBe(true);
     expect(resolveArgs.suppressNameConflicts).toBe(true);
     expect(resolveArgs.toolAllowlist).toEqual(["group:plugins"]);
     expect(resolveArgs.context?.agentId).toBe("main");
@@ -223,10 +234,66 @@ describe("tools.catalog handler", () => {
     expect(registryArgs.toolAllowlist).toEqual(["group:plugins"]);
     expect(registryArgs.context).toEqual({
       config: {},
+      runtimeConfig: {},
       workspaceDir: "/tmp/workspace-main",
       agentDir: "/tmp/agents/main/agent",
       agentId: "main",
     });
+  });
+
+  it("omits declared brokered tools when the catalog has no prepared conversation scope", async () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    vi.mocked(getRuntimeConfigSourceSnapshot).mockReturnValue(sourceConfig as never);
+    vi.mocked(loadManifestContractSnapshot).mockReturnValue({
+      index: {},
+      plugins: [
+        {
+          id: "tavily",
+          credentialBroker: {
+            operations: [
+              {
+                id: "search",
+                tool: "tavily_search",
+                secretInputPath: "webSearch.apiKey",
+              },
+            ],
+          },
+        },
+      ],
+    } as never);
+    const toolRegistry = createEmptyPluginRegistry();
+    toolRegistry.tools.push({
+      pluginId: "tavily",
+      pluginName: "Tavily",
+      factory: vi.fn(),
+      names: [],
+      declaredNames: ["tavily_search"],
+      optional: true,
+      source: "test",
+    });
+    vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(toolRegistry);
+    vi.mocked(resolvePluginTools).mockReturnValueOnce([]);
+
+    const { respond, invoke } = createInvokeParams({});
+    await invoke();
+
+    const payload = expectCatalogPayload(respond);
+    const pluginToolIds = payload.groups
+      .filter((group) => group.source === "plugin")
+      .flatMap((group) => group.tools.map((tool) => tool.id));
+    expect(pluginToolIds).not.toContain("tavily_search");
   });
 
   it("projects metadata from the exact tool-discovery registry", async () => {

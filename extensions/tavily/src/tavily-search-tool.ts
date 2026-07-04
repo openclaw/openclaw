@@ -7,7 +7,11 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
 import { runTavilySearch } from "./tavily-client.js";
-import { resolveTavilyToolConfig, type TavilyToolConfigContext } from "./tavily-tool-config.js";
+import {
+  resolveTavilyToolConfig,
+  tavilyToolRequiresCredentialBroker,
+  type TavilyToolConfigContext,
+} from "./tavily-tool-config.js";
 import { optionalStringEnum } from "./tavily-tool-schema.js";
 
 const TavilySearchToolSchema = Type.Object(
@@ -55,7 +59,11 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
     description:
       "Search the web using Tavily Search API. Supports search depth, topic filtering, domain filters, time ranges, and AI answer summaries.",
     parameters: TavilySearchToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
       const query = readStringParam(rawParams, "query", { required: true });
       const searchDepth = readStringParam(rawParams, "search_depth") || undefined;
       const topic = readStringParam(rawParams, "topic") || undefined;
@@ -83,6 +91,9 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
           timeRange,
           includeDomains: includeDomains?.length ? includeDomains : undefined,
           excludeDomains: excludeDomains?.length ? excludeDomains : undefined,
+          ...(ctx?.credentialBroker ? { credentialBroker: ctx.credentialBroker } : {}),
+          ...(tavilyToolRequiresCredentialBroker(ctx) ? { requiresCredentialBroker: true } : {}),
+          ...(signal ? { signal } : {}),
         }),
       );
     },

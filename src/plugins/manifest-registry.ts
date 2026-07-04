@@ -35,6 +35,7 @@ import {
   type OpenClawPackageManifest,
   type PluginManifestActivation,
   type PluginManifestConfigContracts,
+  type PluginManifestCredentialBroker,
   type PluginManifest,
   type PluginManifestCapabilityProviderMetadata,
   type PluginManifestChannelCommandDefaults,
@@ -263,6 +264,7 @@ export type PluginManifestRecord = {
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   toolMetadata?: Record<string, PluginManifestToolMetadata>;
+  credentialBroker?: PluginManifestCredentialBroker;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -561,6 +563,7 @@ function buildRecord(params: {
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,
     toolMetadata: params.manifest.toolMetadata,
+    credentialBroker: params.manifest.credentialBroker,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id

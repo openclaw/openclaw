@@ -1,8 +1,11 @@
 // Verifies optional plugin tool registration and absence handling.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import type { OpenClawCredentialBroker } from "./credential-broker-types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
 type MockRegistryToolEntry = {
@@ -98,6 +101,11 @@ function createToolRegistry(entries: MockRegistryToolEntry[]) {
       pluginId: string;
       source: string;
       message: string;
+    }>,
+    toolMetadata: [] as Array<{
+      pluginId: string;
+      source: string;
+      metadata: { toolName: string; displayName?: string };
     }>,
   };
 }
@@ -1349,6 +1357,491 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolveOptionalDemoTools();
 
     expect(tools).toHaveLength(0);
+  });
+
+  it("injects a manifest-declared credential broker into its owning tool factory", () => {
+    const sourceConfig = {
+      ...createContext().config,
+      tools: { allow: ["brokered_action"] },
+      plugins: {
+        ...createContext().config.plugins,
+        allow: [...createContext().config.plugins.allow, "broker-demo"],
+        entries: {
+          "broker-demo": {
+            config: {
+              service: {
+                token: { source: "env", provider: "default", id: "BROKER_DEMO_TOKEN" },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const runtimeEntry = runtimeConfig.plugins?.entries?.["broker-demo"]?.config as {
+      service?: { token?: unknown };
+    };
+    if (runtimeEntry.service) {
+      runtimeEntry.service.token = "resolved-secret-must-not-cross";
+    }
+    let credentialBroker: OpenClawCredentialBroker | undefined;
+    let factoryContext: {
+      config?: OpenClawConfig;
+      runtimeConfig?: OpenClawConfig;
+      getRuntimeConfig?: () => OpenClawConfig | undefined;
+    } = {};
+    const factory = vi.fn((rawContext: unknown) => {
+      factoryContext = rawContext as typeof factoryContext;
+      credentialBroker = (rawContext as { credentialBroker?: OpenClawCredentialBroker })
+        .credentialBroker;
+      return makeTool("brokered_action");
+    });
+    const registry = createToolRegistry([
+      {
+        pluginId: "broker-demo",
+        optional: false,
+        source: "/tmp/broker-demo.js",
+        names: ["brokered_action"],
+        factory,
+      },
+    ]);
+    const manifestPlugin = {
+      id: "broker-demo",
+      origin: "bundled",
+      enabledByDefault: true,
+      channels: [],
+      providers: [],
+      contracts: { tools: ["brokered_action"] },
+      credentialBroker: {
+        operations: [
+          {
+            id: "action",
+            tool: "brokered_action",
+            secretInputPath: "service.token",
+            defaultBaseUrl: "https://api.example.test",
+            path: "/action",
+            method: "POST",
+            credentialHeader: "Authorization",
+            maxRequestBodyBytes: 1024,
+            maxResponseBodyBytes: 1024,
+            timeoutMs: 1000,
+          },
+        ],
+      },
+    };
+    installToolManifestSnapshot({
+      config: sourceConfig as never,
+      compatibleConfigs: [runtimeConfig as never],
+      plugin: manifestPlugin,
+    });
+    const profile = resolveConversationCapabilityProfile({
+      config: sourceConfig,
+      sessionKey: "agent:main:discord:direct:alice",
+      agentId: "main",
+      messageProvider: "discord",
+      messageChannel: "discord",
+      chatType: "direct",
+      senderId: "alice",
+      workspaceDir: "/tmp",
+    });
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+        getRuntimeConfig: () => runtimeConfig,
+      } as never,
+      runtimeRegistry: registry as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerContext: {
+        profile,
+        sourceConfig,
+        runtimeConfig,
+      },
+    });
+
+    expectResolvedToolNames(tools, ["brokered_action"]);
+    expect(factory).toHaveBeenCalledOnce();
+    expect(credentialBroker?.isConfigured("action")).toBe(true);
+    expect(JSON.stringify(factoryContext.config)).not.toContain("BROKER_DEMO_TOKEN");
+    expect(JSON.stringify(factoryContext.runtimeConfig)).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(factoryContext.getRuntimeConfig?.())).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
+      cache?: boolean;
+      config?: OpenClawConfig;
+      activationSourceConfig?: OpenClawConfig;
+      runtimeOptions?: { getConfig?: () => OpenClawConfig };
+    };
+    expect(loaderParams.cache).toBe(false);
+    expect(JSON.stringify(loaderParams.config)).not.toContain("resolved-secret-must-not-cross");
+    expect(JSON.stringify(loaderParams.activationSourceConfig)).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(loaderParams.runtimeOptions?.getConfig?.())).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(loaderParams.runtimeOptions?.getConfig?.())).toContain(
+      "BROKER_DEMO_TOKEN",
+    );
+
+    factory.mockClear();
+    credentialBroker = undefined;
+    resetPluginToolFactoryCache();
+    resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+      } as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerSourceConfig: sourceConfig,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    const unavailableBroker = credentialBroker as OpenClawCredentialBroker | undefined;
+    expect(unavailableBroker?.isConfigured("action")).toBe(true);
+    expect(() => unavailableBroker?.createRequest({ operationId: "action", body: {} })).toThrow(
+      "Credential broker requires a prepared conversation capability profile.",
+    );
+    expect(JSON.stringify(factoryContext.config)).not.toContain("resolved-secret-must-not-cross");
+
+    resetPluginToolFactoryCache();
+    const unscopedTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+      } as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerSourceConfig: sourceConfig,
+      omitCredentialBrokerToolsWithoutContext: true,
+    });
+
+    expect(unscopedTools).toEqual([]);
+
+    const literalSourceConfig = structuredClone(sourceConfig);
+    const literalEntry = literalSourceConfig.plugins?.entries?.["broker-demo"]?.config as {
+      service?: { token?: unknown };
+    };
+    if (literalEntry.service) {
+      literalEntry.service.token = "literal-before-secret-ref";
+    }
+    let liveRuntimeConfig = literalSourceConfig;
+    factory.mockClear();
+    loadOpenClawPluginsMock.mockClear();
+    resetPluginToolFactoryCache();
+    installToolManifestSnapshot({
+      config: literalSourceConfig as never,
+      plugin: manifestPlugin,
+    });
+
+    resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: literalSourceConfig,
+        runtimeConfig: literalSourceConfig,
+        getRuntimeConfig: () => liveRuntimeConfig,
+      } as never,
+      runtimeRegistry: registry as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerSourceConfig: literalSourceConfig,
+    });
+
+    const literalLoaderParams = mockCallParams(loadOpenClawPluginsMock) as {
+      cache?: boolean;
+      runtimeOptions?: { getConfig?: () => OpenClawConfig };
+    };
+    expect(literalLoaderParams.cache).toBe(false);
+    expect(JSON.stringify(literalLoaderParams.runtimeOptions?.getConfig?.())).toContain(
+      "literal-before-secret-ref",
+    );
+    const transitionedRuntimeConfig = structuredClone(runtimeConfig);
+    const transitionedEntry = transitionedRuntimeConfig.plugins?.entries?.["broker-demo"]
+      ?.config as {
+      service?: { baseUrl?: string; token?: unknown };
+    };
+    if (transitionedEntry.service) {
+      transitionedEntry.service.baseUrl = "https://next.example.test";
+    }
+    liveRuntimeConfig = transitionedRuntimeConfig;
+    expect(JSON.stringify(factoryContext.getRuntimeConfig?.())).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(factoryContext.getRuntimeConfig?.())).toContain(
+      "literal-before-secret-ref",
+    );
+    expect(JSON.stringify(factoryContext.getRuntimeConfig?.())).toContain(
+      "https://next.example.test",
+    );
+    expect(JSON.stringify(literalLoaderParams.runtimeOptions?.getConfig?.())).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(literalLoaderParams.runtimeOptions?.getConfig?.())).toContain(
+      "literal-before-secret-ref",
+    );
+    expect(JSON.stringify(literalLoaderParams.runtimeOptions?.getConfig?.())).toContain(
+      "https://next.example.test",
+    );
+  });
+
+  it("does not reuse descriptors captured before a credential becomes brokered", () => {
+    const marker = "descriptor-credential-marker";
+    const createBrokerConfig = (token: unknown) =>
+      ({
+        ...createContext().config,
+        tools: { allow: ["brokered_action"] },
+        plugins: {
+          ...createContext().config.plugins,
+          allow: [...createContext().config.plugins.allow, "broker-demo"],
+          entries: {
+            "broker-demo": { config: { service: { token } } },
+          },
+        },
+      }) as OpenClawConfig;
+    const runtimeConfig = createBrokerConfig(marker);
+    const sourceConfig = createBrokerConfig({
+      source: "env",
+      provider: "default",
+      id: "BROKER_DESCRIPTOR_TOKEN",
+    });
+    const manifestPlugin = {
+      id: "broker-demo",
+      origin: "bundled",
+      enabledByDefault: true,
+      channels: [],
+      providers: [],
+      contracts: { tools: ["brokered_action"] },
+      credentialBroker: {
+        operations: [
+          {
+            id: "action",
+            tool: "brokered_action",
+            secretInputPath: "service.token",
+            defaultBaseUrl: "https://api.example.test",
+            path: "/action",
+            method: "POST",
+            credentialHeader: "Authorization",
+            maxRequestBodyBytes: 1024,
+            maxResponseBodyBytes: 1024,
+            timeoutMs: 1000,
+          },
+        ],
+      },
+    };
+    const factory = vi.fn((rawContext: unknown) => {
+      const config = (rawContext as { config?: OpenClawConfig }).config;
+      return {
+        ...makeTool("brokered_action"),
+        description: JSON.stringify(config).includes(marker)
+          ? `brokered action ${marker}`
+          : "brokered action safe",
+      };
+    });
+    const registry = createToolRegistry([
+      {
+        pluginId: "broker-demo",
+        optional: false,
+        source: "/tmp/broker-demo.js",
+        names: ["brokered_action"],
+        factory,
+      },
+    ]);
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+    installToolManifestSnapshot({ config: runtimeConfig as never, plugin: manifestPlugin });
+
+    const literalTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+      } as never,
+      runtimeRegistry: registry as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerSourceConfig: runtimeConfig,
+    });
+    expect(literalTools[0]?.description).toContain(marker);
+    expect(factory).toHaveBeenCalledOnce();
+
+    factory.mockClear();
+    installToolManifestSnapshot({
+      config: sourceConfig as never,
+      compatibleConfigs: [runtimeConfig as never],
+      plugin: manifestPlugin,
+    });
+    const profile = resolveConversationCapabilityProfile({
+      config: sourceConfig,
+      sessionKey: "agent:main:discord:direct:alice",
+      agentId: "main",
+      messageProvider: "discord",
+      messageChannel: "discord",
+      chatType: "direct",
+      senderId: "alice",
+      workspaceDir: "/tmp",
+    });
+    const brokeredTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+      } as never,
+      runtimeRegistry: registry as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerContext: { profile, sourceConfig, runtimeConfig },
+    });
+
+    expect(brokeredTools[0]?.description).toBe("brokered action safe");
+    expect(factory).toHaveBeenCalledOnce();
+  });
+
+  it("isolates broker owners without reloading unrelated plugin tools", () => {
+    const sourceConfig = {
+      ...createContext().config,
+      plugins: {
+        ...createContext().config.plugins,
+        allow: [...createContext().config.plugins.allow, "broker-demo", "regular-demo"],
+        entries: {
+          "broker-demo": {
+            config: {
+              service: {
+                token: { source: "env", provider: "default", id: "BROKER_DEMO_TOKEN" },
+              },
+            },
+          },
+          "regular-demo": { config: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const runtimeEntry = runtimeConfig.plugins?.entries?.["broker-demo"]?.config as {
+      service?: { token?: unknown };
+    };
+    if (runtimeEntry.service) {
+      runtimeEntry.service.token = "resolved-secret-must-not-cross";
+    }
+    const brokerManifest = {
+      id: "broker-demo",
+      origin: "bundled",
+      enabledByDefault: true,
+      channels: [],
+      providers: [],
+      contracts: { tools: ["brokered_action"] },
+      credentialBroker: {
+        operations: [
+          {
+            id: "action",
+            tool: "brokered_action",
+            secretInputPath: "service.token",
+            defaultBaseUrl: "https://api.example.test",
+            path: "/action",
+            method: "POST",
+            credentialHeader: "Authorization",
+            maxRequestBodyBytes: 1024,
+            maxResponseBodyBytes: 1024,
+            timeoutMs: 1000,
+          },
+        ],
+      },
+    };
+    installToolManifestSnapshots({
+      config: sourceConfig as never,
+      compatibleConfigs: [runtimeConfig as never],
+      plugins: [
+        brokerManifest,
+        {
+          id: "regular-demo",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["regular_action"] },
+        },
+      ],
+    });
+    const activeBrokerFactory = vi.fn(() => makeTool("brokered_action"));
+    const regularFactory = vi.fn(() => makeTool("regular_action"));
+    const isolatedBrokerFactory = vi.fn(() => makeTool("brokered_action"));
+    const runtimeRegistry = createToolRegistry([
+      {
+        pluginId: "broker-demo",
+        optional: false,
+        source: "/tmp/active-broker.js",
+        names: ["brokered_action"],
+        factory: activeBrokerFactory,
+      },
+      {
+        pluginId: "regular-demo",
+        optional: false,
+        source: "/tmp/regular.js",
+        names: ["regular_action"],
+        factory: regularFactory,
+      },
+    ]);
+    runtimeRegistry.toolMetadata = [
+      {
+        pluginId: "regular-demo",
+        source: "/tmp/regular.js",
+        metadata: { toolName: "regular_action", displayName: "Regular action" },
+      },
+    ];
+    const isolatedRegistry = createToolRegistry([
+      {
+        pluginId: "broker-demo",
+        optional: false,
+        source: "/tmp/isolated-broker.js",
+        names: ["brokered_action"],
+        factory: isolatedBrokerFactory,
+      },
+    ]);
+    isolatedRegistry.toolMetadata = [
+      {
+        pluginId: "broker-demo",
+        source: "/tmp/isolated-broker.js",
+        metadata: { toolName: "brokered_action", displayName: "Brokered action" },
+      },
+    ];
+    loadOpenClawPluginsMock.mockReturnValue(isolatedRegistry);
+    setActivePluginRegistry(
+      runtimeRegistry as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    const context = {
+      ...createContext(),
+      config: runtimeConfig,
+      runtimeConfig,
+      getRuntimeConfig: () => runtimeConfig,
+    } as never;
+    const catalogRegistry = ensureStandalonePluginToolRegistryLoaded({
+      context,
+      toolAllowlist: ["brokered_action", "regular_action"],
+      credentialBrokerSourceConfig: sourceConfig,
+    });
+
+    expect(catalogRegistry?.toolMetadata?.map((entry) => entry.metadata.displayName)).toEqual([
+      "Regular action",
+      "Brokered action",
+    ]);
+    loadOpenClawPluginsMock.mockClear();
+
+    const tools = resolvePluginTools({
+      context,
+      runtimeRegistry: runtimeRegistry as never,
+      toolAllowlist: ["brokered_action", "regular_action"],
+      credentialBrokerSourceConfig: sourceConfig,
+    });
+
+    expectResolvedToolNames(tools, ["regular_action", "brokered_action"]);
+    expect(regularFactory).toHaveBeenCalledOnce();
+    expect(activeBrokerFactory).not.toHaveBeenCalled();
+    expect(isolatedBrokerFactory).toHaveBeenCalledOnce();
+    expectLoaderSelectedOnlyPluginIds(["broker-demo"]);
   });
 
   it("does not invoke named optional tool factories without a matching allowlist", () => {
