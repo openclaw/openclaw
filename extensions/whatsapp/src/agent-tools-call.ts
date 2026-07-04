@@ -20,10 +20,13 @@ import { resolveJidToE164 } from "./targets-runtime.js";
 
 const MEOWCALLER_COMMAND = "meowcaller";
 const SESSION_DATABASE = "wa-voip.db";
-const CALL_ANSWER_GRACE_MS = 60_000;
-const MIN_CALL_WINDOW_MS = 60_000;
-const MAX_CALL_WINDOW_MS = 120_000;
-const MAX_AUDIO_DURATION_MS = MAX_CALL_WINDOW_MS - CALL_ANSWER_GRACE_MS;
+const MEOWCALLER_CONNECT_TIMEOUT_MS = 60_000;
+const MEOWCALLER_ANSWER_TIMEOUT_MS = 45_000;
+const CALL_SHUTDOWN_GRACE_MS = 10_000;
+const MAX_AUDIO_DURATION_MS = 60_000;
+const MIN_CALL_WINDOW_MS =
+  MEOWCALLER_CONNECT_TIMEOUT_MS + MEOWCALLER_ANSWER_TIMEOUT_MS + CALL_SHUTDOWN_GRACE_MS;
+const MAX_CALL_WINDOW_MS = MIN_CALL_WINDOW_MS + MAX_AUDIO_DURATION_MS;
 const MAX_MESSAGE_LENGTH = 4_000;
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
 const MEOWCALLER_ANSWER_TIMEOUT = "45s";
@@ -83,7 +86,18 @@ function quotePosixShellArg(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function resolveSetupCommand(stateDir: string, sessionStorePath: string): string {
+function quotePowerShellArg(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function resolveSetupCommand(
+  stateDir: string,
+  sessionStorePath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    return `meowcaller pair --store ${quotePowerShellArg(sessionStorePath)}`;
+  }
   const quotedStateDir = quotePosixShellArg(stateDir);
   const quotedStorePath = quotePosixShellArg(sessionStorePath);
   return `mkdir -p ${quotedStateDir} && chmod 700 ${quotedStateDir} && meowcaller pair --store ${quotedStorePath}`;
@@ -130,10 +144,7 @@ function resolveCallWindowMs(pcmBytes: number, sampleRate: number): number {
   if (audioDurationMs > MAX_AUDIO_DURATION_MS) {
     throw new Error("TTS audio exceeds the 60-second WhatsApp call limit");
   }
-  return Math.min(
-    MAX_CALL_WINDOW_MS,
-    Math.max(MIN_CALL_WINDOW_MS, Math.ceil(audioDurationMs + CALL_ANSWER_GRACE_MS)),
-  );
+  return Math.min(MAX_CALL_WINDOW_MS, Math.ceil(audioDurationMs + MIN_CALL_WINDOW_MS));
 }
 
 async function resolveRequesterE164(params: {
@@ -214,6 +225,7 @@ function createWhatsAppCallToolWithDependencies(
           accountId,
           stateDir,
           setupCommand: resolveSetupCommand(stateDir, sessionStorePath),
+          setupShell: process.platform === "win32" ? "PowerShell" : "POSIX shell",
           requiredCommand:
             "meowcaller notify --store <path> --answer-timeout 45s --max-duration 65s <target> <file>",
           note: "MeowCaller uses a separate WhatsApp linked-device session; it cannot reuse OpenClaw's Baileys credentials.",

@@ -168,7 +168,8 @@ meowcaller pair --store "$state_dir/wa-voip.db"
     Run the command in an interactive terminal. Scan its QR from **WhatsApp > Linked devices**
     and wait for `MeowCaller linked device ready`. The command then exits. Keep `wa-voip.db`
     private; it is the MeowCaller linked-device session. The `whatsapp_call` status action
-    returns the account-specific command when you use a non-default account.
+    returns the account-specific command and shell when you use a non-default account. On
+    Windows, run its PowerShell command; MeowCaller creates the store directory.
 
   </Step>
 
@@ -192,7 +193,8 @@ Current limits:
 - no self-calls from personal-number/self-chat mode
 - synthesized audio is limited to 60 seconds
 - no handset-side audibility receipt beyond MeowCaller's answer/playback/hangup completion
-- OpenClaw stops the companion process after a bounded 60–120 second window
+- OpenClaw stops the companion process after a bounded 115–175 second window, including
+  MeowCaller's connection, answer, playback, and shutdown phases
 
 ## Deployment patterns
 

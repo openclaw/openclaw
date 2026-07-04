@@ -147,7 +147,7 @@ describe("WhatsApp call tool", () => {
     expect(result?.details).toMatchObject({
       completed: true,
       recipient: "current WhatsApp requester",
-      callWindowSeconds: 61,
+      callWindowSeconds: 116,
       ttsProvider: "openai",
     });
     expect(audioPath).toBeDefined();
@@ -275,8 +275,8 @@ describe("WhatsApp call tool", () => {
     expect(() => testing.normalizeTelephonyPcm(Buffer.alloc(2), "mp3")).toThrow(
       "unsupported telephony format",
     );
-    expect(testing.resolveCallWindowMs(0, 24_000)).toBe(60_000);
-    expect(testing.resolveCallWindowMs(24_000 * 2 * 60, 24_000)).toBe(120_000);
+    expect(testing.resolveCallWindowMs(0, 24_000)).toBe(115_000);
+    expect(testing.resolveCallWindowMs(24_000 * 2 * 60, 24_000)).toBe(175_000);
     expect(() => testing.resolveCallWindowMs(24_000 * 2 * 61, 24_000)).toThrow(
       "60-second WhatsApp call limit",
     );
@@ -288,5 +288,12 @@ describe("WhatsApp call tool", () => {
     ).toBe(
       `mkdir -p '/tmp/call dir/$HOME'"'"'s' && chmod 700 '/tmp/call dir/$HOME'"'"'s' && meowcaller pair --store '/tmp/call dir/$HOME'"'"'s/wa-voip.db'`,
     );
+    expect(
+      testing.resolveSetupCommand(
+        String.raw`C:\Users\Peter O'Neil\calls`,
+        String.raw`C:\Users\Peter O'Neil\calls\wa-voip.db`,
+        "win32",
+      ),
+    ).toBe(String.raw`meowcaller pair --store 'C:\Users\Peter O''Neil\calls\wa-voip.db'`);
   });
 });
