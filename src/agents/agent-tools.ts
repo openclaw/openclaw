@@ -904,6 +904,7 @@ export function createOpenClawCodingTools(options?: {
             config: options?.config,
             fsPolicy,
             requesterSenderId: options?.senderId,
+            senderIsOwner: options?.senderIsOwner,
             sessionId: options?.sessionId,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
