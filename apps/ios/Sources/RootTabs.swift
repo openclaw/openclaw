@@ -861,6 +861,9 @@ struct RootTabs: View {
             .onChange(of: self.showOnboarding) { _, newValue in
                 guard !newValue else { return }
                 self.maybeRequestLocalNetworkAccess(reason: "onboarding_dismissed")
+                // A setup link can arrive while onboarding owns the screen. Replay it
+                // after dismissal so Settings can consume the still-pending link.
+                self.maybeOpenSettingsForGatewaySetup()
             }
             .onChange(of: self.appModel.openChatRequestID) { _, newValue in
                 self.handleOpenChatRequest(newValue)
@@ -1292,8 +1295,8 @@ extension RootTabs {
     private func maybeOpenSettingsForGatewaySetup() {
         let requestID = self.appModel.gatewaySetupRequestID
         guard requestID != 0, requestID != self.handledGatewaySetupRequestID else { return }
-        self.handledGatewaySetupRequestID = requestID
         guard !self.showOnboarding else { return }
+        self.handledGatewaySetupRequestID = requestID
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true

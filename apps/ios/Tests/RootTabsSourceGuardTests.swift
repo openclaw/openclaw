@@ -798,6 +798,10 @@ struct RootTabsSourceGuardTests {
             gatewaySetupSource.range(of: "self.handledGatewaySetupRequestID = requestID"))
         let onboardingSetupGuard = try #require(
             gatewaySetupSource.range(of: "guard !self.showOnboarding else { return }"))
+        let onboardingDismissal = try Self.extract(
+            rootSource,
+            from: ".onChange(of: self.showOnboarding)",
+            to: ".onChange(of: self.appModel.openChatRequestID)")
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("self.gatewayActions"))
@@ -853,7 +857,8 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
-        #expect(handledGatewaySetup.lowerBound < onboardingSetupGuard.lowerBound)
+        #expect(onboardingSetupGuard.lowerBound < handledGatewaySetup.lowerBound)
+        #expect(onboardingDismissal.contains("self.maybeOpenSettingsForGatewaySetup()"))
         #expect(settingsSource.contains("QRScannerView("))
         #expect(settingsOnDismiss.lowerBound < settingsProcessing.lowerBound)
         #expect(settingsProcessing.lowerBound < settingsContent.lowerBound)
