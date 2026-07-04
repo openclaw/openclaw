@@ -1814,7 +1814,7 @@ install_node() {
         fi
 
         # Arch-based distros: use pacman with official repos
-        if command -v pacman &> /dev/null || is_arch_linux; then
+        if command -v pacman &> /dev/null && is_arch_linux; then
             ui_info "Installing Node.js via pacman (Arch-based distribution detected)"
             if is_root; then
                 run_required_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
