@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeFastMode,
@@ -265,10 +266,6 @@ function shouldStripOpenAICompletionMessageKeys(model: {
       ? (model.compat as { strictMessageKeys?: unknown })
       : undefined;
   return model.api === "openai-completions" && compat?.strictMessageKeys === true;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function hasResponsesWebSearchTool(tools: unknown): boolean {

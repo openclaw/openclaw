@@ -22,16 +22,6 @@
     <string name="password">密碼</string>
     <string name="run_onboarding_again">再次執行新手導覽</string>
     <string name="resolved_endpoint">已解析的端點</string>
-    <string name="gateway_setup">閘道設定</string>
-    <string name="connect_to_gateway">連接到您的閘道</string>
-    <string name="scan_setup_code">掃描設定碼</string>
-    <string name="use_gateway_qr">使用您的 Gateway QR 或設定碼</string>
-    <string name="nearby_gateway">附近的閘道</string>
-    <string name="enter_gateway_url">輸入閘道 URL</string>
-    <string name="connect_manual_url">使用手動 URL 連接</string>
-    <string name="permissions">權限</string>
-    <string name="done">完成</string>
     <string name="gateway_trust_first_seen">請先驗證憑證指紋，再信任此閘道。\n\n%1$s</string>
     <string name="gateway_trust_changed">閘道憑證已變更。僅在這是您預期的變更時繼續。\n\n舊 SHA-256：\n%1$s\n\n新 SHA-256：\n%2$s</string>
-    <string name="gateway_recovery">閘道復原</string>
 </resources>

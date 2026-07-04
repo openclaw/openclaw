@@ -2,6 +2,7 @@
 // Loads plugin registries and builds fallback request context for non-WS paths.
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_IDS,
@@ -124,16 +125,11 @@ function normalizeAllowedModelRef(raw: string): string | null {
   if (trimmed === "*") {
     return "*";
   }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return null;
   }
-  const providerRaw = trimmed.slice(0, slash).trim();
-  const modelRaw = trimmed.slice(slash + 1).trim();
-  if (!providerRaw || !modelRaw) {
-    return null;
-  }
-  const normalized = normalizeModelRef(providerRaw, modelRaw);
+  const normalized = normalizeModelRef(parsed.provider, parsed.modelId);
   return `${normalized.provider}/${normalized.model}`;
 }
 

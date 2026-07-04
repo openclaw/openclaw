@@ -1,9 +1,9 @@
 // Persists queued session deliveries for retry and recovery.
-import { createHash } from "node:crypto";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionPostCompactionDelegate } from "../config/sessions/types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { sha256Hex } from "./crypto-digest.js";
 import {
   deleteDeliveryQueueEntry,
   loadDeliveryQueueEntries,
@@ -169,7 +169,7 @@ function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
     return generateSecureUuid();
   }
-  return createHash("sha256").update(canonicalizeIdempotencyKey(idempotencyKey)).digest("hex");
+  return sha256Hex(canonicalizeIdempotencyKey(idempotencyKey));
 }
 
 function normalizeQueuedTraceparent(
@@ -191,7 +191,7 @@ function buildPostCompactionDelegateIdempotencyKey(params: {
   sequence: number;
   compactionCount?: number;
 }): string {
-  const taskHash = createHash("sha256").update(params.delegate.task).digest("hex").slice(0, 16);
+  const taskHash = sha256Hex(params.delegate.task).slice(0, 16);
   return [
     "post-compaction-delegate",
     params.sessionKey,

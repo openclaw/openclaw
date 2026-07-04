@@ -116,22 +116,22 @@ export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaL
 
 async function createQaSuiteTransportAdapter(params: {
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
 }) {
-  if (params.channelDriverSelection) {
-    const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
-    return await createQaCrablineTransportAdapter({
+  try {
+    return await createQaTransportAdapter({
+      channelId: params.channelDriverSelection?.channel ?? params.transportId,
+      driver: params.channelDriverSelection ? "crabline" : params.transportId,
       outputDir: params.outputDir,
-      selection: params.channelDriverSelection,
       state: params.state,
     });
+  } catch (error) {
+    await params.cleanupOnFailure?.().catch(() => undefined);
+    throw error;
   }
-  return createQaTransportAdapter({
-    id: params.transportId,
-    state: params.state,
-  });
 }
 
 export type QaSuiteRunParams = {
@@ -700,12 +700,14 @@ async function runQaRuntimeParitySuite(params: {
       port: 0,
       embeddedGateway: "disabled",
     }));
-  const transport = await createQaSuiteTransportAdapter({
+  const transportFactoryResult = await createQaSuiteTransportAdapter({
     channelDriverSelection: params.channelDriverSelection,
+    cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir: params.outputDir,
     state: lab.state,
     transportId: params.transportId,
   });
+  const transport = transportFactoryResult.adapter;
   const liveScenarioOutcomes: QaLabScenarioOutcome[] = params.selectedScenarios.map((scenario) => ({
     id: scenario.id,
     name: scenario.title,
@@ -893,7 +895,7 @@ async function runQaRuntimeParitySuite(params: {
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } finally {
-    await transport.cleanup?.();
+    await transportFactoryResult.cleanup();
     if (ownsLab) {
       await lab.stop();
     }
@@ -1263,12 +1265,14 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         port: 0,
         embeddedGateway: "disabled",
       }));
-    const transport = await createQaSuiteTransportAdapter({
+    const transportFactoryResult = await createQaSuiteTransportAdapter({
       channelDriverSelection: params?.channelDriverSelection,
+      cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
       outputDir,
       state: lab.state,
       transportId,
     });
+    const transport = transportFactoryResult.adapter;
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({
       id: scenario.id,
       name: scenario.title,
@@ -1500,7 +1504,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
     } finally {
-      await transport.cleanup?.();
+      await transportFactoryResult.cleanup();
       await disposeRegisteredAgentHarnesses();
       if (ownsLab) {
         await lab.stop();
@@ -1521,81 +1525,89 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     }));
   writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
   await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
-  const transport = await createQaSuiteTransportAdapter({
+  const transportFactoryResult = await createQaSuiteTransportAdapter({
     channelDriverSelection: params?.channelDriverSelection,
+    cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
     outputDir,
     state: lab.state,
     transportId,
   });
-  writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
-  const mock = await startQaProviderServer(providerMode);
-  writeQaSuiteProgress(
-    progressEnabled,
-    `provider ready: ${sanitizeQaSuiteProgressValue(mock?.baseUrl ?? "live")}`,
-  );
-  writeQaSuiteProgress(progressEnabled, "gateway start");
-  const gateway = await startQaGatewayChild({
-    repoRoot,
-    providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-    transport,
-    transportBaseUrl: lab.listenUrl,
-    controlUiAllowedOrigins: [lab.listenUrl],
-    providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode,
-    thinkingDefault: params?.thinkingDefault,
-    claudeCliAuthMode: params?.claudeCliAuthMode,
-    controlUiEnabled: params?.controlUiEnabled ?? true,
-    enabledPluginIds,
-    forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
-    mutateConfig: gatewayConfigPatch
-      ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
-      : undefined,
-    runtimeEnvPatch: mergeQaRuntimeEnvPatches(
-      buildQaRuntimeEnvPatch({
-        providerMode,
-        forcedRuntime: params?.forcedRuntime,
-        mockBaseUrl: mock?.baseUrl,
-      }),
-      transport.createRuntimeEnvPatch?.(),
-      buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
-    ),
-  });
-  writeQaSuiteProgress(
-    progressEnabled,
-    `gateway ready: ${sanitizeQaSuiteProgressValue(gateway.baseUrl)}`,
-  );
-  lab.setControlUi({
-    controlUiProxyTarget: gateway.baseUrl,
-    controlUiProxyToken: gateway.token,
-  });
-  const env: QaSuiteEnvironment = {
-    lab,
-    mock,
-    gateway,
-    // YAML scenarios should see the full staged gateway config, not just
-    // the transport fragment. Routing/session/plugin assertions depend on it.
-    cfg: gateway.cfg,
-    transport,
-    repoRoot,
-    providerMode,
-    primaryModel,
-    alternateModel,
-    webSessionIds: new Set(),
-  };
-
+  const transport = transportFactoryResult.adapter;
+  let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
+  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  let env: QaSuiteEnvironment | undefined;
   let preserveGatewayRuntimeDir: string | undefined;
   try {
+    writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
+    const activeMock = await startQaProviderServer(providerMode);
+    mock = activeMock;
+    writeQaSuiteProgress(
+      progressEnabled,
+      `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
+    );
+    writeQaSuiteProgress(progressEnabled, "gateway start");
+    const activeGateway = await startQaGatewayChild({
+      repoRoot,
+      providerBaseUrl: activeMock ? `${activeMock.baseUrl}/v1` : undefined,
+      transport,
+      transportBaseUrl: lab.listenUrl,
+      controlUiAllowedOrigins: [lab.listenUrl],
+      providerMode,
+      primaryModel,
+      alternateModel,
+      fastMode,
+      thinkingDefault: params?.thinkingDefault,
+      claudeCliAuthMode: params?.claudeCliAuthMode,
+      controlUiEnabled: params?.controlUiEnabled ?? true,
+      enabledPluginIds,
+      forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
+      mutateConfig: gatewayConfigPatch
+        ? (cfg) => applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig
+        : undefined,
+      runtimeEnvPatch: mergeQaRuntimeEnvPatches(
+        buildQaRuntimeEnvPatch({
+          providerMode,
+          forcedRuntime: params?.forcedRuntime,
+          mockBaseUrl: activeMock?.baseUrl,
+        }),
+        transport.createRuntimeEnvPatch?.(),
+        buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
+      ),
+    });
+    gateway = activeGateway;
+    writeQaSuiteProgress(
+      progressEnabled,
+      `gateway ready: ${sanitizeQaSuiteProgressValue(activeGateway.baseUrl)}`,
+    );
+    lab.setControlUi({
+      controlUiProxyTarget: activeGateway.baseUrl,
+      controlUiProxyToken: activeGateway.token,
+    });
+    const activeEnv: QaSuiteEnvironment = {
+      lab,
+      mock: activeMock,
+      gateway: activeGateway,
+      // YAML scenarios should see the full staged gateway config, not just
+      // the transport fragment. Routing/session/plugin assertions depend on it.
+      cfg: activeGateway.cfg,
+      transport,
+      repoRoot,
+      providerMode,
+      primaryModel,
+      alternateModel,
+      webSessionIds: new Set(),
+    };
+    env = activeEnv;
+
     const transportReadyTimeoutMs = resolveQaSuiteTransportReadyTimeoutMs(
       params?.transportReadyTimeoutMs,
     );
     // The gateway child already waits for /readyz before returning, but the
     // selected transport can still be finishing account startup. Pay that
     // readiness cost once here so the first scenario does not race bootstrap.
-    await waitForTransportReady(env, transportReadyTimeoutMs).catch(async () => {
-      await waitForGatewayHealthy(env, transportReadyTimeoutMs);
-      await waitForTransportReady(env, transportReadyTimeoutMs);
+    await waitForTransportReady(activeEnv, transportReadyTimeoutMs).catch(async () => {
+      await waitForGatewayHealthy(activeEnv, transportReadyTimeoutMs);
+      await waitForTransportReady(activeEnv, transportReadyTimeoutMs);
     });
     await sleep(1_000);
     const scenarios: QaSuiteScenarioResult[] = [];
@@ -1614,7 +1626,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
 
     const gatewayProcessRssSamples: QaSuiteGatewayRssSample[] = [];
     const sampleGatewayProcessRss = (label: string) => {
-      const gatewayProcessRssBytes = gateway.getProcessRssBytes?.() ?? null;
+      const gatewayProcessRssBytes = activeGateway.getProcessRssBytes?.() ?? null;
       if (gatewayProcessRssBytes !== null) {
         gatewayProcessRssSamples.push({
           label,
@@ -1624,7 +1636,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       }
       return gatewayProcessRssBytes;
     };
-    const gatewayProcessCpuStartMs = gateway.getProcessCpuMs?.() ?? null;
+    const gatewayProcessCpuStartMs = activeGateway.getProcessCpuMs?.() ?? null;
     const gatewayProcessRssStartBytes = sampleGatewayProcessRss("suite-start");
     const gatewayHeapSnapshots: QaSuiteGatewayHeapSnapshot[] = [];
     const captureGatewayHeapCheckpoint = async (label: string) => {
@@ -1632,7 +1644,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         return;
       }
       const snapshot = await captureGatewayHeapSnapshotCheckpoint({
-        gateway,
+        gateway: activeGateway,
         outputDir,
         label,
       });
@@ -1661,7 +1673,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         scenarios: [...liveScenarioOutcomes],
       });
 
-      const result = await runScenarioDefinition(env, scenario);
+      const result = await runScenarioDefinition(activeEnv, scenario);
       sampleGatewayProcessRss(`scenario:${scenario.id}:finish`);
       scenarios.push(result);
       writeQaSuiteProgress(
@@ -1692,10 +1704,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       scenarios.length > 0
         ? await captureRuntimeParityCell({
             runtime: params.forcedRuntime,
-            gateway,
+            gateway: activeGateway,
             scenarioResult: scenarios[0],
             wallClockMs: Math.max(1, Date.now() - startedAt.getTime()),
-            mockBaseUrl: mock?.baseUrl,
+            mockBaseUrl: activeMock?.baseUrl,
           })
         : undefined;
     const finishedAt = new Date();
@@ -1704,7 +1716,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       startedAt,
       finishedAt,
       gatewayProcessCpuStartMs,
-      gatewayProcessCpuEndMs: gateway.getProcessCpuMs?.() ?? null,
+      gatewayProcessCpuEndMs: activeGateway.getProcessCpuMs?.() ?? null,
       gatewayProcessRssStartBytes,
       gatewayProcessRssEndBytes: sampleGatewayProcessRss("suite-finish"),
       gatewayProcessRssSamples,
@@ -1778,13 +1790,15 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     throw error;
   } finally {
-    await closeQaWebSessions(env.webSessionIds);
+    if (env) {
+      await closeQaWebSessions(env.webSessionIds);
+    }
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
-    await gateway.stop({
+    await gateway?.stop({
       keepTemp,
       preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
     });
-    await transport.cleanup?.();
+    await transportFactoryResult.cleanup();
     await disposeRegisteredAgentHarnesses();
     await mock?.stop();
     if (ownsLab) {

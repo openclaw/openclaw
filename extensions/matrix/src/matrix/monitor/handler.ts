@@ -27,6 +27,7 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -124,44 +125,20 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
-let matrixSendModulePromise: Promise<typeof import("../send.js")> | undefined;
-let acpBindingRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/acp-binding-runtime")>
-  | undefined;
-let sessionBindingRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/session-binding-runtime")>
-  | undefined;
-let matrixReactionEventsPromise: Promise<typeof import("./reaction-events.js")> | undefined;
-let matrixDraftStreamPromise: Promise<typeof import("../draft-stream.js")> | undefined;
 
-function loadMatrixSendModule(): Promise<typeof import("../send.js")> {
-  matrixSendModulePromise ??= import("../send.js");
-  return matrixSendModulePromise;
-}
+const loadMatrixSendModule = createLazyRuntimeModule(() => import("../send.js"));
 
-function loadAcpBindingRuntime(): Promise<
-  typeof import("openclaw/plugin-sdk/acp-binding-runtime")
-> {
-  acpBindingRuntimePromise ??= import("openclaw/plugin-sdk/acp-binding-runtime");
-  return acpBindingRuntimePromise;
-}
+const loadAcpBindingRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/acp-binding-runtime"),
+);
 
-function loadSessionBindingRuntime(): Promise<
-  typeof import("openclaw/plugin-sdk/session-binding-runtime")
-> {
-  sessionBindingRuntimePromise ??= import("openclaw/plugin-sdk/session-binding-runtime");
-  return sessionBindingRuntimePromise;
-}
+const loadSessionBindingRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/session-binding-runtime"),
+);
 
-function loadMatrixReactionEvents(): Promise<typeof import("./reaction-events.js")> {
-  matrixReactionEventsPromise ??= import("./reaction-events.js");
-  return matrixReactionEventsPromise;
-}
+const loadMatrixReactionEvents = createLazyRuntimeModule(() => import("./reaction-events.js"));
 
-function loadMatrixDraftStream(): Promise<typeof import("../draft-stream.js")> {
-  matrixDraftStreamPromise ??= import("../draft-stream.js");
-  return matrixDraftStreamPromise;
-}
+const loadMatrixDraftStream = createLazyRuntimeModule(() => import("../draft-stream.js"));
 
 async function matrixTextWouldActivateMentions(
   client: MatrixClient,
@@ -1672,6 +1649,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 mentions: {
                   canDetectMention: true,
                   wasMentioned,
+                  requireMention: shouldRequireMention,
                 },
               }
             : {}),

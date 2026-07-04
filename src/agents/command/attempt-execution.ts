@@ -961,6 +961,7 @@ export async function runAgentAttempt(params: {
       disableMessageTool: params.opts.disableMessageTool,
       streamParams: params.opts.streamParams,
       agentDir: params.agentDir,
+      allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
       allowTransientCooldownProbe: params.allowTransientCooldownProbe,
       cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
       oneShotCliRun: params.opts.oneShotCliRun,

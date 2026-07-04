@@ -34,6 +34,11 @@ import {
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import {
+  clearEmbeddedAgentRunAbortabilityForRunId,
+  isEmbeddedAgentRunAbortableForRunId,
+  retainEmbeddedAgentRunAbortabilityForRunId,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
@@ -93,7 +98,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { isAbortError } from "../../infra/unhandled-rejections.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
@@ -2645,6 +2650,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         ownerDeviceId,
         providerId: activeModelProvider,
         authProviderId: activeAuthProvider,
+        isAbortable: () => isEmbeddedAgentRunAbortableForRunId(runId),
+        onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(runId),
         controlUiVisible: !suppressVisibleSessionEffects,
         kind: "agent",
         lifecycleGeneration,
@@ -2659,6 +2666,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       if (activeRunAbort.registered) {
+        retainEmbeddedAgentRunAbortabilityForRunId(runId);
         if (pendingChatRun) {
           context.addChatRun(runId, {
             ...pendingChatRun,
@@ -2674,6 +2682,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           );
         }
       }
+      const cleanupActiveRunAbort = (opts?: { force?: boolean }) => {
+        activeRunAbort.cleanup(opts);
+      };
 
       const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
       // Confirmed only when the caller is the trusted in-process backend ACP
@@ -2945,12 +2956,15 @@ export const agentHandlers: GatewayRequestHandlers = {
                 spawnedBy: spawnedByValue,
                 sessionEntry,
               }),
+              // Plugin tools created for Gateway-owned turns must resolve the live
+              // Gateway subagent and node runtimes, not standalone placeholders.
+              allowGatewaySubagentBinding: true,
               allowModelOverride,
             },
             runId,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
-            cleanupAbortController: activeRunAbort.cleanup,
+            cleanupAbortController: cleanupActiveRunAbort,
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
@@ -2979,7 +2993,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           });
         } finally {
           if (!dispatched) {
-            activeRunAbort.cleanup({ force: true });
+            cleanupActiveRunAbort({ force: true });
           }
         }
       })();

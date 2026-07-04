@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
+import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -38,13 +39,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
@@ -106,6 +107,7 @@ fun ChatScreen(
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -145,6 +147,7 @@ fun ChatScreen(
       viewModel.loadChat(loadSessionKey)
     }
     viewModel.refreshChatSessions(limit = 100)
+    viewModel.refreshChatCommands()
   }
 
   LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
@@ -169,6 +172,21 @@ fun ChatScreen(
     viewModel.clearChatDraft()
   }
 
+  val newChatEnabled =
+    canStartNewChat(
+      pendingRunCount = pendingRunCount,
+      hasQueuedMessage = pendingAssistantAutoSend != null,
+      gatewayReady = healthOk && !gatewayOffline,
+    )
+
+  val startNewChat = {
+    if (newChatEnabled) {
+      viewModel.startNewChat()
+      viewModel.refreshChatSessions(limit = 100)
+      viewModel.refreshChatCommands()
+    }
+  }
+
   Column(
     modifier =
       Modifier
@@ -180,6 +198,10 @@ fun ChatScreen(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
+      newChatEnabled = newChatEnabled,
+      onNewChat = {
+        startNewChat()
+      },
       onMore = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
@@ -205,6 +227,7 @@ fun ChatScreen(
     }
 
     ChatMessageList(
+      sessionKey = sessionKey,
       messages = messages,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
@@ -226,6 +249,7 @@ fun ChatScreen(
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
       pendingRunCount = pendingRunCount,
+      commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
@@ -270,15 +294,31 @@ private fun ChatSessionSwitcher(
   onSelectSession: (String) -> Unit,
   onOpenSessions: () -> Unit,
 ) {
-  val choices =
+  val allChoices =
     remember(sessionKey, sessions, mainSessionKey) {
-      resolveCompactSessionChoices(
+      resolveSessionChoices(
         currentSessionKey = sessionKey,
         sessions = sessions,
         mainSessionKey = mainSessionKey,
       )
     }
-  if (choices.size <= 1 && sessions.size <= 1) return
+  val choices =
+    remember(sessionKey, allChoices, mainSessionKey) {
+      compactSessionChoices(
+        choices = allChoices,
+        currentSessionKey = sessionKey,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  val hasMoreSessions =
+    remember(sessions, choices, mainSessionKey) {
+      hasAdditionalSessionChoices(
+        sessions = sessions,
+        displayedChoices = choices,
+        mainSessionKey = mainSessionKey,
+      )
+    }
+  if (choices.size <= 1 && !hasMoreSessions) return
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -292,7 +332,7 @@ private fun ChatSessionSwitcher(
         onClick = { onSelectSession(entry.key) },
       )
     }
-    if (sessions.size > choices.size) {
+    if (hasMoreSessions) {
       Surface(
         onClick = onOpenSessions,
         modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
@@ -338,11 +378,19 @@ private fun ChatSessionChip(
   }
 }
 
+internal fun canStartNewChat(
+  pendingRunCount: Int,
+  hasQueuedMessage: Boolean,
+  gatewayReady: Boolean,
+): Boolean = gatewayReady && pendingRunCount == 0 && !hasQueuedMessage
+
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
   healthOk: Boolean,
   pendingRunCount: Int,
+  newChatEnabled: Boolean,
+  onNewChat: () -> Unit,
   onMore: () -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -379,6 +427,7 @@ private fun ChatHeader(
             else -> ClawStatus.Danger
           },
       )
+      HeaderIcon(icon = Icons.Default.Add, contentDescription = "New chat", enabled = newChatEnabled, onClick = onNewChat)
       HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -430,14 +479,17 @@ private fun ModelPill(
 private fun HeaderIcon(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   contentDescription: String,
+  enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
+  val contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textMuted
   Surface(
     onClick = onClick,
+    enabled = enabled,
     modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = Color.Transparent,
-    contentColor = ClawTheme.colors.text,
+    contentColor = contentColor,
   ) {
     Box(contentAlignment = Alignment.Center) {
       Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(20.dp))
@@ -447,6 +499,7 @@ private fun HeaderIcon(
 
 @Composable
 private fun ChatMessageList(
+  sessionKey: String,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
   pendingRunCount: Int,
@@ -457,7 +510,6 @@ private fun ChatMessageList(
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val listState = rememberLazyListState()
   val timeline =
     remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText) {
       buildChatTimeline(
@@ -467,17 +519,17 @@ private fun ChatMessageList(
         streamingAssistantText = streamingAssistantText,
       )
     }
-
-  LaunchedEffect(timeline.scrollTargetIndex, timeline.items.size, pendingRunCount, pendingToolCalls.size) {
-    timeline.scrollTargetIndex?.let { index ->
-      listState.animateScrollToItem(index = index)
-    }
-  }
+  val readerScroll =
+    rememberChatReaderScrollController(
+      sessionKey = sessionKey,
+      timeline = timeline,
+      historyLoading = historyLoading,
+    )
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
-      state = listState,
+      state = readerScroll.listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(5.dp),
       contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
@@ -514,6 +566,27 @@ private fun ChatMessageList(
           onStarterPrompt = onStarterPrompt,
           modifier = Modifier.align(Alignment.Center),
         )
+      }
+    }
+
+    if (readerScroll.showJumpToLatest) {
+      Surface(
+        onClick = readerScroll.jumpToLatest,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        shape = RoundedCornerShape(999.dp),
+        color = ClawTheme.colors.surfaceRaised,
+        contentColor = ClawTheme.colors.text,
+        shadowElevation = 6.dp,
+        border = BorderStroke(1.dp, ClawTheme.colors.border),
+      ) {
+        Row(
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
+          Text(text = "Jump to latest", style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
+        }
       }
     }
   }
@@ -694,15 +767,7 @@ private fun ChatText(
   text: String,
   textColor: Color,
 ) {
-  if (text.hasMarkdownSyntax()) {
-    ChatMarkdown(text = text, textColor = textColor)
-  } else {
-    Text(
-      text = text,
-      style = ClawTheme.type.body,
-      color = textColor,
-    )
-  }
+  ChatMarkdown(text = text, textColor = textColor)
 }
 
 @Composable
@@ -767,6 +832,7 @@ private fun ChatComposer(
   gatewayOffline: Boolean,
   offlineStatus: String,
   pendingRunCount: Int,
+  commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
@@ -776,6 +842,11 @@ private fun ChatComposer(
   onAbort: () -> Unit,
   onSend: () -> Unit,
 ) {
+  val slashCommands =
+    remember(value, commands) {
+      matchingSlashCommands(input = value, commands = commands)
+    }
+
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
@@ -787,8 +858,21 @@ private fun ChatComposer(
       onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
     )
 
+    if (shouldShowSlashCommandMenu(value)) {
+      SlashCommandPanel(
+        commands = slashCommands,
+        onSelect = { command -> onValueChange(slashCommandCompletion(command)) },
+      )
+    }
+
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      ChatInputPill(value = value, onValueChange = onValueChange, onPickImages = onPickImages, onVoice = onVoice, modifier = Modifier.weight(1f))
+      ChatInputPill(
+        value = value,
+        onValueChange = onValueChange,
+        onPickImages = onPickImages,
+        onVoice = onVoice,
+        modifier = Modifier.weight(1f),
+      )
       SendButton(
         enabled = healthOk && pendingRunCount == 0 && (value.trim().isNotEmpty() || attachments.isNotEmpty()),
         onClick = onSend,
@@ -821,6 +905,68 @@ private fun ChatComposer(
             Text(text = "Stop", style = ClawTheme.type.label)
           }
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SlashCommandPanel(
+  commands: List<ChatCommandEntry>,
+  onSelect: (ChatCommandEntry) -> Unit,
+) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+    Column {
+      if (commands.isEmpty()) {
+        Text(
+          text = "No commands found",
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+        )
+      } else {
+        commands.forEachIndexed { index, command ->
+          SlashCommandRow(command = command, onClick = { onSelect(command) })
+          if (index != commands.lastIndex) {
+            HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SlashCommandRow(
+  command: ChatCommandEntry,
+  onClick: () -> Unit,
+) {
+  Surface(onClick = onClick, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .heightIn(min = 48.dp)
+          .padding(horizontal = 10.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = slashCommandText(command),
+        style = ClawTheme.type.label,
+        color = ClawTheme.colors.text,
+        modifier = Modifier.width(82.dp),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(
+          text = command.description.ifBlank { command.category ?: "Command" },
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
     }
   }
@@ -1121,9 +1267,3 @@ internal fun contextMeterThinkingLabel(value: String): String =
   }
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))
-
-/** Quick markdown detector used to avoid routing plain chat text through the markdown renderer. */
-private fun String.hasMarkdownSyntax(): Boolean =
-  any { it == '#' || it == '*' || it == '`' || it == '[' || it == '|' } ||
-    contains("\n- ") ||
-    contains("\n1. ")

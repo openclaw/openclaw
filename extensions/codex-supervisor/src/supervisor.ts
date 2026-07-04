@@ -2,6 +2,7 @@
  * Codex app-server supervisor that lists sessions, reads transcripts, and
  * starts/steers/interrupts turns across configured endpoints.
  */
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { connectCodexAppServerEndpoint } from "./json-rpc-client.js";
 import type {
   CodexJsonRpcConnection,
@@ -18,10 +19,6 @@ type EndpointConnector = (endpoint: CodexSupervisorEndpoint) => Promise<CodexJso
 
 const ALL_CODEX_THREAD_SOURCE_KINDS = ["cli", "vscode", "exec", "appServer", "unknown"];
 const DEFAULT_MAX_STORED_SESSIONS = 200;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function asRecordArray(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) {

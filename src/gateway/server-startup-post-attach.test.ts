@@ -1045,6 +1045,40 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("skips provider auth startup prewarm without disabling failure rewarm", async () => {
+    vi.useFakeTimers();
+    const onGatewayLifetimeSidecars = vi.fn();
+
+    try {
+      await startGatewayPostAttachRuntime({
+        ...createPostAttachParams(),
+        deferSidecars: true,
+        providerAuthPrewarm: { startupEnabled: false },
+        onGatewayLifetimeSidecars,
+      });
+
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledTimes(1);
+      });
+      expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+
+      const hook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as (() => void) | undefined;
+      hook?.();
+      expect(hoisted.clearCurrentProviderAuthState).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses current config when agent runtime plugin prewarm runs", async () => {
     const startupConfig = { marker: "startup" } as never;
     const currentConfig = { marker: "current" } as never;

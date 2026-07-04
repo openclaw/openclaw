@@ -1710,6 +1710,10 @@ export async function runReplyAgent(replyParams: {
       }),
     );
 
+    if (replyOperation.result?.kind === "aborted") {
+      throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
+    }
+
     if (visibleMemoryFlushErrorPayloads.length > 0) {
       const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
       const payloadResult = await buildReplyPayloads({
@@ -1739,6 +1743,7 @@ export async function runReplyAgent(replyParams: {
         markReplyPayloadForSourceSuppressionDelivery(payload),
       );
       if (replyPayloads.length > 0) {
+        replyOperation.freezeAbort();
         replyOperation.fail(
           "run_failed",
           new Error("memory flush produced visible error payloads"),

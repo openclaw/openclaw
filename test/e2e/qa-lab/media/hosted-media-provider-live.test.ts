@@ -86,7 +86,6 @@ describe("hosted media provider live QA producer", () => {
     const evidence = buildHostedMediaEvidence({
       options,
       result: {
-        artifacts: [{ kind: "log", path: "hosted-media-live.log" }],
         durationMs: 10,
         status: "pass",
       },

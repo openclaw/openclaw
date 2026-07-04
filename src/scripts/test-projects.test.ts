@@ -959,7 +959,10 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/commands/status.scan.shared.test.ts"],
+        includePatterns: [
+          "src/commands/doctor-completion.test.ts",
+          "src/commands/status.scan.shared.test.ts",
+        ],
         watchMode: false,
       },
       {

@@ -22,16 +22,6 @@
     <string name="password">パスワード</string>
     <string name="run_onboarding_again">オンボーディングを再実行</string>
     <string name="resolved_endpoint">解決済みエンドポイント</string>
-    <string name="gateway_setup">ゲートウェイ設定</string>
-    <string name="connect_to_gateway">ゲートウェイに接続</string>
-    <string name="scan_setup_code">セットアップコードをスキャン</string>
-    <string name="use_gateway_qr">ゲートウェイの QR またはセットアップコードを使用</string>
-    <string name="nearby_gateway">近くのゲートウェイ</string>
-    <string name="enter_gateway_url">ゲートウェイ URL を入力</string>
-    <string name="connect_manual_url">手動 URL で接続</string>
-    <string name="permissions">権限</string>
-    <string name="done">完了</string>
     <string name="gateway_trust_first_seen">このゲートウェイを信頼する前に、証明書のフィンガープリントを確認してください。\n\n%1$s</string>
     <string name="gateway_trust_changed">ゲートウェイの証明書が変更されました。想定した変更である場合のみ続行してください。\n\n以前の SHA-256:\n%1$s\n\n新しい SHA-256:\n%2$s</string>
-    <string name="gateway_recovery">ゲートウェイの復旧</string>
 </resources>

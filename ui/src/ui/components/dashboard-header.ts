@@ -31,7 +31,9 @@ export class DashboardHeader extends LitElement {
 
   override render() {
     const label = titleForTab(this.tab);
-    const agentLabel = this.agentLabel.trim();
+    const rawAgentLabel = this.agentLabel.trim();
+    // Skip the agent crumb when it repeats the brand crumb ("OpenClaw › OpenClaw › …").
+    const agentLabel = rawAgentLabel.toLowerCase() === "openclaw" ? "" : rawAgentLabel;
 
     return html`
       <div class="dashboard-header">

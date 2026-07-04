@@ -20,8 +20,6 @@ struct RootTabs: View {
     @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
-    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
-        AppAppearancePreference.system.rawValue
     @State private var selectedTab: AppTab = Self.initialTab
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
@@ -52,7 +50,6 @@ struct RootTabs: View {
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
-    @State private var didApplyInitialAppearance: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
     @State private var handledGatewaySetupRequestID: Int = 0
     @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
@@ -181,6 +178,7 @@ struct RootTabs: View {
                 Label(
                     "Talk",
                     systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
+                    .font(OpenClawType.captionSemiBold)
             }
             .tag(AppTab.talk)
 
@@ -306,7 +304,7 @@ struct RootTabs: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("OpenClaw")
-                    .font(.headline.weight(.semibold))
+                    .font(OpenClawType.headline)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
@@ -315,9 +313,10 @@ struct RootTabs: View {
                         .font(.system(size: 7, weight: .bold))
                         .foregroundStyle(self.sidebarGatewayStatusColor)
                     Text(self.sidebarGatewayStatusTitle)
+                        .font(OpenClawType.captionMedium)
                         .lineLimit(1)
                 }
-                .font(.caption.weight(.medium))
+                .font(OpenClawType.captionMedium)
                 .foregroundStyle(.secondary)
             }
 
@@ -400,6 +399,7 @@ struct RootTabs: View {
             self.selectSidebarDestination(destination)
         } label: {
             Label(title ?? destination.sidebarTitle, systemImage: destination.systemImage)
+                .font(OpenClawType.subheadSemiBold)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .truncationMode(.tail)
@@ -408,6 +408,7 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
+        .font(OpenClawType.subheadSemiBold)
         .buttonStyle(.plain)
         .foregroundStyle(destination == self.selectedSidebarDestination ? OpenClawBrand.accent : .primary)
         .listRowBackground(
@@ -608,7 +609,7 @@ struct RootTabs: View {
             self.hideSidebar()
         } label: {
             Image(systemName: self.isSidebarDrawerLayout ? "xmark" : "sidebar.left")
-                .font(.system(size: 15, weight: .semibold))
+                .font(OpenClawType.subheadSemiBold)
         }
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
@@ -786,7 +787,6 @@ struct RootTabs: View {
             .onAppear { self.maybeAutoOpenSettings() }
             .onAppear { self.maybeOpenSettingsForGatewaySetup() }
             .onAppear { self.maybeShowQuickSetup() }
-            .onAppear { self.applyInitialAppearanceIfNeeded() }
             .onAppear { self.applyInitialChatSessionIfNeeded() }
             .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
             .onChange(of: self.appModel.talkMode.isEnabled) { _, _ in self.updateIdleTimer() }
@@ -890,7 +890,6 @@ struct RootTabs: View {
                         .environment(self.appModel)
                         .environment(self.gatewayController)
                         .openClawSheetChrome()
-                        .preferredColorScheme(self.appearancePreference.colorScheme)
                 }
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -905,7 +904,6 @@ struct RootTabs: View {
                     .environment(self.appModel)
                     .environment(self.voiceWake)
                     .environment(self.gatewayController)
-                    .preferredColorScheme(self.appearancePreference.colorScheme)
             }
             .gatewayTrustPromptAlert()
             .deepLinkAgentPromptAlert()
@@ -915,12 +913,6 @@ struct RootTabs: View {
                 self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId
                 self.selectSettingsRoute(.notifications)
             })
-    }
-
-    private var appearancePreference: AppAppearancePreference {
-        AppAppearancePreference.launchArgumentPreference
-            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
-            ?? .system
     }
 
     private var gatewayStatus: GatewayDisplayState {
@@ -1318,13 +1310,6 @@ extension RootTabs {
         self.appModel.focusChatSession(Self.initialChatSessionKey)
     }
 
-    private func applyInitialAppearanceIfNeeded() {
-        guard !self.didApplyInitialAppearance else { return }
-        self.didApplyInitialAppearance = true
-        guard let preference = AppAppearancePreference.launchArgumentPreference else { return }
-        self.appearancePreferenceRaw = preference.rawValue
-    }
-
     private func maybeShowQuickSetup() {
         let shouldPresent = Self.shouldPresentQuickSetup(
             quickSetupDismissed: self.quickSetupDismissed,
@@ -1503,6 +1488,7 @@ extension EnvironmentValues {
 }
 
 private struct RootTabsPreviewHost: View {
+    @State private var appearanceModel = AppAppearanceModel()
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
     private let idiom: UIUserInterfaceIdiom
@@ -1518,6 +1504,7 @@ private struct RootTabsPreviewHost: View {
 
     var body: some View {
         RootTabs()
+            .environment(self.appearanceModel)
             .environment(self.appModel)
             .environment(self.appModel.voiceWake)
             .environment(self.gatewayController)
