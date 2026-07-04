@@ -10,6 +10,7 @@ import {
   type AdvertisedLanHostCommandRunner,
 } from "./advertised-lan-host.js";
 import type { NetworkInterfacesSnapshot } from "./network-interfaces.js";
+import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 function ipv4(address: string, family: "IPv4" | 4 = "IPv4") {
   return {
@@ -118,7 +119,7 @@ describe("advertised LAN host", () => {
     ).resolves.toBe("10.211.55.3");
     expect(runner).toHaveBeenCalledWith(
       [
-        "powershell.exe",
+        getWindowsPowerShellExePath(),
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",

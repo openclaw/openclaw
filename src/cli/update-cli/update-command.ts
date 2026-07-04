@@ -103,7 +103,10 @@ import {
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
-import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../../infra/windows-install-roots.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -2937,7 +2940,7 @@ async function readProcessStartTimeMs(pid: number): Promise<number | undefined> 
   }
   const raw =
     process.platform === "win32"
-      ? await execFileStdout("powershell.exe", [
+      ? await execFileStdout(getWindowsPowerShellExePath(), [
           "-NoProfile",
           "-NonInteractive",
           "-Command",

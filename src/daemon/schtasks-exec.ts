@@ -1,4 +1,5 @@
 /** Executes Windows Task Scheduler commands with daemon-friendly timeouts. */
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const SCHTASKS_TIMEOUT_MS = 15_000;
@@ -8,7 +9,7 @@ const SCHTASKS_NO_OUTPUT_TIMEOUT_MS = 30_000;
 export async function execSchtasks(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const result = await runCommandWithTimeout(["schtasks", ...args], {
+  const result = await runCommandWithTimeout([getWindowsSystem32ExePath("schtasks.exe"), ...args], {
     timeoutMs: SCHTASKS_TIMEOUT_MS,
     noOutputTimeoutMs: SCHTASKS_NO_OUTPUT_TIMEOUT_MS,
   });

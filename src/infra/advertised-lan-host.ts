@@ -6,6 +6,7 @@ import {
   safeNetworkInterfaces,
   type NetworkInterfacesSnapshot,
 } from "./network-interfaces.js";
+import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 const DEFAULT_ROUTE_HINT_TIMEOUT_MS = 3_000;
 const DEFAULT_ROUTE_HINT_OUTPUT_BYTES = 16 * 1024;
@@ -194,7 +195,7 @@ async function resolveDefaultRouteHints(params: {
     const stdout = await runRouteHintCommand(
       params.runCommandWithTimeout,
       [
-        "powershell.exe",
+        getWindowsPowerShellExePath(),
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",

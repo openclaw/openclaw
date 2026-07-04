@@ -17,6 +17,7 @@ import {
 } from "./update-control-plane-sentinel.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
+import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
 const PARENT_EXIT_GRACE_MS = 60_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
@@ -357,7 +358,7 @@ function startGatewayServiceBestEffort() {
     }
   } else if (recovery.kind === "schtasks") {
     target = recovery.taskName;
-    status = runServiceCommand("schtasks.exe", ["/Run", "/TN", recovery.taskName]);
+    status = runServiceCommand(getWindowsSystem32ExePath("schtasks.exe"), ["/Run", "/TN", recovery.taskName]);
   } else {
     return;
   }

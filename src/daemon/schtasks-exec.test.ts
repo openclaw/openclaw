@@ -1,5 +1,6 @@
 // Windows schtasks exec tests cover scheduled task command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { execSchtasks } from "./schtasks-exec.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -28,10 +29,13 @@ describe("execSchtasks", () => {
       stderr: "",
       code: 0,
     });
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
-      timeoutMs: 15_000,
-      noOutputTimeoutMs: 30_000,
-    });
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [getWindowsSystem32ExePath("schtasks.exe"), "/Query"],
+      {
+        timeoutMs: 15_000,
+        noOutputTimeoutMs: 30_000,
+      },
+    );
   });
 
   it("maps a timeout into a non-zero schtasks result", async () => {
