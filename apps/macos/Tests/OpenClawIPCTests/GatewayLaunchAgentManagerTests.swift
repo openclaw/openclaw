@@ -61,4 +61,43 @@ struct GatewayLaunchAgentManagerTests {
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
     }
+
+    @Test func `launch agent plist snapshot reads generated env file`() throws {
+        let dir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-launchd-env-\(UUID().uuidString)", isDirectory: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: dir) }
+
+        let envFilePath = dir.appendingPathComponent("ai.openclaw.gateway.env")
+        let wrapperPath = dir.appendingPathComponent("ai.openclaw.gateway-env-wrapper.sh")
+        try """
+        export OPENCLAW_GATEWAY_TOKEN=' secret-from-file '
+        export OPENCLAW_GATEWAY_PASSWORD='pw-from-file'
+        """.write(to: envFilePath, atomically: true, encoding: .utf8)
+
+        let plistURL = dir.appendingPathComponent("ai.openclaw.gateway.plist")
+        let plist: [String: Any] = [
+            "ProgramArguments": [
+                "/bin/sh",
+                wrapperPath.path,
+                envFilePath.path,
+                "openclaw",
+                "gateway",
+                "--port",
+                "18789",
+                "--bind",
+                "loopback",
+            ],
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: plistURL, options: [.atomic])
+
+        let snapshot = try #require(LaunchAgentPlist.snapshot(url: plistURL))
+        #expect(snapshot.programArguments == ["openclaw", "gateway", "--port", "18789", "--bind", "loopback"])
+        #expect(snapshot.port == 18789)
+        #expect(snapshot.bind == "loopback")
+        #expect(snapshot.token == "secret-from-file")
+        #expect(snapshot.password == "pw-from-file")
+        #expect(snapshot.environment["OPENCLAW_GATEWAY_TOKEN"] == "secret-from-file")
+    }
 }

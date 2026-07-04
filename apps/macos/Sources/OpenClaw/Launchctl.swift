@@ -39,6 +39,8 @@ struct LaunchAgentPlistSnapshot: Equatable {
 }
 
 enum LaunchAgentPlist {
+    private static let envWrapperShell = "/bin/sh"
+
     static func snapshot(url: URL) -> LaunchAgentPlistSnapshot? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let rootAny: Any
@@ -51,8 +53,11 @@ enum LaunchAgentPlist {
             return nil
         }
         guard let root = rootAny as? [String: Any] else { return nil }
-        let programArguments = root["ProgramArguments"] as? [String] ?? []
-        let env = root["EnvironmentVariables"] as? [String: String] ?? [:]
+        let rawProgramArguments = root["ProgramArguments"] as? [String] ?? []
+        let inlineEnv = root["EnvironmentVariables"] as? [String: String] ?? [:]
+        let fileEnv = Self.readGeneratedEnvironmentFile(programArguments: rawProgramArguments)
+        let env = inlineEnv.merging(fileEnv) { _, file in file }
+        let programArguments = Self.unwrapGeneratedEnvWrapperArgs(rawProgramArguments)
         let stdoutPath = (root["StandardOutPath"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let stderrPath = (root["StandardErrorPath"] as? String)?
@@ -70,6 +75,82 @@ enum LaunchAgentPlist {
             bind: bind,
             token: token,
             password: password)
+    }
+
+    private static func unwrapGeneratedEnvWrapperArgs(_ programArguments: [String]) -> [String] {
+        guard let layout = Self.resolveGeneratedEnvWrapperLayout(programArguments) else {
+            return programArguments
+        }
+        return Array(programArguments.dropFirst(layout.commandStartIndex))
+    }
+
+    private static func readGeneratedEnvironmentFile(programArguments: [String]) -> [String: String] {
+        guard let layout = Self.resolveGeneratedEnvWrapperLayout(programArguments) else {
+            return [:]
+        }
+        guard let content = try? String(contentsOf: URL(fileURLWithPath: layout.envFilePath), encoding: .utf8) else {
+            return [:]
+        }
+        var environment: [String: String] = [:]
+        for rawLine in content.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") {
+                continue
+            }
+            guard line.hasPrefix("export ") else { continue }
+            let payload = String(line.dropFirst("export ".count))
+            guard let equalIndex = payload.firstIndex(of: "=") else { continue }
+            let key = String(payload[..<equalIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let first = key.first, first.isLetter || first == "_" else { continue }
+            guard key.dropFirst().allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { continue }
+            let valueStart = payload.index(after: equalIndex)
+            let rawValue = String(payload[valueStart...])
+            environment[key] = Self.parseGeneratedEnvValue(rawValue)
+        }
+        return environment
+    }
+
+    private static func parseGeneratedEnvValue(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("'"), trimmed.hasSuffix("'"), trimmed.count >= 2 else {
+            return trimmed
+        }
+        let inner = trimmed.dropFirst().dropLast()
+        return inner.replacingOccurrences(of: "'\\''", with: "'")
+    }
+
+    private struct GeneratedEnvWrapperLayout {
+        let envFilePath: String
+        let commandStartIndex: Int
+    }
+
+    private static func resolveGeneratedEnvWrapperLayout(
+        _ programArguments: [String]) -> GeneratedEnvWrapperLayout?
+    {
+        if programArguments.first == Self.envWrapperShell,
+           programArguments.count >= 3,
+           Self.isExpectedGeneratedEnvWrapperPair(
+               wrapperPath: programArguments[1],
+               envFilePath: programArguments[2])
+        {
+            return GeneratedEnvWrapperLayout(envFilePath: programArguments[2], commandStartIndex: 3)
+        }
+        if programArguments.count >= 2,
+           Self.isExpectedGeneratedEnvWrapperPair(
+               wrapperPath: programArguments[0],
+               envFilePath: programArguments[1])
+        {
+            return GeneratedEnvWrapperLayout(envFilePath: programArguments[1], commandStartIndex: 2)
+        }
+        return nil
+    }
+
+    private static func isExpectedGeneratedEnvWrapperPair(
+        wrapperPath: String,
+        envFilePath: String) -> Bool
+    {
+        guard !wrapperPath.isEmpty, !envFilePath.isEmpty else { return false }
+        return wrapperPath.hasSuffix("-env-wrapper.sh")
     }
 
     private static func extractFlagInt(_ args: [String], flag: String) -> Int? {
