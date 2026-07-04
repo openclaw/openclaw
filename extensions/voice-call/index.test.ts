@@ -768,7 +768,7 @@ describe("voice-call plugin", () => {
       action: "get_status",
       callId: "call-1",
     })) as { details: { found?: boolean; call?: { state?: string } } };
-    expect(runtimeStub.manager.getCallHistory).toHaveBeenCalled();
+    expect(runtimeStub.manager["getCallHistory"]).toHaveBeenCalled();
     expect(result.details.found).toBe(true);
     expect(result.details.call?.state).toBe("completed");
   });
