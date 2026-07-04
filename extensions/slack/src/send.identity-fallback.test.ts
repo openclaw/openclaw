@@ -189,7 +189,7 @@ describe("sendMessageSlack customize-scope fallback", () => {
     );
   });
 
-  it("retries without identity when Slack rejects identity arguments", async () => {
+  it("preserves the username when Slack rejects the custom icon", async () => {
     const client = createSlackSendTestClient();
     vi.mocked(client.chat.postMessage)
       .mockRejectedValueOnce(buildInvalidIdentityError())
@@ -207,6 +207,33 @@ describe("sendMessageSlack customize-scope fallback", () => {
       icon_emoji: "📟",
     });
     expect(readPostMessagePayload(client, 1)).toEqual({
+      channel: "C123",
+      text: "hello",
+      username: "Pulse",
+      unfurl_links: false,
+    });
+    expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
+      "slack send: custom icon rejected, retrying with username only",
+    );
+  });
+
+  it("drops the full identity only when Slack also rejects the username-only retry", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage)
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockResolvedValueOnce({ ts: "171234.567" });
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      identity: { username: "Pulse", iconEmoji: "📟" },
+    });
+
+    expect(readPostMessagePayload(client, 1)).toMatchObject({ username: "Pulse" });
+    expect(readPostMessagePayload(client, 1)).not.toHaveProperty("icon_emoji");
+    expect(readPostMessagePayload(client, 2)).toEqual({
       channel: "C123",
       text: "hello",
       unfurl_links: false,

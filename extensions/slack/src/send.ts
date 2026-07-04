@@ -408,6 +408,23 @@ async function postSlackMessageBestEffort(params: {
     if (!hasCustomIdentity(params.identity) || !isSlackCustomIdentityRejectedError(err)) {
       throw err;
     }
+    const identity = params.identity;
+    if (
+      !isSlackCustomizeScopeError(err) &&
+      identity.username &&
+      (identity.iconUrl || identity.iconEmoji)
+    ) {
+      logVerbose("slack send: custom icon rejected, retrying with username only");
+      try {
+        return await withSlackDnsRequestRetry("chat.postMessage", () =>
+          postChatMessage({ ...basePayload, username: identity.username }),
+        );
+      } catch (retryError) {
+        if (!isSlackCustomIdentityRejectedError(retryError)) {
+          throw retryError;
+        }
+      }
+    }
     logVerbose("slack send: custom identity rejected, retrying without custom identity");
     return withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(basePayload));
   }
