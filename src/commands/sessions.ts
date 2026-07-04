@@ -314,10 +314,10 @@ export async function sessionsCommand(
   opts: {
     json?: boolean;
     store?: string;
-    active?: string;
+    active?: number;
     agent?: string;
     allAgents?: boolean;
-    limit?: string | number;
+    limit?: number | "all";
   },
   runtime: RuntimeEnv,
 ) {
@@ -342,23 +342,9 @@ export async function sessionsCommand(
     return;
   }
 
-  let activeMinutes: number | undefined;
-  if (opts.active !== undefined) {
-    const parsed = parseStrictPositiveInteger(opts.active);
-    if (parsed === undefined) {
-      runtime.error("--active must be a positive number of minutes, for example --active 30.");
-      runtime.exit(1);
-      return;
-    }
-    activeMinutes = parsed;
-  }
+  const activeMinutes: number | undefined = opts.active;
 
-  const limit = parseSessionsLimit(opts.limit);
-  if (limit === null) {
-    runtime.error('--limit must be a positive integer or "all", for example --limit 25.');
-    runtime.exit(1);
-    return;
-  }
+  const limit: number | undefined = opts.limit === "all" ? undefined : opts.limit;
 
   const allRows = targets.flatMap((target) => {
     return listSessionEntries({ agentId: target.agentId, storePath: target.storePath })

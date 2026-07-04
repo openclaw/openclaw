@@ -284,7 +284,7 @@ describe("sessionsCommand", () => {
       sessions?: Array<{
         key: string;
       }>;
-    }>(sessionsCommand, store, { active: "10" });
+    }>(sessionsCommand, store, { active: 10 });
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
@@ -310,7 +310,7 @@ describe("sessionsCommand", () => {
         key: string;
         runtimePolicySessionKey?: string;
       }>;
-    }>(sessionsCommand, store, { active: "10" });
+    }>(sessionsCommand, store, { active: 10 });
 
     const main = payload.sessions?.find((row) => row.key === "agent:main:main");
     expect(main?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:42");
@@ -336,7 +336,7 @@ describe("sessionsCommand", () => {
       limitApplied?: number | null;
       hasMore?: boolean;
       sessions?: Array<{ key: string }>;
-    }>(sessionsCommand, store, { limit: "2" });
+    }>(sessionsCommand, store, { limit: 2 });
 
     expect(payload.count).toBe(2);
     expect(payload.totalCount).toBe(3);
@@ -360,7 +360,7 @@ describe("sessionsCommand", () => {
       limitApplied?: number | null;
       hasMore?: boolean;
       sessions?: Array<{ key: string }>;
-    }>(sessionsCommand, store, { limit: "all" });
+    }>(sessionsCommand, store, { limit: "all" as const });
 
     expect(payload.count).toBe(2);
     expect(payload.totalCount).toBe(2);
@@ -384,7 +384,7 @@ describe("sessionsCommand", () => {
       limitApplied?: number | null;
       hasMore?: boolean;
       sessions?: Array<{ key: string }>;
-    }>(sessionsCommand, store, { limit: "100000" });
+    }>(sessionsCommand, store, { limit: 100000 });
 
     expect(payload.count).toBe(2);
     expect(payload.totalCount).toBe(2);
@@ -393,62 +393,20 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
   });
 
-  it("rejects invalid --active values", async () => {
+  it("accepts pre-parsed active and limit values from the CLI layer", async () => {
     const store = writeStore(
       {
-        demo: {
-          sessionId: "demo",
+        one: {
+          sessionId: "one",
           updatedAt: Date.now() - 5 * 60_000,
         },
       },
-      "sessions-active-invalid",
+      "sessions-cli-parsed",
     );
-    const { runtime, errors } = makeRuntime();
+    const { runtime } = makeRuntime();
 
-    await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    fs.rmSync(store);
-  });
-
-  it("rejects partial --active values", async () => {
-    const store = writeStore(
-      {
-        demo: {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-partial",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, active: "10m" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    fs.rmSync(store);
-  });
-
-  it("rejects invalid --limit values", async () => {
-    const store = writeStore(
-      {
-        demo: {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-limit-invalid",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      '--limit must be a positive integer or "all", for example --limit 25.',
-    ]);
+    await expect(sessionsCommand({ store, active: 10 }, runtime)).resolves.toBeUndefined();
+    await expect(sessionsCommand({ store, limit: 25 }, runtime)).resolves.toBeUndefined();
 
     fs.rmSync(store);
   });

@@ -156,13 +156,25 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!limit.ok) {
     return null;
   }
+  const parsedActive =
+    active.value !== undefined ? parseStrictPositiveIntOrUndefined(active.value) : undefined;
+  const parsedLimit = ((): number | "all" | undefined => {
+    if (limit.value === undefined) {
+      return undefined;
+    }
+    const trimmed = limit.value.trim();
+    if (trimmed.toLowerCase() === "all") {
+      return "all";
+    }
+    return parseStrictPositiveIntOrUndefined(trimmed) ?? undefined;
+  })();
   return {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
     agent: agent.value,
     store: store.value,
-    active: active.value,
-    limit: limit.value,
+    active: parsedActive,
+    limit: parsedLimit,
   };
 }
 

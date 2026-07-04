@@ -90,13 +90,32 @@ function parseSessionsLimit(value: unknown): number | "all" | undefined {
 }
 
 function parseSessionsTail(value: unknown): number | undefined {
-  const parsed = parsePositiveIntOrUndefined(value);
-  if (value !== undefined && parsed === undefined) {
-    defaultRuntime.error("--tail must be a positive integer, for example --tail 25.");
-    defaultRuntime.exit(1);
+  if (value === undefined || value === null || value === "") {
     return undefined;
   }
-  return parsed;
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    Number.isSafeInteger(value)
+  ) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed) && Number.isSafeInteger(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  defaultRuntime.error("--tail must be a non-negative integer, for example --tail 25.");
+  defaultRuntime.exit(1);
+  return undefined;
 }
 
 async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {

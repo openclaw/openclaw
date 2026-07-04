@@ -35,7 +35,7 @@ type SessionsTailOptions = {
   allAgents?: boolean;
   sessionKey?: string;
   follow?: boolean;
-  tail?: string | number;
+  tail?: number;
 };
 
 type TailSelection = {
