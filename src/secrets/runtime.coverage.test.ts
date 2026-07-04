@@ -439,6 +439,9 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
   if (entry.id.startsWith("plugins.entries.")) {
     return entry.id;
   }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
+  }
   if (entry.id.startsWith("skills.entries.")) {
     return "skills.entries";
   }
