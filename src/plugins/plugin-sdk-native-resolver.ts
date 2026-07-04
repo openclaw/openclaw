@@ -78,7 +78,6 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["media-source-url", "media-source-url.ts"],
       ["mime", "mime.ts"],
       ["read-byte-stream-with-limit", "read-byte-stream-with-limit.ts"],
-      ["read-response-with-limit", "read-response-with-limit.ts"],
     ],
   },
   {

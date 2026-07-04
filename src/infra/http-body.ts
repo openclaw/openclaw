@@ -1,4 +1,4 @@
-// Reads HTTP request bodies with timeout and byte limits.
+// Reads HTTP request and response bodies with timeout and byte limits.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -124,6 +124,207 @@ function advanceRequestBodyChunk(
     totalBytes: nextTotalBytes,
     exceeded: nextTotalBytes > maxBytes,
   };
+}
+
+async function readResponseChunkWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  chunkTimeoutMs: number,
+  onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
+): Promise<Awaited<ReturnType<typeof reader.read>>> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+
+  return await new Promise((resolve, reject) => {
+    const clear = () => {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+    };
+
+    const resolvedChunkTimeoutMs = resolveTimerTimeoutMs(chunkTimeoutMs, 1);
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      const error =
+        onIdleTimeout?.({ chunkTimeoutMs: resolvedChunkTimeoutMs }) ??
+        new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`);
+      clear();
+      // Cancel with the timeout error so fetch-backed streams release sockets
+      // and buffers instead of continuing after the caller has failed.
+      void reader.cancel(error).catch(() => undefined);
+      reject(error);
+    }, resolvedChunkTimeoutMs);
+
+    void reader.read().then(
+      (result) => {
+        clear();
+        if (!timedOut) {
+          resolve(result);
+        }
+      },
+      (error: unknown) => {
+        clear();
+        if (!timedOut) {
+          reject(toHttpBodyError(error, "Non-Error rejection"));
+        }
+      },
+    );
+  });
+}
+
+type ReadResponsePrefixResult = {
+  buffer: Buffer;
+  size: number;
+  truncated: boolean;
+};
+
+async function readResponsePrefix(
+  response: Response,
+  maxBytes: number,
+  options?: {
+    chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+  },
+): Promise<ReadResponsePrefixResult> {
+  const body = response.body;
+  if (!body || typeof body.getReader !== "function") {
+    const fallback = Buffer.from(await response.arrayBuffer());
+    if (fallback.length > maxBytes) {
+      return {
+        buffer: fallback.subarray(0, maxBytes),
+        size: fallback.length,
+        truncated: true,
+      };
+    }
+    return { buffer: fallback, size: fallback.length, truncated: false };
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let size = 0;
+  let truncated = false;
+  try {
+    while (true) {
+      const { done, value } = options?.chunkTimeoutMs
+        ? await readResponseChunkWithIdleTimeout(
+            reader,
+            options.chunkTimeoutMs,
+            options.onIdleTimeout,
+          )
+        : await reader.read();
+      if (done) {
+        size = total;
+        break;
+      }
+      if (!value?.length) {
+        continue;
+      }
+      const nextTotal = total + value.length;
+      if (nextTotal > maxBytes) {
+        const remaining = maxBytes - total;
+        if (remaining > 0) {
+          chunks.push(value.subarray(0, remaining));
+          total += remaining;
+        }
+        size = nextTotal;
+        truncated = true;
+        try {
+          await reader.cancel();
+        } catch {}
+        break;
+      }
+      chunks.push(value);
+      total = nextTotal;
+      size = total;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+
+  return {
+    buffer: Buffer.concat(
+      chunks.map((chunk) => Buffer.from(chunk)),
+      total,
+    ),
+    size,
+    truncated,
+  };
+}
+
+/** Reads a response body under a byte cap, cancelling the stream on overflow or idle timeout. */
+export async function readResponseWithLimit(
+  response: Response,
+  maxBytes: number,
+  options?: {
+    onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
+    chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+  },
+): Promise<Buffer> {
+  const onOverflow =
+    options?.onOverflow ??
+    ((params: { size: number; maxBytes: number }) =>
+      new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+  const prefix = await readResponsePrefix(response, maxBytes, {
+    chunkTimeoutMs: options?.chunkTimeoutMs,
+    onIdleTimeout: options?.onIdleTimeout,
+  });
+  if (prefix.truncated) {
+    throw onOverflow({ size: prefix.size, maxBytes, res: response });
+  }
+  return prefix.buffer;
+}
+
+/** Reads a small collapsed text prefix from a response body for diagnostics/errors. */
+export async function readResponseTextSnippet(
+  response: Response,
+  options?: {
+    maxBytes?: number;
+    maxChars?: number;
+    chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
+  },
+): Promise<string | undefined> {
+  const maxBytes = options?.maxBytes ?? 8 * 1024;
+  const maxChars = options?.maxChars ?? 200;
+  const prefix = await readResponsePrefix(response, maxBytes, {
+    chunkTimeoutMs: options?.chunkTimeoutMs,
+    onIdleTimeout: options?.onIdleTimeout,
+  });
+  if (prefix.buffer.length === 0) {
+    return undefined;
+  }
+
+  const text = new TextDecoder().decode(prefix.buffer);
+  if (!text) {
+    return undefined;
+  }
+
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (!collapsed) {
+    return undefined;
+  }
+  if (collapsed.length > maxChars) {
+    return `${collapsed.slice(0, maxChars)}…`;
+  }
+  return prefix.truncated ? `${collapsed}…` : collapsed;
+}
+
+function toHttpBodyError(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
 
 export async function readRequestBodyWithLimit(
