@@ -53,6 +53,7 @@ import {
   repairProviderWrappedModelOverride,
 } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -108,6 +109,7 @@ import {
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { prepareInternalSessionEffectsTranscript } from "./internal-session-effects.js";
@@ -1690,6 +1692,27 @@ async function agentCommandInternal(
       lifecycleEnded: false,
     };
     const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
+    const suppressUserTurnPersistence =
+      opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
+    const recorderTranscriptText = transcriptBody || undefined;
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      ...(!suppressUserTurnPersistence && recorderTranscriptText
+        ? { input: { text: recorderTranscriptText } }
+        : {}),
+      target: {
+        transcriptPath: attemptSessionFile,
+        sessionId,
+        agentId: sessionAgentId,
+        ...(sessionKey ? { sessionKey } : {}),
+        cwd: cwd ?? workspaceDir,
+        config: cfg,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      errorContext: "agent command user turn transcript",
+    });
+    if (suppressUserTurnPersistence) {
+      userTurnTranscriptRecorder.markBlocked();
+    }
     let lifecycleFinishingEmitted = false;
     const emitLifecycleFinishing = (runResult: AgentAttemptResult) => {
       if (
@@ -1928,6 +1951,7 @@ async function agentCommandInternal(
               workspaceDir,
               cwd,
               body,
+              transcriptBody,
               isFallbackRetry,
               resolvedThinkLevel,
               fastMode,
@@ -1958,8 +1982,11 @@ async function agentCommandInternal(
                 !isNewSession ||
                 (await attemptExecutionRuntime.sessionFileHasContent(attemptSessionFile)),
               suppressPromptPersistenceOnRetry:
-                opts.suppressPromptPersistence === true ||
+                suppressUserTurnPersistence ||
+                userTurnTranscriptRecorder.hasPersisted() ||
+                userTurnTranscriptRecorder.isBlocked() ||
                 (isFallbackRetry && attemptLifecycleState.currentTurnUserMessagePersisted),
+              userTurnTranscriptRecorder,
               onUserMessagePersisted: attemptLifecycleCallbacks.onUserMessagePersisted,
               onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
                 lifecycleGeneration = nextLifecycleGeneration;
@@ -2220,6 +2247,10 @@ async function agentCommandInternal(
             sessionCwd: effectiveCwd,
             config: cfg,
             embeddedAssistantGapFill,
+            skipUserTurn:
+              suppressUserTurnPersistence ||
+              userTurnTranscriptRecorder.hasPersisted() ||
+              userTurnTranscriptRecorder.isBlocked(),
           });
           sessionEntry = transcriptResult.sessionEntry;
           sessionReboundDuringRun = transcriptResult.kind === "session-rebound";

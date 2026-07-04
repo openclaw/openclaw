@@ -2251,6 +2251,9 @@ export async function runEmbeddedAttempt(
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
         },
+        onUserMessageBlocked: () => {
+          params.userTurnTranscriptRecorder?.markBlocked();
+        },
         onAssistantErrorMessagePersisted: (message) => {
           params.onAssistantErrorMessagePersisted?.(message);
         },
