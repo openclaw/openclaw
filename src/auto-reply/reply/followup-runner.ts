@@ -167,7 +167,7 @@ async function forwardFollowupProgressEvent(params: {
     return;
   }
 
-  if (evt.stream === "tool") {
+  if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
     const phase = readStringValue(evt.data.phase) ?? "";
     const name = readStringValue(evt.data.name);
     if (phase === "start" || phase === "update") {
@@ -193,7 +193,9 @@ async function forwardFollowupProgressEvent(params: {
     evt.stream === "item" &&
     evt.data.suppressChannelProgress === true &&
     Boolean(opts?.onToolStart);
-  if (evt.stream === "item" && !suppressItemChannelProgress) {
+  const hideItemFromChannelProgress =
+    evt.stream === "item" && evt.data.hideFromChannelProgress === true;
+  if (evt.stream === "item" && !suppressItemChannelProgress && !hideItemFromChannelProgress) {
     await opts?.onItemEvent?.({
       itemId: readStringValue(evt.data.itemId),
       toolCallId: readStringValue(evt.data.toolCallId),

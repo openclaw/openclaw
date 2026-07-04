@@ -132,6 +132,9 @@
       "@openclaw/normalization-core/boolean-coercion": [
         "./packages/normalization-core/src/boolean-coercion.ts"
       ],
+      "@openclaw/normalization-core/error-coercion": [
+        "./packages/normalization-core/src/error-coercion.ts"
+      ],
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],

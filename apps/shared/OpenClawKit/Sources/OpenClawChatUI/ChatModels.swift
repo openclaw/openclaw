@@ -183,10 +183,15 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
 }
 
 public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
+    private struct OpenClawMetadata: Codable {
+        let idempotencyKey: String?
+    }
+
     public var id: UUID = .init()
     public let role: String
     public let content: [OpenClawChatMessageContent]
     public let timestamp: Double?
+    public let idempotencyKey: String?
     public let toolCallId: String?
     public let toolName: String?
     public let usage: OpenClawChatUsage?
@@ -197,6 +202,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         case role
         case content
         case timestamp
+        case idempotencyKey
+        case openClaw = "__openclaw"
         case toolCallId
         case tool_call_id
         case toolName
@@ -211,6 +218,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         role: String,
         content: [OpenClawChatMessageContent],
         timestamp: Double?,
+        idempotencyKey: String? = nil,
         toolCallId: String? = nil,
         toolName: String? = nil,
         usage: OpenClawChatUsage? = nil,
@@ -221,6 +229,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.role = role
         self.content = content
         self.timestamp = timestamp
+        self.idempotencyKey = idempotencyKey
         self.toolCallId = toolCallId
         self.toolName = toolName
         self.usage = usage
@@ -232,6 +241,9 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedRole = try container.decode(String.self, forKey: .role)
         let decodedTimestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        let decodedOpenClaw = try container.decodeIfPresent(OpenClawMetadata.self, forKey: .openClaw)
+        let decodedIdempotencyKey = try decodedOpenClaw?.idempotencyKey ??
+            container.decodeIfPresent(String.self, forKey: .idempotencyKey)
         let decodedToolCallId =
             try container.decodeIfPresent(String.self, forKey: .toolCallId) ??
             container.decodeIfPresent(String.self, forKey: .tool_call_id)
@@ -244,6 +256,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
         self.role = decodedRole
         self.timestamp = decodedTimestamp
+        self.idempotencyKey = decodedIdempotencyKey
         self.toolCallId = decodedToolCallId
         self.toolName = decodedToolName
         self.usage = decodedUsage
@@ -315,6 +328,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
+        try container.encodeIfPresent(self.idempotencyKey, forKey: .idempotencyKey)
         try container.encodeIfPresent(self.toolCallId, forKey: .toolCallId)
         try container.encodeIfPresent(self.toolName, forKey: .toolName)
         try container.encodeIfPresent(self.usage, forKey: .usage)

@@ -6,10 +6,7 @@ import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk
 import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import {
-  attachChannelToResult,
-  attachChannelToResults,
-} from "openclaw/plugin-sdk/channel-send-result";
+import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -219,6 +216,9 @@ async function sendFormattedSignalText(ctx: {
   accountId?: string | null;
   deps?: { [channelId: string]: unknown };
   abortSignal?: AbortSignal;
+  onDeliveryResult?: Parameters<
+    NonNullable<ChannelOutboundAdapter["sendFormattedText"]>
+  >[0]["onDeliveryResult"];
 }) {
   const { send, maxBytes } = await resolveSignalSendContext({
     cfg: ctx.cfg,
@@ -255,9 +255,14 @@ async function sendFormattedSignalText(ctx: {
       textMode: "plain",
       textStyles: chunk.styles,
     });
-    results.push(attachSignalVisibleText(result, chunk.text));
+    const deliveryResult = attachChannelToResult(
+      "signal",
+      attachSignalVisibleText(result, chunk.text),
+    );
+    results.push(deliveryResult);
+    await ctx.onDeliveryResult?.(deliveryResult);
   }
-  return attachChannelToResults("signal", results);
+  return results;
 }
 
 async function sendFormattedSignalMedia(ctx: {
@@ -549,7 +554,15 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         afterDeliverPayload: async (params) =>
           await registerDeliveredSignalApprovalPayloadForReactions(params),
         renderPresentation: async (params) => await renderSignalApprovalPayloadForReactions(params),
-        sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
+        sendFormattedText: async ({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          abortSignal,
+          onDeliveryResult,
+        }) =>
           await sendFormattedSignalText({
             cfg,
             to,
@@ -557,6 +570,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             accountId,
             deps,
             abortSignal,
+            onDeliveryResult,
           }),
         sendFormattedMedia: async ({
           cfg,

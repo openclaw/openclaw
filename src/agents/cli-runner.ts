@@ -25,6 +25,7 @@ import {
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
+import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -256,9 +257,11 @@ async function runCliAgentEndHook(
   runAgentEndSideEffects(hookParams);
 }
 
-async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
-  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscriptRecorder) {
-    return;
+async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<boolean> {
+  const recorder = params.userTurnTranscriptRecorder;
+  const reusingPersistedTurn = params.suppressNextUserMessagePersistence === true;
+  if (!recorder || (reusingPersistedTurn && !recorder.hasPersisted())) {
+    return recorder?.isBlocked() === true;
   }
 
   const target = {
@@ -269,8 +272,13 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     cwd: params.cwd ?? params.workspaceDir,
     ...(params.config ? { config: params.config } : {}),
   };
-  const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
-  if (persisted) {
+  const persisted = await recorder.persistApproved({ target });
+  if (!persisted && !recorder.hasPersisted() && (await recorder.resolveMessage())) {
+    // A prepared user row can be rejected by before_message_write. Preserve
+    // that terminal decision so outer transcript mirrors do not retry it.
+    recorder.markBlocked();
+  }
+  if (persisted && !reusingPersistedTurn) {
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);
       if (notification) {
@@ -282,6 +290,7 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
       log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
     }
   }
+  return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
 }
 
 async function persistCliAssistantTranscript(params: {
@@ -651,6 +660,7 @@ export async function runPreparedCliAgent(
   });
 
   let deliveredMessagingSideEffect = false;
+  let userTurnHandled = false;
   const buildCliSourceReplyMirrorPayloads = (
     evidence: Pick<
       CliOutput,
@@ -765,6 +775,7 @@ export async function runPreparedCliAgent(
     message: string;
     pluginId: string;
   }): Promise<void> => {
+    params.userTurnTranscriptRecorder?.markBlocked();
     try {
       const nowMs = Date.now();
       const sessionManager = SessionManager.open(params.sessionFile);
@@ -886,6 +897,8 @@ export async function runPreparedCliAgent(
       assistantText,
       lastAssistant,
       sourceReplyWasDelivered: sourceReplyMirror.delivered,
+      usedHistoryPrompt:
+        cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
     };
   };
 
@@ -894,6 +907,7 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
+    usedHistoryPrompt: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
@@ -925,6 +939,27 @@ export async function runPreparedCliAgent(
     const persistedCliSessionId = unflushedCliSessionId
       ? undefined
       : resultParams.effectiveCliSessionId;
+    const createdReseedReceipt =
+      persistedCliSessionId &&
+      resultParams.usedHistoryPrompt &&
+      isClaudeCliProvider(params.provider) &&
+      resultParams.output.finalPromptText !== undefined &&
+      userTurnHandled &&
+      params.sessionId
+        ? {
+            version: 1 as const,
+            promptHash: hashCliReseedPrompt(resultParams.output.finalPromptText),
+            localSessionId: params.sessionId,
+            userTurnDisposition: params.userTurnTranscriptRecorder?.hasPersisted()
+              ? ("persisted" as const)
+              : ("omitted" as const),
+          }
+        : undefined;
+    const preservedReseedReceipt =
+      params.cliSessionBinding && persistedCliSessionId === params.cliSessionBinding.sessionId
+        ? params.cliSessionBinding.reseedReceipt
+        : undefined;
+    const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
     const agentSessionId = unflushedCliSessionId
       ? ""
       : (resultParams.effectiveCliSessionId ?? params.sessionId ?? "");
@@ -999,6 +1034,7 @@ export async function runPreparedCliAgent(
                   ...(context.preparedBackend.mcpResumeHash
                     ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
                     : {}),
+                  ...(reseedReceipt ? { reseedReceipt } : {}),
                 },
               }
             : {}),
@@ -1052,7 +1088,8 @@ export async function runPreparedCliAgent(
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
       fallbackCliSessionId?: string,
     ) => {
-      const { output, assistantText, lastAssistant, sourceReplyWasDelivered } = result;
+      const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
+        result;
       try {
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         await finalizeCliContextEngineTurn({
@@ -1088,6 +1125,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned,
+          usedHistoryPrompt,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
@@ -1164,7 +1202,7 @@ export async function runPreparedCliAgent(
       }
     }
 
-    await persistApprovedCliUserTurnTranscript(params);
+    userTurnHandled = await persistApprovedCliUserTurnTranscript(params);
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,

@@ -366,6 +366,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/error-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "error-coercion.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,

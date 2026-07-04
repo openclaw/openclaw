@@ -369,14 +369,18 @@ describe("control UI routing", () => {
     app.requestUpdate();
     await app.updateComplete;
 
-    expectElement(app, ".sidebar-version", HTMLElement);
-    const statusDot = expectElement(app, ".sidebar-version__status", HTMLElement);
+    const status = expectElement(app, ".sidebar-status", HTMLElement);
+    const statusDot = expectElement(app, ".sidebar-status__dot", HTMLElement);
     expect(statusDot.getAttribute("aria-label")).toBe("Gateway status: Online");
     expect(statusDot.getAttribute("title")).toBe("Gateway status: Online");
     expect([...statusDot.classList]).toEqual([
-      "sidebar-version__status",
+      "sidebar-status__dot",
       "sidebar-connection-status--online",
     ]);
+    // The gateway version intentionally stays out of the persistent sidebar;
+    // it lives in Settings (Quick Settings footer).
+    expect(status.textContent).not.toContain("1.2.3");
+    expect(app.querySelector(".sidebar-version")).toBeNull();
 
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;

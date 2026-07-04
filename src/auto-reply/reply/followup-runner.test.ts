@@ -3165,6 +3165,60 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
+  it("keeps internal tool lifecycle events out of queued channel progress", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "wait",
+            hideFromChannelProgress: true,
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: {
+            phase: "start",
+            itemId: "tool:wait-1",
+            title: "wait",
+            hideFromChannelProgress: true,
+          },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
+    expect(onItemEvent).not.toHaveBeenCalled();
+  });
+
   it("keeps queued follow-up progress quiet when verbose state is missing", async () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});

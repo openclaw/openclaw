@@ -1,7 +1,9 @@
 // Media Core module implements read response with limit behavior.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-async function readChunkWithIdleTimeout(
+/** Reads one chunk, rejecting and cancelling the reader after an idle timeout. */
+export async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
@@ -40,7 +42,7 @@ async function readChunkWithIdleTimeout(
       (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(toLintErrorObject(err, "Non-Error rejection"));
+          reject(toErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -183,18 +185,4 @@ export async function readResponseTextSnippet(
     return `${collapsed.slice(0, maxChars)}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

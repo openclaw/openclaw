@@ -47,6 +47,42 @@ describe("install-cli.sh", () => {
     expect(script).toContain('cleanup_legacy_submodules "$repo_dir"');
   });
 
+  it("accepts only Node versions with the required SQLite statement API", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      set +e
+      for version in 22.18.9 22.19.0 23.7.0 23.10.9 23.11.0 24.0.0; do
+        node_version_is_supported "$version"
+        printf '%s=%s\n' "$version" "$?"
+      done
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("22.18.9=1");
+    expect(result.stdout).toContain("22.19.0=0");
+    expect(result.stdout).toContain("23.7.0=1");
+    expect(result.stdout).toContain("23.10.9=1");
+    expect(result.stdout).toContain("23.11.0=0");
+    expect(result.stdout).toContain("24.0.0=0");
+  });
+
+  it("rejects an explicitly requested incompatible Node 23 release", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NODE_VERSION=23.7.0
+      NODE_VERSION_REQUESTED=1
+      install_node
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(
+      "Node 23.7.0 is unsupported; use Node 22.19+, Node 23.11+, or Node 24+.",
+    );
+    expect(result.stdout).not.toContain("Installing Node 23.7.0");
+  });
+
   it("rejects installer options with missing values", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
@@ -686,7 +722,7 @@ describe("install-cli.sh", () => {
           "require_bin() { :; }",
           "download_file() {",
           '  case "$1" in',
-          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.18.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
+          "    */SHASUMS256.txt) printf 'fixture-sha  node-v22.19.0-linux-x64.tar.gz\\n' > \"$2\" ;;",
           "    *) printf 'node tarball fixture\\n' > \"$2\" ;;",
           "  esac",
           "}",
@@ -701,7 +737,7 @@ describe("install-cli.sh", () => {
           '  cp "$NEW_NPM" "$dest/bin/npm"',
           "}",
           `PREFIX=${JSON.stringify(prefix)}`,
-          "NODE_VERSION=22.18.0",
+          "NODE_VERSION=22.19.0",
           "NODE_VERSION_REQUESTED=1",
           "install_node",
         ].join("\n"),
@@ -713,7 +749,7 @@ describe("install-cli.sh", () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).toContain(
-        "Installed Node 22.18.0 must provide Node >= 22.19.0 with node:sqlite",
+        "Installed Node 22.19.0 must provide Node >= 22.19.0 with node:sqlite",
       );
       expect(result.stdout).toContain("found v22.18.0");
     } finally {

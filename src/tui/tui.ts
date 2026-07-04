@@ -39,6 +39,7 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -1434,7 +1435,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       message,
     });
   const notifyBlockedChatSubmit = () => {
-    chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    addBlockedChatSubmitNotice(chatLog);
     tui.requestRender();
   };
   const submitHandler = createEditorSubmitHandler({

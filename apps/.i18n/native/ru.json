@@ -4504,6 +4504,11 @@
       "translated": "Готово"
     },
     {
+      "id": "native.apple.202b97e93b938049",
+      "source": "What would you like to work on?",
+      "translated": "Над чем вы хотите поработать?"
+    },
+    {
       "id": "native.apple.32179ce0b6d4543f",
       "source": "The session attaches once the gateway is ready.",
       "translated": "Сеанс подключится, когда Gateway будет готов."
@@ -4532,6 +4537,36 @@
       "id": "native.apple.e8173c7d24457256",
       "source": "Message \\(self.agentDisplayName)...",
       "translated": "Сообщение \\(self.agentDisplayName)..."
+    },
+    {
+      "id": "native.apple.14492e334b87e4f2",
+      "source": "Check OpenClaw status",
+      "translated": "Проверить статус OpenClaw"
+    },
+    {
+      "id": "native.apple.bbf7bd23da1e7865",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "Сводка текущего статуса OpenClaw и что требует внимания."
+    },
+    {
+      "id": "native.apple.ea8cbb1b4230c652",
+      "source": "What can I control here?",
+      "translated": "Чем я могу здесь управлять?"
+    },
+    {
+      "id": "native.apple.451d25bdb3130ed0",
+      "source": "Show me which phone controls and device capabilities are available right now.",
+      "translated": "Покажите, какие элементы управления телефоном и возможности устройства доступны прямо сейчас."
+    },
+    {
+      "id": "native.apple.503ec402d08bd43a",
+      "source": "Help me start voice chat",
+      "translated": "Помогите начать голосовой чат"
+    },
+    {
+      "id": "native.apple.65e462758be96174",
+      "source": "Help me start a realtime voice session from this phone.",
+      "translated": "Помогите начать сеанс голосовой связи в реальном времени с этого телефона."
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
@@ -6904,6 +6939,26 @@
       "translated": "/pair qr"
     },
     {
+      "id": "native.apple.fe3269c93d6f8524",
+      "source": "Copied",
+      "translated": "Скопировано"
+    },
+    {
+      "id": "native.apple.bad4a8110ca864e1",
+      "source": "Copy",
+      "translated": "Копировать"
+    },
+    {
+      "id": "native.apple.b6f3f5c300b28f17",
+      "source": "Copy pair command",
+      "translated": "Копировать команду сопряжения"
+    },
+    {
+      "id": "native.apple.7308cbcb1e40d70e",
+      "source": "Pair command copied",
+      "translated": "Команда сопряжения скопирована"
+    },
+    {
       "id": "native.apple.b727174424127618",
       "source": "Run this in your OpenClaw chat, then scan the code.",
       "translated": "Выполните это в чате OpenClaw, затем отсканируйте код."
@@ -7129,9 +7184,9 @@
       "translated": "Повторить подключение"
     },
     {
-      "id": "native.apple.f50052c1d760ec10",
-      "source": "Open OpenClaw",
-      "translated": "Открыть OpenClaw"
+      "id": "native.apple.e674edbcb002aec6",
+      "source": "Go to Chat",
+      "translated": "Перейти в чат"
     },
     {
       "id": "native.apple.4679e949156e07e3",

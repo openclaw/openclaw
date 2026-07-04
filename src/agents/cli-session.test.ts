@@ -3,7 +3,11 @@
  * Verifies provider-keyed bindings, legacy Claude state, and reuse invalidation.
  */
 import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import {
+  normalizeCliSessionReseedReceipt,
+  rebindCliSessionReseedReceiptsForReset,
+} from "../config/sessions/cli-session-binding.js";
 import {
   clearAllCliSessions,
   clearCliSession,
@@ -11,6 +15,7 @@ import {
   hashCliSessionText,
   resolveCliSessionReuse,
   setCliSessionBinding,
+  setCliSessionId,
 } from "./cli-session.js";
 
 describe("cli-session helpers", () => {
@@ -32,6 +37,12 @@ describe("cli-session helpers", () => {
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "openclaw-session",
+        userTurnDisposition: "persisted",
+      },
     });
 
     expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
@@ -48,7 +59,126 @@ describe("cli-session helpers", () => {
       cwdHash: "cwd-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "openclaw-session",
+        userTurnDisposition: "persisted",
+      },
     });
+  });
+
+  it("drops malformed reseed receipts while preserving the session binding", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+    };
+
+    setCliSessionBinding(entry, "claude-cli", {
+      sessionId: "cli-session-1",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "not-a-digest",
+        localSessionId: "openclaw-session",
+        userTurnDisposition: "persisted",
+      },
+    });
+
+    expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
+      sessionId: "cli-session-1",
+      authProfileId: undefined,
+      authEpoch: undefined,
+      authEpochVersion: undefined,
+      extraSystemPromptHash: undefined,
+      messageToolPolicyHash: undefined,
+      promptToolNamesHash: undefined,
+      cwdHash: undefined,
+      mcpConfigHash: undefined,
+      mcpResumeHash: undefined,
+      reseedReceipt: undefined,
+    });
+  });
+
+  it("rejects reseed receipts without a local session owner", () => {
+    expect(
+      normalizeCliSessionReseedReceipt({
+        version: 1,
+        promptHash: "a".repeat(64),
+      } as CliSessionReseedReceipt),
+    ).toBeUndefined();
+  });
+
+  it("rejects reseed receipts without a user-turn disposition", () => {
+    expect(
+      normalizeCliSessionReseedReceipt({
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "openclaw-session",
+      } as CliSessionReseedReceipt),
+    ).toBeUndefined();
+  });
+
+  it("rebinds only omitted receipts across binding-preserving resets", () => {
+    const bindings = {
+      "claude-cli": {
+        sessionId: "claude-session",
+        reseedReceipt: {
+          version: 1 as const,
+          promptHash: "a".repeat(64),
+          localSessionId: "old-local-session",
+          userTurnDisposition: "omitted" as const,
+        },
+      },
+      "other-cli": {
+        sessionId: "other-session",
+        reseedReceipt: {
+          version: 1 as const,
+          promptHash: "b".repeat(64),
+          localSessionId: "old-local-session",
+          userTurnDisposition: "persisted" as const,
+        },
+      },
+    };
+
+    expect(rebindCliSessionReseedReceiptsForReset(bindings, "new-local-session")).toEqual({
+      "claude-cli": {
+        sessionId: "claude-session",
+        reseedReceipt: {
+          version: 1,
+          promptHash: "a".repeat(64),
+          localSessionId: "new-local-session",
+          userTurnDisposition: "omitted",
+        },
+      },
+      "other-cli": bindings["other-cli"],
+    });
+    expect(bindings["claude-cli"].reseedReceipt.localSessionId).toBe("old-local-session");
+  });
+
+  it("preserves receipts only while updating the same native CLI session", () => {
+    const entry: SessionEntry = {
+      sessionId: "openclaw-session",
+      updatedAt: Date.now(),
+    };
+    const receipt = {
+      version: 1 as const,
+      promptHash: "a".repeat(64),
+      localSessionId: "openclaw-session",
+      userTurnDisposition: "persisted" as const,
+    };
+
+    setCliSessionBinding(entry, "claude-cli", {
+      sessionId: "cli-session-1",
+      reseedReceipt: receipt,
+    });
+    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-1" });
+    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
+
+    setCliSessionId(entry, "claude-cli", "cli-session-1");
+    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
+
+    setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });
+    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toBeUndefined();
   });
 
   it("force-reuses explicitly attached CLI sessions despite metadata drift", () => {

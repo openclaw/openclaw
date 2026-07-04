@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private enum OnboardingLayout {
     static let contentMaxWidth: CGFloat = 680
@@ -131,6 +132,8 @@ struct OnboardingWelcomeStep: View {
     let onScanQRCode: () -> Void
     let onManualSetup: () -> Void
 
+    @State private var pairCommandCopied = false
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -144,8 +147,29 @@ struct OnboardingWelcomeStep: View {
                 .font(OpenClawType.title1)
                 .padding(.bottom, 12)
 
-            KeycapText("/pair qr")
-                .padding(.bottom, 10)
+            HStack(spacing: 8) {
+                KeycapText("/pair qr")
+                Button {
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        UIPasteboard.general.string = "/pair qr"
+                        self.pairCommandCopied = true
+                    }
+                } label: {
+                    Label(
+                        self.pairCommandCopied ? "Copied" : "Copy",
+                        systemImage: self.pairCommandCopied ? "checkmark" : "doc.on.doc")
+                        .font(OpenClawType.captionSemiBold)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.primary)
+                .animation(nil, value: self.pairCommandCopied)
+                .accessibilityLabel(self.pairCommandCopied ? "Pair command copied" : "Copy pair command")
+                .accessibilityIdentifier("onboarding-copy-pair-command")
+            }
+            .padding(.bottom, 10)
 
             Text("Run this in your OpenClaw chat, then scan the code.")
                 .font(OpenClawType.subhead)

@@ -1,6 +1,14 @@
 // Overflow helpers classify provider overflow errors and retryable responses.
 import type { AssistantMessage } from "../types.js";
 
+const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
+  /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
+
+/** Detects DS4-style raw token-count context overflow errors. */
+export function isConfiguredContextSizeOverflowError(errorMessage: string): boolean {
+  return CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE.test(errorMessage);
+}
+
 /**
  * Regex patterns to detect context overflow errors from different providers.
  *
@@ -48,6 +56,7 @@ const OVERFLOW_PATTERNS = [
   /context window exceeds limit/i, // MiniMax
   /exceeded model token limit/i, // Kimi For Coding
   /too large for model with \d+ maximum context length/i, // Mistral
+  CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
   /prompt too long; exceeded (?:max )?context length/i, // Ollama explicit overflow error
   /context[_ ]length[_ ]exceeded/i, // Generic fallback

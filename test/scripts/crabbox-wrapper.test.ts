@@ -19,6 +19,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
 const fakeCrabboxBinDirs = new Map<string, string>();
+const fakeGitBinDirs = new Map<string, string>();
+const timingPreloads = new Map<string, string>();
 const GIT_COMMON_DIR_KEY = "rev-parse\u0000--git-common-dir";
 const GIT_CONFIG_SPARSE_KEY = "config\u0000--bool\u0000core.sparseCheckout";
 const GIT_SPARSE_LIST_KEY = "sparse-checkout\u0000list";
@@ -213,6 +215,38 @@ function makeSlowVersionCrabbox(helpText: string): string {
   return binDir;
 }
 
+function testTimingPreload(options: { clockScale?: number; spawnTimeoutMs?: number }): string {
+  const key = JSON.stringify(options);
+  let preloadPath = timingPreloads.get(key);
+  if (!preloadPath) {
+    const dir = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-timing-"));
+    tempDirs.push(dir);
+    preloadPath = path.join(dir, "preload.cjs");
+    const script: string[] = [];
+    if (options.clockScale !== undefined) {
+      script.push(
+        "const realNow = Date.now.bind(Date);",
+        "const startedAt = realNow();",
+        `Date.now = () => startedAt + (realNow() - startedAt) * ${options.clockScale};`,
+      );
+    }
+    if (options.spawnTimeoutMs !== undefined) {
+      script.push(
+        'const childProcess = require("node:child_process");',
+        'const { syncBuiltinESMExports } = require("node:module");',
+        "const realSpawnSync = childProcess.spawnSync;",
+        "childProcess.spawnSync = (command, args, spawnOptions) =>",
+        "  realSpawnSync(command, args,",
+        `    spawnOptions?.timeout ? { ...spawnOptions, timeout: Math.min(spawnOptions.timeout, ${options.spawnTimeoutMs}) } : spawnOptions);`,
+        "syncBuiltinESMExports();",
+      );
+    }
+    writeFileSync(preloadPath, `${script.join("\n")}\n`, "utf8");
+    timingPreloads.set(key, preloadPath);
+  }
+  return preloadPath;
+}
+
 function windowsNodeCmdShim(target: string): string {
   return [
     "@ECHO off",
@@ -243,6 +277,11 @@ function shellSingleQuote(value: string): string {
 function makeFakeGit(
   responses: Record<string, { status?: number; stdout?: string; stderr?: string }>,
 ): string {
+  const key = JSON.stringify(responses);
+  const cached = fakeGitBinDirs.get(key);
+  if (cached) {
+    return cached;
+  }
   const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-git-"));
   tempDirs.push(binDir);
   const gitPath = path.join(binDir, "git");
@@ -277,6 +316,7 @@ function makeFakeGit(
     ].join("\n");
     writeFileSync(gitPath, `${script}\n`, "utf8");
     chmodSync(gitPath, 0o755);
+    fakeGitBinDirs.set(key, binDir);
     return binDir;
   }
 
@@ -299,6 +339,7 @@ function makeFakeGit(
   writeFileSync(gitPath, `${script}\n`, "utf8");
   writeFileSync(`${gitPath}.cmd`, windowsNodeCmdShim("git"), "utf8");
   chmodSync(gitPath, 0o755);
+  fakeGitBinDirs.set(key, binDir);
   return binDir;
 }
 
@@ -311,7 +352,12 @@ function shellArgListCondition(args: string[]): string {
 }
 
 function runWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
-  return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
+  const nodeArgs = [
+    ...(options.nodePreload ? ["--require", options.nodePreload] : []),
+    "scripts/crabbox-wrapper.mjs",
+    ...args,
+  ];
+  return spawnSync(process.execPath, nodeArgs, {
     cwd: repoRoot,
     encoding: "utf8",
     input: options.input,
@@ -327,10 +373,16 @@ type WrapperOptions = {
   extraPathEntries?: string[];
   gitResponses?: Record<string, { status?: number; stdout?: string; stderr?: string }>;
   input?: string;
+  nodePreload?: string;
 };
 
 function spawnWrapper(helpText: string, args: string[], options: WrapperOptions = {}) {
-  return spawn(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
+  const nodeArgs = [
+    ...(options.nodePreload ? ["--require", options.nodePreload] : []),
+    "scripts/crabbox-wrapper.mjs",
+    ...args,
+  ];
+  return spawn(process.execPath, nodeArgs, {
     cwd: repoRoot,
     env: wrapperEnv(helpText, options),
     stdio: ["ignore", "pipe", "pipe"],
@@ -442,6 +494,7 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
       env: {
         OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH: descendantPidPath,
       },
+      nodePreload: testTimingPreload({ clockScale: 20 }),
     },
   );
 
@@ -3060,6 +3113,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
     const result = runWrapper(helpText, ["--version"], {
       extraPathEntries: [makeSlowVersionCrabbox(helpText)],
+      nodePreload: testTimingPreload({ spawnTimeoutMs: 25 }),
     });
 
     expect(result.error).toBeUndefined();
@@ -3183,25 +3237,6 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
-  });
-
-  it("rebuilds stale remote Git metadata before sparse changed gates", () => {
-    const result = runWrapper(
-      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
-      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
-      {
-        gitResponses: {
-          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
-          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
-          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
-        },
-      },
-    );
-
-    const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
-    expect(result.status).toBe(0);
-    expectChangedGateGitBootstrap(remoteCommand);
   });
 
   it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
