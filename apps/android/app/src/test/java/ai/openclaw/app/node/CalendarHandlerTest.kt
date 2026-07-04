@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 
 class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   @Test
@@ -86,6 +87,24 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
     assertFalse(result.ok)
     assertEquals("CALENDAR_NOT_FOUND", result.error?.code)
   }
+
+  @Test
+  fun handleCalendarAdd_normalizesAllDayEventForAndroidProvider() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"X","startISO":"2026-07-05T09:00:00Z","endISO":"2026-07-06T09:00:00Z","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertTrue(request.isAllDay)
+    assertEquals("UTC", request.timeZoneId)
+    assertEquals(Instant.parse("2026-07-05T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-06T00:00:00Z").toEpochMilli(), request.endMs)
+  }
 }
 
 private class FakeCalendarDataSource(
@@ -104,6 +123,9 @@ private class FakeCalendarDataSource(
     ),
   private val addError: Throwable? = null,
 ) : CalendarDataSource {
+  var addedRequest: CalendarAddRequest? = null
+    private set
+
   override fun hasReadPermission(context: Context): Boolean = canRead
 
   override fun hasWritePermission(context: Context): Boolean = canWrite
@@ -118,6 +140,7 @@ private class FakeCalendarDataSource(
     request: CalendarAddRequest,
   ): CalendarEventRecord {
     addError?.let { throw it }
+    addedRequest = request
     return addResult
   }
 }
