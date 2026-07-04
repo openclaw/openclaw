@@ -5,6 +5,7 @@ import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsGraphMessageUrls,
   buildMSTeamsMediaPayload,
+  resolveMSTeamsInboundAttachmentPresentation,
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
@@ -198,6 +199,41 @@ describe("msteams attachment helpers", () => {
           maxInlineTotalBytes: 4,
         }),
       ).toBe("<media:document>");
+    });
+
+    it("counts advertised files without URLs and ignores mention-only HTML", () => {
+      expect(
+        resolveMSTeamsInboundAttachmentPresentation([
+          { contentType: "application/pdf", name: "report.pdf" },
+        ]),
+      ).toEqual({ placeholder: "<media:document>", expectedMediaCount: 1 });
+      expect(
+        resolveMSTeamsInboundAttachmentPresentation([
+          { contentType: "text/html", content: "<div><at>Bot</at> hello</div>" },
+        ]),
+      ).toEqual({ placeholder: "", expectedMediaCount: 0 });
+    });
+
+    it("counts repeated inline URLs once while keeping data images per occurrence", () => {
+      const repeatedUrl = "https://example.com/repeated.png";
+      expect(
+        resolveMSTeamsInboundAttachmentPresentation([
+          {
+            contentType: "text/html",
+            content: `<img src="${repeatedUrl}"><img src="${repeatedUrl}">`,
+          },
+        ]),
+      ).toEqual({ placeholder: "<media:image>", expectedMediaCount: 1 });
+
+      const dataUrl = "data:image/png;base64,AQ==";
+      expect(
+        resolveMSTeamsInboundAttachmentPresentation([
+          {
+            contentType: "text/html",
+            content: `<img src="${dataUrl}"><img src="${dataUrl}">`,
+          },
+        ]),
+      ).toEqual({ placeholder: "<media:image> (2 images)", expectedMediaCount: 2 });
     });
   });
 
