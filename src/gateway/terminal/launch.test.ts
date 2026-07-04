@@ -1,7 +1,5 @@
-import { mkdtempSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildTerminalEnv,
@@ -9,6 +7,8 @@ import {
   resolveTerminalLaunch,
   resolveTerminalShell,
 } from "./launch.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveTerminalShell", () => {
   it("prefers an explicitly configured shell", () => {
@@ -46,7 +46,7 @@ describe("resolveTerminalLaunch", () => {
   });
 
   it("returns a host plan starting in the agent workspace", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-ws-"));
+    const workspace = tempDirs.make("term-ws-");
     const config = {
       agents: { defaults: { workspace } },
     } as unknown as OpenClawConfig;
@@ -80,7 +80,7 @@ describe("resolveTerminalLaunch", () => {
   });
 
   it("allows a host terminal under non-main sandbox mode (main session runs on host)", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-ws-nm-"));
+    const workspace = tempDirs.make("term-ws-nm-");
     const config = {
       agents: { defaults: { workspace, sandbox: { mode: "non-main" } } },
     } as unknown as OpenClawConfig;
@@ -115,7 +115,7 @@ describe("resolveTerminalLaunch", () => {
   });
 
   it("accepts an explicit id that names a configured agent", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-ws-id-"));
+    const workspace = tempDirs.make("term-ws-id-");
     const config = {
       agents: {
         defaults: { workspace },
@@ -155,7 +155,7 @@ describe("createTerminalLaunchPolicy", () => {
   });
 
   it("preserves sandbox revocations across later restart-bound updates", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-policy-agent-"));
+    const workspace = tempDirs.make("term-policy-agent-");
     const baseConfig: OpenClawConfig = {
       gateway: { terminal: { enabled: true } },
       agents: { defaults: { workspace }, list: [{ id: "ops" }] },
@@ -181,7 +181,7 @@ describe("createTerminalLaunchPolicy", () => {
   });
 
   it("keeps current launch details until a restart-bound change takes effect", () => {
-    const workspace = mkdtempSync(path.join(os.tmpdir(), "term-policy-"));
+    const workspace = tempDirs.make("term-policy-");
     const policy = createTerminalLaunchPolicy({
       gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
       agents: { defaults: { workspace } },
