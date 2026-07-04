@@ -433,12 +433,16 @@ describe("slackPlugin status", () => {
     const cfg = {
       channels: {
         slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+            },
+          },
         },
       },
     } as OpenClawConfig;
-    const account = slackPlugin.config.resolveAccount(cfg, "default");
+    const account = slackPlugin.config.resolveAccount(cfg, "work");
 
     const result = await slackPlugin.status!.probeAccount!({
       account,
@@ -446,13 +450,33 @@ describe("slackPlugin status", () => {
       cfg,
     });
 
-    expect(probeSpy).toHaveBeenCalledWith("xoxb-test", 2500);
+    expect(probeSpy).toHaveBeenCalledWith("xoxb-work", 2500, { accountId: "work" });
     expect(result).toEqual({
       ok: true,
       status: 200,
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
     });
+  });
+
+  it("renders Slack probe token warnings in capabilities output", () => {
+    const lines = slackPlugin.status?.formatCapabilitiesProbe?.({
+      probe: {
+        ok: true,
+        warning: "Slack bot token is a user token",
+        bot: { id: "UUSER", name: "human-installer" },
+        team: { id: "T1", name: "OpenClaw" },
+      },
+    });
+
+    expect(lines).toStrictEqual([
+      {
+        text: "Warning: Slack bot token is a user token",
+        tone: "warn",
+      },
+      { text: "Bot: @human-installer" },
+      { text: "Team: OpenClaw (T1)" },
+    ]);
   });
 
   it("recovers thread routing from mixed-case Slack session keys", async () => {
