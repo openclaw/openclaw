@@ -687,6 +687,22 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(watchService.lastSentAppSnapshot?.talkEnabled == false)
     }
 
+    @Test @MainActor func handleInvokePTTStartRestoresVoiceWakeWhenStartFails() async {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let appModel = NodeAppModel(talkMode: talkMode)
+        appModel.voiceWake.isEnabled = true
+        appModel.voiceWake.isListening = true
+        appModel.voiceWake.statusText = "Listening"
+
+        let req = BridgeInvokeRequest(id: "ptt-start", command: OpenClawTalkCommand.pttStart.rawValue)
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.message.contains("Gateway not connected") == true)
+        #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        appModel.voiceWake.stop()
+    }
+
     @Test @MainActor func watchAppCommandOpensChatSessionOnPhoneModel() async {
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)

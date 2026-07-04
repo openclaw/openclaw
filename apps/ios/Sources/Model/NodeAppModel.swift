@@ -1696,7 +1696,15 @@ final class NodeAppModel {
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
             self.pttVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
+            var didStart = false
+            defer {
+                if !didStart {
+                    self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: self.pttVoiceWakeSuspended)
+                    self.pttVoiceWakeSuspended = false
+                }
+            }
             let payload = try await self.talkMode.beginPushToTalk()
+            didStart = true
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawTalkCommand.pttStop.rawValue:
