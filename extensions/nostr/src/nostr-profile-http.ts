@@ -8,7 +8,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -78,10 +78,10 @@ function checkRateLimit(accountId: string): boolean {
 // Mutex for Concurrent Publish Prevention
 // ============================================================================
 
-const publishLocks = new Map<string, Promise<void>>();
+const publishLocks = new KeyedAsyncQueue();
 
 async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
-  return await enqueueKeyedTask({ tails: publishLocks, key: accountId, task: fn });
+  return await publishLocks.enqueue(accountId, fn);
 }
 
 // ============================================================================

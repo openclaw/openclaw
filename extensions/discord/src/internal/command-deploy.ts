@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   createApplicationCommand,
@@ -34,10 +34,10 @@ type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
  * file lock. Discord deployers only run inside the gateway process, so an
  * in-process mutex is sufficient for the documented concurrency surface.
  */
-const cachePersistLocks = new Map<string, Promise<void>>();
+const cachePersistLocks = new KeyedAsyncQueue();
 
 async function withCachePersistLock<T>(storePath: string, fn: () => Promise<T>): Promise<T> {
-  return await enqueueKeyedTask({ tails: cachePersistLocks, key: storePath, task: fn });
+  return await cachePersistLocks.enqueue(storePath, fn);
 }
 
 export class DiscordCommandDeployer {

@@ -27,7 +27,7 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   isFutureDateTimestampMs,
@@ -530,7 +530,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logVerboseMessage,
   });
   const roomHistoryTracker = createRoomHistoryTracker();
-  const roomIngressTails = new Map<string, Promise<void>>();
+  const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
   const readStoreAllowFrom = async (): Promise<string[]> => {
@@ -577,7 +577,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   };
 
   const runRoomIngress = async <T>(roomId: string, task: () => Promise<T>): Promise<T> => {
-    return await enqueueKeyedTask({ tails: roomIngressTails, key: roomId, task });
+    return await roomIngressQueue.enqueue(roomId, task);
   };
 
   return async (roomId: string, event: MatrixRawEvent) => {

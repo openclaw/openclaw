@@ -1,4 +1,4 @@
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -358,7 +358,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return null;
   }
 
-  const refreshQueues = new Map<string, Promise<void>>();
+  let refreshQueue = new KeyedAsyncQueue();
 
   function refreshQueueKey(provider: string, profileId: string): string {
     return `${provider}\u0000${profileId}`;
@@ -654,11 +654,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const key = refreshQueueKey(params.provider, params.profileId);
-    return await enqueueKeyedTask({
-      tails: refreshQueues,
-      key,
-      task: () => doRefreshOAuthTokenWithLock(params),
-    });
+    return await refreshQueue.enqueue(key, () => doRefreshOAuthTokenWithLock(params));
   }
 
   async function resolveOAuthAccess(params: {
@@ -809,7 +805,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   }
 
   function resetRefreshQueuesForTest(): void {
-    refreshQueues.clear();
+    refreshQueue = new KeyedAsyncQueue();
   }
 
   return {

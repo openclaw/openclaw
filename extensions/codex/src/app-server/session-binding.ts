@@ -12,7 +12,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
@@ -41,7 +41,7 @@ const CODEX_APP_SERVER_BINDING_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS * 2,
 };
-const bindingMutationQueues = new Map<string, Promise<void>>();
+const bindingMutationQueue = new KeyedAsyncQueue();
 const bindingMutationContext = new AsyncLocalStorage<Set<string>>();
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
@@ -121,14 +121,11 @@ export async function withCodexAppServerBindingLock<T>(
   // same-process tasks cannot slip between compare/clear/start.
   const nestedOwnedBindings = new Set(ownedBindings);
   nestedOwnedBindings.add(bindingPath);
-  return await enqueueKeyedTask({
-    tails: bindingMutationQueues,
-    key: bindingPath,
-    task: () =>
-      bindingMutationContext.run(nestedOwnedBindings, () =>
-        withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run),
-      ),
-  });
+  return await bindingMutationQueue.enqueue(bindingPath, () =>
+    bindingMutationContext.run(nestedOwnedBindings, () =>
+      withFileLock(bindingPath, CODEX_APP_SERVER_BINDING_LOCK_OPTIONS, run),
+    ),
+  );
 }
 
 /** Reads and normalizes a Codex app-server binding sidecar, returning undefined on stale data. */

@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
@@ -121,7 +121,7 @@ type CodexConversationConfig = Parameters<
 type ResolvedCodexConversationConfig = NonNullable<CodexConversationConfig>;
 
 type CodexConversationGlobalState = {
-  queues: Map<string, Promise<void>>;
+  queue: KeyedAsyncQueue;
 };
 
 async function resolveConversationAppServerRuntime(params: {
@@ -170,7 +170,7 @@ function getGlobalState(): CodexConversationGlobalState {
   const globalState = globalThis as typeof globalThis & {
     [CODEX_CONVERSATION_GLOBAL_STATE]?: CodexConversationGlobalState;
   };
-  globalState[CODEX_CONVERSATION_GLOBAL_STATE] ??= { queues: new Map() };
+  globalState[CODEX_CONVERSATION_GLOBAL_STATE] ??= { queue: new KeyedAsyncQueue() };
   return globalState[CODEX_CONVERSATION_GLOBAL_STATE];
 }
 
@@ -975,8 +975,7 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
 }
 
 function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
-  const state = getGlobalState();
-  return enqueueKeyedTask({ tails: state.queues, key, task: run });
+  return getGlobalState().queue.enqueue(key, run);
 }
 
 function resolveThreadRequestModelProvider(params: {

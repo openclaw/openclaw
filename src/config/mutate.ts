@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
@@ -69,7 +69,7 @@ const CONFIG_MUTATION_LOCK_OPTIONS = {
 
 const DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS = 5;
 const activeConfigMutationLocks = new AsyncLocalStorage<Set<string>>();
-const configMutationQueueTails = new Map<string, Promise<void>>();
+const configMutationQueue = new KeyedAsyncQueue();
 
 export { ConfigMutationConflictError } from "./mutation-conflict.js";
 
@@ -190,15 +190,12 @@ async function withConfigMutationLock<T>(
 
   const nextActiveLocks = new Set(activeLocks ?? []);
   nextActiveLocks.add(configPath);
-  return await enqueueKeyedTask({
-    tails: configMutationQueueTails,
-    key: configPath,
-    task: () =>
-      activeConfigMutationLocks.run(
-        nextActiveLocks,
-        async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
-      ),
-  });
+  return await configMutationQueue.enqueue(configPath, () =>
+    activeConfigMutationLocks.run(
+      nextActiveLocks,
+      async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
+    ),
+  );
 }
 
 function markActiveConfigMutationPath(configPath: string): void {

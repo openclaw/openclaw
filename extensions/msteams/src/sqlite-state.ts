@@ -1,6 +1,6 @@
 // Msteams plugin module implements sqlite state behavior.
 import path from "node:path";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { withFileLock } from "./store-fs.js";
 
@@ -56,10 +56,10 @@ export function resolveMSTeamsSqliteStateDir(
   );
 }
 
-const sqliteMutationLocks = new Map<string, Promise<void>>();
+const sqliteMutationLocks = new KeyedAsyncQueue();
 
 async function withProcessMutationLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
-  return await enqueueKeyedTask({ tails: sqliteMutationLocks, key: lockPath, task: fn });
+  return await sqliteMutationLocks.enqueue(lockPath, fn);
 }
 
 export async function withMSTeamsSqliteMutationLock<T>(

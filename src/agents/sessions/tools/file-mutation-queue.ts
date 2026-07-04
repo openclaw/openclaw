@@ -5,9 +5,9 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 
-const fileMutationQueues = new Map<string, Promise<void>>();
+const fileMutationQueue = new KeyedAsyncQueue();
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);
@@ -24,5 +24,5 @@ function getMutationQueueKey(filePath: string): string {
  */
 export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   const key = getMutationQueueKey(filePath);
-  return await enqueueKeyedTask({ tails: fileMutationQueues, key, task: fn });
+  return await fileMutationQueue.enqueue(key, fn);
 }

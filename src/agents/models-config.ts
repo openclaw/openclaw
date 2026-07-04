@@ -5,7 +5,6 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
@@ -341,11 +340,7 @@ export async function buildModelsJsonSourceFingerprint(
 }
 
 async function withModelsJsonWriteLock<T>(targetPath: string, run: () => Promise<T>): Promise<T> {
-  return await enqueueKeyedTask({
-    tails: MODELS_JSON_STATE.writeLocks,
-    key: targetPath,
-    task: run,
-  });
+  return await MODELS_JSON_STATE.writeQueue.enqueue(targetPath, run);
 }
 
 /** Ensures models.json and plugin catalog sidecars are current for an agent. */

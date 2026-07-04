@@ -5,7 +5,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   ErrorCodes,
   errorShape,
@@ -411,7 +411,7 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   }
 }
 
-const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
+const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
 
 function resolveSourceReplyTranscriptMirrorQueueKey(
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
@@ -427,11 +427,9 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
-  return enqueueKeyedTask({
-    tails: sourceReplyTranscriptMirrorQueues,
-    key: queueKey,
-    task: () => mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
-  });
+  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>
+    mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
+  );
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
