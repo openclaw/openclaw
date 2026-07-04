@@ -25,7 +25,10 @@ vi.mock("../../process/exec.js", () => ({
 
 import { devicePairSetupHandlers } from "./device-pair-setup.js";
 
-function createOptions(params: Record<string, unknown>): {
+function createOptions(
+  params: Record<string, unknown>,
+  config: Record<string, unknown> = {},
+): {
   options: GatewayRequestHandlerOptions;
   respond: ReturnType<typeof vi.fn>;
 } {
@@ -37,7 +40,7 @@ function createOptions(params: Record<string, unknown>): {
     isWebchatConnect: () => false,
     respond,
     context: {
-      getRuntimeConfig: vi.fn(() => ({})),
+      getRuntimeConfig: vi.fn(() => config),
     },
   } as unknown as GatewayRequestHandlerOptions;
   return { options, respond };
@@ -79,6 +82,67 @@ describe("device.pair.setupCode", () => {
     });
     // The bootstrap token only lives inside the (opaque) setup code, never as a field.
     expect(JSON.stringify(payload)).not.toContain("boot-123");
+  });
+
+  it("preserves the configured device-pair public URL fallback", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+
+    const { options } = createOptions(
+      {},
+      {
+        plugins: {
+          entries: {
+            "device-pair": { config: { publicUrl: " wss://gateway.example.com " } },
+          },
+        },
+      },
+    );
+    await devicePairSetupHandlers["device.pair.setupCode"](options);
+
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ publicUrl: "wss://gateway.example.com" }),
+    );
+  });
+
+  it("labels an explicit request URL separately from configured fallback", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+
+    const { options, respond } = createOptions({ publicUrl: "wss://request.example.com" });
+    await devicePairSetupHandlers["device.pair.setupCode"](options);
+
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ publicUrl: "wss://request.example.com" }),
+    );
+    expect(respond.mock.calls[0]?.[1]?.urlSource).toBe("request.publicUrl");
+  });
+
+  it("prefers the remote URL over the configured device-pair fallback", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+    mocks.renderQrPngDataUrl.mockResolvedValue("data:image/png;base64,qr");
+
+    const { options } = createOptions(
+      { preferRemoteUrl: true },
+      {
+        plugins: {
+          entries: {
+            "device-pair": { config: { publicUrl: "wss://plugin.example.com" } },
+          },
+        },
+      },
+    );
+    await devicePairSetupHandlers["device.pair.setupCode"](options);
+
+    expect(mocks.resolvePairingSetupFromConfig).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ publicUrl: undefined, preferRemoteUrl: true }),
+    );
   });
 
   it("omits the QR when includeQr is false", async () => {
@@ -135,7 +199,7 @@ describe("device.pair.setupCode", () => {
     expect(mocks.resolvePairingSetupFromConfig).not.toHaveBeenCalled();
   });
 
-  it("responds unavailable when QR rendering throws", async () => {
+  it("keeps the setup code when optional QR rendering throws", async () => {
     mocks.resolvePairingSetupFromConfig.mockResolvedValue(okResolution);
     mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
     mocks.renderQrPngDataUrl.mockRejectedValue(new Error("qr boom"));
@@ -143,8 +207,10 @@ describe("device.pair.setupCode", () => {
     const { options, respond } = createOptions({});
     await devicePairSetupHandlers["device.pair.setupCode"](options);
 
-    const [ok, , error] = respond.mock.calls[0];
-    expect(ok).toBe(false);
-    expect(error?.message).toContain("qr boom");
+    const [ok, payload, error] = respond.mock.calls[0];
+    expect(ok).toBe(true);
+    expect(payload.setupCode).toBe("SETUP-CODE-XYZ");
+    expect(payload.qrDataUrl).toBeUndefined();
+    expect(error).toBeUndefined();
   });
 });

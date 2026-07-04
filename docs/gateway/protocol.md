@@ -455,9 +455,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Device pairing and device tokens">
     - `device.pair.list` returns pending and approved paired devices.
+    - `device.pair.setupCode` creates a mobile setup code and, by default, a PNG QR data URL. It requires `operator.admin` and is intentionally omitted from advertised discovery. The result includes `setupCode`, optional `qrDataUrl`, `gatewayUrl`, the non-secret `auth` label, and `urlSource`.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
     - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+
+    The setup code embeds a short-lived bootstrap credential. Clients must not
+    log or persist it beyond the pairing flow.
 
   </Accordion>
 

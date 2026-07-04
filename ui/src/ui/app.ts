@@ -101,7 +101,7 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
-import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
   WikiImportInsights,
@@ -371,6 +371,10 @@ export class OpenClawApp extends LitElement {
   @state() devicesLoading = false;
   @state() devicesError: string | null = null;
   @state() devicesList: DevicePairingList | null = null;
+  @state() devicePairSetupOpen = false;
+  @state() devicePairSetupLoading = false;
+  @state() devicePairSetupError: string | null = null;
+  @state() devicePairSetup: DevicePairSetup | null = null;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;

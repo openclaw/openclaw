@@ -7,6 +7,7 @@ import {
   errorShape,
   validateDevicePairSetupCodeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -19,6 +20,11 @@ import { assertValidParams } from "./validation.js";
 // that case we omit the QR (the client can still render one from setupCode)
 // rather than return a response that violates the protocol schema.
 const MAX_QR_DATA_URL_LENGTH = 16_384;
+
+function readConfiguredDevicePairPublicUrl(config: OpenClawConfig): string | undefined {
+  const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 /** Gateway handler for producing a device-pairing setup code + connect QR. */
 export const devicePairSetupHandlers: GatewayRequestHandlers = {
@@ -34,9 +40,14 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const resolved = await resolvePairingSetupFromConfig(context.getRuntimeConfig(), {
+      const config = context.getRuntimeConfig();
+      const requestPublicUrl = typeof params.publicUrl === "string" ? params.publicUrl : undefined;
+      const configuredPublicUrl =
+        params.preferRemoteUrl === true ? undefined : readConfiguredDevicePairPublicUrl(config);
+      const publicUrl = requestPublicUrl ?? configuredPublicUrl;
+      const resolved = await resolvePairingSetupFromConfig(config, {
         env: process.env,
-        publicUrl: typeof params.publicUrl === "string" ? params.publicUrl : undefined,
+        publicUrl,
         preferRemoteUrl: params.preferRemoteUrl === true,
         // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.
         runCommandWithTimeout: async (argv, runOpts) =>
@@ -49,7 +60,10 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       const setupCode = encodePairingSetupCode(resolved.payload);
       // QR is on by default; callers that only need the code can opt out.
       const includeQr = params.includeQr !== false;
-      const renderedQr = includeQr ? await renderQrPngDataUrl(setupCode) : undefined;
+      // QR rendering is optional output; keep the usable setup code if encoding fails.
+      const renderedQr = includeQr
+        ? await renderQrPngDataUrl(setupCode).catch(() => undefined)
+        : undefined;
       const qrDataUrl =
         renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
       respond(
@@ -60,7 +74,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           gatewayUrl: resolved.payload.url,
           // Label only — never the raw gateway token/password.
           auth: resolved.authLabel,
-          urlSource: resolved.urlSource,
+          urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
         },
         undefined,
       );
