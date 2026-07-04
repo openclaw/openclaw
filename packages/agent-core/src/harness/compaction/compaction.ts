@@ -441,7 +441,7 @@ export function findCutPoint(
   };
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
@@ -800,9 +800,9 @@ export async function compact(
   let summary: string;
 
   if (isSplitTurn && turnPrefixMessages.length > 0) {
-    const [historyResult, turnPrefixResult] = await Promise.all([
+    const historyResult =
       messagesToSummarize.length > 0
-        ? generateSummary(
+        ? await generateSummary(
             messagesToSummarize,
             model,
             settings.reserveTokens,
@@ -815,22 +815,21 @@ export async function compact(
             streamFn,
             runtime,
           )
-        : Promise.resolve(ok<string, CompactionError>("No prior history.")),
-      generateTurnPrefixSummary(
-        turnPrefixMessages,
-        model,
-        settings.reserveTokens,
-        apiKey,
-        headers,
-        signal,
-        thinkingLevel,
-        streamFn,
-        runtime,
-      ),
-    ]);
+        : ok<string, CompactionError>("No prior history.");
     if (!historyResult.ok) {
       return err(historyResult.error);
     }
+    const turnPrefixResult = await generateTurnPrefixSummary(
+      turnPrefixMessages,
+      model,
+      settings.reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      thinkingLevel,
+      streamFn,
+      runtime,
+    );
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }

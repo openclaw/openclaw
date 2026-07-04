@@ -26,6 +26,19 @@ import type { FindToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
+function isInsideGitRepository(searchPath: string): boolean {
+  for (let current = searchPath; ; ) {
+    if (existsSync(path.join(current, ".git"))) {
+      return true;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
+}
+
 const findSchema = Type.Object({
   pattern: Type.String({
     description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
@@ -244,17 +257,13 @@ export function createFindToolDefinition(
               return;
             }
 
-            // Build fd arguments. --no-require-git makes fd apply hierarchical .gitignore
-            // semantics whether or not the search path is inside a git repository, without
-            // leaking sibling-directory rules the way --ignore-file (a global source) would.
-            const args: string[] = [
-              "--glob",
-              "--color=never",
-              "--hidden",
-              "--no-require-git",
-              "--max-results",
-              String(effectiveLimit),
-            ];
+            const args: string[] = ["--glob", "--color=never", "--hidden"];
+            // Outside a repo, fd needs this flag to honor standalone ignore files.
+            // Inside a repo, default git-aware traversal preserves nested repo boundaries.
+            if (!isInsideGitRepository(searchPath)) {
+              args.push("--no-require-git");
+            }
+            args.push("--max-results", String(effectiveLimit));
 
             // fd --glob matches against the basename unless --full-path is set; in --full-path
             // mode it matches against the absolute candidate path, so a path-containing

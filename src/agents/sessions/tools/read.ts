@@ -25,7 +25,7 @@ import {
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
+import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -259,7 +259,7 @@ export function createReadToolDefinition(
   return {
     name: "read",
     label: "read",
-    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files instead of cat or sed."],
     parameters: readSchema,
@@ -305,38 +305,25 @@ export function createReadToolDefinition(
               // Read image as binary.
               const buffer = await ops.readFile(absolutePath);
               const base64 = buffer.toString("base64");
-              if (autoResizeImages) {
-                // Resize image if needed before sending it back to the model.
-                const resized = await resizeImage({ type: "image", data: base64, mimeType });
-                if (!resized) {
-                  let textNote = `Read image file [${mimeType}]\n[Image omitted: could not be resized below the inline image size limit.]`;
-                  if (nonVisionImageNote) {
-                    textNote += `\n${nonVisionImageNote}`;
-                  }
-                  content = [{ type: "text", text: textNote }];
-                } else {
-                  const dimensionNote = formatDimensionNote(resized);
-                  let textNote = `Read image file [${resized.mimeType}]`;
-                  if (dimensionNote) {
-                    textNote += `\n${dimensionNote}`;
-                  }
-                  if (nonVisionImageNote) {
-                    textNote += `\n${nonVisionImageNote}`;
-                  }
-                  content = [
-                    { type: "text", text: textNote },
-                    { type: "image", data: resized.data, mimeType: resized.mimeType },
-                  ];
-                }
-              } else {
-                let textNote = `Read image file [${mimeType}]`;
+              const processed = await processImage(
+                { type: "image", data: base64, mimeType },
+                { autoResizeImages },
+              );
+              if (!processed.ok) {
+                let textNote = `Read image file [${mimeType}]\n${processed.message}`;
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
                 }
-                content = [
-                  { type: "text", text: textNote },
-                  { type: "image", data: base64, mimeType },
-                ];
+                content = [{ type: "text", text: textNote }];
+              } else {
+                let textNote = `Read image file [${processed.image.mimeType}]`;
+                if (processed.hints.length > 0) {
+                  textNote += `\n${processed.hints.join("\n")}`;
+                }
+                if (nonVisionImageNote) {
+                  textNote += `\n${nonVisionImageNote}`;
+                }
+                content = [{ type: "text", text: textNote }, processed.image];
               }
             } else {
               // Read text content.
