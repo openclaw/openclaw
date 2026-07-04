@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.node.CanvasController
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.util.Log
@@ -86,6 +87,20 @@ fun CanvasScreen(
       webView.isHorizontalScrollBarEnabled = true
       webView.webViewClient =
         object : WebViewClient() {
+          override fun shouldOverrideUrlLoading(
+            view: WebView,
+            request: WebResourceRequest,
+          ): Boolean {
+            if (!request.isForMainFrame) return false
+            return blockLoopbackCanvasNavigation(viewModel, currentPageUrlRef, request.url.toString())
+          }
+
+          @Suppress("OVERRIDE_DEPRECATION")
+          override fun shouldOverrideUrlLoading(
+            view: WebView,
+            url: String?,
+          ): Boolean = blockLoopbackCanvasNavigation(viewModel, currentPageUrlRef, url)
+
           override fun onPageStarted(
             view: WebView,
             url: String?,
@@ -185,6 +200,18 @@ fun CanvasScreen(
       }
     },
   )
+}
+
+private fun blockLoopbackCanvasNavigation(
+  viewModel: MainViewModel,
+  currentPageUrlRef: AtomicReference<String?>,
+  rawUrl: String?,
+): Boolean {
+  val url = rawUrl?.trim().orEmpty()
+  if (!CanvasController.shouldBlockNavigateUrl(url)) return false
+  currentPageUrlRef.set(null)
+  viewModel.canvas.navigate("")
+  return true
 }
 
 /** Filters WebView postMessage payloads before they enter the A2UI action handler. */
