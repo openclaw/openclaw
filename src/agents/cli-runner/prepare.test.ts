@@ -6,6 +6,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGroupChatContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -2116,6 +2117,97 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }
     },
   );
+
+  it("reuses CLI session bindings across explicit mention toggles with stable group prompt facts", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const baseGroupCtx = {
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "SirPinchALotBot",
+      } as const;
+      const mentionedStaticPrompt = [
+        buildGroupChatContext({
+          sessionCtx: {
+            ...baseGroupCtx,
+            ExplicitlyMentionedBot: true,
+          },
+          sourceReplyDeliveryMode: "automatic",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+        buildGroupIntro({
+          defaultActivation: "mention",
+        }),
+      ].join("\n\n");
+      const unmentionedStaticPrompt = [
+        buildGroupChatContext({
+          sessionCtx: {
+            ...baseGroupCtx,
+            ExplicitlyMentionedBot: false,
+          },
+          sourceReplyDeliveryMode: "automatic",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+        buildGroupIntro({
+          defaultActivation: "mention",
+        }),
+      ].join("\n\n");
+      expect(unmentionedStaticPrompt).toBe(mentionedStaticPrompt);
+
+      const first = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "first ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-mention-binding-a",
+        extraSystemPrompt: [
+          "The incoming message explicitly mentions your channel identity @SirPinchALotBot.",
+          mentionedStaticPrompt,
+        ].join("\n\n"),
+        sourceReplyDeliveryMode: "automatic",
+        cliSessionBindingFacts: {
+          extraSystemPromptStatic: mentionedStaticPrompt,
+          sourceReplyDeliveryMode: "automatic",
+        },
+        config: createCliBackendConfig(),
+      });
+      const second = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "second ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-mention-binding-b",
+        extraSystemPrompt: unmentionedStaticPrompt,
+        sourceReplyDeliveryMode: "automatic",
+        cliSessionBindingFacts: {
+          extraSystemPromptStatic: unmentionedStaticPrompt,
+          sourceReplyDeliveryMode: "automatic",
+        },
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: first.extraSystemPromptHash,
+          messageToolPolicyHash: first.messageToolPolicyHash,
+          cwdHash: hashCliSessionText(dir),
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(second.extraSystemPromptHash).toBe(first.extraSystemPromptHash);
+      expect(second.reusableCliSession).toEqual({ sessionId: "cli-session" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("reuses CLI session bindings across owner sender flips with stable prompt tool scope", async () => {
     const { dir, sessionFile } = createSessionFile();

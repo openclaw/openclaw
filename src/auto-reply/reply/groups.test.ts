@@ -144,8 +144,8 @@ describe("group runtime loading", () => {
     expect(disallowed).not.toContain("Never say that you are staying quiet");
   });
 
-  it("binds an explicitly mentioned channel handle to the current assistant identity", () => {
-    const context = groups.buildGroupChatContext({
+  it("keeps per-message mention state out of stable group context", () => {
+    const mentioned = groups.buildGroupChatContext({
       sessionCtx: {
         ChatType: "group",
         Provider: "telegram",
@@ -156,19 +156,19 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
     });
 
-    expect(context).toContain("explicitly mentions your channel identity @SirPinchALotBot");
-    expect(context).toContain("Treat that mention as addressed to you");
-
     const notExplicit = groups.buildGroupChatContext({
       sessionCtx: {
         ChatType: "group",
         Provider: "telegram",
-        BotUsername: "kesslerAIBot",
+        BotUsername: "SirPinchALotBot",
+        ExplicitlyMentionedBot: false,
       },
       silentToken: "NO_REPLY",
       silentReplyPolicy: "allow",
     });
-    expect(notExplicit).not.toContain("channel identity @kesslerAIBot");
+
+    expect(mentioned).toBe(notExplicit);
+    expect(mentioned).not.toContain("channel identity @SirPinchALotBot");
   });
 
   it("uses channel wording when the authoritative chat type is channel", () => {
