@@ -50,7 +50,7 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import {
-  buildTelegramRichMessage,
+  buildTelegramRichMessagePlan,
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
   splitTelegramRichMessageTextChunks,
@@ -61,9 +61,12 @@ import {
   type TelegramRichTextChunk,
 } from "./rich-message.js";
 import {
+  buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
-  isTelegramRichEntityInvalidError,
-} from "./send-error-predicates.js";
+  splitTelegramPlainTextChunks,
+  splitTelegramPlainTextFallback,
+  warnTelegramRichHtmlDegradations,
+} from "./rich-plain-fallback.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -200,69 +203,6 @@ function resolveTelegramMessageIdOrThrow(
     return Math.trunc(result.message_id);
   }
   throw new Error(`Telegram ${context} returned no message_id`);
-}
-
-// Pull a chunk end back off a UTF-16 surrogate pair so neither chunk carries a
-// lone surrogate that re-encodes to U+FFFD. Mirrors the guard in
-// bot/native-quote.ts `truncateUtf16Safe`; shared by both plain-text splitters.
-//
-// `start` is the beginning of the current chunk — the return value is
-// guaranteed to be > start, so callers that loop on `start = end` always
-// advance. When clamping would land on `start` (i.e. the surrogate pair begins
-// exactly at `start`), we emit both surrogates together (end = start + 2)
-// rather than emitting a lone surrogate or stalling.
-function surrogateSafeChunkEnd(text: string, end: number, start: number): number {
-  const high = text.charCodeAt(end - 1);
-  const low = text.charCodeAt(end);
-  const splitsPair = end > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
-  if (!splitsPair) {
-    return end;
-  }
-  const clamped = end - 1;
-  // Guard: never return an index that would stall the loop. If clamped equals
-  // start the surrogate pair's high unit is the very first char of this chunk;
-  // emit both surrogates together instead of splitting or stalling.
-  return clamped > start ? clamped : start + 2;
-}
-
-function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
-  if (!text) {
-    return [];
-  }
-  const normalizedLimit = Math.max(1, Math.floor(limit));
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const end = surrogateSafeChunkEnd(text, start + normalizedLimit, start);
-    chunks.push(text.slice(start, end));
-    start = end;
-  }
-  return chunks;
-}
-
-function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {
-  if (!text) {
-    return [];
-  }
-  const normalizedLimit = Math.max(1, Math.floor(limit));
-  const fixedChunks = splitTelegramPlainTextChunks(text, normalizedLimit);
-  if (chunkCount <= 1 || fixedChunks.length >= chunkCount) {
-    return fixedChunks;
-  }
-  const chunks: string[] = [];
-  let offset = 0;
-  for (let index = 0; index < chunkCount; index += 1) {
-    const remainingChars = text.length - offset;
-    const remainingChunks = chunkCount - index;
-    const nextChunkLength =
-      remainingChunks === 1
-        ? remainingChars
-        : Math.min(normalizedLimit, Math.ceil(remainingChars / remainingChunks));
-    const end = surrogateSafeChunkEnd(text, offset + nextChunkLength, offset);
-    chunks.push(text.slice(offset, end));
-    offset = end;
-  }
-  return chunks;
 }
 
 // Test-only handle: the plain-text splitter is internal, but its surrogate-safe
@@ -1080,6 +1020,11 @@ export async function sendMessageTelegram(
       let result: TelegramMessageLike;
       let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
       try {
+        warnTelegramRichHtmlDegradations({
+          context: "richMessage",
+          reasons: chunk.degradationReasons,
+          warn: (message) => sendLogger.warn(message),
+        });
         const richResult = await withTelegramNativeQuoteFallback<TelegramMessageLike>({
           label: "richMessage",
           requestParams: acceptedParams ?? {},
@@ -1089,10 +1034,9 @@ export async function sendMessageTelegram(
               () =>
                 richRawApi.sendRichMessage({
                   chat_id: chatId,
-                  rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
-                    skipEntityDetection: account.config.linkPreview === false,
-                    tableMode,
-                  }),
+                  rich_message: chunk.skipEntityDetection
+                    ? { html: chunk.text, skip_entity_detection: true }
+                    : { html: chunk.text },
                   ...effectiveParams,
                   ...(opts.silent === true ? { disable_notification: true } : {}),
                 }),
@@ -1102,17 +1046,16 @@ export async function sendMessageTelegram(
         result = richResult.result;
         recordedParams = toTelegramRichMessageContextParams(richResult.acceptedParams);
       } catch (err) {
-        if (!isTelegramRichEntityInvalidError(err)) {
+        const fallbackPlan = buildTelegramPlainFallbackPlan({
+          html: chunk.text,
+          err,
+          context: "richMessage",
+          warn: (message) => sendLogger.warn(message),
+        });
+        if (!fallbackPlan) {
           throw err;
         }
-        // Mirror delivery.send.ts plain-text fallback, but keep normal 4k
-        // sendMessage chunking because rich chunks may be much larger.
-        sendLogger.warn(
-          `telegram richMessage rejected invalid entity, retrying as plain text: ${formatErrorMessage(
-            err,
-          )}`,
-        );
-        const fallbackChunks = splitTelegramPlainTextChunks(chunk.plainText, 4000);
+        const fallbackChunks = fallbackPlan.chunks;
         const fallbackReplyChunkCount = Math.max(chunks.length, fallbackChunks.length);
         for (let fallbackIndex = 0; fallbackIndex < fallbackChunks.length; fallbackIndex += 1) {
           const fallbackText = fallbackChunks[fallbackIndex] ?? "";
@@ -1872,8 +1815,8 @@ export async function editMessageTelegram(
   const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
   const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
   const richRawApi = useRichMessages ? getTelegramRichRawApi(api) : undefined;
-  const richMessage = useRichMessages
-    ? buildTelegramRichMessage(text, textMode, {
+  const richMessagePlan = useRichMessages
+    ? buildTelegramRichMessagePlan(text, textMode, {
         skipEntityDetection: opts.linkPreview === false,
         tableMode,
       })
@@ -1918,35 +1861,39 @@ export async function editMessageTelegram(
   }
 
   const performTextEdit = () => {
-    if (richRawApi && richMessage) {
+    if (richRawApi && richMessagePlan) {
       const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
         replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
+      warnTelegramRichHtmlDegradations({
+        context: "editMessage",
+        reasons: richMessagePlan.degradationReasons,
+        warn: (message) => sendLogger.warn(message),
+      });
       return requestWithEditShouldLog(
         () =>
           richRawApi.editMessageText({
             chat_id: chatId,
             message_id: messageId,
-            rich_message: richMessage,
+            rich_message: richMessagePlan.richMessage,
             ...richEditParams,
           }),
         "editMessage",
         (err) => !isTelegramMessageNotModifiedError(err),
       ).catch((err: unknown) => {
-        if (!isTelegramRichEntityInvalidError(err)) {
+        const fallbackPlan = buildTelegramPlainFallbackPlan({
+          html: richMessagePlan.richMessage.html,
+          err,
+          context: "editMessage",
+          warn: (message) => sendLogger.warn(message),
+        });
+        if (!fallbackPlan) {
           throw err;
         }
-        // Mirror durable send fallback for edits: invalid rich entities degrade
-        // to the same plain text that normal HTML edit fallback would send.
-        sendLogger.warn(
-          `telegram editMessage rich entity rejected, retrying as plain text: ${formatErrorMessage(
-            err,
-          )}`,
-        );
         return requestWithEditShouldLog(
           () =>
             Object.keys(plainTextParams).length > 0
-              ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
-              : api.editMessageText(chatId, messageId, plainText),
+              ? api.editMessageText(chatId, messageId, fallbackPlan.plainText, plainTextParams)
+              : api.editMessageText(chatId, messageId, fallbackPlan.plainText),
           "editMessage-plain",
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         );

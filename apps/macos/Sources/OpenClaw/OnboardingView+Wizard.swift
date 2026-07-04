@@ -18,10 +18,13 @@ extension OnboardingView {
                     OnboardingWizardCardContent(
                         wizard: self.onboardingWizard,
                         mode: self.state.connectionMode,
-                        workspacePath: self.workspacePath)
+                        workspacePath: self.workspacePath,
+                        paused: self.state.isPaused,
+                        onResume: { self.state.isPaused = false })
                 }
             }
-            .task {
+            .task(id: "\(self.cliInstalled)-\(self.state.isPaused)") {
+                guard self.state.connectionMode != .local || self.cliInstalled else { return }
                 await self.onboardingWizard.startIfNeeded(
                     mode: self.state.connectionMode,
                     workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
@@ -34,9 +37,12 @@ private struct OnboardingWizardCardContent: View {
     @Bindable var wizard: OnboardingWizardModel
     let mode: AppState.ConnectionMode
     let workspacePath: String
+    let paused: Bool
+    let onResume: () -> Void
 
     private enum CardState {
         case error(String)
+        case paused
         case starting
         case step(WizardStep)
         case complete
@@ -44,6 +50,7 @@ private struct OnboardingWizardCardContent: View {
     }
 
     private var state: CardState {
+        if self.paused, !self.wizard.isComplete { return .paused }
         if let error = wizard.errorMessage { return .error(error) }
         if self.wizard.isStarting { return .starting }
         if let step = wizard.currentStep { return .step(step) }
@@ -69,6 +76,14 @@ private struct OnboardingWizardCardContent: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+        case .paused:
+            Text("Setup is paused")
+                .font(.headline)
+            Text("Resume OpenClaw to start the local Gateway and continue setup.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Resume setup", action: self.onResume)
+                .buttonStyle(.borderedProminent)
         case .starting:
             HStack(spacing: 8) {
                 ProgressView()

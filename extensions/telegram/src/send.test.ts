@@ -1021,6 +1021,40 @@ describe("sendMessageTelegram", () => {
     expect(richMessage?.html).toContain("<table bordered striped>");
   });
 
+  it("normalizes raw rich HTML tables before durable rich sends", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const html =
+      '<table data-source="model"><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>';
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.html).toBe(
+      "<table bordered striped><thead><tr><th>Rank</th><th>Model</th><th>Score</th></tr></thead><tbody><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></tbody></table>",
+    );
+  });
+
+  it("warns when raw rich HTML tables degrade to ASCII", async () => {
+    const logFile = captureInfoLogs();
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
+
+    await sendMessageTelegram("123", `<table><tr>${cells}</tr></table>`, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    const richMessage = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
+    expect(richMessage?.html).toContain("<pre><code>");
+    expect(capturedLogText(logFile)).toContain("rich-degrade=table-ascii");
+  });
+
   it("skips rich entity detection for provider-prefixed email text", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const oauthProfileText =
@@ -1059,6 +1093,26 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
     expect(result).toEqual({ messageId: "46", chatId: "123" });
+  });
+
+  it("uses table-aware plain text when durable rich sends fall back", async () => {
+    const logFile = captureInfoLogs();
+    const html =
+      "<table><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("URL"));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", html, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Rank | Model | Score\n4 | Claude Opus | 78.16%",
+    );
+    expect(capturedLogText(logFile)).toContain("rich-degrade=plain-fallback:rich-entity-invalid");
   });
 
   it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
@@ -1123,6 +1177,28 @@ describe("sendMessageTelegram", () => {
       expect(countTelegramRichHtmlBlocks(html)).toBeLessThanOrEqual(500);
     }
     expect(htmlChunks.join("\n")).toContain(testCase.terminalText);
+  });
+
+  it("keeps rich entity detection skip scoped to the affected chunk", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const firstChunk = Array.from(
+      { length: 700 },
+      (_, index) => `<p><a href="https://example.com/${index}">link ${index}</a></p>`,
+    )
+      .join("")
+      .trim();
+    const text = `${firstChunk}<p>OAuth profile: openai:owner@example.com</p>`;
+
+    await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
+    const richMessages = botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    expect(richMessages[0]).not.toHaveProperty("skip_entity_detection");
+    expect(richMessages.at(-1)).toHaveProperty("skip_entity_detection", true);
   });
 
   it("chunks rich media at Telegram's attachment limit", async () => {

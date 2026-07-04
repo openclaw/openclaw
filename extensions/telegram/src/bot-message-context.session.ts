@@ -3,14 +3,12 @@ import {
   type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
-  classifyChannelInboundEvent,
   formatInboundEnvelope,
-  resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
+  type InboundEventKind,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -200,6 +198,7 @@ export async function buildTelegramInboundContextPayload(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
   groupRequireMention: boolean;
   mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
@@ -252,6 +251,7 @@ export async function buildTelegramInboundContextPayload(params: {
     groupConfig,
     topicConfig,
     effectiveWasMentioned,
+    inboundEventKind,
     groupRequireMention,
     mentionFacts,
     hasControlCommand,
@@ -437,22 +437,7 @@ export async function buildTelegramInboundContextPayload(params: {
   const commandSource =
     options?.commandSource ??
     (commandAuthorized && hasControlCommand ? ("text" as const) : undefined);
-  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
-    cfg,
-    agentId: route.agentId,
-  });
-  const hasAbortRequest = isAbortRequestText(rawBody, {
-    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
-  });
   const conversationKind = isGroup ? "group" : "direct";
-  const inboundEventKind = classifyChannelInboundEvent({
-    conversation: { kind: conversationKind },
-    unmentionedGroupPolicy,
-    wasMentioned: effectiveWasMentioned,
-    hasControlCommand,
-    hasAbortRequest,
-    commandSource,
-  });
   let watermarkedGroupHistoryEntries: HistoryEntry[] | undefined;
   let groupHistoryPromptEntries: HistoryEntry[] = [];
   if (hasGroupHistoryContext && historyKey && historyLimit > 0) {
