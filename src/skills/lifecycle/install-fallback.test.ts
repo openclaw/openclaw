@@ -1,4 +1,5 @@
 // Install fallback tests cover alternate skill install paths when primary paths fail.
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -287,7 +288,7 @@ describe("skills-install fallback edge cases", () => {
     }
   });
 
-  it("does not redirect existing Go installs into the Homebrew bin", async () => {
+  it("routes existing Go installs to the user-local PATH bin instead of Homebrew", async () => {
     mockAvailableBinaries(["go", "brew"]);
     runCommandWithTimeoutMock.mockResolvedValue({
       code: 0,
@@ -307,7 +308,7 @@ describe("skills-install fallback edge cases", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     const installCall = commandCallAt(0);
     expect(installCall[0]).toEqual(["go", "install", "example.com/tool@latest"]);
-    expect(installCall[1].env?.GOBIN).toBeUndefined();
+    expect(installCall[1].env?.GOBIN).toBe(path.join(os.homedir(), ".local", "bin"));
   });
 
   describe("resolveInstallerKindReadiness", () => {

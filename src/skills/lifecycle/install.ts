@@ -705,11 +705,12 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   if (spec.kind === "node") {
     Object.assign(envOverrides, await buildNodeInstallEnv(prefs));
   }
-  if (spec.kind === "go" && brewExe && !goWasAlreadyInstalled) {
-    const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
-    if (brewBin) {
-      envOverrides.GOBIN = brewBin;
-    }
+  if (spec.kind === "go") {
+    const brewBin =
+      brewExe && !goWasAlreadyInstalled ? await resolveBrewBinDir(timeoutMs, brewExe) : undefined;
+    // OpenClaw adds ~/.local/bin to PATH on startup. Existing and apt-provided
+    // Go toolchains should not depend on an unrelated Homebrew installation.
+    envOverrides.GOBIN = brewBin ?? path.join(os.homedir(), ".local", "bin");
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
