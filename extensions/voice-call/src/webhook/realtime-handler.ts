@@ -666,10 +666,15 @@ export class RealtimeCallHandler {
     });
     const providerEmitsSpeechStartedEvent =
       this.realtimeProvider.capabilities?.emitsSpeechStartedEvent === true;
+    const interruptResponseOnInputAudio =
+      typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
+        ? this.providerConfig.interruptResponseOnInputAudio
+        : undefined;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
+      interruptResponseOnInputAudio,
       instructions: this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
@@ -800,7 +805,9 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.type === "input_audio_buffer.speech_started") {
-          cancelOutputAudioForBargeIn("provider", "provider-barge-in");
+          if (interruptResponseOnInputAudio !== false) {
+            cancelOutputAudioForBargeIn("provider", "provider-barge-in");
+          }
           return;
         }
         if (event.type === "input_audio_buffer.speech_stopped") {

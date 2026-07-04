@@ -73,6 +73,7 @@ function makeHandler(
   deps?: {
     manager?: Partial<CallManager>;
     provider?: Partial<VoiceCallProvider>;
+    providerConfig?: Record<string, unknown>;
     realtimeProvider?: RealtimeVoiceProviderPlugin;
   },
 ) {
@@ -121,7 +122,7 @@ function makeHandler(
       ...deps?.provider,
     } as unknown as VoiceCallProvider,
     deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
-    { apiKey: "test-key" },
+    deps?.providerConfig ?? { apiKey: "test-key" },
     "/voice/webhook",
   );
 }
@@ -830,6 +831,102 @@ describe("RealtimeCallHandler path routing", () => {
         expect(recent?.findLast((event) => event.type === "output.audio.done")?.turnId).toBe(
           cancelled.turnId,
         );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("does not cancel provider speech_started when input interruption is disabled", async () => {
+    let callbacks:
+      | {
+          onAudio?: (audio: Buffer) => void;
+          onEvent?: (event: {
+            direction: "client" | "server";
+            type: string;
+            detail?: string;
+          }) => void;
+        }
+      | undefined;
+    const sendAudio = vi.fn();
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-disabled-barge-in",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ sendAudio });
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn((): CallRecord => call),
+      },
+      providerConfig: { apiKey: "test-key", interruptResponseOnInputAudio: false },
+      realtimeProvider: makeRealtimeProvider(createBridge, {
+        capabilities: PROVIDER_BARGE_IN_CAPABILITIES,
+      }),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      const outboundMessages: Array<Record<string, unknown>> = [];
+      ws.on("message", (data) => {
+        const messageText =
+          typeof data === "string"
+            ? data
+            : Buffer.isBuffer(data)
+              ? data.toString("utf8")
+              : Array.isArray(data)
+                ? Buffer.concat(data).toString("utf8")
+                : Buffer.from(data).toString("utf8");
+        outboundMessages.push(JSON.parse(messageText) as Record<string, unknown>);
+      });
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-disabled-barge-in", callSid: "CA-disabled-barge-in" },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+        expect(createBridge.mock.calls[0]?.[0].interruptResponseOnInputAudio).toBe(false);
+
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+
+        callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        expect(outboundMessages.some((message) => message.event === "clear")).toBe(false);
+        expect(
+          (
+            call.metadata?.recentTalkEvents as
+              | Array<{
+                  type: string;
+                }>
+              | undefined
+          )?.some((event) => event.type === "turn.cancelled"),
+        ).toBe(false);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
