@@ -243,6 +243,30 @@ describe("sendMessageSlack customize-scope fallback", () => {
     );
   });
 
+  it("reuses the downgraded identity for later chunks", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage)
+      .mockRejectedValueOnce(buildInvalidIdentityError())
+      .mockResolvedValue({ ts: "171234.567" });
+
+    await sendMessageSlack("channel:C123", "alpha beta", {
+      token: "xoxb-test",
+      cfg: { channels: { slack: { botToken: "xoxb-test", textChunkLimit: 5 } } },
+      client,
+      identity: { username: "Pulse", iconEmoji: "📟" },
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(readPostMessagePayload(client, 0)).toMatchObject({
+      username: "Pulse",
+      icon_emoji: "📟",
+    });
+    for (const index of [1, 2]) {
+      expect(readPostMessagePayload(client, index)).toMatchObject({ username: "Pulse" });
+      expect(readPostMessagePayload(client, index)).not.toHaveProperty("icon_emoji");
+    }
+  });
+
   it("rethrows missing_scope errors that reference a different scope", async () => {
     const client = createSlackSendTestClient();
     const err = buildMissingScopeError({ needed: "channels:history" });

@@ -1,6 +1,6 @@
 // Slack plugin module implements send behavior.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import type { Block, ChatPostMessageArguments, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -376,33 +376,40 @@ async function postSlackMessageBestEffort(params: {
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
+  const post = async (payload: ChatPostMessageArguments, identity?: SlackSendIdentity) => ({
+    response: await withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(payload)),
+    identity,
+  });
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
     const identity = params.identity;
     if (identity?.iconUrl) {
-      return await withSlackDnsRequestRetry("chat.postMessage", () =>
-        postChatMessage({
+      return await post(
+        {
           ...basePayload,
           ...(identity.username ? { username: identity.username } : {}),
           icon_url: identity.iconUrl,
-        }),
+        },
+        identity,
       );
     }
     if (identity?.iconEmoji) {
-      return await withSlackDnsRequestRetry("chat.postMessage", () =>
-        postChatMessage({
+      return await post(
+        {
           ...basePayload,
           ...(identity.username ? { username: identity.username } : {}),
           icon_emoji: identity.iconEmoji,
-        }),
+        },
+        identity,
       );
     }
-    return await withSlackDnsRequestRetry("chat.postMessage", () =>
-      postChatMessage({
+    return await post(
+      {
         ...basePayload,
         ...(identity?.username ? { username: identity.username } : {}),
-      }),
+      },
+      identity,
     );
   } catch (err) {
     if (!hasCustomIdentity(params.identity) || !isSlackCustomIdentityRejectedError(err)) {
@@ -416,8 +423,9 @@ async function postSlackMessageBestEffort(params: {
     ) {
       logVerbose("slack send: custom icon rejected, retrying with username only");
       try {
-        return await withSlackDnsRequestRetry("chat.postMessage", () =>
-          postChatMessage({ ...basePayload, username: identity.username }),
+        return await post(
+          { ...basePayload, username: identity.username },
+          { username: identity.username },
         );
       } catch (retryError) {
         if (!isSlackCustomIdentityRejectedError(retryError)) {
@@ -426,7 +434,7 @@ async function postSlackMessageBestEffort(params: {
       }
     }
     logVerbose("slack send: custom identity rejected, retrying without custom identity");
-    return withSlackDnsRequestRetry("chat.postMessage", () => postChatMessage(basePayload));
+    return post(basePayload);
   }
 }
 
@@ -809,7 +817,7 @@ async function sendMessageSlackQueuedInner(params: {
       trimmedMessage || buildSlackBlocksFallbackText(blocks),
       SLACK_TEXT_LIMIT,
     );
-    const response = await postSlackMessageBestEffort({
+    const { response } = await postSlackMessageBestEffort({
       client,
       channelId,
       text: fallbackText,
@@ -896,17 +904,20 @@ async function sendMessageSlackQueuedInner(params: {
     chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
   }
 
+  let sendIdentity = identity;
   for (const chunk of chunksToPost) {
-    const response = await postSlackMessageBestEffort({
+    const posted = await postSlackMessageBestEffort({
       client,
       channelId,
       text: chunk,
       threadTs: opts.threadTs,
       replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
-      identity,
+      identity: sendIdentity,
       metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
       unfurl,
     });
+    const response = posted.response;
+    sendIdentity = posted.identity;
     lastMessageId = response.ts ?? lastMessageId;
     deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
     canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);

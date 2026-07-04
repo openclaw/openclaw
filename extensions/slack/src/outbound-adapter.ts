@@ -69,6 +69,8 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   const username = normalizeOptionalString(identity.name);
   const iconUrl = normalizeOptionalString(identity.avatarUrl);
   const rawEmoji = normalizeOptionalString(identity.emoji);
+  // Live Slack accepts Unicode custom icons even though its docs show shortcode form.
+  // send.ts downgrades once per send when a workspace rejects the configured icon.
   const iconEmoji = !iconUrl ? rawEmoji : undefined;
   if (!username && !iconUrl && !iconEmoji) {
     return undefined;
