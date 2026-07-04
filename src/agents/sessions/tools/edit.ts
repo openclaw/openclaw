@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { truncateUtf16Safe } from "../../../shared/utf16-slice.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
@@ -173,23 +174,11 @@ function didEditLikelyApply(params: {
   );
 }
 
-function createMismatchHintSnippet(currentContent: string): string {
-  let snippet = "";
-  let length = 0;
-
-  for (const char of currentContent) {
-    if (length === EDIT_MISMATCH_HINT_LIMIT) {
-      return `${snippet}\n... (truncated)`;
-    }
-    snippet += char;
-    length += 1;
-  }
-
-  return snippet;
-}
-
 function appendMismatchHint(error: Error, currentContent: string): Error {
-  const snippet = createMismatchHintSnippet(currentContent);
+  const snippet =
+    currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
+      ? currentContent
+      : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
     cause: error,
   });

@@ -46,7 +46,7 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
-  it("truncates exact-match mismatch hints without splitting unicode characters", async () => {
+  it("truncates exact-match mismatch hints without splitting UTF-16 surrogate pairs", async () => {
     const boundaryEmoji = "🙂";
     const filePath = await createTempFile(`${"a".repeat(799)}${boundaryEmoji}tail`);
     const tool = createEditTool(tmpDir);
@@ -60,7 +60,7 @@ describe("edit tool", () => {
         },
         undefined,
       ),
-    ).rejects.toThrow(`${"a".repeat(799)}${boundaryEmoji}\n... (truncated)`);
+    ).rejects.toThrow(`${"a".repeat(799)}\n... (truncated)`);
   });
 
   it("recovers success after a post-write throw when the edit already applied", async () => {
