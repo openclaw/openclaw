@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => ({
     }>
   >(),
   listAgentIdsMock: vi.fn<() => string[]>(),
+  resolveDefaultAgentIdMock: vi.fn<() => string>(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
@@ -30,7 +31,7 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),
-  resolveDefaultAgentId: () => "main",
+  resolveDefaultAgentId: () => hoisted.resolveDefaultAgentIdMock(),
 }));
 
 const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
@@ -70,6 +71,8 @@ describe("resolveSessionKeyForRequest", () => {
     hoisted.listSessionEntriesMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
+    hoisted.resolveDefaultAgentIdMock.mockReset();
+    hoisted.resolveDefaultAgentIdMock.mockReturnValue("main");
   });
 
   it("prefers the current store when equal duplicates exist across stores", () => {
@@ -135,6 +138,26 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore).toEqual(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keys new explicit session ids to the configured default agent", () => {
+    // A new sessionId without an explicit agentId must synthesize its key from
+    // the same effective default agent that owns the store, not literal "main".
+    hoisted.resolveDefaultAgentIdMock.mockReturnValue("crab");
+    hoisted.listAgentIdsMock.mockReturnValue(["crab"]);
+    mockSessionStores({});
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "fresh-sid",
+    });
+
+    expect(result.sessionKey).toBe("agent:crab:explicit:fresh-sid");
+    expect(result.storePath).toBe("/stores/crab.json");
   });
 
   it("borrows session stores when requested", () => {

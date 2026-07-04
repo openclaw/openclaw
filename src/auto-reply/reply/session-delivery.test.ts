@@ -63,6 +63,17 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
     expect(["webchat", undefined]).toContain(result);
   });
 
+  it("does not infer a channel from a configured default agent id", () => {
+    expect(
+      resolveLastChannelRaw({
+        originatingChannelRaw: "webchat",
+        persistedLastChannel: "telegram",
+        sessionKey: "agent:telegram:main",
+        isInterSession: true,
+      }),
+    ).toBe("telegram");
+  });
+
   it("inter-session on session with no persisted lastTo preserves session route", () => {
     const result = resolveLastToRaw({
       originatingChannelRaw: "webchat",
