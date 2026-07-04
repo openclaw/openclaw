@@ -428,5 +428,8 @@ function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
     ...(finding.target !== undefined ? { target: finding.target } : {}),
     ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
+    ...(finding.fixRecommendation !== undefined
+      ? { fixRecommendation: finding.fixRecommendation }
+      : {}),
   };
 }

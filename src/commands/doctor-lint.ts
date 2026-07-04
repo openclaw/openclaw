@@ -164,5 +164,6 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.target !== undefined ? { target: f.target } : {}),
     ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
+    ...(f.fixRecommendation !== undefined ? { fixRecommendation: f.fixRecommendation } : {}),
   };
 }
