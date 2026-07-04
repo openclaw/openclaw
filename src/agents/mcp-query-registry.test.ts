@@ -5,10 +5,9 @@
  * MCP server fixture. They prove that the runtime discovers the tools and that
  * the fixture enforces the correct call order and boundary conditions.
  */
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -39,12 +38,8 @@ async function createQueryRegistryRuntime(params: {
   });
 }
 
-async function makeTempFixture(): Promise<{
-  tempDir: string;
-  serverPath: string;
-  logPath: string;
-}> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "query-registry-"));
+async function makeTempFixture(tempDirs: { make: (prefix: string) => string }) {
+  const tempDir = tempDirs.make("query-registry-");
   const serverPath = path.join(tempDir, "query-registry-server.mjs");
   const logPath = path.join(tempDir, "server.log");
   await writeQueryRegistryMcpServer(serverPath, { logPath });
@@ -58,20 +53,15 @@ async function expectTextContentBlock(block: unknown, text: string) {
 }
 
 describe("MCP query-registry workflow", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let sessionSeq = 0;
 
   afterEach(async () => {
     await cleanupBundleMcpHarness();
-    for (const dir of tempDirs) {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-    tempDirs.length = 0;
   });
 
   it("discovers the four query-registry tools in the catalog", async () => {
-    const { tempDir, serverPath } = await makeTempFixture();
-    tempDirs.push(tempDir);
+    const { tempDir, serverPath } = await makeTempFixture(tempDirs);
     const sessionKey = `agent:test:query-registry:${sessionSeq++}`;
     const runtime = await createQueryRegistryRuntime({ serverPath, sessionKey });
 
@@ -90,8 +80,7 @@ describe("MCP query-registry workflow", () => {
   });
 
   it("executes the happy path: context -> list -> describe -> execute", async () => {
-    const { tempDir, serverPath } = await makeTempFixture();
-    tempDirs.push(tempDir);
+    const { tempDir, serverPath } = await makeTempFixture(tempDirs);
     const sessionKey = `agent:test:query-registry:${sessionSeq++}`;
     const runtime = await createQueryRegistryRuntime({ serverPath, sessionKey });
 
@@ -158,8 +147,7 @@ describe("MCP query-registry workflow", () => {
   });
 
   it("rejects execute when the query has not been described", async () => {
-    const { tempDir, serverPath } = await makeTempFixture();
-    tempDirs.push(tempDir);
+    const { tempDir, serverPath } = await makeTempFixture(tempDirs);
     const sessionKey = `agent:test:query-registry:${sessionSeq++}`;
     const runtime = await createQueryRegistryRuntime({ serverPath, sessionKey });
 
@@ -190,8 +178,7 @@ describe("MCP query-registry workflow", () => {
   });
 
   it("rejects execute with missing params", async () => {
-    const { tempDir, serverPath } = await makeTempFixture();
-    tempDirs.push(tempDir);
+    const { tempDir, serverPath } = await makeTempFixture(tempDirs);
     const sessionKey = `agent:test:query-registry:${sessionSeq++}`;
     const runtime = await createQueryRegistryRuntime({ serverPath, sessionKey });
 
@@ -211,8 +198,7 @@ describe("MCP query-registry workflow", () => {
   });
 
   it("rejects describe for an unknown query id", async () => {
-    const { tempDir, serverPath } = await makeTempFixture();
-    tempDirs.push(tempDir);
+    const { tempDir, serverPath } = await makeTempFixture(tempDirs);
     const sessionKey = `agent:test:query-registry:${sessionSeq++}`;
     const runtime = await createQueryRegistryRuntime({ serverPath, sessionKey });
 
