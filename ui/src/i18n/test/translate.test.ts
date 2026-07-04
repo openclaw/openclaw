@@ -205,10 +205,9 @@ describe("i18n", () => {
   });
 
   it("keeps mobile pairing copy localized in shipped locale bundles", () => {
-    const checkedKeys = flatten(
-      en.nodes.pairing as Record<string, string | Record<string, unknown>>,
-      "nodes.pairing",
-    ).filter((key) => key !== "nodes.pairing.title");
+    const checkedKeys = flatten(en).filter(
+      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+    );
 
     for (const [locale, value] of Object.entries(shippedLocales)) {
       for (const key of checkedKeys) {
