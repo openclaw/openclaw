@@ -210,7 +210,7 @@ function recoverPendingContinuations(params: { log: GatewayRuntimeServiceLogger 
       // so recovery cannot double-drive an actively-releasing delegate.
       const awaitingNextCompactionRequeue =
         await delegateModule.requeueAwaitingNextCompactionDelegates({
-          runningUpdatedAtOrBefore: recoveryArmedAt - 30_000,
+          runningUpdatedAtOrBefore: recoveryArmedAt,
         });
       if (awaitingNextCompactionRequeue.requeued > 0) {
         delegateLog.info(
