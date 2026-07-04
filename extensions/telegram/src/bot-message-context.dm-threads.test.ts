@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
 import { resetTopicNameCacheForTest } from "./topic-name-cache.js";
 
 type SessionRuntimeModule = typeof import("./bot-message-context.session.runtime.js");
@@ -10,7 +11,7 @@ type RecordInboundSessionFn = SessionRuntimeModule["recordInboundSession"];
 type ResolveStorePathFn = SessionRuntimeModule["resolveStorePath"];
 
 const { inboundBodyResult, recordInboundSessionMock, resolveStorePathMock } = vi.hoisted(() => {
-  const createInboundBodyResult = () => ({
+  const createInboundBodyResult = (): TelegramInboundBodyResult => ({
     bodyText: "hello",
     rawBody: "hello",
     historyKey: undefined,
