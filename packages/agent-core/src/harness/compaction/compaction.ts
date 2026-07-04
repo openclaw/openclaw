@@ -146,9 +146,17 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   keepRecentTokens: 20000,
 };
 
-/** Calculate total context tokens from provider usage. */
+/**
+ * Calculate total context tokens from provider usage.
+ *
+ * Prefer `totalTokens` as the canonical per-call context size. The fallback
+ * intentionally excludes `cacheRead`/`cacheWrite` because those fields can be
+ * turn-aggregated across multiple API calls in a single tool-loop turn with
+ * prompt caching, which would inflate the estimate and trigger premature
+ * compaction (see #99843).
+ */
 export function calculateContextTokens(usage: Usage): number {
-  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  return usage.totalTokens || usage.input + usage.output;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   if (msg.role === "assistant" && "usage" in msg) {
