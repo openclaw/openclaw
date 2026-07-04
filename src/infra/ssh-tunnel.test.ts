@@ -192,6 +192,7 @@ describe("startSshPortForward", () => {
     await expect(
       startSshPortForward({
         target: "me@example.com:2222",
+        localPortPreferred: 43210,
         remotePort: 18789,
         timeoutMs: 500,
       }),
