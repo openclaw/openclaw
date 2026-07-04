@@ -469,31 +469,43 @@ extension OnboardingView {
 
     @MainActor
     private func probeRemoteConnection() async {
-        let originalMode = self.state.connectionMode
-        let shouldRestoreMode = originalMode != .remote
-        if shouldRestoreMode {
-            // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
-            self.state.connectionMode = .remote
-        }
-        self.remoteProbeState = .checking
-        self.remoteAuthIssue = nil
-        defer {
+        await Self.withSuppressedConnectionModeCoordinator(state: self.state) {
+            let originalMode = self.state.connectionMode
+            let shouldRestoreMode = originalMode != .remote
             if shouldRestoreMode {
-                self.suppressRemoteProbeReset = true
-                self.state.connectionMode = originalMode
-                self.suppressRemoteProbeReset = false
+                // Reuse the shared remote endpoint stack for probing without committing the user's mode choice.
+                self.state.connectionMode = .remote
+            }
+            self.remoteProbeState = .checking
+            self.remoteAuthIssue = nil
+            defer {
+                if shouldRestoreMode {
+                    self.suppressRemoteProbeReset = true
+                    self.state.connectionMode = originalMode
+                    self.suppressRemoteProbeReset = false
+                }
+            }
+
+            switch await RemoteGatewayProbe.run() {
+            case let .ready(success):
+                self.remoteProbeState = .ok(success)
+            case let .authIssue(issue):
+                self.remoteAuthIssue = issue
+                self.remoteProbeState = .failed(issue.statusMessage)
+            case let .failed(message):
+                self.remoteProbeState = .failed(message)
             }
         }
+    }
 
-        switch await RemoteGatewayProbe.run() {
-        case let .ready(success):
-            self.remoteProbeState = .ok(success)
-        case let .authIssue(issue):
-            self.remoteAuthIssue = issue
-            self.remoteProbeState = .failed(issue.statusMessage)
-        case let .failed(message):
-            self.remoteProbeState = .failed(message)
-        }
+    @MainActor
+    static func withSuppressedConnectionModeCoordinator(
+        state: AppState,
+        perform: () async -> Void) async
+    {
+        state.suppressConnectionModeCoordinator = true
+        defer { state.suppressConnectionModeCoordinator = false }
+        await perform()
     }
 
     private func resetRemoteProbeFeedback() {

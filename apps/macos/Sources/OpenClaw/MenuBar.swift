@@ -87,6 +87,7 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
         }
         .onChange(of: self.state.connectionMode) { _, mode in
+            guard !self.state.suppressConnectionModeCoordinator else { return }
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
         }

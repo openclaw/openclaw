@@ -247,6 +247,9 @@ final class AppState {
     /// Tracks whether the Canvas panel is currently visible (not persisted).
     var canvasPanelVisible: Bool = false
 
+    /// Skips ConnectionModeCoordinator while onboarding probes remote without committing mode.
+    var suppressConnectionModeCoordinator = false
+
     var peekabooBridgeEnabled: Bool {
         didSet {
             self.ifNotPreview {

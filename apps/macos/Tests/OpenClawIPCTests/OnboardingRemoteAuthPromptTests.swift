@@ -139,4 +139,13 @@ struct OnboardingRemoteAuthPromptTests {
         #expect(OnboardingView.shouldResetRemoteProbeFeedback(for: .remote, suppressReset: false) == false)
         #expect(OnboardingView.shouldResetRemoteProbeFeedback(for: .local, suppressReset: true) == false)
     }
+
+    @Test @MainActor func `remote probe suppresses connection mode coordinator`() async {
+        let state = AppState(preview: true)
+        #expect(state.suppressConnectionModeCoordinator == false)
+        await OnboardingView.withSuppressedConnectionModeCoordinator(state: state) {
+            #expect(state.suppressConnectionModeCoordinator)
+        }
+        #expect(state.suppressConnectionModeCoordinator == false)
+    }
 }
