@@ -2682,6 +2682,24 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     defaultRuntime.exit(1);
     return;
   }
+  if (requestedChannel === "extended-stable") {
+    const updateStatus = await checkUpdateStatus({
+      root,
+      timeoutMs: timeoutMs ?? 3500,
+      fetchGit: false,
+      includeRegistry: false,
+    });
+    if (updateStatus.installKind === "git") {
+      await reportPreMutationUpdateFailure({
+        root,
+        installKind: updateStatus.installKind,
+        reason: "unsupported_git_channel",
+        opts,
+        controlPlaneUpdateSentinelMeta: null,
+      });
+      return;
+    }
+  }
   const storedChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;

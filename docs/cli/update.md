@@ -109,7 +109,8 @@ Options:
 
 - `--channel <stable|extended-stable|beta|dev>`: persist the core update channel
   before repair. For extended-stable, plugin convergence temporarily targets
-  the stable/latest plugin line.
+  the stable/latest plugin line. Extended-stable repair is rejected on Git
+  checkouts without changing config.
 - `--json`: print machine-readable finalization JSON.
 - `--timeout <seconds>`: timeout for repair steps (default `1800`).
 - `--yes`: skip confirmation prompts.

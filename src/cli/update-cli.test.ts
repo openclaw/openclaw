@@ -7068,6 +7068,24 @@ describe("update-cli", () => {
     );
   });
 
+  it("updateFinalizeCommand rejects extended-stable on Git before persistence", async () => {
+    await updateFinalizeCommand({
+      channel: "extended-stable",
+      json: true,
+      restart: false,
+    });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      mode: "git",
+      reason: "unsupported_git_channel",
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
     const preDoctorConfig = {
       update: { channel: "stable" },
