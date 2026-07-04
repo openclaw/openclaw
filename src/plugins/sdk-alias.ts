@@ -766,6 +766,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/normalization-core",
     packageDir: "normalization-core",
+    subpath: "boolean-coercion",
+    srcFile: "boolean-coercion.ts",
+    distFile: "boolean-coercion.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
     subpath: "number-coercion",
     srcFile: "number-coercion.ts",
     distFile: "number-coercion.mjs",

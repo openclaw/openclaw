@@ -352,6 +352,16 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
       },
       {
+        find: "@openclaw/normalization-core/boolean-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "boolean-coercion.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,
@@ -392,7 +402,7 @@ export const sharedVitestConfig = {
         ),
       },
       {
-        find: "@openclaw/normalization-core",
+        find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
       sourcePackageAlias("media-core", "base64"),
