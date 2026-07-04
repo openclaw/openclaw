@@ -5,6 +5,7 @@
  *   - status         show shared-client liveness + recent error context
  *   - version        report bridge + installed server package versions
  *   - threads        list .claude-binding.json files for the active session
+ *   - conversations  list this agent's other real conversations with a bound Claude/GLM thread
  *   - resume <id>    rotate the current session's binding to a given thread_id
  *   - help           print subcommand listing
  *
@@ -37,7 +38,7 @@ export function createClaudeCommand(
   };
 }
 
-const SUBCOMMANDS = ["status", "version", "threads", "resume", "help"] as const;
+const SUBCOMMANDS = ["status", "version", "threads", "conversations", "resume", "help"] as const;
 type ClaudeSubcommand = (typeof SUBCOMMANDS)[number];
 
 function parseSubcommand(raw: string | undefined): {
@@ -70,6 +71,8 @@ export async function handleClaudeCommand(
         return await handlers.handleVersion(ctx);
       case "threads":
         return await handlers.handleThreads(ctx);
+      case "conversations":
+        return await handlers.handleConversations(ctx);
       case "resume":
         return await handlers.handleResume(ctx, rest);
       default:

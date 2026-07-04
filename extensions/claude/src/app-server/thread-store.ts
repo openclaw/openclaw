@@ -150,11 +150,20 @@ export async function writeClaudeAppServerBinding(
     // two units depending on whether the binding was last touched by a normal
     // turn (seconds) or by `/claude resume` (ms) — openclaw-0ld C1.
     const now = Date.now();
+    // schemaVersion/createdAt/updatedAt MUST be spread onto AFTER `...binding`,
+    // not before — callers that read-modify-write via `{...existing, ...}`
+    // (e.g. recordClaudeThreadTurnSummary, handleResume) pass an object that
+    // already carries the OLD schemaVersion/createdAt/updatedAt from the
+    // existing binding. Spreading `...binding` last would let those stale
+    // values silently win over the freshly computed `now`, so every
+    // subsequent write kept re-persisting the original creation timestamp
+    // as "updated" — this is exactly what caused `/claude threads` and
+    // `/claude conversations` to render a frozen "Updated" time.
     const data: ClaudeAppServerBinding = {
+      ...binding,
       schemaVersion: SCHEMA_VERSION,
       createdAt: binding.createdAt ?? now,
       updatedAt: now,
-      ...binding,
     };
     const target = resolveClaudeAppServerBindingPath(sessionFile);
     const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
