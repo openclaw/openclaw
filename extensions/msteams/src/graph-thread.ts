@@ -112,14 +112,20 @@ export async function fetchChannelMessage(
   }
 }
 
+// Getting the newest replies means walking the whole thread, because the Graph replies
+// endpoint is oldest-first with no `$orderby`. Bound the walk so a very long thread
+// cannot issue an unbounded number of sequential Graph reads on the inbound context path
+// (50 pages x $top 50 = up to 2500 replies scanned).
+const MAX_REPLY_PAGES = 50;
+
 /**
- * Fetch thread replies for a channel message, ordered chronologically.
+ * Fetch thread replies for a channel message, returning the newest `limit`.
  *
- * The Graph replies endpoint (`/messages/{id}/replies`) returns replies ascending
- * (oldest-first), does not support `$orderby`, and caps `$top` at 50. Fetching a single
- * page therefore dropped the newest (usually most relevant) replies on long threads.
- * This follows `@odata.nextLink` to page through the thread and returns the newest
- * `limit` replies. Pagination is bounded by `maxPages`.
+ * The Graph replies endpoint (`/messages/{id}/replies`) returns replies oldest-first,
+ * does not support `$orderby`, and caps `$top` at 50, so fetching a single page dropped
+ * the newest (usually most relevant) replies on long threads. This pages through the
+ * thread via `@odata.nextLink` (bounded by `MAX_REPLY_PAGES`) and selects the newest
+ * `limit` by `createdDateTime`, falling back to arrival order when timestamps are absent.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -131,9 +137,14 @@ export async function fetchThreadReplies(
   const want = Math.max(limit, 1);
   const top = Math.min(want, 50);
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
-  const { items } = await fetchAllGraphPages<GraphThreadMessage>({ token, path, maxPages: 50 });
-  // Replies come back oldest-first, so the newest `want` are at the end of the list.
-  return items.slice(-want);
+  const { items } = await fetchAllGraphPages<GraphThreadMessage>({ token, path, maxPages: MAX_REPLY_PAGES });
+  // Order by createdDateTime so the newest window does not depend on page order. Fall
+  // back to arrival order (Graph returns oldest-first) when any timestamp is missing.
+  const allTimestamped = items.every((m) => Number.isFinite(Date.parse(m.createdDateTime ?? "")));
+  const ordered = allTimestamped
+    ? [...items].sort((a, b) => Date.parse(a.createdDateTime ?? "") - Date.parse(b.createdDateTime ?? ""))
+    : items;
+  return ordered.slice(-want);
 }
 
 /**
