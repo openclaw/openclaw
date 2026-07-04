@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -423,6 +423,63 @@ describe("runSetupWizard", () => {
     await fs.mkdir(dir, { recursive: true });
     return dir;
   }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped.mockResolvedValue("skip");
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockImplementation(async (args) => ({ config: args.config }));
+    setupChannels.mockReset();
+    setupChannels.mockImplementation(async (cfg) => cfg);
+    setupSkills.mockReset();
+    setupSkills.mockImplementation(async (cfg) => cfg);
+    configureGatewayForSetup.mockReset();
+    configureGatewayForSetup.mockImplementation(async (args) => ({
+      nextConfig: args.nextConfig,
+      settings: {
+        port: args.localPort ?? 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+    }));
+    readConfigFileSnapshot.mockReset();
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: false,
+      raw: null,
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    probeGatewayReachable.mockReset();
+    probeGatewayReachable.mockResolvedValue({ ok: true });
+    resolvePreferredProviderForAuthChoice.mockReset();
+    resolvePreferredProviderForAuthChoice.mockResolvedValue("demo-provider");
+    resolvePluginProvidersRuntime.mockReset();
+    resolvePluginProvidersRuntime.mockReturnValue([]);
+    resolveManifestProviderAuthChoice.mockReset();
+    resolveManifestProviderAuthChoice.mockReturnValue(undefined);
+    resolvePluginSetupProvider.mockReset();
+    resolvePluginSetupProvider.mockReturnValue(undefined);
+    resolveProviderPluginChoice.mockReset();
+    resolveProviderPluginChoice.mockReturnValue(null);
+    promptDefaultModel.mockReset();
+    promptDefaultModel.mockResolvedValue({});
+    warnIfModelConfigLooksOff.mockReset();
+    warnIfModelConfigLooksOff.mockResolvedValue(undefined);
+    buildPluginCompatibilitySnapshotNotices.mockReset();
+    buildPluginCompatibilitySnapshotNotices.mockReturnValue([]);
+    hasRunnableLocalAgent.mockReset();
+    hasRunnableLocalAgent.mockResolvedValue(false);
+  });
 
   it("defaults to minimal setup and hands optional configuration to the local agent", async () => {
     hasRunnableLocalAgent.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
