@@ -248,6 +248,40 @@ describe("deliverLineAutoReply", () => {
     expect(pushOrder).toBeLessThan(replyOrder);
   });
 
+  it("falls back to altText when markdown flex message exceeds size limit", async () => {
+    // Build contents large enough to exceed FLEX_MAX_CONTENTS_BYTES (32568)
+    const largeContents = { type: "bubble", body: { type: "box", layout: "vertical", contents: Array.from({ length: 5000 }, (_, i) => ({ type: "text", text: `line ${i}` })) } };
+    const chunkMarkdownTextSpy = vi.fn((text: string) => [text]);
+    const sendLineReplyChunksSpy = vi.fn(async () => ({ replyTokenUsed: false }));
+    const { deps, replyMessageLine } = createDeps({
+      processLineMessage: () => ({
+        text: "some text",
+        flexMessages: [{ type: "flex", altText: "Table: 50 rows x 3 cols", contents: largeContents }],
+      }),
+      chunkMarkdownText: chunkMarkdownTextSpy,
+      sendLineReplyChunks: sendLineReplyChunksSpy,
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "some text", channelData: { line: {} } },
+      lineData: {},
+      deps,
+    });
+
+    // The text passed to chunkMarkdownText should include the fallback altText
+    expect(chunkMarkdownTextSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Table: 50 rows x 3 cols"),
+      expect.any(Number),
+    );
+    // Verify oversized Flex was NOT added to richMessages
+    expect(replyMessageLine).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining([expect.objectContaining({ altText: "Table: 50 rows x 3 cols" })]),
+      expect.anything(),
+    );
+  });
+
   it("falls back to push when reply token delivery fails", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },

@@ -505,8 +505,8 @@ describe("convertCodeBlockToFlexBubble", () => {
     const bubble = convertCodeBlockToFlexBubble(block);
 
     const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
-    const codeText = body.contents[1].contents[0].text;
-    expect(codeText.endsWith("\n...")).toBe(true);
+    const codeText = body.contents[2].contents[0].text;
+    expect(codeText).toContain("truncated");
     expect(
       /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(codeText),
     ).toBe(false);
@@ -569,6 +569,23 @@ print("done")
 
     expect(result.text).toBe(text);
     expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("preserves user-intentional pipes inside text", () => {
+    const result = processLineMessage("Run: cat file | grep foo");
+    expect(result.text).toContain("|");
+    expect(result.flexMessages).toHaveLength(0);
+  });
+
+  it("includes dynamic altText with row and column count for tables", () => {
+    const text = `| A | B |
+|---|---|---|
+| 1 | 2 |`;
+    const result = processLineMessage(text);
+    expect(result.flexMessages).toHaveLength(1);
+    expect(result.flexMessages[0].altText).toContain("Table:");
+    expect(result.flexMessages[0].altText).toContain("rows");
+    expect(result.flexMessages[0].altText).toContain("cols");
   });
 });
 

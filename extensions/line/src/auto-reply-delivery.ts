@@ -127,7 +127,8 @@ export async function deliverLineAutoReply(params: {
     : { text: "", flexMessages: [] };
 
   // LINE FlexMessage total payload includes wrapper ({ type, altText, contents }),
-  // use a conservative limit to account for ~200 bytes of wrapper + altText overhead
+  // use a conservative limit to account for ~200 bytes of wrapper + altText overhead.
+  // Official LINE API limit for contents is 50 KB (51200 bytes).
   const FLEX_MAX_CONTENTS_BYTES = 32768 - 200;
 
   for (const flexMsg of processed.flexMessages) {
@@ -136,6 +137,10 @@ export async function deliverLineAutoReply(params: {
       deps.warn?.(
         `[LINE] FlexMessage from markdown ${flexBytes} bytes exceeds ${FLEX_MAX_CONTENTS_BYTES}, skipping`,
       );
+      // Fall back to altText so the table/code content isn't silently dropped
+      processed.text = processed.text
+        ? `${processed.text}\n[${flexMsg.altText}]`
+        : `[${flexMsg.altText}]`;
       continue;
     }
     richMessages.push(
