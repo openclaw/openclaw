@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
-import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -38,13 +38,19 @@ export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
-function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
+function resolveActiveAgentDir(
+  config: OpenClawConfig,
+  stateDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env);
   }
-  // Storage scans must include the implicit main agent even before config has agent entries.
-  return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
+  return resolveUserPath(
+    resolveDefaultAgentDir(config, { ...env, OPENCLAW_STATE_DIR: stateDir }),
+    env,
+  );
 }
 
 /**
@@ -57,9 +63,10 @@ export function listAgentModelsJsonPaths(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const resolvedStateDir = resolveUserPath(stateDir);
+  const scopedEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
   const paths = new Set<string>();
-  paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
+  paths.add(path.join(resolveDefaultAgentDir(config, scopedEnv), "models.json"));
+  paths.add(path.join(resolveActiveAgentDir(config, stateDir, env), "models.json"));
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -72,12 +79,8 @@ export function listAgentModelsJsonPaths(
   }
 
   for (const agentId of listAgentIds(config)) {
-    if (agentId === "main") {
-      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
-      continue;
-    }
-    const agentDir = resolveAgentDir(config, agentId);
-    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
+    const agentDir = resolveAgentDir(config, agentId, scopedEnv);
+    paths.add(path.join(resolveUserPath(agentDir, scopedEnv), "models.json"));
   }
 
   return [...paths];

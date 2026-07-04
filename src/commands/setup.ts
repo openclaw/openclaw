@@ -38,7 +38,7 @@ type SetupCommandDeps = {
     opts: { path?: string; suffix?: string },
   ) => void | Promise<void>;
   mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
-  resolveSessionTranscriptsDir?: () => string | Promise<string>;
+  resolveSessionTranscriptsDir?: (cfg?: OpenClawConfig) => string | Promise<string>;
   replaceConfigFile?: (params: {
     nextConfig: OpenClawConfig;
     afterWrite: { mode: "auto" };
@@ -118,9 +118,9 @@ async function logDefaultConfigUpdated(
   logConfigUpdated(runtime, opts);
 }
 
-async function resolveDefaultSessionTranscriptsDir(): Promise<string> {
+async function resolveDefaultSessionTranscriptsDir(cfg?: OpenClawConfig): Promise<string> {
   const { resolveSessionTranscriptsDir } = await import("../config/sessions.js");
-  return resolveSessionTranscriptsDir();
+  return resolveSessionTranscriptsDir(undefined, undefined, cfg);
 }
 
 async function readConfigFileRaw(configPath: string): Promise<{
@@ -217,7 +217,7 @@ export async function setupCommand(
 
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )();
+  )(next);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");
