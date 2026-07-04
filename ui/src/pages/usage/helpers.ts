@@ -1,4 +1,6 @@
 // Control UI module implements usage helpers behavior.
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+
 export type UsageQueryTerm = {
   key?: string;
   value: string;
@@ -31,6 +33,54 @@ type UsageSessionQueryTarget = {
     modelUsage?: Array<{ provider?: string; model?: string }>;
   } | null;
 };
+
+export function toggleUsageRangeSelection<T>(
+  selected: T[],
+  value: T,
+  orderedValues: T[],
+  shiftKey: boolean,
+  append: boolean,
+): T[] {
+  if (shiftKey && selected.length > 0) {
+    const lastIndex = orderedValues.indexOf(selected[selected.length - 1]);
+    const nextIndex = orderedValues.indexOf(value);
+    if (lastIndex !== -1 && nextIndex !== -1) {
+      const [start, end] = lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
+      return [...new Set([...selected, ...orderedValues.slice(start, end + 1)])];
+    }
+  }
+  if (selected.includes(value)) {
+    return selected.filter((entry) => entry !== value);
+  }
+  return append ? [...selected, value] : [value];
+}
+
+export function selectUsageSessionKeys(
+  selected: string[],
+  key: string,
+  sessions: UsageSessionQueryTarget[],
+  tokenMode: boolean,
+  shiftKey: boolean,
+): string[] {
+  if (shiftKey && selected.length > 0) {
+    const orderedKeys = [...sessions]
+      .toSorted((left, right) => {
+        const leftValue = tokenMode ? (left.usage?.totalTokens ?? 0) : (left.usage?.totalCost ?? 0);
+        const rightValue = tokenMode
+          ? (right.usage?.totalTokens ?? 0)
+          : (right.usage?.totalCost ?? 0);
+        return rightValue - leftValue;
+      })
+      .map((session) => session.key);
+    const lastIndex = orderedKeys.indexOf(selected[selected.length - 1]);
+    const nextIndex = orderedKeys.indexOf(key);
+    if (lastIndex !== -1 && nextIndex !== -1) {
+      const [start, end] = lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
+      return [...new Set([...selected, ...orderedKeys.slice(start, end + 1)])];
+    }
+  }
+  return selected.length === 1 && selected[0] === key ? [] : [key];
+}
 
 const QUERY_KEYS = new Set([
   "agent",
@@ -323,4 +373,3 @@ export function parseToolSummary(content: string) {
     cleanContent: nonToolLines.join("\n").trim(),
   };
 }
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";

@@ -10,9 +10,6 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   NostrProfile,
-  SessionsUsageResult,
-  CostUsageSummary,
-  SessionUsageTimeSeries,
   SessionsListResult,
   SessionCompactionCheckpoint,
   SkillStatusReport,
@@ -55,7 +52,6 @@ import type { RealtimeTalkStatus } from "../pages/chat/realtime-talk.ts";
 import type { ChatAbortOptions, ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/proposals.ts";
-import type { SessionLogEntry } from "../pages/usage/view.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 
@@ -315,43 +311,6 @@ export type AppViewState = {
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
-  usageLoading: boolean;
-  usageResult: SessionsUsageResult | null;
-  usageCostSummary: CostUsageSummary | null;
-  usageError: string | null;
-  usageStartDate: string;
-  usageEndDate: string;
-  usageScope: "instance" | "family";
-  usageAgentId: string | null;
-  usageSelectedSessions: string[];
-  usageSelectedDays: string[];
-  usageSelectedHours: number[];
-  usageChartMode: "tokens" | "cost";
-  usageDailyChartMode: "total" | "by-type";
-  usageTimeSeriesMode: "cumulative" | "per-turn";
-  usageTimeSeriesBreakdownMode: "total" | "by-type";
-  usageTimeSeries: SessionUsageTimeSeries | null;
-  usageTimeSeriesLoading: boolean;
-  usageTimeSeriesCursorStart: number | null;
-  usageTimeSeriesCursorEnd: number | null;
-  usageSessionLogs: SessionLogEntry[] | null;
-  usageSessionLogsLoading: boolean;
-  usageSessionLogsExpanded: boolean;
-  usageQuery: string;
-  usageQueryDraft: string;
-  usageQueryDebounceTimer: number | null;
-  usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
-  usageSessionSortDir: "asc" | "desc";
-  usageRecentSessions: string[];
-  usageTimeZone: "local" | "utc";
-  usageContextExpanded: boolean;
-  usageHeaderPinned: boolean;
-  usageSessionsTab: "all" | "recent";
-  usageVisibleColumns: string[];
-  usageLogFilterRoles: import("./views/usage.js").SessionLogRole[];
-  usageLogFilterTools: string[];
-  usageLogFilterHasTools: boolean;
-  usageLogFilterQuery: string;
 } & Pick<
   CronState,
   | "cronLoading"

@@ -15,7 +15,7 @@ import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as overviewPage } from "./pages/overview/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
-// import { page as usagePage } from "./pages/usage/route.ts";
+import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 
 export type AppRouteModule = {
@@ -39,6 +39,7 @@ export const APP_ROUTE_TREE = [
   ...configPages,
   workboardPage,
   instancesPage,
+  usagePage,
   debugPage,
   logsPage,
   skillWorkshopPage,

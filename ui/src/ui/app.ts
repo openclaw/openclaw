@@ -7,7 +7,6 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
-  CostUsageSummary,
   ConfigSnapshot,
   ConfigUiHints,
   CronDeliveryStatus,
@@ -22,8 +21,6 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   SessionCompactionCheckpoint,
-  SessionUsageTimeSeries,
-  SessionsUsageResult,
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
@@ -123,7 +120,6 @@ import {
   saveSkillWorkshopMode,
   saveSkillWorkshopUseCurrentChatForRevisions,
 } from "../pages/skill-workshop/storage.ts";
-import type { SessionLogEntry } from "../pages/usage/view.ts";
 import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -459,63 +455,6 @@ export class OpenClawApp extends LitElement {
   @state() sessionsCheckpointLoadingKey: string | null = null;
   @state() sessionsCheckpointBusyKey: string | null = null;
   @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
-
-  @state() usageLoading = false;
-  @state() usageResult: SessionsUsageResult | null = null;
-  @state() usageCostSummary: CostUsageSummary | null = null;
-  @state() usageError: string | null = null;
-  @state() usageStartDate = (() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  })();
-  @state() usageEndDate = (() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  })();
-  @state() usageScope: "instance" | "family" = "family";
-  @state() usageAgentId: string | null = null;
-  @state() usageSelectedSessions: string[] = [];
-  @state() usageSelectedDays: string[] = [];
-  @state() usageSelectedHours: number[] = [];
-  @state() usageChartMode: "tokens" | "cost" = "tokens";
-  @state() usageDailyChartMode: "total" | "by-type" = "by-type";
-  @state() usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
-  @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
-  @state() usageTimeSeries: SessionUsageTimeSeries | null = null;
-  @state() usageTimeSeriesLoading = false;
-  @state() usageTimeSeriesCursorStart: number | null = null;
-  @state() usageTimeSeriesCursorEnd: number | null = null;
-  @state() usageSessionLogs: SessionLogEntry[] | null = null;
-  @state() usageSessionLogsLoading = false;
-  @state() usageSessionLogsExpanded = false;
-  // Applied query (used to filter the already-loaded sessions list client-side).
-  @state() usageQuery = "";
-  // Draft query text (updates immediately as the user types; applied via debounce or "Search").
-  @state() usageQueryDraft = "";
-  @state() usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors" = "recent";
-  @state() usageSessionSortDir: "desc" | "asc" = "desc";
-  @state() usageRecentSessions: string[] = [];
-  @state() usageTimeZone: "local" | "utc" = "local";
-  @state() usageContextExpanded = false;
-  @state() usageHeaderPinned = false;
-  @state() usageSessionsTab: "all" | "recent" = "all";
-  @state() usageVisibleColumns: string[] = [
-    "channel",
-    "agent",
-    "provider",
-    "model",
-    "messages",
-    "tools",
-    "errors",
-    "duration",
-  ];
-  @state() usageLogFilterRoles: import("./views/usage.js").SessionLogRole[] = [];
-  @state() usageLogFilterTools: string[] = [];
-  @state() usageLogFilterHasTools = false;
-  @state() usageLogFilterQuery = "";
-
-  // Non-reactive (don’t trigger renders just for timer bookkeeping).
-  usageQueryDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
   @state() cronQuickCreateOpen = false;

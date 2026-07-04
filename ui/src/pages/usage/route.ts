@@ -1,18 +1,12 @@
 import { definePage } from "@openclaw/uirouter";
-import type { SettingsAppHost } from "../../app/app-host.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadUsage } from "./data.ts";
-import { renderUsageTab } from "./render.ts";
-
-type UsageRenderContext = { state: AppViewState };
-type UsageLoadContext = { app: SettingsAppHost };
+import { html } from "lit";
 
 export const page = definePage({
   id: "usage",
   path: "/usage",
-  loader: ({ app }: UsageLoadContext) => loadUsage(app).then(() => undefined),
   component: () =>
-    import("./view.ts").then((module) => ({
-      render: ({ state }: UsageRenderContext) => renderUsageTab(state, module),
+    import("./usage-page.ts").then(() => ({
+      header: true,
+      render: () => html`<openclaw-usage-page></openclaw-usage-page>`,
     })),
 });
