@@ -302,6 +302,17 @@ import {
   TaskSummarySchema,
 } from "./tasks.js";
 import {
+  TerminalAckResultSchema,
+  TerminalCloseParamsSchema,
+  TerminalDataEventSchema,
+  TerminalEventSchema,
+  TerminalExitEventSchema,
+  TerminalInputParamsSchema,
+  TerminalOpenParamsSchema,
+  TerminalOpenResultSchema,
+  TerminalResizeParamsSchema,
+} from "./terminal.js";
+import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -558,6 +569,15 @@ export const ProtocolSchemas = {
   CronRunLogEntry: CronRunLogEntrySchema,
   LogsTailParams: LogsTailParamsSchema,
   LogsTailResult: LogsTailResultSchema,
+  TerminalOpenParams: TerminalOpenParamsSchema,
+  TerminalOpenResult: TerminalOpenResultSchema,
+  TerminalInputParams: TerminalInputParamsSchema,
+  TerminalResizeParams: TerminalResizeParamsSchema,
+  TerminalCloseParams: TerminalCloseParamsSchema,
+  TerminalAckResult: TerminalAckResultSchema,
+  TerminalDataEvent: TerminalDataEventSchema,
+  TerminalExitEvent: TerminalExitEventSchema,
+  TerminalEvent: TerminalEventSchema,
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParams: ExecApprovalsSetParamsSchema,
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,

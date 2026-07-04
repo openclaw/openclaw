@@ -9,7 +9,7 @@ import {
   scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
 } from "./app-chat.ts";
-import { syncUrlWithSessionKey } from "./app-settings.ts";
+import { hasOperatorAdminAccess, syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
@@ -30,6 +30,7 @@ import {
   loadSessions,
   syncSelectedSessionMessageSubscription,
 } from "./controllers/sessions.ts";
+import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
@@ -105,6 +106,27 @@ export function resolveDashboardHeaderContext(
     normalizeOptionalString(agent?.name) ??
     agentId;
   return { agentLabel };
+}
+
+/**
+ * Whether the operator terminal surface (toolbar toggle + dock) should render.
+ *
+ * The terminal is an admin-only host shell, so availability must track a *live,
+ * admin* connection — not just `terminal.open` appearing in `features.methods`,
+ * which is the server-wide catalog and stays populated from a stale `hello`
+ * while the client auto-reconnects. Requiring `connected` also lets the panel's
+ * own `available` teardown fire on disconnect (the gateway kills that
+ * connection's PTYs), so the UI never keeps tabs pointing at dead sessions.
+ */
+export function isTerminalAvailable(
+  state: Pick<AppViewState, "connected" | "terminalEnabled" | "hello">,
+): boolean {
+  if (!state.connected || !state.terminalEnabled) {
+    return false;
+  }
+  const auth =
+    (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ?? null;
+  return hasOperatorAdminAccess(auth) && isGatewayMethodAdvertised(state, "terminal.open") === true;
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {

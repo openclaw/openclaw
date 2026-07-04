@@ -22,12 +22,12 @@
     "nodes.pairing.title",
     "nodes.pairing.waiting"
   ],
-  "generatedAt": "2026-07-04T10:00:48.470Z",
+  "generatedAt": "2026-07-04T18:11:20.222Z",
   "locale": "ru",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "f7d983d7920c1ebc509fef5fff4f67b35c78a17e6c35b204d8d04aa60e92c809",
-  "totalKeys": 1438,
-  "translatedKeys": 1417,
+  "sourceHash": "2ba8357d0e74acfac4159662ea2c07c723a125b47606daaffe785ecccc48299e",
+  "totalKeys": 1452,
+  "translatedKeys": 1431,
   "workflow": 1
 }

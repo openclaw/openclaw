@@ -1087,6 +1087,13 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        terminal: z
+          .object({
+            enabled: z.boolean().optional(),
+            shell: z.string().optional(),
+          })
+          .strict()
+          .optional(),
         auth: z
           .object({
             mode: z

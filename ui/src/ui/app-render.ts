@@ -13,6 +13,7 @@ import {
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
+import "./terminal/terminal-panel.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
@@ -24,6 +25,7 @@ import {
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
+  isTerminalAvailable,
   switchChatSession,
   switchChatSessionAndWait,
 } from "./app-render.helpers.ts";
@@ -190,11 +192,12 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-import "./components/dashboard-header.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
+import "./components/dashboard-header.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
+import { resolveTheme } from "./theme.ts";
 import type {
   ArtifactDownloadResult,
   GatewaySessionRow,
@@ -2623,6 +2626,35 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
+            ${isTerminalAvailable(state)
+              ? html`<button
+                  class="topbar-icon-btn"
+                  @click=${() => window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
+                  title=${t("terminal.toggle")}
+                  aria-label=${t("terminal.toggle")}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <rect
+                      x="3"
+                      y="4"
+                      width="18"
+                      height="16"
+                      rx="2"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                    />
+                    <path
+                      d="M7 9l3 3-3 3M12.5 15h4"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.6"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>`
+              : nothing}
             <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
           </div>
         </div>
@@ -4188,6 +4220,17 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
+      ${(() => {
+        const terminalAvailable = isTerminalAvailable(state);
+        const terminalMode = resolveTheme(state.theme, state.themeMode).includes("light")
+          ? "light"
+          : "dark";
+        return html`<openclaw-terminal-panel
+          .client=${state.client}
+          .available=${terminalAvailable}
+          .themeMode=${terminalMode}
+        ></openclaw-terminal-panel>`;
+      })()}
       ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)}
       ${renderDreamingRestartConfirmation({
         open: state.dreamingRestartConfirmOpen,

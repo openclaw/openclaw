@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
@@ -597,11 +598,60 @@ describe("runCliAgent reliability", () => {
       model: "opus",
       openClawHistoryPrompt: CLI_RESEED_PROMPT,
     });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+      imageArg: "--image",
+      imageMode: "repeat",
+    };
+    const stateDir = autoCleanupTempDirs.make("openclaw-cli-retry-images-");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "offloaded.png";
+    const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.mkdirSync(inboundDir, { recursive: true });
+    fs.writeFileSync(path.join(inboundDir, mediaId), offloadedImage);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
+    context.workspaceDir = workspaceDir;
+    context.params = {
+      ...context.params,
+      workspaceDir,
+      prompt: `[Retry after failure]\n\n${currentTurn}`,
+      imagePrompt: currentTurn,
+      images: [
+        {
+          type: "image",
+          data: inlineImage.toString("base64"),
+          mimeType: "image/png",
+        },
+      ],
+      imageOrder: ["offloaded", "inline"],
+    };
 
     const result = await runPreparedCliAgent(context);
 
     expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    for (const [index, label] of ["resumed", "fresh"].entries()) {
+      const spawn = requireRecord(
+        callArg(supervisorSpawnMock, index, 0, `${label} image CLI spawn`),
+        `${label} image CLI spawn`,
+      );
+      const argv = requireArray(spawn.argv, `${label} image CLI argv`);
+      const imagePaths = argv.flatMap((arg, argIndex) =>
+        arg === "--image" && typeof argv[argIndex + 1] === "string"
+          ? [argv[argIndex + 1] as string]
+          : [],
+      );
+      expect(imagePaths).toHaveLength(2);
+      expect(fs.readFileSync(imagePaths[0])).toEqual(offloadedImage);
+      expect(fs.readFileSync(imagePaths[1])).toEqual(inlineImage);
+      expect(argv.includes("resume")).toBe(index === 0);
+      expect(argv.includes("stale-cli-session")).toBe(index === 0);
+    }
   });
 
   it("does not retry or fail over after a confirmed message send", async () => {

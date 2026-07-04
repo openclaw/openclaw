@@ -76,6 +76,7 @@ import {
   dismissRealtimeTalkError,
   handleChatManualRefresh,
   isCronSessionKey,
+  isTerminalAvailable,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
@@ -1599,5 +1600,53 @@ describe("dismissRealtimeTalkError", () => {
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkTranscript).toBeNull();
+  });
+});
+
+describe("isTerminalAvailable", () => {
+  function makeState(overrides?: {
+    connected?: boolean;
+    terminalEnabled?: boolean;
+    methods?: string[];
+    scopes?: string[] | undefined;
+  }): Pick<AppViewState, "connected" | "terminalEnabled" | "hello"> {
+    const methods = overrides?.methods ?? ["terminal.open", "terminal.input"];
+    const scopes = "scopes" in (overrides ?? {}) ? overrides?.scopes : ["operator.admin"];
+    return {
+      connected: overrides?.connected ?? true,
+      terminalEnabled: overrides?.terminalEnabled ?? true,
+      hello: {
+        features: { methods },
+        auth: scopes ? { role: "operator", scopes } : undefined,
+      },
+    } as unknown as Pick<AppViewState, "connected" | "terminalEnabled" | "hello">;
+  }
+
+  it("is available for a live admin connection that advertises terminal.open", () => {
+    expect(isTerminalAvailable(makeState())).toBe(true);
+  });
+
+  it("is unavailable while disconnected even if the stale hello still advertises it", () => {
+    // Auto-reconnect keeps the previous hello populated; the panel must go away
+    // so its teardown fires and it does not keep tabs on server-killed sessions.
+    expect(isTerminalAvailable(makeState({ connected: false }))).toBe(false);
+  });
+
+  it("is unavailable when the operator config disables it", () => {
+    expect(isTerminalAvailable(makeState({ terminalEnabled: false }))).toBe(false);
+  });
+
+  it("is unavailable when terminal.open is not advertised", () => {
+    expect(isTerminalAvailable(makeState({ methods: ["health", "status"] }))).toBe(false);
+  });
+
+  it("is unavailable for a non-admin operator even though the method is server-wide", () => {
+    expect(isTerminalAvailable(makeState({ scopes: ["operator.read", "operator.write"] }))).toBe(
+      false,
+    );
+  });
+
+  it("stays available when the gateway reports no scopes (tokenless/legacy admin)", () => {
+    expect(isTerminalAvailable(makeState({ scopes: undefined }))).toBe(true);
   });
 });

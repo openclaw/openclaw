@@ -93,6 +93,8 @@ export type AppViewState = {
   userAvatar?: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: EmbedSandboxMode;
+  /** Whether the gateway advertises the operator terminal as enabled. */
+  terminalEnabled: boolean;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
   sessionKey: string;

@@ -29,6 +29,7 @@ import type {
 } from "../server-chat-state.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { TerminalSessionManager } from "../terminal/session-manager.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -101,6 +102,9 @@ export type GatewayRequestContext = {
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
+  // Operator terminal session store. Absent in local/in-process contexts where
+  // no PTY surface is served.
+  terminalSessions?: TerminalSessionManager;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;

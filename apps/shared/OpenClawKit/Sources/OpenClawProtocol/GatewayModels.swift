@@ -6475,6 +6475,178 @@ public struct LogsTailResult: Codable, Sendable {
     }
 }
 
+public struct TerminalOpenParams: Codable, Sendable {
+    public let agentid: String?
+    public let cols: Int
+    public let rows: Int
+
+    public init(
+        agentid: String? = nil,
+        cols: Int,
+        rows: Int)
+    {
+        self.agentid = agentid
+        self.cols = cols
+        self.rows = rows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case cols
+        case rows
+    }
+}
+
+public struct TerminalOpenResult: Codable, Sendable {
+    public let sessionid: String
+    public let agentid: String
+    public let shell: String
+    public let cwd: String
+    public let confined: Bool
+
+    public init(
+        sessionid: String,
+        agentid: String,
+        shell: String,
+        cwd: String,
+        confined: Bool)
+    {
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.shell = shell
+        self.cwd = cwd
+        self.confined = confined
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case shell
+        case cwd
+        case confined
+    }
+}
+
+public struct TerminalInputParams: Codable, Sendable {
+    public let sessionid: String
+    public let data: String
+
+    public init(
+        sessionid: String,
+        data: String)
+    {
+        self.sessionid = sessionid
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case data
+    }
+}
+
+public struct TerminalResizeParams: Codable, Sendable {
+    public let sessionid: String
+    public let cols: Int
+    public let rows: Int
+
+    public init(
+        sessionid: String,
+        cols: Int,
+        rows: Int)
+    {
+        self.sessionid = sessionid
+        self.cols = cols
+        self.rows = rows
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case cols
+        case rows
+    }
+}
+
+public struct TerminalCloseParams: Codable, Sendable {
+    public let sessionid: String
+
+    public init(
+        sessionid: String)
+    {
+        self.sessionid = sessionid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+    }
+}
+
+public struct TerminalAckResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
+public struct TerminalDataEvent: Codable, Sendable {
+    public let sessionid: String
+    public let seq: Int
+    public let data: String
+
+    public init(
+        sessionid: String,
+        seq: Int,
+        data: String)
+    {
+        self.sessionid = sessionid
+        self.seq = seq
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case seq
+        case data
+    }
+}
+
+public struct TerminalExitEvent: Codable, Sendable {
+    public let sessionid: String
+    public let exitcode: AnyCodable?
+    public let signal: AnyCodable?
+    public let reason: AnyCodable?
+    public let error: String?
+
+    public init(
+        sessionid: String,
+        exitcode: AnyCodable?,
+        signal: AnyCodable?,
+        reason: AnyCodable?,
+        error: String?)
+    {
+        self.sessionid = sessionid
+        self.exitcode = exitcode
+        self.signal = signal
+        self.reason = reason
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case exitcode = "exitCode"
+        case signal
+        case reason
+        case error
+    }
+}
+
 public struct ExecApprovalsGetParams: Codable, Sendable {}
 
 public struct ExecApprovalsSetParams: Codable, Sendable {

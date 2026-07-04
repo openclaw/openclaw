@@ -37,11 +37,15 @@
 
 .shell--nav-collapsed {
   grid-template-columns: var(--shell-nav-rail-width) minmax(0, 1fr);
+  /* Keep --shell-nav-width in sync with the real column so fixed-position
+     consumers (e.g. the docked terminal panel) align to the collapsed rail. */
+  --shell-nav-width: var(--shell-nav-rail-width);
 }
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
+  --shell-nav-width: 0px;
 }
 
 .shell--onboarding .topbar {
@@ -284,6 +288,34 @@
 }
 
 .topbar-search:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.topbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-height: 38px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.topbar-icon-btn:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.topbar-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -1280,6 +1312,14 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve space for the docked operator terminal so it reshapes the content
+     area (shrinks it) instead of overlaying the chat. The terminal panel sets
+     these vars; they are 0 when it is closed. */
+  margin-bottom: var(--oc-terminal-reserve-bottom, 0);
+  margin-right: var(--oc-terminal-reserve-right, 0);
+  transition:
+    margin-bottom 0.16s ease,
+    margin-right 0.16s ease;
 }
 
 .content > * + * {
