@@ -190,6 +190,9 @@ import {
   DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
+  type DevicePairSetupCodeParams,
+  DevicePairSetupCodeParamsSchema,
+  type DevicePairSetupCodeResult,
   type DeviceTokenRevokeParams,
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
@@ -247,6 +250,24 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
+  type TerminalAckResult,
+  TerminalAckResultSchema,
+  type TerminalCloseParams,
+  TerminalCloseParamsSchema,
+  type TerminalDataEvent,
+  TerminalDataEventSchema,
+  type TerminalEvent,
+  TerminalEventSchema,
+  type TerminalExitEvent,
+  TerminalExitEventSchema,
+  type TerminalInputParams,
+  TerminalInputParamsSchema,
+  type TerminalOpenParams,
+  TerminalOpenParamsSchema,
+  type TerminalOpenResult,
+  TerminalOpenResultSchema,
+  type TerminalResizeParams,
+  TerminalResizeParamsSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -907,6 +928,9 @@ export const validateDevicePairRejectParams = lazyCompile<DevicePairRejectParams
 export const validateDevicePairRemoveParams = lazyCompile<DevicePairRemoveParams>(
   DevicePairRemoveParamsSchema,
 );
+export const validateDevicePairSetupCodeParams = lazyCompile<DevicePairSetupCodeParams>(
+  DevicePairSetupCodeParamsSchema,
+);
 export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
 );
@@ -953,6 +977,15 @@ export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
+export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
+export const validateTerminalInputParams =
+  lazyCompile<TerminalInputParams>(TerminalInputParamsSchema);
+export const validateTerminalResizeParams = lazyCompile<TerminalResizeParams>(
+  TerminalResizeParamsSchema,
+);
+export const validateTerminalCloseParams =
+  lazyCompile<TerminalCloseParams>(TerminalCloseParamsSchema);
+export const validateTerminalEvent = lazyCompile<TerminalEvent>(TerminalEventSchema);
 export const validateChatHistoryParams = withChatHistoryParamRules(
   lazyCompile(ChatHistoryParamsSchema),
 );
@@ -1237,6 +1270,15 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
+  TerminalOpenParamsSchema,
+  TerminalOpenResultSchema,
+  TerminalInputParamsSchema,
+  TerminalResizeParamsSchema,
+  TerminalCloseParamsSchema,
+  TerminalAckResultSchema,
+  TerminalDataEventSchema,
+  TerminalExitEventSchema,
+  TerminalEventSchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -1283,6 +1325,8 @@ export type {
   DevicePairListParams,
   DevicePairApproveParams,
   DevicePairRejectParams,
+  DevicePairSetupCodeParams,
+  DevicePairSetupCodeResult,
   ConfigGetParams,
   ConfigSetParams,
   ConfigApplyParams,
@@ -1459,6 +1503,15 @@ export type {
   ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
+  TerminalOpenParams,
+  TerminalOpenResult,
+  TerminalInputParams,
+  TerminalResizeParams,
+  TerminalCloseParams,
+  TerminalAckResult,
+  TerminalDataEvent,
+  TerminalExitEvent,
+  TerminalEvent,
   PollParams,
   WebPushVapidPublicKeyParams,
   WebPushSubscribeParams,

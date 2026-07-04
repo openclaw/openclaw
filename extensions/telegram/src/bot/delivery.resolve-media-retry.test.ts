@@ -1,6 +1,7 @@
 // Telegram tests cover delivery.resolve media retry plugin behavior.
+import { GrammyError } from "grammy";
 import type { Message } from "grammy/types";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
@@ -43,11 +44,13 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
 vi.mock("./delivery.resolve-media.runtime.js", () => {
   class MediaFetchError extends Error {
     code: string;
+    status?: number;
 
-    constructor(code: string, message: string, options?: { cause?: unknown }) {
+    constructor(code: string, message: string, options?: { cause?: unknown; status?: number }) {
       super(message, options);
       this.name = "MediaFetchError";
       this.code = code;
+      this.status = options?.status;
     }
   }
   return {
@@ -57,11 +60,10 @@ vi.mock("./delivery.resolve-media.runtime.js", () => {
     MediaFetchError,
     resolveTelegramApiBase: (apiRoot?: string) =>
       apiRoot?.trim() ? apiRoot.replace(/\/+$/u, "") : "https://api.telegram.org",
-    retryAsync,
+    sleepWithAbort,
     saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
     saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
     shouldRetryTelegramTransportFallback: vi.fn(() => false),
-    warn: (s: string) => s,
   };
 });
 
@@ -191,6 +193,34 @@ function createFileTooBigError(): Error {
   return new Error("GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)");
 }
 
+function createFileTooBigGrammyError(): GrammyError {
+  return new GrammyError(
+    "Call to 'getFile' failed!",
+    {
+      ok: false,
+      error_code: 400,
+      description: "Bad Request: file is too big",
+      parameters: {},
+    },
+    "getFile",
+    {},
+  );
+}
+
+function createRateLimitGrammyError(retryAfterSeconds = 3): GrammyError {
+  return new GrammyError(
+    "Call to 'getFile' failed!",
+    {
+      ok: false,
+      error_code: 429,
+      description: "Too Many Requests: retry later",
+      parameters: { retry_after: retryAfterSeconds },
+    },
+    "getFile",
+    {},
+  );
+}
+
 function resolveMediaWithDefaults(
   ctx: TelegramContext,
   overrides: Partial<Parameters<typeof resolveMedia>[0]> = {},
@@ -253,15 +283,18 @@ function expectResolvedMediaFields(
 
 async function expectMediaFetchError(
   promise: Promise<unknown>,
-  fields: { code: string; messageIncludes: string },
+  fields: { code: string; messageIncludes: string; name?: string; status?: number },
 ) {
   try {
     await promise;
   } catch (error) {
     const record = requireRecord(error, "MediaFetchError");
-    expect(record.name).toBe("MediaFetchError");
+    expect(record.name).toBe(fields.name ?? "MediaFetchError");
     expect(record.code).toBe(fields.code);
     expect(String(record.message)).toContain(fields.messageIncludes);
+    if (fields.status !== undefined) {
+      expect(record.status).toBe(fields.status);
+    }
     return;
   }
   throw new Error("expected MediaFetchError rejection");
@@ -321,16 +354,19 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it.each(["voice", "photo", "video"] as const)(
-    "returns null for %s when getFile exhausts retries so message is not dropped",
+    "throws a typed failure for %s when getFile exhausts retries",
     async (mediaField) => {
       const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
       const promise = resolveMediaWithDefaults(makeCtx(mediaField, getFile));
+      const failure = expectMediaFetchError(promise, {
+        code: "fetch_failed",
+        messageIncludes: "Telegram getFile failed after retries",
+      });
       await flushRetryTimers();
-      const result = await promise;
+      await failure;
 
       expect(getFile).toHaveBeenCalledTimes(3);
-      expect(result).toBeNull();
     },
   );
 
@@ -345,39 +381,117 @@ describe("resolveMedia getFile retry", () => {
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
+  it("does not retry string-shaped 'file is too big' errors", async () => {
     // Simulate Telegram Bot API error when file exceeds 20MB limit.
     const fileTooBigError = createFileTooBigError();
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMediaWithDefaults(makeCtx("video", getFile));
+    await expectMediaFetchError(resolveMediaWithDefaults(makeCtx("video", getFile)), {
+      code: "max_bytes",
+      messageIncludes: "larger than 20 MB",
+      name: "TelegramBotApiFileTooLargeError",
+      status: 400,
+    });
 
     // Should NOT retry - "file is too big" is a permanent error, not transient.
     expect(getFile).toHaveBeenCalledTimes(1);
-    expect(result).toBeNull();
   });
 
-  it("does not retry 'file is too big' GrammyError instances and returns null", async () => {
-    const fileTooBigError = new Error(
-      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
-    );
+  it("preserves Telegram status for 'file is too big' GrammyError instances", async () => {
+    const fileTooBigError = createFileTooBigGrammyError();
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMediaWithDefaults(makeCtx("video", getFile));
+    await expectMediaFetchError(resolveMediaWithDefaults(makeCtx("video", getFile)), {
+      code: "max_bytes",
+      messageIncludes: "larger than 20 MB",
+      name: "TelegramBotApiFileTooLargeError",
+      status: 400,
+    });
 
     expect(getFile).toHaveBeenCalledTimes(1);
-    expect(result).toBeNull();
+  });
+
+  it("honors Telegram retry_after before retrying getFile", async () => {
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(createRateLimitGrammyError())
+      .mockResolvedValueOnce({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const promise = resolveMediaWithDefaults(makeCtx("document", getFile));
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(getFile).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cap Telegram retry_after at 30 seconds", async () => {
+    const getFile = vi
+      .fn()
+      .mockRejectedValueOnce(createRateLimitGrammyError(60))
+      .mockResolvedValueOnce({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const promise = resolveMediaWithDefaults(makeCtx("document", getFile));
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(getFile).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts long retry_after waits at the overall handler deadline", async () => {
+    const getFile = vi.fn().mockRejectedValue(createRateLimitGrammyError(1_200));
+    const startedAt = Date.now();
+
+    const promise = resolveMediaWithDefaults(makeCtx("document", getFile));
+    const failure = expectMediaFetchError(promise, {
+      code: "http_error",
+      messageIncludes: "Telegram getFile failed after retries",
+      status: 429,
+    });
+    await vi.runAllTimersAsync();
+    await failure;
+
+    expect(getFile.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(Date.now() - startedAt).toBeLessThan(25 * 60_000);
+  });
+
+  it("aborts retry_after waits when the Telegram session shuts down", async () => {
+    const shutdown = new AbortController();
+    const getFile = vi.fn().mockRejectedValue(createRateLimitGrammyError(60));
+    const promise = resolveMediaWithDefaults(makeCtx("document", getFile), {
+      abortSignal: shutdown.signal,
+    });
+    const failure = expectMediaFetchError(promise, {
+      code: "http_error",
+      messageIncludes: "Telegram getFile failed after retries",
+      status: 429,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    shutdown.abort();
+    await failure;
+
+    expect(getFile).toHaveBeenCalledTimes(1);
   });
 
   it.each(["audio", "voice"] as const)(
-    "returns null for %s when file is too big",
+    "throws a typed failure for %s when file is too big",
     async (mediaField) => {
       const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
 
-      const result = await resolveMediaWithDefaults(makeCtx(mediaField, getFile));
+      await expectMediaFetchError(resolveMediaWithDefaults(makeCtx(mediaField, getFile)), {
+        code: "max_bytes",
+        messageIncludes: "larger than 20 MB",
+        name: "TelegramBotApiFileTooLargeError",
+        status: 400,
+      });
 
       expect(getFile).toHaveBeenCalledTimes(1);
-      expect(result).toBeNull();
     },
   );
 
@@ -423,16 +537,19 @@ describe("resolveMedia getFile retry", () => {
     });
   });
 
-  it("returns null for sticker when getFile exhausts retries", async () => {
+  it("throws a typed failure for stickers when getFile exhausts retries", async () => {
     const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
     const ctx = makeCtx("sticker", getFile);
     const promise = resolveMediaWithDefaults(ctx);
+    const failure = expectMediaFetchError(promise, {
+      code: "fetch_failed",
+      messageIncludes: "Telegram getFile failed after retries",
+    });
     await flushRetryTimers();
-    const result = await promise;
+    await failure;
 
     expect(getFile).toHaveBeenCalledTimes(3);
-    expect(result).toBeNull();
   });
 
   it("uses caller-provided fetch impl for file downloads", async () => {

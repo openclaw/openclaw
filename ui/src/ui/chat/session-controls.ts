@@ -14,8 +14,8 @@ import {
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
-import { loadSessions } from "../controllers/sessions.ts";
-import { formatDateTimeMs } from "../format.ts";
+import { loadSessions, patchSession } from "../controllers/sessions.ts";
+import { formatDateTimeMs, formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { pathForTab } from "../navigation.ts";
@@ -23,11 +23,14 @@ import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
 import {
+  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  canArchiveSessionRow,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
 } from "../session-key.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
@@ -380,13 +383,7 @@ function createChatSessionPickerRequestParams(
   return params;
 }
 
-function projectChatSessionPickerResult(
-  state: AppViewState,
-  result: SessionsListResult,
-): SessionsListResult {
-  if (state.sessionsShowArchived) {
-    return result;
-  }
+function projectChatSessionPickerResult(result: SessionsListResult): SessionsListResult {
   const sessions = result.sessions.filter((row) => row.key && row.archived !== true);
   return {
     ...result,
@@ -440,7 +437,6 @@ async function loadChatSessionPickerPage(
   requestHostUpdate(state);
   try {
     const page = projectChatSessionPickerResult(
-      state,
       await state.client.request<SessionsListResult>(
         "sessions.list",
         createChatSessionPickerRequestParams(state, { query, offset: options.offset }),
@@ -601,18 +597,52 @@ function resolveSelectedChatSessionLabel(
   );
 }
 
-function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]): string {
-  const parts = [
+// Rows stay single-line minimal: relative time in the row, full detail
+// (surface, model, absolute timestamp) only in the hover tooltip.
+function formatChatSessionPickerTooltip(
+  row: SessionsListResult["sessions"][number],
+  label: string,
+): string {
+  return [
+    label,
     normalizeOptionalString(row.surface),
     [normalizeOptionalString(row.modelProvider), normalizeOptionalString(row.model)]
       .filter(Boolean)
       .join("/"),
-  ].filter(Boolean);
-  const updatedAt = formatDateTimeMs(row.updatedAt, undefined, "");
-  if (updatedAt) {
-    parts.push(updatedAt);
+    formatDateTimeMs(row.updatedAt, undefined, ""),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+async function patchChatSessionFromPicker(params: {
+  state: AppViewState;
+  row: SessionsListResult["sessions"][number];
+  patch: { label?: string | null; archived?: boolean; pinned?: boolean };
+  onSwitchSession: ChatSessionSwitchHandler;
+}) {
+  const { state, row, patch, onSwitchSession } = params;
+  const patched = await patchSession(state, row.key, patch, {
+    ...createChatSessionsLoadOverrides(state),
+    showArchived: false,
+  });
+  if (!patched) {
+    state.chatSessionPickerError = state.sessionsError ?? "Failed to update session";
+    return;
   }
-  return parts.join(" · ");
+  if (patch.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey)) {
+    const parsed = parseAgentSessionKey(row.key);
+    const fallbackKey = buildAgentMainSessionKey({
+      agentId: parsed?.agentId ?? state.agentsList?.defaultId ?? "main",
+      mainKey: state.agentsList?.mainKey ?? undefined,
+    });
+    closeChatSessionPicker(state);
+    onSwitchSession(state, fallbackKey);
+    return;
+  }
+  await loadChatSessionPickerPage(state, {
+    query: state.chatSessionPickerAppliedQuery,
+  });
 }
 
 function renderChatSessionPicker(params: {
@@ -759,38 +789,119 @@ function renderChatSessionPickerPopover(
           (entry) => entry.row.key,
           (entry) => {
             const { row, label } = entry;
-            const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
+            const pinned = row.pinned === true;
+            const running = row.hasActiveRun === true;
+            const archiveAllowed = canArchiveSessionRow(row, resolveUiConfiguredMainKey(state));
+            const rowClass = [
+              "chat-session-picker__option-row",
+              "session-row-host",
+              selected ? "chat-session-picker__option-row--selected" : "",
+              pinned ? "session-row-host--pinned" : "",
+              running ? "session-row-host--running" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            const updatedAt = formatRelativeTimestamp(row.updatedAt, { fallback: "" });
             return html`
-              <button
-                class="chat-session-picker__option ${selected
-                  ? "chat-session-picker__option--selected"
-                  : ""}"
-                data-chat-session-picker-option="true"
-                data-session-key=${row.key}
-                role="option"
-                aria-selected=${selected ? "true" : "false"}
-                title=${label}
-                type="button"
-                @click=${() => {
-                  closeChatSessionPicker(state);
-                  if (row.key !== state.sessionKey) {
-                    onSwitchSession(state, row.key);
-                    return;
-                  }
-                  options.onSelectCurrent?.(state);
-                }}
-              >
-                <span class="chat-session-picker__option-main">
+              <div class=${rowClass}>
+                <button
+                  class="chat-session-picker__option"
+                  data-chat-session-picker-option="true"
+                  data-session-key=${row.key}
+                  role="option"
+                  aria-selected=${selected ? "true" : "false"}
+                  title=${formatChatSessionPickerTooltip(row, label)}
+                  type="button"
+                  @click=${() => {
+                    closeChatSessionPicker(state);
+                    if (row.key !== state.sessionKey) {
+                      onSwitchSession(state, row.key);
+                      return;
+                    }
+                    options.onSelectCurrent?.(state);
+                  }}
+                >
                   <span class="chat-session-picker__option-label">${label}</span>
-                  ${meta ? html`<span class="chat-session-picker__option-meta">${meta}</span>` : ""}
+                </button>
+                <span class="session-row-aside">
+                  <span class="session-row-trail">
+                    ${running
+                      ? html`<span
+                          class="session-run-spinner"
+                          role="img"
+                          aria-label=${t("sessionsView.activeRun")}
+                          title=${t("sessionsView.activeRun")}
+                        ></span>`
+                      : updatedAt}
+                  </span>
+                  <span class="session-row-actions">
+                    <button
+                      class="session-action"
+                      data-chat-session-rename="true"
+                      type="button"
+                      title=${t("sessionsView.renameSession")}
+                      aria-label=${t("sessionsView.renameSession")}
+                      ?disabled=${controlsDisabled}
+                      @click=${() => {
+                        const nextLabel = window.prompt(
+                          t("sessionsView.renameSessionPrompt"),
+                          row.label ?? label,
+                        );
+                        if (nextLabel === null) {
+                          return;
+                        }
+                        void patchChatSessionFromPicker({
+                          state,
+                          row,
+                          patch: { label: normalizeOptionalString(nextLabel) ?? null },
+                          onSwitchSession,
+                        });
+                      }}
+                    >
+                      ${icons.edit}
+                    </button>
+                    <button
+                      class="session-action"
+                      data-chat-session-archive="true"
+                      type="button"
+                      title=${t("sessionsView.archiveSession")}
+                      aria-label=${t("sessionsView.archiveSession")}
+                      ?disabled=${controlsDisabled || !archiveAllowed}
+                      @click=${() =>
+                        void patchChatSessionFromPicker({
+                          state,
+                          row,
+                          patch: { archived: true },
+                          onSwitchSession,
+                        })}
+                    >
+                      ${icons.archive}
+                    </button>
+                    <button
+                      class="session-action session-action--pin"
+                      data-chat-session-pin="true"
+                      type="button"
+                      title=${pinned
+                        ? t("sessionsView.unpinSession")
+                        : t("sessionsView.pinSession")}
+                      aria-label=${pinned
+                        ? t("sessionsView.unpinSession")
+                        : t("sessionsView.pinSession")}
+                      ?disabled=${controlsDisabled}
+                      @click=${() =>
+                        void patchChatSessionFromPicker({
+                          state,
+                          row,
+                          patch: { pinned: !pinned },
+                          onSwitchSession,
+                        })}
+                    >
+                      ${icons.pin}
+                    </button>
+                  </span>
                 </span>
-                ${selected
-                  ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
-                      ${icons.check}
-                    </span>`
-                  : ""}
-              </button>
+              </div>
             `;
           },
         )}
@@ -941,6 +1052,7 @@ export function renderChatModelSelect(state: AppViewState) {
     selectedThinkingLabel,
     selectedThinkingValue: thinking.currentOverride,
     fastMode,
+    thinkingDefaultValue: thinking.defaultValue,
     thinkingDisabled,
     thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
     onModelSelect: (next) => switchChatModel(state, next),
@@ -957,6 +1069,8 @@ type ChatThinkingSelectOption = {
 type ChatThinkingSelectState = {
   currentOverride: string;
   defaultLabel: string;
+  /** Normalized default level id so the slider can mark the inherited stop. */
+  defaultValue: string;
   options: ChatThinkingSelectOption[];
 };
 
@@ -1142,6 +1256,7 @@ export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkin
   return {
     currentOverride: effectiveOverride,
     defaultLabel: formatInheritedThinkingLabel(defaultLevel),
+    defaultValue: normalizeThinkingOptionValue(defaultLevel),
     options: buildThinkingOptions(levels, effectiveOverride),
   };
 }
@@ -1164,10 +1279,6 @@ function formatCombinedPickerThinkingLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
 }
 
-function formatCombinedPickerThinkingOptionLabel(option: ChatInlineSelectOption): string {
-  return option.value === "" ? "Default" : formatCombinedPickerThinkingLabel(option.label);
-}
-
 function renderChatModelReasoningSelect(params: {
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
@@ -1176,6 +1287,7 @@ function renderChatModelReasoningSelect(params: {
   selectedModelValue: string;
   selectedThinkingLabel: string;
   selectedThinkingValue: string;
+  thinkingDefaultValue: string;
   thinkingDisabled: boolean;
   thinkingOptions: ChatInlineSelectOption[];
   onFastModeSelect: (value: "" | "on" | "off" | "auto") => Promise<unknown>;
@@ -1190,6 +1302,7 @@ function renderChatModelReasoningSelect(params: {
     selectedModelValue,
     selectedThinkingLabel,
     selectedThinkingValue,
+    thinkingDefaultValue,
     thinkingDisabled,
     thinkingOptions,
     onFastModeSelect,
@@ -1198,7 +1311,53 @@ function renderChatModelReasoningSelect(params: {
   } = params;
   const triggerModel = formatCombinedPickerModelLabel(selectedModelLabel);
   const triggerThinking = formatCombinedPickerThinkingLabel(selectedThinkingLabel);
-  const triggerLabel = `${triggerModel} · ${triggerThinking}`;
+  const triggerTitle = `${triggerModel} · ${triggerThinking}`;
+  // The visible trigger stays minimal: the inherited default level is noise,
+  // so reasoning only appears when overridden. Title/aria keep the full pair.
+  const triggerLabel =
+    selectedThinkingValue === "" ? triggerModel : `${triggerModel} · ${triggerThinking}`;
+  // Reasoning renders as a discrete slider over the ordered level list the
+  // gateway offers (faster -> smarter). "" (inherit default) is not a stop:
+  // the thumb parks on the default level until the user sets an override.
+  const sliderStops = thinkingOptions.filter((option) => option.value !== "");
+  const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
+  const hasThinkingOverride = selectedThinkingValue !== "";
+  const overrideStopIndex = sliderStops.findIndex(
+    (option) => option.value === selectedThinkingValue,
+  );
+  const sliderIndex = Math.max(hasThinkingOverride ? overrideStopIndex : defaultStopIndex, 0);
+  // Inherited defaults like "adaptive" may not exist on the offered scale.
+  // The value label stays truthful ("Default (Adaptive)"); the thumb gets an
+  // unanchored style so its parked position does not read as the default.
+  const sliderUnanchored = !hasThinkingOverride && defaultStopIndex < 0;
+  const sliderFillPercent = (index: number) =>
+    sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
+  const reasoningValueLabel = hasThinkingOverride
+    ? triggerThinking
+    : `Default (${triggerThinking})`;
+  const defaultLevelLabel = formatThinkingOverrideLabel(thinkingDefaultValue);
+  // Keep the filled track segment glued to the thumb while dragging; the
+  // sessions.patch commit happens on release (change), not per input tick.
+  const onSliderDrag = (event: Event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
+  };
+  const onSliderCommit = async (event: Event) => {
+    if (thinkingDisabled) {
+      return;
+    }
+    const input = event.currentTarget as HTMLInputElement;
+    const stop = sliderStops[Number(input.value)];
+    if (!stop || stop.value === selectedThinkingValue) {
+      return;
+    }
+    await onThinkingSelect(stop.value);
+  };
+  const showReasoning = sliderStops.length > 0;
+  // A one-entry scale is not a slider, but the lone level must stay
+  // selectable from the inherited default (regression guard vs the old list).
+  const onlyStop = sliderStops.length === 1 ? sliderStops[0] : undefined;
+  const showReasoningPanel = showReasoning || fastMode.supported;
   return html`
     <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
       <summary
@@ -1210,9 +1369,9 @@ function renderChatModelReasoningSelect(params: {
         data-chat-select-value=${selectedModelValue}
         data-chat-thinking-value=${selectedThinkingValue}
         data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
-        aria-label=${`${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerLabel}`}
+        aria-label=${`${t("chat.selectors.model")}, ${t("chat.selectors.thinkingLevel")}: ${triggerTitle}`}
         aria-disabled=${disabled ? "true" : "false"}
-        title=${triggerLabel}
+        title=${triggerTitle}
         @click=${(event: MouseEvent) => {
           if (disabled) {
             event.preventDefault();
@@ -1272,100 +1431,162 @@ function renderChatModelReasoningSelect(params: {
             },
           )}
         </div>
-        <div
-          class="chat-controls__reasoning-panel"
-          role="listbox"
-          aria-label=${t("chat.selectors.thinkingLevel")}
-        >
-          <div class="chat-controls__inline-select-section-label">Reasoning</div>
-          <div class="chat-controls__reasoning-options">
-            ${repeat(
-              thinkingOptions,
-              (thinking) => thinking.value,
-              (thinking) => {
-                const thinkingSelected = thinking.value === selectedThinkingValue;
-                return html`
-                  <button
-                    class="chat-controls__reasoning-option ${thinkingSelected
-                      ? "chat-controls__reasoning-option--selected"
-                      : ""}"
-                    data-chat-thinking-option=${thinking.value}
-                    role="option"
-                    aria-selected=${thinkingSelected ? "true" : "false"}
-                    type="button"
-                    ?disabled=${thinkingDisabled}
-                    @click=${async (event: MouseEvent) => {
-                      event.stopPropagation();
-                      if (thinkingDisabled) {
-                        event.preventDefault();
-                        return;
-                      }
-                      (event.currentTarget as HTMLElement)
-                        .closest("details")
-                        ?.removeAttribute("open");
-                      await onThinkingSelect(thinking.value);
-                    }}
-                  >
-                    <span>${formatCombinedPickerThinkingOptionLabel(thinking)}</span>
-                    ${thinkingSelected
-                      ? html`<span class="chat-controls__inline-select-check" aria-hidden="true">
-                          ${icons.check}
-                        </span>`
-                      : ""}
-                  </button>
-                `;
-              },
-            )}
-          </div>
-          ${fastMode.supported
-            ? html`
-                <div class="chat-controls__inline-select-section-label">Speed</div>
-                <div class="chat-controls__reasoning-options" role="listbox">
-                  ${repeat(
-                    fastMode.options,
-                    (speed) => speed.value,
-                    (speed) => {
-                      const speedValue = speed.value as "" | "on" | "off" | "auto";
-                      const speedSelected = speedValue === fastMode.currentOverride;
-                      return html`
-                        <button
-                          class="chat-controls__reasoning-option ${speedSelected
-                            ? "chat-controls__reasoning-option--selected"
-                            : ""}"
-                          data-chat-speed-option=${speed.value}
-                          role="option"
-                          aria-selected=${speedSelected ? "true" : "false"}
-                          type="button"
-                          ?disabled=${fastMode.disabled}
-                          @click=${async (event: MouseEvent) => {
-                            event.stopPropagation();
-                            if (fastMode.disabled) {
-                              event.preventDefault();
-                              return;
-                            }
-                            (event.currentTarget as HTMLElement)
-                              .closest("details")
-                              ?.removeAttribute("open");
-                            await onFastModeSelect(speedValue);
-                          }}
-                        >
-                          <span>${speed.label}</span>
-                          ${speedSelected
-                            ? html`<span
-                                class="chat-controls__inline-select-check"
-                                aria-hidden="true"
+        ${showReasoningPanel
+          ? html`
+              <div class="chat-controls__reasoning-panel">
+                ${showReasoning
+                  ? html`
+                      <div class="chat-controls__reasoning-head">
+                        <span class="chat-controls__inline-select-section-label">Reasoning</span>
+                        <span class="chat-controls__reasoning-value">${reasoningValueLabel}</span>
+                      </div>
+                      ${sliderStops.length > 1
+                        ? html`
+                            <div class="chat-controls__reasoning-slider">
+                              <div class="chat-controls__reasoning-dots" aria-hidden="true">
+                                ${sliderStops.map(
+                                  (stop, index) =>
+                                    html`<span
+                                      class="chat-controls__reasoning-dot ${index ===
+                                      defaultStopIndex
+                                        ? "chat-controls__reasoning-dot--default"
+                                        : ""}"
+                                      data-stop=${stop.value}
+                                    ></span>`,
+                                )}
+                              </div>
+                              <input
+                                class="chat-controls__reasoning-range ${hasThinkingOverride
+                                  ? ""
+                                  : "chat-controls__reasoning-range--inherit"} ${sliderUnanchored
+                                  ? "chat-controls__reasoning-range--unanchored"
+                                  : ""}"
+                                type="range"
+                                min="0"
+                                max=${sliderStops.length - 1}
+                                step="1"
+                                .value=${String(sliderIndex)}
+                                style=${`--reasoning-fill: ${sliderFillPercent(sliderIndex)}%`}
+                                data-chat-thinking-slider="true"
+                                data-chat-thinking-values=${sliderStops
+                                  .map((stop) => stop.value)
+                                  .join(",")}
+                                aria-label=${t("chat.selectors.thinkingLevel")}
+                                aria-valuetext=${reasoningValueLabel}
+                                ?disabled=${thinkingDisabled}
+                                @input=${onSliderDrag}
+                                @change=${onSliderCommit}
+                              />
+                            </div>
+                            <div class="chat-controls__reasoning-scale" aria-hidden="true">
+                              <span>Faster</span>
+                              <span>Smarter</span>
+                            </div>
+                          `
+                        : onlyStop
+                          ? html`
+                              <button
+                                class="chat-controls__reasoning-option ${hasThinkingOverride
+                                  ? "chat-controls__reasoning-option--selected"
+                                  : ""}"
+                                data-chat-thinking-option=${onlyStop.value}
+                                type="button"
+                                aria-pressed=${hasThinkingOverride ? "true" : "false"}
+                                ?disabled=${thinkingDisabled}
+                                @click=${async (event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  if (thinkingDisabled || hasThinkingOverride) {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  await onThinkingSelect(onlyStop.value);
+                                }}
                               >
-                                ${icons.check}
-                              </span>`
-                            : ""}
-                        </button>
-                      `;
-                    },
-                  )}
-                </div>
-              `
-            : ""}
-        </div>
+                                <span>${onlyStop.label}</span>
+                                ${hasThinkingOverride
+                                  ? html`<span
+                                      class="chat-controls__inline-select-check"
+                                      aria-hidden="true"
+                                    >
+                                      ${icons.check}
+                                    </span>`
+                                  : ""}
+                              </button>
+                            `
+                          : ""}
+                      ${hasThinkingOverride
+                        ? html`
+                            <button
+                              class="chat-controls__reasoning-reset"
+                              data-chat-thinking-option=""
+                              type="button"
+                              ?disabled=${thinkingDisabled}
+                              @click=${async (event: MouseEvent) => {
+                                event.stopPropagation();
+                                if (thinkingDisabled) {
+                                  event.preventDefault();
+                                  return;
+                                }
+                                await onThinkingSelect("");
+                              }}
+                            >
+                              Use default (${defaultLevelLabel})
+                            </button>
+                          `
+                        : ""}
+                    `
+                  : ""}
+                ${fastMode.supported
+                  ? html`
+                      <div class="chat-controls__inline-select-section-label">Speed</div>
+                      <div class="chat-controls__reasoning-options" role="listbox">
+                        ${repeat(
+                          fastMode.options,
+                          (speed) => speed.value,
+                          (speed) => {
+                            const speedValue = speed.value as "" | "on" | "off" | "auto";
+                            const speedSelected = speedValue === fastMode.currentOverride;
+                            return html`
+                              <button
+                                class="chat-controls__reasoning-option ${speedSelected
+                                  ? "chat-controls__reasoning-option--selected"
+                                  : ""}"
+                                data-chat-speed-option=${speed.value}
+                                role="option"
+                                aria-selected=${speedSelected ? "true" : "false"}
+                                type="button"
+                                ?disabled=${fastMode.disabled}
+                                @click=${async (event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  if (fastMode.disabled) {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  (event.currentTarget as HTMLElement)
+                                    .closest("details")
+                                    ?.removeAttribute("open");
+                                  await onFastModeSelect(speedValue);
+                                }}
+                              >
+                                <span>${speed.label}</span>
+                                ${speedSelected
+                                  ? html`<span
+                                      class="chat-controls__inline-select-check"
+                                      aria-hidden="true"
+                                    >
+                                      ${icons.check}
+                                    </span>`
+                                  : ""}
+                              </button>
+                            `;
+                          },
+                        )}
+                      </div>
+                    `
+                  : ""}
+              </div>
+            `
+          : ""}
       </div>
     </details>
   `;

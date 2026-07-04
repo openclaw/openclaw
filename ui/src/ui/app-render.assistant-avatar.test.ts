@@ -361,6 +361,18 @@ describe("renderApp assistant avatar routing", () => {
     expect(chatProps.current?.autoExpandToolCalls).toBe(false);
   });
 
+  it("makes an archived chat session read-only", () => {
+    renderApp(
+      createState({
+        tab: "chat",
+        selectedChatSessionArchived: true,
+      }),
+    );
+
+    expect(chatProps.current?.canSend).toBe(false);
+    expect(chatProps.current?.disabledReason).toBe("Restore this session to send messages.");
+  });
+
   it("does not render chat errors in non-chat page headers", () => {
     const container = document.createElement("div");
 

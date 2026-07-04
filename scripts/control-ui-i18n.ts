@@ -1554,6 +1554,14 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
+export function shouldReuseExistingTranslation(options: {
+  allowTranslate: boolean;
+  force: boolean;
+  isFallback: boolean;
+}): boolean {
+  return !options.isFallback || (!options.allowTranslate && !options.force);
+}
+
 async function syncLocale(
   entry: LocaleEntry,
   options: { checkOnly: boolean; force: boolean; write: boolean },
@@ -1587,8 +1595,13 @@ async function syncLocale(
     const cachedByText = tmByTextHash.get(textHash);
     const existing = existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
+    const shouldReuse = shouldReuseExistingTranslation({
+      allowTranslate,
+      force: options.force,
+      isFallback: shouldRefreshFallback,
+    });
 
-    if (cached && !(allowTranslate && shouldRefreshFallback)) {
+    if (cached && shouldReuse) {
       nextFlat.set(key, cached.translated);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
@@ -1607,7 +1620,7 @@ async function syncLocale(
       continue;
     }
 
-    if (existing !== undefined && !(allowTranslate && shouldRefreshFallback)) {
+    if (existing !== undefined && shouldReuse) {
       nextFlat.set(key, existing);
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);

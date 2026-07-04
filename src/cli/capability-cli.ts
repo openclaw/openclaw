@@ -6,7 +6,6 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -56,6 +55,7 @@ import type {
   ImageGenerationOutputFormat,
   ImageGenerationQuality,
 } from "../image-generation/types.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
 import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,

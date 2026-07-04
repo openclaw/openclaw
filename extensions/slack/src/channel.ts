@@ -9,10 +9,14 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
+  attachChannelToResult,
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
@@ -60,6 +64,7 @@ import {
   isSlackInteractiveRepliesEnabled,
 } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
@@ -425,6 +430,14 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       accountId,
       payload,
     }),
+  presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadSlackOutboundAdapterModule,
+    renderPresentation: {
+      resolve: ({ slackOutbound }) => slackOutbound.renderPresentation,
+      unavailableMessage: "Slack outbound presentation rendering is unavailable",
+    },
+  }),
   sendPayload: async (ctx) => {
     const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
       cfg: ctx.cfg,
@@ -454,7 +467,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "slack",
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg, onDeliveryResult }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
         accountId: accountId ?? undefined,
@@ -466,6 +479,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         cfg,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("slack", result));
+            }
+          : undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
     },
@@ -479,6 +497,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       cfg,
+      onDeliveryResult,
     }) => {
       const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
         cfg,
@@ -493,6 +512,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
         mediaLocalRoots,
         threadTs: threadTsValue,
         accountId: accountId ?? undefined,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("slack", result));
+            }
+          : undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
     },
@@ -675,11 +699,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (!token) {
           return { ok: false, error: "missing token" };
         }
-        return await (await loadSlackProbeModule()).probeSlack(token, timeoutMs);
+        return await (
+          await loadSlackProbeModule()
+        ).probeSlack(token, timeoutMs, {
+          accountId: account.accountId,
+        });
       },
       formatCapabilitiesProbe: ({ probe }) => {
         const slackProbe = probe as SlackProbe | undefined;
         const lines = [];
+        if (slackProbe?.warning) {
+          lines.push({ text: `Warning: ${slackProbe.warning}`, tone: "warn" } as const);
+        }
         if (slackProbe?.bot?.name) {
           lines.push({ text: `Bot: @${slackProbe.bot.name}` });
         }

@@ -31,7 +31,20 @@ import {
 } from "./prepare.test-helpers.js";
 import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
-const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const { enqueueSystemEventMock, logVerboseMock, shouldLogVerboseMock } = vi.hoisted(() => ({
+  enqueueSystemEventMock: vi.fn(),
+  logVerboseMock: vi.fn(),
+  shouldLogVerboseMock: vi.fn(() => false),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    logVerbose: (...args: unknown[]) => logVerboseMock(...args),
+    shouldLogVerbose: () => shouldLogVerboseMock(),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
@@ -54,6 +67,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     clearSlackAllowFromCacheForTest();
     clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
+    logVerboseMock.mockClear();
+    shouldLogVerboseMock.mockReset();
+    shouldLogVerboseMock.mockReturnValue(false);
   });
 
   afterAll(() => {
@@ -169,6 +185,28 @@ describe("slack prepareSlackMessage inbound contract", () => {
       contextKey: "slack:message:D123:1.000",
     });
     expect(prepared.ctxPayload.BodyForAgent).toContain(body);
+  });
+
+  it("logs inbound metadata without logging message content", async () => {
+    const body = "confidential acquisition target: northstar; do not include this text in logs";
+    shouldLogVerboseMock.mockReturnValue(true);
+
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: body }));
+
+    assertPrepared(prepared);
+    const inboundLog = logVerboseMock.mock.calls
+      .map(([entry]) => entry)
+      .find((entry) => typeof entry === "string" && entry.startsWith("slack inbound:"));
+    const verboseOutput = logVerboseMock.mock.calls
+      .flat()
+      .filter((entry): entry is string => typeof entry === "string")
+      .join("\n");
+    expect(inboundLog).toBe(
+      `slack inbound: account=${prepared.route.accountId} agent=${prepared.route.agentId} channel=D123 message_ts=1.000 thread_ts=none from=slack:U1 chat=direct chars=${body.length}`,
+    );
+    expect(verboseOutput).not.toContain(body);
+    expect(verboseOutput).not.toContain("confidential acquisition target");
+    expect(verboseOutput).not.toContain("preview=");
   });
 
   it("prepares wildcard open-policy account DMs", async () => {

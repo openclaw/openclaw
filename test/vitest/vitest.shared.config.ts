@@ -366,6 +366,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/error-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "error-coercion.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,
@@ -418,7 +428,6 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "media-source-url"),
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
-      sourcePackageAlias("media-core", "read-response-with-limit"),
       sourcePackageAlias("media-core"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({

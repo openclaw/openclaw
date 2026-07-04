@@ -37,11 +37,15 @@
 
 .shell--nav-collapsed {
   grid-template-columns: var(--shell-nav-rail-width) minmax(0, 1fr);
+  /* Keep --shell-nav-width in sync with the real column so fixed-position
+     consumers (e.g. the docked terminal panel) align to the collapsed rail. */
+  --shell-nav-width: var(--shell-nav-rail-width);
 }
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
+  --shell-nav-width: 0px;
 }
 
 .shell--onboarding .topbar {
@@ -284,6 +288,34 @@
 }
 
 .topbar-search:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.topbar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  min-height: 38px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.topbar-icon-btn:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.topbar-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -802,16 +834,13 @@
 }
 
 .sidebar-recent-session {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
   min-height: 34px;
-  padding: 5px 9px;
+  padding-right: 4px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
-  text-decoration: none;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -821,7 +850,6 @@
 .sidebar-recent-session:hover {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-recent-session--active {
@@ -830,11 +858,19 @@
   color: var(--text-strong);
 }
 
-.sidebar-recent-session__body {
+.sidebar-recent-session__link {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 5px 4px 5px 9px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-recent-session__link:hover {
+  text-decoration: none;
 }
 
 .sidebar-recent-session__name {
@@ -853,21 +889,8 @@
   color: var(--text-strong);
 }
 
-.sidebar-recent-session__meta {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-  opacity: 0.85;
-}
-
-.sidebar-recent-session__live {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: var(--ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 12%, transparent);
-  animation: pulse-subtle 2s ease-in-out infinite;
+.sidebar-recent-session__aside {
+  padding-right: 2px;
 }
 
 .sidebar-nav::-webkit-scrollbar {
@@ -1180,56 +1203,34 @@
   min-height: 42px;
 }
 
-.sidebar-version {
+/* Borderless status line: the sidebar footer signals connectivity only;
+   the gateway version moved into Settings (Quick Settings footer). */
+.sidebar-status {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 40px;
+  gap: 8px;
+  min-height: 28px;
   padding: 0 12px;
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-.sidebar-version__label {
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.sidebar-version__text {
+.sidebar-status__text {
   font-size: 12px;
-  color: var(--text);
-  font-weight: 600;
+  color: var(--muted);
 }
 
-.sidebar-version__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 78%, white 22%);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
-  opacity: 1;
-  margin: 0 auto;
-}
-
-.sidebar-version__status {
+.sidebar-status__dot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
-  margin-left: auto;
 }
 
-.sidebar-version__status.sidebar-connection-status--online {
+.sidebar-status__dot.sidebar-connection-status--online {
   background: var(--ok);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 14%, transparent);
 }
 
-.sidebar-version__status.sidebar-connection-status--offline {
+.sidebar-status__dot.sidebar-connection-status--offline {
   background: var(--danger);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
@@ -1243,16 +1244,11 @@
   gap: 6px;
 }
 
-.sidebar--collapsed .sidebar-version {
+.sidebar--collapsed .sidebar-status {
   width: 44px;
-  min-height: 44px;
+  min-height: 36px;
   padding: 0;
   justify-content: center;
-  border-radius: var(--radius-lg);
-}
-
-.sidebar--collapsed .sidebar-version__status {
-  margin-left: 0;
 }
 
 /* Mode switch in sidebar — hidden on desktop, shown on mobile */
@@ -1307,6 +1303,14 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve space for the docked operator terminal so it reshapes the content
+     area (shrinks it) instead of overlaying the chat. The terminal panel sets
+     these vars; they are 0 when it is closed. */
+  margin-bottom: var(--oc-terminal-reserve-bottom, 0);
+  margin-right: var(--oc-terminal-reserve-right, 0);
+  transition:
+    margin-bottom 0.16s ease,
+    margin-right 0.16s ease;
 }
 
 .content > * + * {

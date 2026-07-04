@@ -393,6 +393,68 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
   });
+
+  it("preserves hidden tool telemetry while marking its channel progress private", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      args: { runId: "cm_1" },
+      hideFromChannelProgress: true,
+    });
+    handleToolExecutionUpdate(ctx, {
+      type: "tool_execution_update",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      args: { runId: "cm_1" },
+      partialResult: { status: "waiting" },
+      hideFromChannelProgress: true,
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "wait",
+      toolCallId: "tool-code-wait",
+      isError: false,
+      result: { details: { status: "completed" } },
+      hideFromChannelProgress: true,
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter((event) => event.data?.name === "wait");
+    expect(lifecycleEvents).not.toHaveLength(0);
+    expect(lifecycleEvents.every((event) => event.data?.hideFromChannelProgress === true)).toBe(
+      true,
+    );
+  });
+
+  it("keeps an unmarked catalog tool named wait visible", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "wait",
+      toolCallId: "tool-catalog-wait",
+      args: {},
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "wait",
+      toolCallId: "tool-catalog-wait",
+      isError: false,
+      result: { details: { status: "completed" } },
+    });
+
+    const lifecycleEvents = onAgentEvent.mock.calls
+      .map((call) => call[0] as CapturedAgentEvent)
+      .filter((event) => event.data?.name === "wait");
+    expect(lifecycleEvents).not.toHaveLength(0);
+    expect(lifecycleEvents.every((event) => event.data?.hideFromChannelProgress !== true)).toBe(
+      true,
+    );
+  });
 });
 
 describe("handleToolExecutionEnd cron mutation tracking", () => {

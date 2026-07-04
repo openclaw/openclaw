@@ -7,6 +7,7 @@ import OSLog
 struct IOSGatewayChatTransport: OpenClawChatTransport {
     static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ios.chat.transport")
     static let defaultChatSendTimeoutMs = 30000
+    static let compactionRequestTimeoutSeconds = 0
     private let gateway: GatewayNodeSession
 
     private struct CreateSessionParams: Codable {
@@ -205,7 +206,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func compactSession(sessionKey: String) async throws {
         let json = try Self.makeSessionKeyParamsJSON(sessionKey)
-        _ = try await self.gateway.request(method: "sessions.compact", paramsJSON: json, timeoutSeconds: 10)
+        let response = try await self.gateway.request(
+            method: "sessions.compact",
+            paramsJSON: json,
+            timeoutSeconds: Self.compactionRequestTimeoutSeconds)
+        try OpenClawSessionsCompactResponse.requireSuccess(from: response)
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {

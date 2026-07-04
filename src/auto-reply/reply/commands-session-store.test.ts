@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistAbortTargetEntry, persistSessionEntry } from "./commands-session-store.js";
@@ -16,7 +16,7 @@ async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise
 }
 
 describe("commands session store persistence", () => {
-  it("persists a single command session entry through the accessor", async () => {
+  it("persists command state without reverting concurrent session management", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:command";
       const otherKey = "agent:main:other";
@@ -24,39 +24,175 @@ describe("commands session store persistence", () => {
         sessionId: "command-session",
         updatedAt: 1,
         model: "gpt-5.5",
+        label: "Before rename",
+        pinnedAt: 100,
       };
       const otherEntry: SessionEntry = {
         sessionId: "other-session",
         updatedAt: 2,
       };
+      const concurrentUpdatedAt = 300;
       await saveSessionStore(
         storePath,
         {
-          [sessionKey]: { ...entry },
+          [sessionKey]: {
+            ...entry,
+            updatedAt: concurrentUpdatedAt,
+            label: "After rename",
+            pinnedAt: undefined,
+          },
           [otherKey]: { ...otherEntry },
         },
         { skipMaintenance: true },
       );
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValue(400);
+
+      try {
+        await expect(
+          persistSessionEntry({
+            sessionEntry: entry,
+            sessionStore,
+            sessionKey,
+            storePath,
+          }),
+        ).resolves.toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+
+      const persisted = loadSessionStore(storePath, { skipCache: true });
+      expect(entry.updatedAt).not.toBe(1);
+      expect(sessionStore[sessionKey]).toMatchObject({
+        sessionId: "command-session",
+        label: "After rename",
+        model: "gpt-5.5",
+        updatedAt: concurrentUpdatedAt,
+      });
+      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+      expect(persisted[sessionKey]).toMatchObject({
+        sessionId: "command-session",
+        label: "After rename",
+        model: "gpt-5.5",
+        updatedAt: concurrentUpdatedAt,
+      });
+      expect(persisted[sessionKey]?.pinnedAt).toBeUndefined();
+      expect(persisted[otherKey]).toStrictEqual(otherEntry);
+    });
+  });
+
+  it("rejects command persistence after the session rotates", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:command";
+      const initialEntry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 1,
+        queueMode: "collect",
+      };
+      const sessionEntry: SessionEntry = {
+        ...initialEntry,
+        queueMode: "followup",
+      };
+      const rotatedEntry: SessionEntry = {
+        sessionId: "session-2",
+        updatedAt: 3,
+        queueMode: "interrupt",
+      };
+      await saveSessionStore(storePath, { [sessionKey]: rotatedEntry }, { skipMaintenance: true });
+      const sessionStore = { [sessionKey]: sessionEntry };
 
       await expect(
         persistSessionEntry({
-          sessionEntry: entry,
+          initialSessionEntry: initialEntry,
+          sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
         }),
-      ).resolves.toBe(true);
+      ).resolves.toBe(false);
 
-      const persisted = loadSessionStore(storePath, { skipCache: true });
-      expect(sessionStore[sessionKey]).toBe(entry);
-      expect(entry.updatedAt).not.toBe(1);
-      expect(persisted[sessionKey]).toMatchObject({
-        sessionId: "command-session",
-        model: "gpt-5.5",
-        updatedAt: entry.updatedAt,
+      expect(sessionStore[sessionKey]).toEqual(rotatedEntry);
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(rotatedEntry);
+    });
+  });
+
+  it("rejects an explicit same-value command after a concurrent change", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:command";
+      const initialEntry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 1,
+        sendPolicy: "deny",
+      };
+      const sessionEntry = { ...initialEntry };
+      const concurrentEntry: SessionEntry = {
+        ...initialEntry,
+        updatedAt: 2,
+        sendPolicy: "allow",
+      };
+      await saveSessionStore(
+        storePath,
+        { [sessionKey]: concurrentEntry },
+        { skipMaintenance: true },
+      );
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await expect(
+        persistSessionEntry({
+          initialSessionEntry: initialEntry,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          touchedFields: ["sendPolicy"],
+        }),
+      ).resolves.toBe(false);
+
+      expect(sessionStore[sessionKey]).toMatchObject({
+        sessionId: "session-1",
+        sendPolicy: "allow",
       });
-      expect(persisted[otherKey]).toStrictEqual(otherEntry);
+    });
+  });
+
+  it("rejects a grouped command before committing any non-conflicting field", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:command";
+      const initialEntry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 1,
+        groupActivation: "mention",
+        groupActivationNeedsSystemIntro: true,
+      };
+      const sessionEntry: SessionEntry = {
+        ...initialEntry,
+        groupActivation: "always",
+      };
+      const concurrentEntry: SessionEntry = {
+        ...initialEntry,
+        updatedAt: 2,
+        groupActivationNeedsSystemIntro: false,
+      };
+      await saveSessionStore(
+        storePath,
+        { [sessionKey]: concurrentEntry },
+        { skipMaintenance: true },
+      );
+      const sessionStore = { [sessionKey]: sessionEntry };
+
+      await expect(
+        persistSessionEntry({
+          initialSessionEntry: initialEntry,
+          sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          touchedFields: ["groupActivation", "groupActivationNeedsSystemIntro"],
+        }),
+      ).resolves.toBe(false);
+
+      expect(sessionStore[sessionKey]).toEqual(concurrentEntry);
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(concurrentEntry);
     });
   });
 
