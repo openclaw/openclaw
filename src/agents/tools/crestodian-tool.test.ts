@@ -53,14 +53,16 @@ describe("crestodian tool", () => {
   });
 
   it("refuses mutating actions without the approved assertion", async () => {
-    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true });
+    const proposalRef: { current?: string } = {};
+    const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     const result = await tool.execute("t2", {
       action: "config_set",
       path: "gateway.port",
       value: "18789",
     });
-    // Denied (approved missing) but registered; armed message says retry now.
-    expect(toolText(result)).toContain("proposal registered");
+    // An armed turn can never mint its own proposal.
+    expect(toolText(result)).toContain("approval-mismatch");
+    expect(proposalRef.current).toBeUndefined();
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
@@ -137,8 +139,17 @@ describe("crestodian tool", () => {
       value: "1",
       approved: true,
     });
-    // A different operation than the approved one never executes.
-    expect(toolText(result)).toContain("proposal registered");
+    // A different operation than the approved one voids the approval entirely;
+    // even an identical retry in the same armed turn stays locked.
+    expect(toolText(result)).toContain("approval-mismatch");
+    expect(proposalRef.current).toBeUndefined();
+    const retry = await armedTool.execute("t3e", {
+      action: "config_set",
+      path: "gateway.port",
+      value: "1",
+      approved: true,
+    });
+    expect(toolText(retry)).toContain("approval-mismatch");
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 

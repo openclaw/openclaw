@@ -224,15 +224,24 @@ export function createCrestodianTool(options: CrestodianToolOptions): AnyAgentTo
         if (!armedForThisOperation) {
           // Three gates must hold: the model asserts consent, the host saw an
           // explicit user approval in the current turn, and the approved call
-          // matches the exact operation that was previously proposed. A
-          // generic "yes" must never authorize a different mutation.
+          // matches the operation registered BEFORE that approval. A generic
+          // "yes" must never authorize a different mutation, and an armed turn
+          // must never mint a new executable proposal for itself — otherwise
+          // the model could swap the approved action for another one.
+          if (options.approvalArmed === true) {
+            if (options.proposalRef) {
+              options.proposalRef.current = undefined;
+            }
+            return textResult(
+              "approval-mismatch: this call is not the operation the user approved. The approval is void; describe the new change and get a fresh yes before retrying.",
+              { needsApproval: true },
+            );
+          }
           if (options.proposalRef) {
             options.proposalRef.current = operationHash;
           }
           return textResult(
-            options.approvalArmed === true
-              ? "proposal registered — the user already approved in this turn. Retry the identical call with approved=true NOW to apply it."
-              : "needs-approval: this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).",
+            "needs-approval: this action changes state. The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the identical call with approved=true).",
             { needsApproval: true },
           );
         }
