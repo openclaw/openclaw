@@ -1,4 +1,5 @@
 /** Normalizes cron create/patch payloads before validation and persistence. */
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -558,17 +559,9 @@ export function normalizeCronJobInput(
   }
 
   if ("enabled" in base) {
-    const enabled = base.enabled;
-    if (typeof enabled === "boolean") {
+    const enabled = parseBoolean(base.enabled);
+    if (enabled !== undefined) {
       next.enabled = enabled;
-    } else if (typeof enabled === "string") {
-      const trimmed = normalizeOptionalLowercaseString(enabled);
-      if (trimmed === "true") {
-        next.enabled = true;
-      }
-      if (trimmed === "false") {
-        next.enabled = false;
-      }
     }
   }
 

@@ -10,6 +10,7 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   emitAgentEvent,
@@ -247,9 +248,7 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
 }
 
 function createCliAbortError(): Error {
-  const error = new Error("CLI run aborted");
-  error.name = "AbortError";
-  return error;
+  return createAbortError("CLI run aborted");
 }
 
 function buildCliLogArgs(params: {

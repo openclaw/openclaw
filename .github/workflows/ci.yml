@@ -872,12 +872,17 @@ jobs:
               ;;
             qa-smoke-ci)
               output_dir=".artifacts/qa-e2e/smoke-ci-profile"
+              package_dir=".artifacts/qa-e2e/smoke-ci-package"
               export OPENCLAW_BUILD_PRIVATE_QA=1
               export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
               export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
               export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
               export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
-              NODE_OPTIONS=--max-old-space-size=8192 node scripts/build-all.mjs qaRuntime
+              export NODE_OPTIONS=--max-old-space-size=12288
+              node scripts/package-openclaw-for-docker.mjs \
+                --output-dir "$package_dir" \
+                --output-name openclaw-current.tgz
+              export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
               qa_exit_code=0
               pnpm openclaw qa run \
                 --repo-root . \

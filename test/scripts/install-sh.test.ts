@@ -86,6 +86,62 @@ describe("install.sh", () => {
     expect(result.stdout + result.stderr).toContain("Missing value for --version");
   });
 
+  it("writes git install wrappers with the resolved Node runtime", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      repo="$tmp/repo"
+      node_dir="node-bin"
+      cd "$tmp"
+      mkdir -p "$repo/.git" "$repo/dist" "$node_dir"
+      touch "$repo/dist/entry.js"
+      cat > "$node_dir/node" <<'NODE'
+#!/usr/bin/env bash
+printf 'fake-node:%s\\n' "$*"
+NODE
+      chmod +x "$node_dir/node"
+      PATH="$node_dir:/usr/bin:/bin"
+      export PATH
+      OS=macos
+      check_git() { return 0; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      resolve_git_openclaw_ref() { printf 'main\\n'; }
+      checkout_git_openclaw_ref() { :; }
+      cleanup_legacy_submodules() { :; }
+      activate_repo_pnpm_version() { :; }
+      git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
+      run_quiet_step() { return 0; }
+      ensure_user_local_bin_on_path() {
+        mkdir -p "$HOME/.local/bin"
+        export PATH="$HOME/.local/bin:$PATH"
+      }
+      ui_info() { :; }
+      ui_success() { :; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      git() {
+        if [[ "$1" == "-C" && "$3" == "status" ]]; then
+          return 0
+        fi
+        printf 'unexpected git:%s\\n' "$*" >&2
+        return 1
+      }
+
+      install_openclaw_from_git "$repo"
+      wrapper="$HOME/.local/bin/openclaw"
+      grep -F "$tmp/$node_dir/node" "$wrapper"
+      cd /
+      PATH="/usr/bin:/bin" "$wrapper" --version
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("exec ");
+    expect(result.stdout).toContain("/node-bin/node");
+    expect(result.stdout).toContain("fake-node:");
+    expect(result.stdout).toContain("/repo/dist/entry.js --version");
+  });
+
   it("accepts GNU and musl Linux shells in OS detection", () => {
     expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
     expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');

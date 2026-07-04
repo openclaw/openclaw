@@ -170,6 +170,42 @@ const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 
+function isAsciiLowercaseLetter(character: string): boolean {
+  return character >= "a" && character <= "z";
+}
+
+function isAsciiUppercaseLetter(character: string): boolean {
+  return character >= "A" && character <= "Z";
+}
+
+function isAsciiAlphaNumeric(character: string): boolean {
+  return (
+    isAsciiLowercaseLetter(character) ||
+    isAsciiUppercaseLetter(character) ||
+    (character >= "0" && character <= "9")
+  );
+}
+
+export function isConditionalBranchIdentifier(source: string): boolean {
+  let index = 0;
+  while (index < source.length && isAsciiLowercaseLetter(source[index])) {
+    index += 1;
+  }
+
+  // Keep this scanner linear: PR-controlled native source passes through CI,
+  // so a backtracking regex here can become a cheap native-i18n DoS trigger.
+  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source[index])) {
+    return false;
+  }
+
+  for (index += 1; index < source.length; index += 1) {
+    if (!isAsciiAlphaNumeric(source[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isTranslatableCandidate(source: string, kind: string): boolean {
   if (BUILD_SETTING_RE.test(source)) {
     BUILD_SETTING_RE.lastIndex = 0;
@@ -183,7 +219,7 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
   if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
     return false;
   }
-  if (kind === "conditional-branch" && /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/u.test(source)) {
+  if (kind === "conditional-branch" && isConditionalBranchIdentifier(source)) {
     return false;
   }
   if (/[{}[\]]/u.test(source) && !/(?:\\\(|\$\{)/u.test(source)) {

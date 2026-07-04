@@ -568,6 +568,8 @@ export async function runPreparedReply(
       : isInternalPromptChannel && opts?.sourceReplyDeliveryMode === undefined
         ? "automatic"
         : opts?.sourceReplyDeliveryMode;
+  const sessionPromptSourceReplyDeliveryMode =
+    opts?.sessionPromptSourceReplyDeliveryMode ?? sourceReplyDeliveryMode;
   const silentReplyConversationType = resolvePromptSilentReplyConversationType({
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
@@ -617,20 +619,20 @@ export async function runPreparedReply(
   const directChatContext = isDirectChat
     ? buildDirectChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
       })
     : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx: promptSessionCtx,
-        sourceReplyDeliveryMode,
+        sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentToken: SILENT_REPLY_TOKEN,
       })
     : "";
-  // Behavioral intro (activation mode, lurking, etc.) only on first turn / activation needed
-  const groupIntro = shouldInjectGroupIntro
+  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
+  const groupIntro = isGroupChat
     ? buildGroupIntro({
         sessionEntry,
         defaultActivation,
@@ -651,32 +653,35 @@ export async function runPreparedReply(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
   );
+  const execOverridePromptHint = buildExecOverridePromptHint({
+    execOverrides,
+    elevatedLevel: resolvedElevatedLevel,
+    fullAccessAvailable: fullAccessState.available,
+    fullAccessBlockedReason: fullAccessState.blockedReason,
+  });
   const extraSystemPromptParts = [
     inboundMetaPrompt,
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
+    execOverridePromptHint,
   ].filter(Boolean);
-  // Static parts only (no per-message inbound metadata) for CLI session reuse hashing.
-  const extraSystemPromptStaticParts = [
+  const extraSystemPromptStatic = [
     directChatContext,
     groupChatContext,
     groupIntro,
     groupSystemPrompt,
-    buildExecOverridePromptHint({
-      execOverrides,
-      elevatedLevel: resolvedElevatedLevel,
-      fullAccessAvailable: fullAccessState.available,
-      fullAccessBlockedReason: fullAccessState.blockedReason,
-    }),
-  ].filter(Boolean);
+    execOverridePromptHint,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  const cliSessionBindingFacts = {
+    extraSystemPromptStatic,
+    ...(sessionPromptSourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: sessionPromptSourceReplyDeliveryMode }
+      : {}),
+  };
   const silentReplyPromptMode: SilentReplyPromptMode =
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
@@ -1457,7 +1462,8 @@ export async function runPreparedReply(
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       silentReplyPromptMode,
-      extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
+      extraSystemPromptStatic,
+      cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,

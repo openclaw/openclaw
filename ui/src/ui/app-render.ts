@@ -29,6 +29,7 @@ import {
 } from "./app-render.helpers.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { copyToClipboard } from "./chat/clipboard.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   renderChatQuotaPill,
@@ -2341,7 +2342,7 @@ export function renderApp(state: AppViewState) {
     }, 160);
   };
   const copyChatWorkspacePath = (filePath: string) => {
-    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+    void copyToClipboard(filePath);
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {

@@ -313,6 +313,7 @@ class SecurePrefs(
       quietEnd = quietEnd,
       maxEventsPerMinute = maxEvents.coerceAtLeast(1),
       sessionKey = sessionKey,
+      selfPackageName = normalizedAppPackage,
     )
   }
 
