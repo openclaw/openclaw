@@ -1958,6 +1958,71 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.content).toBe("ok");
   });
 
+  it("awaits native tool progress consumers before completing tool start notifications", async () => {
+    let releaseProgress!: () => void;
+    const progressDelivered = new Promise<void>((resolve) => {
+      releaseProgress = resolve;
+    });
+    let progressResolved = false;
+    void progressDelivered.then(() => {
+      progressResolved = true;
+    });
+    const onAgentEvent = vi.fn((event) => {
+      const data = requireRecord(event.data, "agent event data");
+      if (event.stream === "tool" && data.phase === "start" && data.name === "bash") {
+        return progressDelivered;
+      }
+      return undefined;
+    });
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    let notificationResolved = false;
+    const pendingNotification = projector
+      .handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-awaited",
+            command: "pwd",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      )
+      .then(() => {
+        notificationResolved = true;
+      });
+
+    await flushDiagnosticEvents();
+
+    const toolStart = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "start",
+      itemId: "cmd-awaited",
+      name: "bash",
+    }).data;
+    expect(toolStart.toolCallId).toBe("cmd-awaited");
+    expect(onAgentEvent.mock.results.some((result) => result.value === progressDelivered)).toBe(
+      true,
+    );
+    expect(progressResolved).toBe(false);
+    expect(notificationResolved).toBe(false);
+
+    releaseProgress();
+    await pendingNotification;
+
+    expect(notificationResolved).toBe(true);
+  });
+
   it("synthesizes native tool progress from turn completion snapshots", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();

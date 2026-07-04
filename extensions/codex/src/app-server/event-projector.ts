@@ -1364,7 +1364,7 @@ export class CodexAppServerEventProjector {
       }
       return;
     }
-    this.emitAgentEvent({
+    await this.emitAgentEventAwaited({
       stream: "tool",
       data: {
         phase: params.phase,
@@ -1920,6 +1920,12 @@ export class CodexAppServerEventProjector {
   private emitAgentEvent(
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
+    void this.emitAgentEventAwaited(event);
+  }
+
+  private async emitAgentEventAwaited(
+    event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+  ): Promise<void> {
     try {
       emitGlobalAgentEvent({
         runId: this.params.runId,
@@ -1931,13 +1937,10 @@ export class CodexAppServerEventProjector {
       embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
     }
     try {
-      const maybePromise = this.params.onAgentEvent?.(event);
-      void Promise.resolve(maybePromise).catch((error: unknown) => {
-        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
-      });
+      await this.params.onAgentEvent?.(event);
     } catch (error) {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
-      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
+      embeddedAgentLog.debug("codex app-server agent event handler failed", { error });
     }
   }
 
