@@ -789,6 +789,60 @@ describe("agentLoop tool termination", () => {
     ).toBe(true);
   });
 
+  it("ignores progress updates after a tool execution settles", async () => {
+    let delayedUpdate: ((result: AgentToolResult<unknown>) => void) | undefined;
+    const tool: AgentTool = {
+      name: "delayed_tool",
+      label: "delayed_tool",
+      description: "captures progress callbacks",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async (_toolCallId, _args, _signal, onUpdate) => {
+        delayedUpdate = onUpdate;
+        onUpdate?.({
+          content: [{ type: "text", text: "running" }],
+          details: { status: "running" },
+        });
+        return {
+          content: [{ type: "text", text: "done" }],
+          details: { status: "done" },
+          terminate: true,
+        };
+      },
+    };
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-delayed", name: tool.name, arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "run", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [tool] },
+        { ...config, toolExecution: "sequential" },
+        undefined,
+        streamFn,
+      ),
+    );
+    const countAfterRun = events.length;
+    delayedUpdate?.({
+      content: [{ type: "text", text: "late" }],
+      details: { status: "late" },
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(events).toHaveLength(countAfterRun);
+    expect(events.filter((event) => event.type === "tool_execution_update")).toHaveLength(1);
+  });
+
   it("continues after a side-effect tool result when afterToolCall records it without terminate", async () => {
     const executed: string[] = [];
     let turn = 0;

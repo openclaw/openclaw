@@ -1,7 +1,3 @@
-/**
- * @deprecated Compatibility subpath for shipped approval reaction helpers.
- * New plugin code should use the focused approval runtime/reply subpaths.
- */
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
@@ -13,6 +9,11 @@ import {
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+/**
+ * @deprecated Compatibility subpath for shipped approval reaction helpers.
+ * New plugin code should use the focused approval runtime/reply subpaths.
+ */
+import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
@@ -226,14 +227,6 @@ export function resolveApprovalReactionTarget<TRoute = unknown>(params: {
   };
 }
 
-function buildFence(text: string, language?: string): string {
-  let fence = "```";
-  while (text.includes(fence)) {
-    fence += "`";
-  }
-  return `${fence}${language ?? ""}\n${text}\n${fence}`;
-}
-
 function formatSeverity(value: "info" | "warning" | "critical"): string {
   return value === "critical" ? "Critical" : value === "info" ? "Info" : "Warning";
 }
@@ -293,7 +286,7 @@ function buildApprovalReactionPromptText(params: {
     if (warningLines?.length) {
       sections.push(["Command analysis:", ...warningLines.map((line) => `- ${line}`)].join("\n"));
     }
-    sections.push(["Pending command:", buildFence(view.commandText, "sh")].join("\n"));
+    sections.push(["Pending command:", formatFencedCodeBlock(view.commandText, "sh")].join("\n"));
     const info: string[] = [];
     if (view.cwd) {
       info.push(`CWD: ${formatApprovalDisplayPath(sanitizeForPromptLiteral(view.cwd))}`);

@@ -3,9 +3,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { applyPatch } from "diff";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
-import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+import {
+  createEditTool,
+  createEditToolDefinition,
+  type EditOperations,
+  type EditToolDetails,
+} from "./edit.js";
 
 const testTheme = {
   bg: (_name: string, text: string) => text,
@@ -155,6 +162,85 @@ describe("edit tool", () => {
       type: "text",
       text: `Successfully replaced 2 block(s) in ${filePath}.`,
     });
+  });
+
+  it("preserves untouched lines during fuzzy multi-edits", async () => {
+    const original = [
+      "keep before  ",
+      "first target  ",
+      "first after",
+      "keep middle   ",
+      "second target  ",
+      "second after",
+      "keep after  ",
+      "",
+    ].join("\n");
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-fuzzy",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "first target\nfirst after", newText: "FIRST\nFIRST2" },
+          { oldText: "second target\nsecond after", newText: "SECOND\nSECOND2" },
+        ],
+      },
+      undefined,
+    );
+
+    const expected = [
+      "keep before  ",
+      "FIRST",
+      "FIRST2",
+      "keep middle   ",
+      "SECOND",
+      "SECOND2",
+      "keep after  ",
+      "",
+    ].join("\n");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(applyPatch(original, details.patch)).toBe(expected);
+  });
+
+  it("preserves the correct duplicate line after a fuzzy replacement", async () => {
+    const original = "replace me   \nafter   \n";
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-duplicate",
+      {
+        path: filePath,
+        edits: [{ oldText: "replace me\n", newText: "after\n" }],
+      },
+      undefined,
+    );
+
+    const expected = "after\nafter   \n";
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(applyPatch(original, details.patch)).toBe(expected);
+  });
+
+  it("strips model-added metadata while retaining the strict edit schema", async () => {
+    const filePath = await createTempFile("before\n");
+    const tool = createEditTool(tmpDir);
+    const prepared = tool.prepareArguments?.({
+      path: filePath,
+      reason: "model explanation",
+      edits: [{ oldText: "before", newText: "after", reason: "why" }],
+    });
+
+    expect(prepared).toEqual({
+      path: filePath,
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    await tool.execute("call-metadata", prepared as never, undefined);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
   it("renders previews through custom edit operations", async () => {
