@@ -1,4 +1,5 @@
 // Commander registration for gateway status, health, diagnostics, discovery, and run commands.
+import { formatByteSize } from "@openclaw/normalization-core/format";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -232,15 +233,12 @@ function formatBytes(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
-  const units = ["B", "KiB", "MiB", "GiB"];
-  let amount = value;
-  let unitIndex = 0;
-  while (amount >= 1024 && unitIndex < units.length - 1) {
-    amount /= 1024;
-    unitIndex += 1;
-  }
-  const digits = unitIndex === 0 || amount >= 100 ? 0 : 1;
-  return `${amount.toFixed(digits)} ${units[unitIndex]}`;
+  return formatByteSize(value, {
+    style: "iec",
+    maxUnit: "giga",
+    separator: " ",
+    fractionDigits: (amount, unit) => (unit === "byte" || amount >= 100 ? 0 : 1),
+  });
 }
 
 function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {

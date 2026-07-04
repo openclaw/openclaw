@@ -1,0 +1,45 @@
+type ByteSizeUnit = "byte" | "kilo" | "mega" | "giga" | "tera";
+
+type ByteSizeStyle = "si" | "iec" | "legacy-binary";
+
+type ByteSizeFormatOptions = {
+  style: ByteSizeStyle;
+  maxUnit: ByteSizeUnit;
+  separator: "" | " ";
+  fractionDigits: number | ((value: number, unit: ByteSizeUnit) => number | null);
+  rounding?: "round" | "floor" | ((value: number, unit: ByteSizeUnit) => "round" | "floor");
+};
+
+const BYTE_SIZE_UNITS: readonly ByteSizeUnit[] = ["byte", "kilo", "mega", "giga", "tera"];
+const BYTE_SIZE_STYLES = {
+  si: { base: 1000, labels: ["B", "kB", "MB", "GB", "TB"] },
+  iec: { base: 1024, labels: ["B", "KiB", "MiB", "GiB", "TiB"] },
+  "legacy-binary": { base: 1024, labels: ["B", "KB", "MB", "GB", "TB"] },
+} as const satisfies Record<ByteSizeStyle, { base: number; labels: readonly string[] }>;
+
+/** Formats a byte count with caller-explicit scale, labels, precision, and unit cap. */
+export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): string {
+  const { base, labels } = BYTE_SIZE_STYLES[options.style];
+  const maxUnitIndex = BYTE_SIZE_UNITS.indexOf(options.maxUnit);
+  let unitIndex = 0;
+  let value = bytes;
+  while (value >= base && unitIndex < maxUnitIndex) {
+    value /= base;
+    unitIndex += 1;
+  }
+
+  const unit = BYTE_SIZE_UNITS[unitIndex];
+  const fractionDigits =
+    typeof options.fractionDigits === "function"
+      ? options.fractionDigits(value, unit)
+      : options.fractionDigits;
+  if (fractionDigits === null) {
+    return `${value}${options.separator}${labels[unitIndex]}`;
+  }
+  const rounding =
+    typeof options.rounding === "function" ? options.rounding(value, unit) : options.rounding;
+  if (rounding === "floor") {
+    value = Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits;
+  }
+  return `${value.toFixed(fractionDigits)}${options.separator}${labels[unitIndex]}`;
+}

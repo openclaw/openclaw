@@ -4,6 +4,7 @@
  * Downscales and recompresses oversized base64 image blocks before provider replay.
  */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
+import { formatByteSize } from "@openclaw/normalization-core/format";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { toErrorObject } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
@@ -97,10 +98,12 @@ function formatBytesShort(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 1024) {
     return `${Math.max(0, Math.round(bytes))}B`;
   }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "kilo" ? 1 : 2),
+  });
 }
 
 function fileNameFromPathLike(pathLike: string): string | undefined {

@@ -1,5 +1,6 @@
-/** Doctor contribution for low disk space around the OpenClaw state directory. */
+// Doctor contribution for low disk space around the OpenClaw state directory.
 import os from "node:os";
+import { formatByteSize } from "@openclaw/normalization-core/format";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -28,16 +29,13 @@ export function formatBytes(bytes: number): string {
   if (bytes < 0 || !Number.isFinite(bytes)) {
     return "unknown";
   }
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${Math.floor(bytes / (1024 * 1024))} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.floor(bytes / 1024)} KB`;
-  }
-  return `${bytes} B`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "giga",
+    separator: " ",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "giga" ? 1 : 0),
+    rounding: (_value, unit) => (unit === "kilo" || unit === "mega" ? "floor" : "round"),
+  });
 }
 
 /**

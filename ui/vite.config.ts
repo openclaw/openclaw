@@ -152,6 +152,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "format"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "string-coerce"),

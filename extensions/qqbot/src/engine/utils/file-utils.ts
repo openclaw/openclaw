@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatByteSize } from "openclaw/plugin-sdk/byte-format";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import {
   openLocalFileSafely,
@@ -124,13 +125,12 @@ export async function fileExistsAsync(filePath: string): Promise<boolean> {
 
 /** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes}B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : 1),
+  });
 }
 
 /** Infer a MIME type from the file extension. */

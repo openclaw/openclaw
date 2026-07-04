@@ -1,8 +1,14 @@
 // Agent Core tests cover truncate behavior.
 import { describe, expect, it } from "vitest";
-import { truncateHead, truncateLine, truncateTail } from "./truncate.js";
+import { formatSize, truncateHead, truncateLine, truncateTail } from "./truncate.js";
 
 describe("truncate utilities", () => {
+  it("preserves compact binary-scaled size labels", () => {
+    expect(formatSize(512)).toBe("512B");
+    expect(formatSize(1536)).toBe("1.5KB");
+    expect(formatSize(2 * 1024 * 1024)).toBe("2.0MB");
+  });
+
   it("does not count a trailing newline as an extra display line", () => {
     expect(truncateHead("alpha\nbeta\n").totalLines).toBe(2);
     expect(truncateTail("alpha\nbeta\n").totalLines).toBe(2);
