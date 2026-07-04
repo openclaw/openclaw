@@ -27,37 +27,43 @@ extension OnboardingView {
             Spacer(minLength: 0)
             self.navigationBar
         }
-        .frame(width: self.pageWidth, height: Self.windowHeight)
+        .frame(width: pageWidth, height: Self.windowHeight)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
+            self.onboardingVisible = true
             self.currentPage = 0
             self.updateMonitoring(for: 0)
         }
-        .onChange(of: self.currentPage) { _, newValue in
+        .onChange(of: currentPage) { _, newValue in
             self.updateMonitoring(for: self.activePageIndex(for: newValue))
         }
-        .onChange(of: self.state.connectionMode) { _, _ in
+        .onChange(of: state.connectionMode) { _, _ in
             let oldActive = self.activePageIndex
             self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
             self.updateDiscoveryMonitoring(for: self.activePageIndex)
         }
-        .onChange(of: self.needsBootstrap) { _, _ in
+        .onChange(of: needsBootstrap) { _, _ in
             if self.currentPage >= self.pageOrder.count {
                 self.currentPage = max(0, self.pageOrder.count - 1)
             }
         }
-        .onChange(of: self.onboardingWizard.isComplete) { _, newValue in
+        .onChange(of: cliInstalled) { _, installed in
+            guard installed else { return }
+            self.updateMonitoring(for: self.activePageIndex)
+        }
+        .onChange(of: onboardingWizard.isComplete) { _, newValue in
             guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
             self.handleNext()
         }
         .onDisappear {
+            self.onboardingVisible = false
             self.stopPermissionMonitoring()
             self.stopDiscovery()
             Task { await self.onboardingWizard.cancelIfRunning() }
         }
         .task {
             await self.refreshPerms()
-            self.refreshCLIStatus()
+            await self.refreshCLIStatus()
             await self.loadWorkspaceDefaults()
             await self.ensureDefaultWorkspace()
             self.refreshBootstrapStatus()
@@ -66,17 +72,17 @@ extension OnboardingView {
     }
 
     func activePageIndex(for pageCursor: Int) -> Int {
-        guard !self.pageOrder.isEmpty else { return 0 }
-        let clamped = min(max(0, pageCursor), self.pageOrder.count - 1)
-        return self.pageOrder[clamped]
+        guard !pageOrder.isEmpty else { return 0 }
+        let clamped = min(max(0, pageCursor), pageOrder.count - 1)
+        return pageOrder[clamped]
     }
 
     func reconcilePageForModeChange(previousActivePageIndex: Int) {
-        if let exact = self.pageOrder.firstIndex(of: previousActivePageIndex) {
+        if let exact = pageOrder.firstIndex(of: previousActivePageIndex) {
             withAnimation { self.currentPage = exact }
             return
         }
-        if let next = self.pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) {
+        if let next = pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) {
             withAnimation { self.currentPage = next }
             return
         }
@@ -84,7 +90,9 @@ extension OnboardingView {
     }
 
     var navigationBar: some View {
-        let wizardLockIndex = self.wizardPageOrderIndex
+        let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
+        let wizardLockIndex = wizardPageOrderIndex
+        let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -102,6 +110,7 @@ extension OnboardingView {
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
+                    .disabled(self.installingCLI)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -111,7 +120,11 @@ extension OnboardingView {
 
             HStack(spacing: 8) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isLocked = wizardLockIndex != nil && !self.onboardingWizard
+                    let isInstallLocked = self.installingCLI && index != self.currentPage
+                    let isConnectionLocked = self.isConnectionSelectionBlocking &&
+                        index > (connectionLockIndex ?? 0)
+                    let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
+                    let isWizardLocked = wizardLockIndex != nil && !self.onboardingWizard
                         .isComplete && index > (wizardLockIndex ?? 0)
                     Button {
                         withAnimation { self.currentPage = index }
@@ -121,8 +134,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
-                    .disabled(isLocked)
-                    .opacity(isLocked ? 0.3 : 1)
+                    .disabled(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked)
+                    .opacity(isInstallLocked || isConnectionLocked || isCLILocked || isWizardLocked ? 0.3 : 1)
                 }
             }
 
@@ -153,7 +166,7 @@ extension OnboardingView {
         }
         .scrollIndicators(.automatic)
         .padding(.horizontal, 28)
-        .frame(width: self.pageWidth, alignment: .top)
+        .frame(width: pageWidth, alignment: .top)
     }
 
     func onboardingCard(

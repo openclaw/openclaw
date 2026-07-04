@@ -90,7 +90,7 @@ import {
   formatCliBackendOutputDigest,
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { CliReusableSession, PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
@@ -377,6 +377,21 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+function formatCliSessionReuseLogState(reusableSession: CliReusableSession): string {
+  switch (reusableSession.mode) {
+    case "reuse":
+      return "reusable";
+    case "reuse-with-drift":
+      return `reusable-drift:${reusableSession.drift.reasons.join(",")}`;
+    case "invalidate":
+      return `invalidated:${reusableSession.invalidatedReason}`;
+    case "none":
+      return "none";
+  }
+  const exhaustive: never = reusableSession;
+  return exhaustive;
+}
+
 /** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
@@ -386,15 +401,9 @@ export function buildCliExecLogLine(params: {
   useResume: boolean;
   cliSessionId?: string;
   resolvedSessionId?: string;
-  reusableSessionId?: string;
-  invalidatedReason?: string;
+  reusableSession: CliReusableSession;
   hasHistoryPrompt: boolean;
 }): string {
-  const reuseState = params.reusableSessionId
-    ? "reusable"
-    : params.invalidatedReason
-      ? `invalidated:${params.invalidatedReason}`
-      : "none";
   return [
     `cli exec: provider=${params.provider}`,
     `model=${params.model}`,
@@ -403,7 +412,7 @@ export function buildCliExecLogLine(params: {
     `useResume=${params.useResume ? "true" : "false"}`,
     `session=${params.cliSessionId ? "present" : "none"}`,
     `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
-    `reuse=${reuseState}`,
+    `reuse=${formatCliSessionReuseLogState(params.reusableSession)}`,
     `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
   ].join(" ");
 }
@@ -445,13 +454,15 @@ export async function executePreparedCliRun(
   const useResume = Boolean(
     cliSessionIdToUse && resolvedSessionId && backend.resumeArgs && backend.resumeArgs.length > 0,
   );
+  const resendSystemPromptForSoftResume = context.reusableCliSession.mode === "reuse-with-drift";
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isNew || resendSystemPromptForSoftResume,
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
-    systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
+    systemPromptArg &&
+    (!useResume || backend.systemPromptWhen === "always" || resendSystemPromptForSoftResume)
       ? await executeDeps.writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,
@@ -522,6 +533,7 @@ export async function executePreparedCliRun(
     imagePaths,
     promptArg: argsPrompt,
     useResume,
+    sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
   const claudeOwnerKey = buildClaudeOwnerKey({
@@ -662,8 +674,7 @@ export async function executePreparedCliRun(
             useResume,
             cliSessionId: cliSessionIdToUse,
             resolvedSessionId,
-            reusableSessionId: context.reusableCliSession.sessionId,
-            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            reusableSession: context.reusableCliSession,
             hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
           }),
         );
