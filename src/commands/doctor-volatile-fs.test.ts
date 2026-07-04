@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   detectLinuxVolatileStateDir,
   formatLinuxVolatileStateDirWarning,
@@ -59,8 +59,7 @@ describe("detectLinuxVolatileStateDir", () => {
   });
 
   it("detects a missing state directory through an existing symlink", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-volatile-"));
-    try {
+    withTempDirSync({ prefix: "openclaw-doctor-volatile-" }, (root) => {
       const volatileMount = path.join(root, "volatile");
       const stateLink = path.join(root, "state");
       fs.mkdirSync(volatileMount);
@@ -80,9 +79,7 @@ describe("detectLinuxVolatileStateDir", () => {
         mountPoint: resolvedVolatileMount,
         fsType: "tmpfs",
       });
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    });
   });
 
   it.each([

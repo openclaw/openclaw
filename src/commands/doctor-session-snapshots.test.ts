@@ -1,12 +1,12 @@
 // Doctor session snapshot tests cover session snapshot validation and repair guidance.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -87,19 +87,26 @@ function readMainSkillsSnapshot(raw: string): NonNullable<SessionEntry["skillsSn
 }
 
 describe("doctor session snapshot stale runtime metadata", () => {
+  const suiteTracker = createSuiteTempRootTracker({
+    prefix: "openclaw-doctor-session-snapshots-",
+  });
   let root = "";
   let bundledSkillsDir = "";
 
+  beforeAll(async () => {
+    await suiteTracker.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTracker.cleanup();
+  });
+
   beforeEach(async () => {
     note.mockClear();
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-session-snapshots-"));
+    root = await suiteTracker.make("snapshot");
     bundledSkillsDir = path.join(root, "current", "skills");
     await fs.mkdir(path.join(bundledSkillsDir, "doctor"), { recursive: true });
     await fs.writeFile(path.join(bundledSkillsDir, "doctor", "SKILL.md"), "# Doctor\n");
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("flags cached bundled skill locations from inactive and temp-backed runtime roots", () => {
@@ -485,19 +492,24 @@ describe("doctor session snapshot stale runtime metadata", () => {
 });
 
 describe("doctor session snapshot repair (shouldRepair)", () => {
+  const suiteTracker = createSuiteTempRootTracker({ prefix: "openclaw-doctor-repair-" });
   let root = "";
   let bundledSkillsDir = "";
 
+  beforeAll(async () => {
+    await suiteTracker.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTracker.cleanup();
+  });
+
   beforeEach(async () => {
     note.mockClear();
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-repair-"));
+    root = await suiteTracker.make("snapshot");
     bundledSkillsDir = path.join(root, "current", "skills");
     await fs.mkdir(path.join(bundledSkillsDir, "doctor"), { recursive: true });
     await fs.writeFile(path.join(bundledSkillsDir, "doctor", "SKILL.md"), "# Doctor\n");
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
   });
 
   it("repairs stale inline prompt paths", async () => {
