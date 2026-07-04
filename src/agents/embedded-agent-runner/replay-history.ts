@@ -737,18 +737,24 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
+  // Compute the latest-assistant preservation decision before any
+  // replay_invalid strip-all step so the strip helper can keep the
+  // active tool-turn thinking signature intact.
+  const preserveLatestAssistantThinking =
+    params.preserveLatestAssistantThinking ??
+    shouldPreserveLatestAssistantThinking(sanitizedImages);
   // When replay_invalid was detected on the previous attempt, strip thinking
   // signatures from all assistant messages before the normal stripping chain.
   // This recovers from thinking signature rejection on process restart or
   // thinking policy change where valid-but-stale signatures survive the
-  // compaction-only strip step.
+  // compaction-only strip step. Preserves the latest assistant thinking
+  // when an active tool-use continuation is in progress.
   const replayedStripped =
     params.replayInvalid && !policy.dropThinkingBlocks
-      ? stripAllThinkingSignatures(sanitizedImages)
+      ? stripAllThinkingSignatures(sanitizedImages, {
+          preserveLatestAssistant: preserveLatestAssistantThinking,
+        })
       : sanitizedImages;
-  const preserveLatestAssistantThinking =
-    params.preserveLatestAssistantThinking ??
-    shouldPreserveLatestAssistantThinking(replayedStripped);
   // Strip thinking signatures that are stale due to compaction context changes before
   // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
   // bound to the original prefix; after compaction the prefix changes and Anthropic
