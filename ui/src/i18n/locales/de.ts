@@ -1340,6 +1340,8 @@ export const de: TranslationMap = {
     settings: "Chat-Einstellungen",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
+    commentaryToggle: "Kommentar nach der endgültigen Antwort behalten",
+    commentaryLabel: "Kommentar",
     autoScrollMode: "Automatischer Scrollmodus",
     autoScrollAlways: "Immer",
     autoScrollNearBottom: "Nahe am unteren Rand",
@@ -1384,6 +1386,11 @@ export const de: TranslationMap = {
       retry: "Wiederholen",
       retrySend: "Senden wiederholen",
       retryQueuedMessage: "Nachricht in der Warteschlange erneut senden",
+    },
+    pairingQrExpired: {
+      title: "Kopplungs-QR-Code abgelaufen",
+      reason: "Führen Sie /pair qr erneut aus, um einen neuen Einrichtungscode zu generieren.",
+      badge: "Abgelaufen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

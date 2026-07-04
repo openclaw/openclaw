@@ -21,15 +21,18 @@ struct IPadWorkboardScreen: View {
     @State private var dispatchSummaryText: String?
     @State private var presentedSheet: IPadWorkboardSheet?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
     let openSettings: () -> Void
 
     init(
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
         openChat: @escaping () -> Void,
         openSettings: @escaping () -> Void = {})
     {
         self.headerLeadingAction = headerLeadingAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openChat = openChat
         self.openSettings = openSettings
     }
@@ -39,6 +42,7 @@ struct IPadWorkboardScreen: View {
             title: "Workboard",
             subtitle: self.currentWorkboardSubtitle,
             headerLeadingAction: self.headerLeadingAction,
+            usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
             if self.isCompactWidth {
@@ -784,6 +788,9 @@ struct IPadWorkboardScreen: View {
 
     private func open(_ card: IPadWorkboardCard) {
         guard let sessionKey = normalized(card.sessionKey) else { return }
+        // Card details are a sheet. Dismiss it before changing tabs or the requested
+        // Chat session and contextual return action remain obscured by the old card.
+        self.presentedSheet = nil
         self.appModel.openChat(sessionKey: sessionKey)
         self.openChat()
     }
@@ -1035,10 +1042,10 @@ private struct IPadWorkboardKanbanCard: View {
     private var color: Color {
         switch self.card.status {
         case "running": OpenClawBrand.ok
-        case "review": OpenClawBrand.accent
+        case "review": OpenClawBrand.accentForeground
         case "blocked": OpenClawBrand.warn
         case "done": .secondary
-        default: OpenClawBrand.accentHot
+        default: OpenClawBrand.accentHotForeground
         }
     }
 
@@ -1160,10 +1167,10 @@ struct IPadWorkboardQueueRow: View {
     private var color: Color {
         switch self.card.status {
         case "running": OpenClawBrand.ok
-        case "review": OpenClawBrand.accent
+        case "review": OpenClawBrand.accentForeground
         case "blocked": OpenClawBrand.warn
         case "done": .secondary
-        default: OpenClawBrand.accentHot
+        default: OpenClawBrand.accentHotForeground
         }
     }
 

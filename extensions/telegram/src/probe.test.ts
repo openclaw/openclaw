@@ -313,6 +313,39 @@ describe("probeTelegram retry logic", () => {
     expect(resolveTelegramTransport).toHaveBeenCalledTimes(2);
   });
 
+  it("closes evicted cached probe transports", async () => {
+    const fetchMock = installFetchMock();
+    const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
+    resolveTelegramTransport.mockImplementation((proxyFetch?: typeof fetch) => {
+      const close = vi.fn(async () => undefined);
+      closeSpies.push(close);
+      return {
+        fetch: proxyFetch ?? fetch,
+        sourceFetch: proxyFetch ?? fetch,
+        forceFallback: forceFallbackMock,
+        close,
+      };
+    });
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    for (let i = 0; i < 65; i += 1) {
+      mockGetMeSuccess(fetchMock);
+      mockGetWebhookInfoSuccess(fetchMock);
+      await probeTelegram(`${token}-cache-${i}`, timeoutMs, {
+        accountId: `account-${i}`,
+        network: {
+          autoSelectFamily: true,
+          dnsResultOrder: "ipv4first",
+        },
+      });
+    }
+
+    expect(resolveTelegramTransport).toHaveBeenCalledTimes(65);
+    expect(closeSpies[0]).toHaveBeenCalledTimes(1);
+    expect(closeSpies.slice(1).every((close) => close.mock.calls.length === 0)).toBe(true);
+  });
+
   it("reuses probe fetcher cache across token rotation when accountId is stable", async () => {
     const fetchMock = installFetchMock();
     vi.stubEnv("VITEST", "");

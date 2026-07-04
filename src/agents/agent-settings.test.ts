@@ -8,6 +8,7 @@ import {
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "./agent-settings.js";
+import { SettingsManager } from "./sessions/settings-manager.js";
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
   it("bumps reserveTokens when below floor", () => {
@@ -516,6 +517,29 @@ describe("applyAgentAutoCompactionGuard", () => {
 
     expect(result).toEqual({ supported: true, disabled: true });
     expect(setCompactionEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("preserves configured reserve tokens when disabling embedded auto-compaction", () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 16_384 },
+    });
+
+    applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 50_000 } } } },
+      contextTokenBudget: 200_000,
+    });
+    const result = applyAgentAutoCompactionGuard({
+      settingsManager,
+      compactionMode: "safeguard",
+    });
+
+    expect(result).toEqual({ supported: true, disabled: true });
+    expect(settingsManager.getCompactionSettings()).toEqual({
+      enabled: false,
+      reserveTokens: 50_000,
+      keepRecentTokens: 20_000,
+    });
   });
 
   // Default-mode runs against ordinary providers must keep OpenClaw runtime's auto-compaction

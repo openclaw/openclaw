@@ -45,7 +45,7 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
@@ -103,6 +103,8 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { createPollCommentFolder } from "./poll-comment.js";
+import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
@@ -728,7 +730,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
-        const preview = text.slice(0, 50);
+        const preview = sliceUtf16Safe(text, 0, 50);
         const ellipsis = text.length > 50 ? "..." : "";
         logVerbose(
           `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
@@ -831,8 +833,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
+  // iMessage delivers a poll's comment as a separate inline reply to the poll
+  // balloon; fold it into the poll so the agent votes once instead of also
+  // replying to the caption in prose (a redundant restatement of the vote).
+  const pollCommentFolder = createPollCommentFolder();
+
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
-    const messageText = (message.text ?? "").trim();
+    // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
+    // decoded poll (question/options/votes) so the agent sees the actual poll.
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
@@ -878,6 +888,25 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   async function handleMessageNowInner(rawMessage: IMessagePayload) {
     const message = await repairMessageConversationAnchor(rawMessage);
     if (!message) {
+      return;
+    }
+
+    // Remember native polls so a caption reply that lands WITH the poll is
+    // recognized and folded. The poll balloon (rendered with options + a vote
+    // cue) is still delivered; only the near-simultaneous comment is dropped so
+    // the agent votes without also answering it as a standalone question. A
+    // deliberate later inline reply to the poll falls outside the window and is
+    // delivered normally.
+    const pollFoldAtMs = message.created_at ? Date.parse(message.created_at) : Number.NaN;
+    if (message.poll) {
+      pollCommentFolder.rememberPoll(message.guid, pollFoldAtMs, message.sender);
+    } else if (
+      message.reply_to_guid != null &&
+      pollCommentFolder.isPollComment(message.reply_to_guid, pollFoldAtMs, message.sender)
+    ) {
+      logVerbose(
+        "imessage: folding poll comment (inline reply sent with a poll) into the poll; not delivering standalone",
+      );
       return;
     }
 

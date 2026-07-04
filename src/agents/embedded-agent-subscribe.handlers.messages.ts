@@ -34,6 +34,7 @@ import { warnIfAssistantEmittedToolText } from "./embedded-agent-subscribe.tool-
 import {
   extractAssistantText,
   extractAssistantThinking,
+  extractAssistantCommentaryText,
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
@@ -41,6 +42,13 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import {
+  hasNonzeroUsage,
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type NormalizedUsage,
+  type UsageLike,
+} from "./usage.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -63,12 +71,81 @@ function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): b
   return api === "openai-responses" || api === "azure-openai-responses";
 }
 
+function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "anthropic-messages";
+}
+
 function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+export function preservePendingAssistantUsage(
+  message: AssistantMessage,
+  pendingUsage: NormalizedUsage | undefined,
+): AssistantMessage {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message) || !hasNonzeroUsage(pendingUsage)) {
+    return message;
+  }
+  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
+  if (hasNonzeroUsage(messageUsage)) {
+    return message;
+  }
+
+  // Pending usage resets at each assistant-message boundary, so it belongs to
+  // this final snapshot. Only replace missing/zero usage; provider totals win.
+  const input = pendingUsage.input ?? 0;
+  const output = pendingUsage.output ?? 0;
+  const cacheRead = pendingUsage.cacheRead ?? 0;
+  const cacheWrite = pendingUsage.cacheWrite ?? 0;
+  message.usage = {
+    ...makeZeroUsageSnapshot(),
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
+    ...(pendingUsage.reasoningTokens !== undefined
+      ? { reasoningTokens: pendingUsage.reasoningTokens }
+      : {}),
+  };
+  return message;
+}
+
+export function capturePendingAssistantUsage(
+  ctx: EmbeddedAgentSubscribeContext,
+  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
+): void {
+  const msg = evt.message;
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
+    return;
+  }
+  const assistantRecord =
+    evt.assistantMessageEvent && typeof evt.assistantMessageEvent === "object"
+      ? (evt.assistantMessageEvent as Record<string, unknown>)
+      : undefined;
+  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
+    ctx.recordAssistantUsage(assistantRecord);
+  }
+}
+
+export function resetPendingAssistantUsage(
+  ctx: EmbeddedAgentSubscribeContext,
+  message: AgentMessage,
+): void {
+  if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+    return;
+  }
+  ctx.state.pendingAssistantUsage = undefined;
+  ctx.state.assistantUsageCommitted = false;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -271,7 +348,7 @@ function copyPartialBlockState(
 }
 
 /** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-function resolveSilentReplyFallbackText(params: {
+export function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
@@ -475,7 +552,7 @@ function resolveStreamingReplyText(params: {
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
-function recordPendingAssistantReplyDirectives(
+export function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
 ) {
@@ -529,19 +606,21 @@ export function hasAssistantVisibleReply(params: {
 }
 
 /** Builds normalized stream payload data for assistant visible output. */
-function buildAssistantStreamData(params: {
+export function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
   replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
   phase?: AssistantPhase;
+  itemId?: string;
 }): {
   text: string;
   delta: string;
   replace?: true;
   mediaUrls?: string[];
   phase?: AssistantPhase;
+  itemId?: string;
 } {
   const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
   return {
@@ -550,6 +629,7 @@ function buildAssistantStreamData(params: {
     replace: params.replace ? true : undefined,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
     phase: params.phase,
+    itemId: params.itemId,
   };
 }
 
@@ -586,6 +666,21 @@ export function handleMessageUpdate(
   ctx.noteLastAssistant(msg);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
   if (suppressVisibleAssistantOutput) {
+    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
+    if (commentaryText) {
+      appendRawStream({
+        ts: Date.now(),
+        event: "assistant_text_stream",
+        runId: ctx.params.runId,
+        sessionId: (ctx.params.session as { id?: string }).id,
+        evtType: "commentary_update",
+        delta: "",
+        content: commentaryText,
+      });
+      ctx.emitAssistantStreamData(
+        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
+      );
+    }
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -600,7 +695,7 @@ export function handleMessageUpdate(
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
-    ctx.recordAssistantUsage(assistantRecord);
+    capturePendingAssistantUsage(ctx, evt);
     if (evtType === "done" || evtType === "error") {
       ctx.commitAssistantUsage();
     }
@@ -625,12 +720,18 @@ export function handleMessageUpdate(
       delta: thinkingDelta,
       content: thinkingContent,
     });
-    if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {
-      // Prefer full partial-message thinking when available; fall back to event payloads.
-      const partialThinking = extractAssistantThinking(msg);
-      ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
-    }
-    if (!suppressMessageToolOnlySourceReplyOutput && evtType === "thinking_end") {
+    // Emit-always: emitReasoningStream always reaches the bus/archive; the
+    // streamReasoning rendering hook and message_tool_only source suppression
+    // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
+    // here stays unconditional.
+    // Prefer full partial-message thinking when available; fall back to event payloads.
+    const partialThinking = extractAssistantThinking(msg);
+    ctx.emitReasoningStream(partialThinking || thinkingContent || thinkingDelta);
+    if (evtType === "thinking_end" && !suppressMessageToolOnlySourceReplyOutput) {
+      // Mirror the open gate above: when message-tool-only delivery has made the
+      // reasoning lane private, do not force-open it just to close it — that
+      // would fire the lane's end hook (onReasoningEnd) for a lane that never
+      // rendered, leaking the boundary signal.
       if (!ctx.state.reasoningStreamOpen) {
         openReasoningStream(ctx);
       }
@@ -677,6 +778,10 @@ export function handleMessageUpdate(
     !deliveryPhase &&
     Boolean(streamItemId) &&
     isOpenAiResponsesAssistantMessage(partialAssistant);
+  // Anthropic commentary is known only at the tool boundary; keep early
+  // unphased deltas out of durable block replies until that phase is known.
+  const isPhasePendingAnthropicText =
+    evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
   let streamItemChanged = false;
   if ((deliveryPhase || isPhasePendingOpenAiResponsesTextItem) && streamItemId) {
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
@@ -689,6 +794,22 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
   if (deliveryPhase === "commentary") {
+    const commentaryText = chunk
+      ? undefined
+      : coerceChatContentText(extractAssistantCommentaryText(partialAssistant));
+    const commentaryData = chunk
+      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: streamItemId })
+      : commentaryText
+        ? buildAssistantStreamData({
+            text: commentaryText,
+            replace: true,
+            phase: "commentary",
+            itemId: streamItemId,
+          })
+        : undefined;
+    if (commentaryData) {
+      ctx.emitAssistantStreamData(commentaryData);
+    }
     return;
   }
   if (isPhasePendingOpenAiResponsesTextItem) {
@@ -702,7 +823,7 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply && !isPhasePendingAnthropicText) {
       appendBlockReplyChunk(ctx, chunk);
     }
   }
@@ -711,10 +832,10 @@ export function handleMessageUpdate(
     return;
   }
 
-  if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {
-    // Handle partial <think> tags: stream whatever reasoning is visible so far.
-    ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
-  }
+  // Handle partial <think> tags: stream whatever reasoning is visible so far.
+  // Emit-always: emitReasoningStream reaches the bus/archive; rendering +
+  // message_tool_only suppression are gated downstream (#92738).
+  ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
   const shouldReadPhaseAwarePartialText =
@@ -911,7 +1032,7 @@ export function handleMessageEnd(
     return;
   }
 
-  const assistantMessage = msg;
+  const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -920,6 +1041,36 @@ export function handleMessageEnd(
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
+    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(assistantMessage));
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_message_end",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
+      rawThinking: extractAssistantThinking(assistantMessage),
+    });
+    if (commentaryText) {
+      ctx.emitAssistantStreamData(
+        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
+      );
+    }
+    // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
+    const suppressedTrimmedReasoning = ctx.state.includeReasoning
+      ? extractAssistantThinking(assistantMessage).trim()
+      : "";
+    if (
+      !ctx.params.silentExpected &&
+      !suppressDeterministicApprovalOutput &&
+      !suppressMessageToolOnlySourceReplyOutput &&
+      ctx.state.includeReasoning &&
+      suppressedTrimmedReasoning &&
+      ctx.params.onBlockReply &&
+      suppressedTrimmedReasoning !== ctx.state.lastReasoningSent
+    ) {
+      ctx.state.lastReasoningSent = suppressedTrimmedReasoning;
+      ctx.emitBlockReply({ text: suppressedTrimmedReasoning, isReasoning: true });
+    }
     return;
   }
   promoteThinkingTagsToBlocks(assistantMessage);
@@ -1051,6 +1202,8 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = trimmedReasoning;
+    // Lane purity: the payload carries raw thinking only. Tool persistence is
+    // the verbose lane's job; interleaving comes from arrival order.
     ctx.emitBlockReply({ text: trimmedReasoning, isReasoning: true });
   };
 
@@ -1174,12 +1327,9 @@ export function handleMessageEnd(
   if (!shouldEmitReasoningBeforeAnswer) {
     maybeEmitReasoning();
   }
-  if (
-    !ctx.params.silentExpected &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    ctx.state.streamReasoning &&
-    rawThinking
-  ) {
+  if (!ctx.params.silentExpected && rawThinking) {
+    // Emit-always: bus/archive get message-end thinking regardless of the
+    // streamReasoning rendering setting (gated inside emitReasoningStream).
     ctx.emitReasoningStream(rawThinking);
   }
 

@@ -493,7 +493,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
   });
 
-  it("keeps prompt projections byte-stable as history grows", () => {
+  it("keeps prompt projections stable while enforcing aggregate recovery as history grows", () => {
     const prefix = [
       makeToolResult("p".repeat(15_000), "prefix_1"),
       makeToolResult("q".repeat(15_000), "prefix_2"),
@@ -521,8 +521,14 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(first.truncatedCount).toBe(4);
-    expect(second.truncatedCount).toBe(1);
-    expect(second.messages.slice(0, messages.length)).toEqual(first.messages);
+    expect(second.truncatedCount).toBe(2);
+    expect(
+      second.messages.reduce(
+        (sum, message) =>
+          sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+        0,
+      ),
+    ).toBeLessThanOrEqual(12_000);
     expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
       true,
     );
@@ -541,7 +547,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
       stableState,
     );
     const stableSecond = truncateOversizedToolResultsInMessages(
-      [...stableHistory, makeToolResult("c".repeat(15_000), "stable_3")],
+      [...stableHistory, makeToolResult("c".repeat(3_000), "stable_3")],
       128_000,
       12_000,
       12_000,
@@ -552,7 +558,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const stableThird = truncateOversizedToolResultsInMessages(
       [
         ...stableHistory,
-        makeToolResult("c".repeat(15_000), "stable_3"),
+        makeToolResult("c".repeat(3_000), "stable_3"),
         makeToolResult("d".repeat(15_000), "stable_4"),
       ],
       128_000,
@@ -564,7 +570,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const stableFourth = truncateOversizedToolResultsInMessages(
       [
         ...stableHistory,
-        makeToolResult("c".repeat(15_000), "stable_3"),
+        makeToolResult("c".repeat(3_000), "stable_3"),
         makeToolResult("d".repeat(15_000), "stable_4"),
         makeToolResult("e".repeat(15_000), "stable_5"),
       ],
@@ -575,6 +581,124 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     const lastText = stableFourth.messages.at(-1);
     expect(lastText && getToolResultTextLength(lastText)).toBeLessThanOrEqual(12_000);
+  });
+
+  it("preserves fresh trailing tool results when aggregate history is already saturated", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMessage[] = [];
+    for (let index = 0; index < 50; index++) {
+      history.push(makeAssistantMessage(`call ${index}`));
+      history.push(makeToolResult("x".repeat(4_000), `history_${index}`));
+    }
+    history.push(makeUserMessage("run echo"));
+
+    const first = truncateOversizedToolResultsInMessages(
+      history,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    expect(first.truncatedCount).toBeGreaterThan(0);
+
+    const freshOutput = "ABC";
+    const second = truncateOversizedToolResultsInMessages(
+      [...history, makeAssistantMessage("running exec"), makeToolResult(freshOutput, "fresh_exec")],
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+
+    const freshResult = second.messages.at(-1);
+    const totalChars = second.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(freshResult?.role).toBe("toolResult");
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe(freshOutput);
+    expect(totalChars).toBeLessThanOrEqual(32_000);
+  });
+
+  it("caps oversized fresh trailing tool results without clearing them for aggregate recovery", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const history: AgentMessage[] = [];
+    for (let index = 0; index < 50; index++) {
+      history.push(makeAssistantMessage(`call ${index}`));
+      history.push(makeToolResult("x".repeat(4_000), `history_${index}`));
+    }
+    history.push(makeUserMessage("run large command"));
+
+    truncateOversizedToolResultsInMessages(history, 1_000_000, 8_000, 32_000, projectionState);
+
+    const second = truncateOversizedToolResultsInMessages(
+      [
+        ...history,
+        makeAssistantMessage("running exec"),
+        makeToolResult("z".repeat(20_000), "fresh_large_exec"),
+      ],
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+
+    const freshResult = second.messages.at(-1);
+    const freshText = freshResult ? getFirstToolResultText(freshResult) : "";
+    const totalChars = second.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(freshResult?.role).toBe("toolResult");
+    expect(freshText.length).toBeGreaterThan(0);
+    expect(freshText.length).toBeLessThanOrEqual(8_000);
+    expect(freshText).toContain("truncated");
+    expect(totalChars).toBeLessThanOrEqual(32_000);
+  });
+
+  it("falls back to trimming fresh trailing batches that exceed the aggregate budget", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const messages: AgentMessage[] = [makeUserMessage("run several tools")];
+    for (let index = 0; index < 5; index++) {
+      messages.push(makeToolResult(String(index).repeat(8_000), `fresh_${index}`));
+    }
+
+    const result = truncateOversizedToolResultsInMessages(
+      messages,
+      1_000_000,
+      8_000,
+      32_000,
+      projectionState,
+    );
+    const toolResults = result.messages.filter((message) => message.role === "toolResult");
+    const totalChars = toolResults.reduce(
+      (sum, message) => sum + getToolResultTextLength(message),
+      0,
+    );
+
+    expect(result.truncatedCount).toBeGreaterThan(0);
+    expect(totalChars).toBeLessThanOrEqual(32_000);
+    expect(toolResults.every((message) => getFirstToolResultText(message).length > 0)).toBe(true);
+  });
+
+  it("keeps aggregate elision markers inside tiny explicit budgets", () => {
+    const messages: AgentMessage[] = [
+      makeToolResult("a".repeat(100), "tiny_1"),
+      makeToolResult("b".repeat(100), "tiny_2"),
+      makeToolResult("c".repeat(100), "tiny_3"),
+    ];
+
+    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 100, 8);
+    const totalChars = result.messages.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+
+    expect(result.truncatedCount).toBeGreaterThan(0);
+    expect(totalChars).toBeLessThanOrEqual(8);
   });
 
   it("does not restore filtered image blocks when reusing a projection", () => {

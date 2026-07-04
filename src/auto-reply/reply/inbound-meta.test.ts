@@ -4,7 +4,6 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
-import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "./delivery-hints.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
@@ -53,10 +52,6 @@ function parseConversationInfoPayload(text: string): Record<string, unknown> {
     string,
     unknown
   >;
-}
-
-function parseSenderInfoPayload(text: string): Record<string, unknown> {
-  return parseUntrustedJsonBlock(text, "Sender (untrusted metadata):") as Record<string, unknown>;
 }
 
 function parseReplyPayload(text: string): Record<string, unknown> {
@@ -310,49 +305,15 @@ describe("buildInboundUserContextPrefix", () => {
       OriginatingTo: "whatsapp:+15551230000",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
-      SenderE164: " +15551234567 ",
+      SenderId: " +15551234567 ",
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["chat_id"]).toBe("whatsapp:+15551230000");
     expect(conversationInfo["message_id"]).toBe("short-id");
     expect(conversationInfo["message_id_full"]).toBeUndefined();
-    expect(conversationInfo["sender"]).toBe("+15551234567");
+    expect(conversationInfo["sender"]).toEqual({ id: "+15551234567" });
     expect(conversationInfo["conversation_label"]).toBeUndefined();
-  });
-
-  it("adds delivery guidance beside inbound source context for message-tool-only turns", () => {
-    const text = buildInboundUserContextPrefix(
-      {
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:849985193",
-        MessageSid: "776",
-        SenderName: "Nik",
-      } as TemplateContext,
-      undefined,
-      { sourceReplyDeliveryMode: "message_tool_only" },
-    );
-
-    expect(text).toContain(MESSAGE_TOOL_ONLY_DELIVERY_HINT);
-    expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
-    expect(text).toContain("Conversation info (untrusted metadata):");
-  });
-
-  it("does not add delivery guidance for automatic source delivery", () => {
-    const text = buildInboundUserContextPrefix(
-      {
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:849985193",
-        MessageSid: "776",
-      } as TemplateContext,
-      undefined,
-      { sourceReplyDeliveryMode: "automatic" },
-    );
-
-    expect(text).not.toContain("Delivery: to send a message");
-    expect(text).toContain("Conversation info (untrusted metadata):");
   });
 
   it("includes message identifiers for direct chats when channel is inferred from Provider", () => {
@@ -376,7 +337,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("123");
-    expect(conversationInfo["sender_id"]).toBe("openclaw-control-ui");
+    expect(conversationInfo["sender"]).toEqual({ id: "openclaw-control-ui" });
     expect(conversationInfo["conversation_label"]).toBe("some-label");
   });
 
@@ -419,36 +380,45 @@ describe("buildInboundUserContextPrefix", () => {
   it("includes sender identifier in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
-      SenderE164: " +15551234567 ",
-    } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toBe("+15551234567");
-  });
-
-  it("prefers SenderName in conversation info sender identity", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      SenderName: " Tyler ",
       SenderId: " +15551234567 ",
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toBe("Tyler");
+    expect(conversationInfo["sender"]).toEqual({ id: "+15551234567" });
   });
 
-  it("includes sender metadata block for direct chats", () => {
+  it("includes nested sender identity in conversation info", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      SenderName: " Tyler ",
+      SenderId: " +15551234567 ",
+      SenderUsername: " ty ",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toEqual({
+      id: "+15551234567",
+      name: "Tyler",
+      username: "ty",
+    });
+  });
+
+  it("includes sender identity in direct external-channel conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
+      OriginatingChannel: "telegram",
       SenderName: "Tyler",
       SenderId: "+15551234567",
       SenderIsBot: true,
     } as TemplateContext);
 
-    const senderInfo = parseSenderInfoPayload(text);
-    expect(senderInfo["label"]).toBe("Tyler (+15551234567)");
-    expect(senderInfo["id"]).toBe("+15551234567");
-    expect(senderInfo["is_bot"]).toBe(true);
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toEqual({
+      id: "+15551234567",
+      name: "Tyler",
+      is_bot: true,
+    });
+    expect(text).not.toContain("Sender (untrusted metadata):");
   });
 
   it("includes formatted timestamp in conversation info when provided", () => {
@@ -624,9 +594,9 @@ describe("buildInboundUserContextPrefix", () => {
       { timezone: "utc" },
     );
 
-    expect(text).toContain('Current message:\n[Replying to: "selected quote"]\n#34974 obviyus:');
+    expect(text).toContain('Current message:\n[Replying to: "selected quote"]\n#34974:');
     expect(text).toContain('[Replying to: "selected quote"]');
-    expect(text.trimEnd().endsWith("#34974 obviyus:")).toBe(true);
+    expect(text.trimEnd().endsWith("#34974:")).toBe(true);
     expect(text).not.toContain("Reply chain of current user message");
     expect(text).not.toContain("Reply target of current user message");
   });
@@ -686,11 +656,9 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(text).toContain("#34971 [reply target] bh.ai: quoted status body");
-    expect(text).toContain(
-      'Current message:\n[Replying to: "quoted status body"]\n#34974 obviyus:',
-    );
+    expect(text).toContain('Current message:\n[Replying to: "quoted status body"]\n#34974:');
     expect(text).toContain('[Replying to: "quoted status body"]');
-    expect(text.trimEnd().endsWith("#34974 obviyus:")).toBe(true);
+    expect(text.trimEnd().endsWith("#34974:")).toBe(true);
   });
 
   it("includes sender_id in conversation info", () => {
@@ -701,7 +669,18 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender_id"]).toBe("289522496");
+    expect(conversationInfo["sender"]).toEqual({ id: "289522496" });
+  });
+
+  it("includes phone-only sender identity in conversation info", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      MessageSid: "msg-456",
+      SenderE164: "+15551234567",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["sender"]).toEqual({ e164: "+15551234567" });
   });
 
   it("includes dynamic per-turn flags in conversation info", () => {
@@ -743,7 +722,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender_id"]).toBe("289522496");
+    expect(conversationInfo["sender"]).toEqual({ id: "289522496" });
   });
 
   it("falls back to SenderId when sender phone is missing", () => {
@@ -753,7 +732,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["sender"]).toBe("user@example.com");
+    expect(conversationInfo["sender"]).toEqual({ id: "user@example.com" });
   });
 
   it("strips null bytes from serialized untrusted metadata blocks", () => {
@@ -778,13 +757,12 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("msg--123");
     expect(conversationInfo["reply_to_id"]).toBe("reply--122");
-    expect(conversationInfo["sender"]).toBe("Alice");
+    expect(conversationInfo["sender"]).toEqual({
+      id: "id--9",
+      name: "Alice",
+      username: "alice",
+    });
     expect(conversationInfo["topic_id"]).toBe("thread--1");
-
-    const senderInfo = parseSenderInfoPayload(text);
-    expect(senderInfo["name"]).toBe("Alice");
-    expect(senderInfo["username"]).toBe("alice");
-    expect(senderInfo["id"]).toBe("id--9");
 
     expect(text).toContain('"body": "thread starter"');
     expect(text).toContain('"sender_label": "Quoter"');
@@ -933,6 +911,37 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain("/home/user/.openclaw/media/inbound/sticker.webp");
     expect(text).not.toContain("Current local chat window (untrusted metadata):");
     expect(text).not.toContain('"message_id": "34273"');
+  });
+
+  it("honors timestamp suppression for chat window structured context", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        ChatType: "group",
+        UntrustedStructuredContext: [
+          {
+            label: "Conversation context",
+            source: "telegram",
+            type: "chat_window",
+            payload: {
+              order: "chronological",
+              relation: "selected_for_current_message",
+              messages: [
+                {
+                  message_id: "1",
+                  sender: "Sam",
+                  timestamp_ms: 1_736_380_700_000,
+                  body: "Expected",
+                },
+              ],
+            },
+          },
+        ],
+      } as TemplateContext,
+      { includeTimestamp: false, timezone: "UTC" },
+    );
+
+    expect(text).toContain("#1 Sam: Expected");
+    expect(text).not.toContain("2025");
   });
 
   it("canonicalizes untrusted chat-window media paths before transcript rendering", () => {

@@ -65,7 +65,6 @@ const DiscordIdListSchema = z.array(DiscordIdSchema);
 const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
-const TelegramGroupHistoryContextModeSchema = z.enum(["none", "mention-only", "recent"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
 
 const TelegramCapabilitiesSchema = z.union([
@@ -103,6 +102,7 @@ const ChannelStreamingProgressSchema = z
     commentary: z.boolean().optional(),
   })
   .strict();
+const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema;
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
@@ -125,7 +125,9 @@ const ChannelPreviewStreamingConfigSchema = z
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: ChannelStreamingPreviewSchema.optional(),
 }).strict();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema;
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  progress: DiscordStreamingProgressSchema.optional(),
+}).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
   progress: SlackStreamingProgressSchema.optional(),
@@ -276,7 +278,6 @@ export const TelegramAccountSchemaBase = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     mentionPatterns: MentionPatternsPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),
-    includeGroupHistoryContext: TelegramGroupHistoryContextModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -1420,6 +1421,7 @@ const IMessageActionSchema = z
     removeParticipant: z.boolean().optional(),
     leaveGroup: z.boolean().optional(),
     sendAttachment: z.boolean().optional(),
+    polls: z.boolean().optional(),
   })
   .strict()
   .optional();

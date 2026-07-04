@@ -399,7 +399,7 @@ export function createSessionActions(context: SessionActionContext) {
     chatLog.addSystem(`session ${key}`);
     state.historyLoaded = true;
     void rememberSessionKey?.(key);
-    tui.requestRender();
+    tui.requestRender(true);
   };
 
   const applySessionMutationResult = (result?: TuiSessionMutationResult | null): boolean => {
@@ -558,7 +558,7 @@ export function createSessionActions(context: SessionActionContext) {
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
-    tui.requestRender();
+    tui.requestRender(true);
   };
 
   const setSession = async (rawKey: string) => {

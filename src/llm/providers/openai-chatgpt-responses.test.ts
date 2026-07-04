@@ -7,6 +7,7 @@ import {
   extractOpenAICodexAccountId,
   parseSSEForTest,
   resetOpenAICodexWebSocketDebugStats,
+  streamSimpleOpenAICodexResponses,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
 
@@ -100,6 +101,39 @@ describe("streamOpenAICodexResponses transport", () => {
   const context = {
     messages: [{ role: "user", content: "hi", timestamp: 1 }],
   } satisfies Context;
+
+  it("preserves max for GPT-5.6 simple Codex Responses requests", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamSimpleOpenAICodexResponses(
+      {
+        ...model,
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        contextWindow: 372_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+      context,
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        reasoning: "max",
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      reasoning: { effort: "max", summary: "auto" },
+    });
+  });
 
   it("does not fall back to SSE when websocket transport is explicit", async () => {
     const fetchMock = vi.fn(async () => {
@@ -364,6 +398,59 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Request timed out after 5ms");
+  });
+
+  it("times out default websocket streams when no first event arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async () => {
+        throw new Error("fetch should not run after websocket first-event timeout");
+      });
+      const sendMock = vi.fn();
+      const closeMock = vi.fn();
+      class OpenNoMessageWebSocket {
+        send = sendMock;
+        close = closeMock;
+        addEventListener(type: string, listener: (event: unknown) => void): void {
+          if (type === "open") {
+            queueMicrotask(() => listener({}));
+          }
+        }
+        removeEventListener(): void {}
+      }
+      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("WebSocket", OpenNoMessageWebSocket);
+      const onFirstEventTimeout = vi.fn();
+
+      const stream = streamOpenAICodexResponses(model, context, {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        firstEventTimeoutMs: 5,
+        onFirstEventTimeout,
+      } as Parameters<typeof streamOpenAICodexResponses>[2] & {
+        firstEventTimeoutMs: number;
+        onFirstEventTimeout: (reason: Error) => void;
+      });
+      const resultPromise = stream.result();
+
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5);
+      const result = await resultPromise;
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(closeMock).toHaveBeenCalled();
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toMatch(
+        /responses HTTP stream opened but did not deliver a first SSE event within 5ms/,
+      );
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(expect.any(Error));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not send websocket payload after timeout fires during connect", async () => {

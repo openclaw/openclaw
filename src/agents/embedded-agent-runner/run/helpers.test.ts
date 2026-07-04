@@ -7,6 +7,7 @@ import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveLatestCallUsage,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
@@ -157,6 +158,36 @@ describe("resolveNextSameModelRateLimitRetryCount", () => {
       retriedSameModelRateLimit: true,
     });
     expect(retriesSoFar).toBe(1);
+  });
+});
+
+describe("resolveLatestCallUsage", () => {
+  it("preserves the previous exact call across a zero-usage retry", () => {
+    const previous = { input: 12, output: 3, total: 15 };
+
+    expect(
+      resolveLatestCallUsage({
+        currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, undefined],
+        carriedCandidates: [previous],
+      }),
+    ).toEqual({
+      currentAttempt: undefined,
+      latest: previous,
+    });
+  });
+
+  it("replaces the previous call when a new nonzero snapshot arrives", () => {
+    const latest = { input: 20, output: 4, total: 24 };
+
+    expect(
+      resolveLatestCallUsage({
+        currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, latest],
+        carriedCandidates: [{ input: 12, output: 3, total: 15 }],
+      }),
+    ).toEqual({
+      currentAttempt: latest,
+      latest,
+    });
   });
 });
 
