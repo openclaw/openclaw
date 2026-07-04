@@ -174,10 +174,13 @@ vi.mock("../chat/grouped-render.ts", () => ({
   },
 }));
 
-vi.mock("../markdown.ts", () => ({
-  isMarkdownBlockArtText: () => false,
-  toSanitizedMarkdownHtml: (value: string) => value,
-}));
+vi.mock("../markdown.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../markdown.ts")>();
+  return {
+    ...actual,
+    toSanitizedMarkdownHtml: (value: string) => value,
+  };
+});
 
 vi.mock("../chat/tool-expansion-state.ts", () => ({
   getExpandedToolCards: () => new Map<string, boolean>(),
@@ -482,8 +485,34 @@ function getThinkingSelect(container: Element): HTMLElement {
   return select;
 }
 
-function getThinkingOptions(container: Element): HTMLButtonElement[] {
-  return Array.from(container.querySelectorAll<HTMLButtonElement>("[data-chat-thinking-option]"));
+function getThinkingSlider(container: Element): HTMLInputElement | null {
+  return container.querySelector<HTMLInputElement>('[data-chat-thinking-slider="true"]');
+}
+
+function getThinkingSliderValues(container: Element): string[] {
+  const values = getThinkingSlider(container)?.dataset.chatThinkingValues ?? "";
+  return values ? values.split(",") : [];
+}
+
+function setThinkingSliderLevel(container: Element, value: string) {
+  const slider = getThinkingSlider(container);
+  expect(slider).toBeInstanceOf(HTMLInputElement);
+  if (!slider) {
+    return;
+  }
+  const index = getThinkingSliderValues(container).indexOf(value);
+  expect(index).toBeGreaterThanOrEqual(0);
+  slider.value = String(index);
+  slider.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function getThinkingReasoningValueLabel(container: Element): string {
+  return container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ?? "";
+}
+
+/** The "" (use default) reset button; the only remaining [data-chat-thinking-option]. */
+function getThinkingResetButton(container: Element): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>('[data-chat-thinking-option=""]');
 }
 
 function requireElement(container: Element, selector: string, label: string): Element {
@@ -1561,7 +1590,7 @@ describe("chat loading skeleton", () => {
       expect(container.querySelector(".agent-chat__run-status--in-progress")).toBeNull();
       expect(container.querySelector(".chat-reading-indicator")).toBeNull();
       expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
-      expect(container.querySelector<HTMLButtonElement>(".context-notice__action")?.disabled).toBe(
+      expect(container.querySelector<HTMLButtonElement>(".context-ring__action")?.disabled).toBe(
         false,
       );
     } finally {
@@ -3910,70 +3939,6 @@ describe("chat session controls", () => {
     expect(state.setTab).toHaveBeenCalledWith("usage");
   });
 
-  it("shows provider quota in the sidebar session switcher (regression #93041)", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [
-              { label: "3h", usedPercent: 18 },
-              { label: "Week", usedPercent: 72 },
-            ],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderChatSessionSelect(state, () => undefined, {
-        sessionSwitcherOnly: true,
-        surface: "sidebar",
-      }),
-      container,
-    );
-
-    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
-
-    const row = container.querySelector(".chat-controls__session-row");
-    expect(row?.classList.contains("chat-controls__session-row--has-quota")).toBe(true);
-  });
-
-  it("hides provider quota when the sidebar session switcher is collapsed", () => {
-    const { state } = createChatHeaderState();
-    state.modelAuthStatusResult = {
-      ts: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "Codex",
-          status: "ok",
-          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-          usage: {
-            windows: [{ label: "3h", usedPercent: 18 }],
-          },
-        },
-      ],
-    };
-    const container = document.createElement("div");
-    render(
-      renderChatSessionSelect(state, () => undefined, {
-        sessionSwitcherOnly: true,
-        compact: true,
-        surface: "sidebar",
-      }),
-      container,
-    );
-
-    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
-  });
-
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
@@ -4211,11 +4176,8 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const adaptive = getThinkingOptions(container).find(
-      (option) => option.dataset.chatThinkingOption === "adaptive",
-    );
-    expect(adaptive).toBeInstanceOf(HTMLButtonElement);
-    adaptive?.click();
+    expect(getThinkingSliderValues(container)).toEqual(["off", "adaptive"]);
+    setThinkingSliderLevel(container, "adaptive");
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "global",
@@ -4363,22 +4325,9 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingOptions = getThinkingOptions(container);
-
-    expect(thinkingOptions.map((option) => option.dataset.chatThinkingOption)).toEqual([
-      "",
-      "off",
-      "adaptive",
-      "xhigh",
-      "max",
-    ]);
-    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual([
-      "Default",
-      "Off",
-      "Adaptive",
-      "Extra high",
-      "Maximum",
-    ]);
+    expect(getThinkingSliderValues(container)).toEqual(["off", "adaptive", "xhigh", "max"]);
+    // No override -> inherit state: no reset affordance.
+    expect(getThinkingResetButton(container)).toBeNull();
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -4391,11 +4340,61 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const thinkingSelect = getThinkingSelect(container);
-    const thinkingOptions = getThinkingOptions(container);
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
+    expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
     expect(thinkingSelect.title).toContain("Adaptive");
+    // "adaptive" is not one of the offered stops, so the parked thumb must
+    // render as unanchored instead of pretending the default is "off".
+    expect(getThinkingSliderValues(container)).not.toContain("adaptive");
+    expect(
+      getThinkingSlider(container)?.classList.contains(
+        "chat-controls__reasoning-range--unanchored",
+      ),
+    ).toBe(true);
+  });
+
+  it("anchors the slider thumb on the inherited default when it is a stop", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      thinkingDefault: "medium",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const slider = getThinkingSlider(container);
+    expect(slider?.classList.contains("chat-controls__reasoning-range--unanchored")).toBe(false);
+    expect(slider?.value).toBe(String(getThinkingSliderValues(container).indexOf("medium")));
+  });
+
+  it("keeps a single available thinking level selectable without a slider", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        modelProvider: "openai",
+        model: "gpt-5",
+        thinkingLevels: [{ id: "adaptive", label: "adaptive" }],
+        updatedAt: 1,
+      },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(getThinkingSlider(container)).toBeNull();
+    const only = container.querySelector<HTMLButtonElement>(
+      '[data-chat-thinking-option="adaptive"]',
+    );
+    expect(only).toBeInstanceOf(HTMLButtonElement);
+    expect(only?.getAttribute("aria-pressed")).toBe("false");
+    only?.click();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: "adaptive",
+    });
   });
 
   it("disables thinking for known non-reasoning models without duplicate off options", () => {
@@ -4430,11 +4429,11 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const thinkingSelect = getThinkingSelect(container);
-    const thinkingOptions = getThinkingOptions(container);
 
     expect(thinkingSelect.dataset.chatThinkingDisabled).toBe("true");
-    expect(thinkingOptions.map((option) => option.dataset.chatThinkingOption)).toEqual([""]);
-    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual(["Default"]);
+    // No reasoning levels -> no slider and no reset control at all.
+    expect(getThinkingSlider(container)).toBeNull();
+    expect(getThinkingResetButton(container)).toBeNull();
   });
 
   it("does not label a non-default chat model from global thinking defaults", () => {
@@ -4461,9 +4460,9 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    const thinkingOptions = getThinkingOptions(container);
-
-    expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
+    // The session model is reasoning-capable, so the inherited default must
+    // come from the model (low), not the unrelated global session default (off).
+    expect(getThinkingReasoningValueLabel(container)).toBe("Default (Low)");
   });
 
   it("always renders full thinking labels", () => {
@@ -4488,19 +4487,12 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const thinkingSelect = getThinkingSelect(container);
-    const thinkingOptions = getThinkingOptions(container);
 
     expect(container.querySelector('[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
     expect(thinkingSelect.title).toContain("High");
-    expect(thinkingOptions.map((option) => option.textContent?.trim())).toEqual([
-      "Default",
-      "Off",
-      "Low",
-      "Medium",
-      "High",
-      "Extra high",
-    ]);
+    expect(getThinkingSliderValues(container)).toEqual(["off", "low", "medium", "high", "xhigh"]);
+    expect(getThinkingReasoningValueLabel(container)).toBe("Default (High)");
   });
 
   it("labels chat thinking default from session defaults when the row is absent", () => {
@@ -4512,10 +4504,9 @@ describe("chat session controls", () => {
     render(renderChatSessionSelect(state), container);
 
     const thinkingSelect = getThinkingSelect(container);
-    const thinkingOptions = getThinkingOptions(container);
 
     expect(getChatThinkingValue(thinkingSelect)).toBe("");
-    expect(thinkingOptions[0]?.textContent?.trim()).toBe("Default");
+    expect(getThinkingReasoningValueLabel(container)).toBe("Default (Adaptive)");
     expect(thinkingSelect.title).toContain("Adaptive");
   });
 });

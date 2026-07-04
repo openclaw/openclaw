@@ -289,7 +289,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /channels/channel-routing
 - Headings:
-  - H1: Channels & routing
+  - H1: Channels &amp; routing
   - H2: Key terms
   - H2: Outbound target prefixes
   - H2: Session key shapes (examples)
@@ -817,9 +817,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (behavior)
   - H2: Media + limits
   - H2: Typing + read receipts
+  - H2: Lifecycle status reactions
   - H2: Reactions (message tool)
   - H2: Approval reactions
   - H2: Delivery targets (CLI/cron)
+  - H2: Aliases
   - H2: Troubleshooting
   - H2: Security notes
   - H2: Configuration reference (Signal)
@@ -1003,6 +1005,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Install (on demand)
   - H2: Quick setup
+  - H2: Call the current requester with MeowCaller (experimental)
   - H2: Deployment patterns
   - H2: Runtime model
   - H2: Approval prompts
@@ -1226,7 +1229,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents bindings
   - H3: agents bind
   - H3: agents unbind
-  - H3: agents delete
+  - H3: agents delete &lt;id&gt;
   - H2: Identity files
   - H2: Set identity
   - H2: Related
@@ -1418,13 +1421,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: openclaw devices
   - H2: Commands
   - H3: openclaw devices list
-  - H3: openclaw devices remove
+  - H3: openclaw devices remove &lt;deviceId&gt;
   - H3: openclaw devices clear --yes [--pending]
   - H3: openclaw devices approve [requestId] [--latest]
   - H2: Paperclip / openclawgateway first-run approval
-  - H3: openclaw devices reject
-  - H3: openclaw devices rotate --device --role [--scope ]
-  - H3: openclaw devices revoke --device --role
+  - H3: openclaw devices reject &lt;requestId&gt;
+  - H3: openclaw devices rotate --device &lt;id&gt; --role &lt;role&gt; [--scope &lt;scope...&gt;]
+  - H3: openclaw devices revoke --device &lt;id&gt; --role &lt;role&gt;
   - H2: Common options
   - H2: Notes
   - H2: Token drift recovery checklist
@@ -1506,7 +1509,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: gateway status
   - H3: gateway probe
   - H4: Remote over SSH (Mac app parity)
-  - H3: gateway call
+  - H3: gateway call &lt;method&gt;
   - H2: Manage the Gateway service
   - H3: Install with a wrapper
   - H2: Discover gateways (Bonjour)
@@ -1747,11 +1750,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: JSONL
   - H3: YAML
   - H2: Subcommand reference
-  - H3: resolve
-  - H3: find
-  - H3: set
-  - H3: validate
-  - H3: emit
+  - H3: resolve &lt;oc-path&gt;
+  - H3: find &lt;pattern&gt;
+  - H3: set &lt;oc-path&gt; &lt;value&gt;
+  - H3: validate &lt;oc-path&gt;
+  - H3: emit &lt;file&gt;
   - H2: Exit codes
   - H2: Output mode
   - H2: Notes
@@ -2039,12 +2042,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: wiki status
   - H3: wiki doctor
   - H3: wiki init
-  - H3: wiki ingest
-  - H3: wiki okf import
+  - H3: wiki ingest &lt;path-or-url&gt;
+  - H3: wiki okf import &lt;path&gt;
   - H3: wiki compile
   - H3: wiki lint
-  - H3: wiki search
-  - H3: wiki get
+  - H3: wiki search &lt;query&gt;
+  - H3: wiki get &lt;lookup&gt;
   - H3: wiki apply
   - H3: wiki bridge import
   - H3: wiki unsafe-local import
@@ -4492,7 +4495,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Volume (required)
   - H3: Variables
   - H2: Connect a channel
-  - H2: Backups & migration
+  - H2: Backups &amp; migration
   - H2: Next steps
 
 ## install/raspberry-pi.md
@@ -4712,6 +4715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Pair + name
   - H3: Allowlist the commands
   - H3: Point exec at the node
+  - H3: Local model inference
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -4961,7 +4965,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/bundled-gateway
 - Headings:
-  - H2: Install the CLI (required for local mode)
+  - H2: Automatic setup
+  - H2: Manual recovery
   - H2: Launchd (Gateway as LaunchAgent)
   - H2: Version compatibility
   - H2: State directory on macOS
@@ -5001,7 +5006,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Prerequisites
   - H2: 1. Install Dependencies
   - H2: 2. Build and Package the App
-  - H2: 3. Install the CLI
+  - H2: 3. Install the CLI and Gateway
   - H2: Troubleshooting
   - H3: Build fails: toolchain or SDK mismatch
   - H3: App crashes on permission grant
@@ -5129,7 +5134,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/voicewake
 - Headings:
-  - H1: Voice Wake & Push-to-Talk
+  - H1: Voice Wake &amp; Push-to-Talk
   - H2: Requirements
   - H2: Modes
   - H2: Runtime behavior (wake-word)
@@ -5413,6 +5418,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements
   - H2: Quickstart
+  - H2: Share threads with Codex Desktop and CLI
   - H2: Configuration
   - H2: Verify Codex runtime
   - H2: Routing and model selection
@@ -5850,6 +5856,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/chutes
 - Headings:
   - H1: Chutes plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/clawrouter.md
+
+- Route: /plugins/reference/clawrouter
+- Headings:
+  - H1: ClawRouter plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -7188,6 +7203,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Getting started
   - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
+  - H2: Safety refusal fallback (Claude Fable 5)
+  - H3: Why this exists
+  - H3: How it works
+  - H3: Observability and billing
+  - H3: Scope
   - H2: Prompt caching
   - H2: Advanced configuration
   - H2: Troubleshooting
@@ -7267,6 +7287,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Built-in catalog
   - H2: Advanced configuration
   - H2: Notes
+  - H2: Related
+
+## providers/clawrouter.md
+
+- Route: /providers/clawrouter
+- Headings:
+  - H2: Getting started
+  - H2: Model discovery
+  - H2: Protocol and provider plugins
+  - H2: Quotas and usage
+  - H2: Troubleshooting
+  - H2: Security behavior
   - H2: Related
 
 ## providers/cloudflare-ai-gateway.md
@@ -7613,6 +7645,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Cloud models
   - H2: Model discovery (implicit provider)
+  - H2: Node-local inference
   - H2: Vision and image description
   - H2: Configuration
   - H2: Common recipes
@@ -8545,7 +8578,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 3.6 Discovery (AML.TA0008)
   - H4: T-DISC-001: Tool Enumeration
   - H4: T-DISC-002: Session Data Extraction
-  - H3: 3.7 Collection & Exfiltration (AML.TA0009, AML.TA0010)
+  - H3: 3.7 Collection &amp; Exfiltration (AML.TA0009, AML.TA0010)
   - H4: T-EXFIL-001: Data Theft via webfetch
   - H4: T-EXFIL-002: Unauthorized Message Sending
   - H4: T-EXFIL-003: Credential Harvesting

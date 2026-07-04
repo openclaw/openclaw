@@ -29,6 +29,7 @@ import {
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
   sendDiscordText,
+  type DiscordSendProgress,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
@@ -55,6 +56,8 @@ type DiscordSendOpts = {
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  /** Persist each concrete platform send before any later chunk can fail. */
+  onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
 
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
@@ -73,6 +76,7 @@ async function sendDiscordThreadTextChunks(params: {
   maxChars?: number;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  onResult?: DiscordSendProgress;
 }): Promise<void> {
   for (const chunk of params.chunks) {
     await sendDiscordText(
@@ -88,6 +92,8 @@ async function sendDiscordThreadTextChunks(params: {
       params.silent,
       params.suppressEmbeds,
       params.maxChars,
+      undefined,
+      params.onResult,
     );
   }
 }
@@ -246,6 +252,19 @@ export async function sendMessageDiscord(
     const messageId = threadRes.message?.id ?? threadId;
     const resultChannelId = threadRes.message?.channel_id ?? threadId;
     const remainingChunks = chunks.slice(1);
+    await opts.onDeliveryResult?.(
+      toDiscordSendResult(
+        {
+          id: messageId,
+          channel_id: resultChannelId,
+        },
+        channelId,
+        { kind: "text", threadId },
+      ),
+    );
+    const reportThreadResult: DiscordSendProgress = async (result, kind) => {
+      await opts.onDeliveryResult?.(toDiscordSendResult(result, threadId, { kind, threadId }));
+    };
 
     try {
       if (opts.mediaUrl) {
@@ -269,6 +288,8 @@ export async function sendMessageDiscord(
           opts.silent,
           suppressEmbeds,
           textLimit,
+          undefined,
+          reportThreadResult,
         );
         await sendDiscordThreadTextChunks({
           rest,
@@ -280,6 +301,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          onResult: reportThreadResult,
         });
       } else {
         await sendDiscordThreadTextChunks({
@@ -292,6 +314,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          onResult: reportThreadResult,
         });
       }
     } catch (err) {
@@ -320,6 +343,14 @@ export async function sendMessageDiscord(
   }
 
   let result: DiscordChannelMessageResult;
+  const reportResult: DiscordSendProgress = async (progressResult, kind) => {
+    await opts.onDeliveryResult?.(
+      toDiscordSendResult(progressResult, channelId, {
+        kind,
+        replyToId: opts.replyTo,
+      }),
+    );
+  };
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(
@@ -342,6 +373,7 @@ export async function sendMessageDiscord(
         suppressEmbeds,
         textLimit,
         opts.replyToFirstChunkOnly,
+        reportResult,
       );
     } else {
       result = await sendDiscordText(
@@ -358,6 +390,7 @@ export async function sendMessageDiscord(
         suppressEmbeds,
         textLimit,
         opts.replyToFirstChunkOnly,
+        reportResult,
       );
     }
   } catch (err) {

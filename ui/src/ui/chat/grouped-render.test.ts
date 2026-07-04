@@ -31,12 +31,15 @@ vi.mock("../../local-storage.ts", () => ({
   }),
 }));
 
-vi.mock("../markdown.ts", () => ({
-  isMarkdownBlockArtText: () => false,
-  toSanitizedMarkdownHtml: markdownRenderMock,
-  toStreamingMarkdownHtml: streamingMarkdownRenderMock,
-  toStreamingPlainTextHtml: streamingTextRenderMock,
-}));
+vi.mock("../markdown.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../markdown.ts")>();
+  return {
+    ...actual,
+    toSanitizedMarkdownHtml: markdownRenderMock,
+    toStreamingMarkdownHtml: streamingMarkdownRenderMock,
+    toStreamingPlainTextHtml: streamingTextRenderMock,
+  };
+});
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -112,11 +115,18 @@ vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
   resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
     name,
-    label: name,
+    label:
+      {
+        sessions_spawn: "Sub-agent",
+        skill_workshop: "Skill Workshop",
+        web_search: "Web Search",
+      }[name] ?? name,
     icon: "zap",
     detail:
       args && typeof args === "object" && "detail" in args
         ? String((args as { detail: unknown }).detail)
+        : args && typeof args === "object" && name === "skill_workshop" && "action" in args
+          ? String((args as { action: unknown }).action)
         : undefined,
   }),
 }));
@@ -1228,7 +1238,7 @@ describe("grouped chat rendering", () => {
     expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
     expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "sessions_spawn",
+      "Sub-agent",
     );
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
 
@@ -1433,7 +1443,7 @@ describe("grouped chat rendering", () => {
     expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
     expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Tool error");
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
-      "sessions_spawn",
+      "Sub-agent",
     );
     expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
 

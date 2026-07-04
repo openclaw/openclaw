@@ -2766,6 +2766,59 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 
+  it("sends an error fallback when dispatch fails after only partial output", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+      throw new Error("dispatch failed after partial output");
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(0, { text: "partial answer" });
+    expectDeliveredReply(
+      0,
+      {
+        text: "Something went wrong while processing your request. Please try again.",
+      },
+      1,
+    );
+  });
+
+  it("returns retryable when dispatch fails after partial output and the fallback is not delivered", async () => {
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
+    deliverReplies.mockResolvedValueOnce({ delivered: false });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial answer" }, { kind: "block" });
+      throw new Error("dispatch failed after partial output");
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      retryDispatchErrors: true,
+      streamMode: "off",
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect((result as { error?: unknown }).error).toBeInstanceOf(Error);
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expectDeliveredReply(0, { text: "partial answer" });
+    expectDeliveredReply(
+      0,
+      {
+        text: "Something went wrong while processing your request. Please try again.",
+      },
+      1,
+    );
+  });
+
   it("returns retryable when spooled replay suppresses fallback after non-silent delivery skip", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });

@@ -304,6 +304,107 @@ The new model will be automatically discovered and available to use.
 If you set `models.providers.ollama` explicitly, or configure a custom remote provider such as `models.providers.ollama-cloud` with `api: "ollama"`, auto-discovery is skipped and you must define models manually. Loopback custom providers such as `http://127.0.0.2:11434` are still treated as local. See the explicit config section below.
 </Note>
 
+## Node-local inference
+
+Agents can delegate a short task to an Ollama model installed on a paired
+desktop or server node. The prompt and response cross the existing authenticated
+Gateway/node connection; the model request runs on the selected node against
+its standard loopback Ollama endpoint (`http://127.0.0.1:11434`).
+
+<Steps>
+  <Step title="Start Ollama on the node">
+    Pull at least one chat model and keep Ollama running:
+
+    ```bash
+    ollama pull qwen3:0.6b
+    ollama list
+    ```
+
+  </Step>
+  <Step title="Connect the node host">
+    On the same machine as Ollama, connect a node host to the Gateway:
+
+    ```bash
+    openclaw node run \
+      --host <gateway-host> \
+      --port 18789 \
+      --display-name "Local inference"
+    ```
+
+    Approve the new device and its declared node commands on the Gateway host,
+    then verify the node:
+
+    ```bash
+    openclaw devices list
+    openclaw devices approve <deviceRequestId>
+    openclaw nodes pending
+    openclaw nodes approve <nodeRequestId>
+    openclaw nodes status --connected
+    ```
+
+    A first connection and an upgrade that adds the Ollama commands can both
+    trigger node-command approval. If the node connects without advertising
+    `ollama.models` and `ollama.chat`, check `openclaw nodes pending` again.
+
+  </Step>
+  <Step title="Ask an agent to use local inference">
+    The bundled Ollama plugin exposes the `node_inference` tool. Agents first
+    use `action: "discover"`, then `action: "run"` with a returned node and
+    model. If exactly one capable node is connected, `run` can omit the node.
+
+    For example: “Discover the Ollama models on my nodes, then use the fastest
+    loaded model to summarize this text.”
+
+  </Step>
+</Steps>
+
+Discovery reads `/api/tags`, checks `/api/show` capabilities, and uses `/api/ps`
+when available to rank already-loaded models first. It returns only local
+chat-capable models: Ollama Cloud rows and embedding-only models are excluded.
+Each run asks Ollama to disable model thinking and caps output at 512 tokens
+unless the tool call requests a different `maxTokens` value. Some models, such
+as GPT-OSS, do not support disabling thinking and may still use reasoning tokens.
+
+To keep Ollama running on a node without making it available to agents, set the
+following in the config used by that node host:
+
+```bash
+openclaw config set plugins.entries.ollama.config.nodeInference.enabled false
+```
+
+If the node uses the foreground `openclaw node run` command from the setup
+above, stop that process and run the command again. If it uses an installed node
+service, run `openclaw node restart`.
+
+The node stops advertising `ollama.models` and `ollama.chat`; Ollama itself and
+the Gateway's Ollama provider remain unchanged. Set the value to `true` and
+restart the node to advertise local inference again. A changed command surface
+may require approval through `openclaw nodes pending` after reconnect.
+
+You can verify the same node commands without an agent turn:
+
+```bash
+openclaw nodes invoke \
+  --node "Local inference" \
+  --command ollama.models \
+  --params '{}' \
+  --invoke-timeout 90000 \
+  --timeout 100000
+
+openclaw nodes invoke \
+  --node "Local inference" \
+  --command ollama.chat \
+  --params '{"model":"qwen3:0.6b","prompt":"Reply with exactly: pong","maxTokens":32,"timeoutMs":120000}' \
+  --invoke-timeout 130000 \
+  --timeout 140000
+```
+
+Node-local inference intentionally does not reuse a remote or cloud
+`models.providers.ollama.baseUrl`. Start Ollama on the node's standard loopback
+endpoint. The node commands are available by default on macOS, Linux, and
+Windows node hosts and remain subject to the normal node pairing and command
+policy.
+
 ## Vision and image description
 
 The bundled Ollama plugin registers Ollama as an image-capable media-understanding provider. This lets OpenClaw route explicit image-description requests and configured image-model defaults through local or hosted Ollama vision models.

@@ -427,16 +427,30 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+  fun buildOperatorConnectOptions_requestsNativeClientOperatorScopes() {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(
-      listOf(
-        "operator.approvals",
-        "operator.read",
-        "operator.write",
-      ),
+      ConnectionManager.nativeClientOperatorScopes,
       options.scopes,
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_preservesRecordedScopes() {
+    assertEquals(
+      listOf("operator.read", "operator.write"),
+      ConnectionManager.operatorScopesForStoredDeviceToken(
+        listOf("operator.read", "operator.write", "operator.read", " "),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_fallsBackToLegacyScopesWhenMetadataMissing() {
+    assertEquals(
+      ConnectionManager.legacyOperatorScopes,
+      ConnectionManager.operatorScopesForStoredDeviceToken(emptyList()),
     )
   }
 

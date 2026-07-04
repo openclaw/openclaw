@@ -1354,6 +1354,9 @@ export const ja_JP: TranslationMap = {
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
+    sidebar: {
+      allSessions: "すべてのセッション",
+    },
     welcome: {
       ready: "Ready to chat",
       hintBeforeShortcut: "Type a message below ·",

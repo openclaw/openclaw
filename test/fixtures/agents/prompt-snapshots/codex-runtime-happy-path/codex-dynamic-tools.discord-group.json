@@ -125,6 +125,108 @@
     "type": "function"
   },
   {
+    "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "agents_list",
+    "type": "function"
+  },
+  {
+    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound, only when requester channel supports thread bindings. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread.",
+    "inputSchema": {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "attachAs": {
+          "properties": {
+            "mountPath": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "attachments": {
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "encoding": {
+                "enum": ["utf8", "base64"],
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "content"],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "cleanup": {
+          "enum": ["delete", "keep"],
+          "type": "string"
+        },
+        "context": {
+          "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
+          "enum": ["isolated", "fork"],
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lightContext": {
+          "description": "Light bootstrap context; runtime=\"subagent\" only.",
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": ["run", "session"],
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtime": {
+          "enum": ["subagent"],
+          "type": "string"
+        },
+        "sandbox": {
+          "enum": ["inherit", "require"],
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "taskName": {
+          "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "thread": {
+          "description": "Bind spawn to new chat thread when supported. `thread=true` defaults mode=\"session\".",
+          "type": "boolean"
+        }
+      },
+      "required": ["task"],
+      "type": "object"
+    },
+    "name": "sessions_spawn",
+    "type": "function"
+  },
+  {
     "description": "End current turn. Use after spawning subagents; results arrive as next message.",
     "inputSchema": {
       "properties": {
@@ -1003,16 +1105,6 @@
       },
       {
         "deferLoading": true,
-        "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
-        "inputSchema": {
-          "properties": {},
-          "type": "object"
-        },
-        "name": "agents_list",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
         "description": "List visible sessions; filter by kind, label, agentId, search, activity. Use before sessions_history or sessions_send target selection.",
         "inputSchema": {
           "properties": {
@@ -1115,100 +1207,6 @@
           "type": "object"
         },
         "name": "sessions_send",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
-        "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound, only when requester channel supports thread bindings. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work; run-mode results return, session-mode output stays in thread.",
-        "inputSchema": {
-          "properties": {
-            "agentId": {
-              "type": "string"
-            },
-            "attachAs": {
-              "properties": {
-                "mountPath": {
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "attachments": {
-              "items": {
-                "properties": {
-                  "content": {
-                    "type": "string"
-                  },
-                  "encoding": {
-                    "enum": ["utf8", "base64"],
-                    "type": "string"
-                  },
-                  "mimeType": {
-                    "type": "string"
-                  },
-                  "name": {
-                    "type": "string"
-                  }
-                },
-                "required": ["name", "content"],
-                "type": "object"
-              },
-              "maxItems": 50,
-              "type": "array"
-            },
-            "cleanup": {
-              "enum": ["delete", "keep"],
-              "type": "string"
-            },
-            "context": {
-              "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
-              "enum": ["isolated", "fork"],
-              "type": "string"
-            },
-            "cwd": {
-              "type": "string"
-            },
-            "label": {
-              "type": "string"
-            },
-            "lightContext": {
-              "description": "Light bootstrap context; runtime=\"subagent\" only.",
-              "type": "boolean"
-            },
-            "mode": {
-              "enum": ["run", "session"],
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            },
-            "runtime": {
-              "enum": ["subagent"],
-              "type": "string"
-            },
-            "sandbox": {
-              "enum": ["inherit", "require"],
-              "type": "string"
-            },
-            "task": {
-              "type": "string"
-            },
-            "taskName": {
-              "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
-              "type": "string"
-            },
-            "thinking": {
-              "type": "string"
-            },
-            "thread": {
-              "description": "Bind spawn to new chat thread when supported. `thread=true` defaults mode=\"session\".",
-              "type": "boolean"
-            }
-          },
-          "required": ["task"],
-          "type": "object"
-        },
-        "name": "sessions_spawn",
         "type": "function"
       },
       {

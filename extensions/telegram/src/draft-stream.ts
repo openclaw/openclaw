@@ -19,17 +19,22 @@ import {
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import {
-  buildTelegramRichMarkdown,
+  buildTelegramRichHtmlPlan,
+  buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
   isTelegramRichMessageWithinStructuralLimits,
   TELEGRAM_RICH_TEXT_LIMIT,
   type TelegramInputRichMessage,
   type TelegramSendRichMessageParams,
 } from "./rich-message.js";
+import {
+  buildTelegramPlainFallbackPlan,
+  isTelegramHtmlParseError,
+  warnTelegramRichHtmlDegradations,
+} from "./rich-plain-fallback.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = TELEGRAM_TEXT_CHUNK_LIMIT;
 const DEFAULT_THROTTLE_MS = 1000;
-const TELEGRAM_PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 // Retryable preview failures keep the latest text pending for the next throttle
 // tick; cap consecutive misses so a persistent outage stops the preview instead
 // of warn-spamming for the rest of the run.
@@ -106,10 +111,6 @@ function renderTelegramDraftPreview(
   return renderText?.(trimmed) ?? { text: trimmed };
 }
 
-function isTelegramHtmlParseError(err: unknown): boolean {
-  return TELEGRAM_PARSE_ERR_RE.test(formatErrorMessage(err));
-}
-
 function telegramRichHtmlToParseModeHtml(html: string): string {
   return html.replace(/<br\s*\/?>/giu, "\n");
 }
@@ -160,8 +161,23 @@ function telegramDraftRichPayloadLength(preview: TelegramDraftPreview): number {
   if (!isTelegramRichMessageWithinStructuralLimits(sourceMessage)) {
     return TELEGRAM_RICH_TEXT_LIMIT + 1;
   }
-  const richMessage = preview.richMessage ?? buildTelegramRichMarkdown(preview.text);
+  const richMessage =
+    preview.richMessage ?? buildTelegramRichMarkdownPlan(preview.text).richMessage;
   return richMessage.html?.length ?? richMessage.markdown?.length ?? 0;
+}
+
+function buildTelegramDraftRichPlan(preview: TelegramDraftPreview) {
+  if (preview.richMessage?.html !== undefined) {
+    return buildTelegramRichHtmlPlan(preview.richMessage.html, {
+      skipEntityDetection: preview.richMessage.skip_entity_detection === true,
+    });
+  }
+  if (preview.richMessage?.markdown !== undefined) {
+    return buildTelegramRichMarkdownPlan(preview.richMessage.markdown, {
+      skipEntityDetection: preview.richMessage.skip_entity_detection === true,
+    });
+  }
+  return buildTelegramRichMarkdownPlan(preview.text);
 }
 
 function resolveTelegramDraftRenderedText(
@@ -267,11 +283,30 @@ export function createTelegramDraftStream(params: {
   };
   const sendRenderedMessage = async (preview: TelegramDraftPreview) => {
     if (richMessages) {
-      return await getTelegramRichRawApi(params.api).sendRichMessage({
-        chat_id: chatId,
-        rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
-        ...richMessageParams,
+      const richPlan = buildTelegramDraftRichPlan(preview);
+      warnTelegramRichHtmlDegradations({
+        context: "stream preview",
+        reasons: richPlan.degradationReasons,
+        warn: (message) => params.warn?.(message),
       });
+      try {
+        return await getTelegramRichRawApi(params.api).sendRichMessage({
+          chat_id: chatId,
+          rich_message: richPlan.richMessage,
+          ...richMessageParams,
+        });
+      } catch (err) {
+        const fallbackPlan = buildTelegramPlainFallbackPlan({
+          html: richPlan.richMessage.html,
+          err,
+          context: "stream preview",
+          warn: (message) => params.warn?.(message),
+        });
+        if (!fallbackPlan) {
+          throw err;
+        }
+        return await params.api.sendMessage(chatId, fallbackPlan.plainText, sendMessageParams);
+      }
     }
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     const sendPlain = async () =>
@@ -298,11 +333,30 @@ export function createTelegramDraftStream(params: {
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       if (richMessages) {
-        await getTelegramRichRawApi(params.api).editMessageText({
-          chat_id: chatId,
-          message_id: streamMessageId,
-          rich_message: preview.richMessage ?? buildTelegramRichMarkdown(preview.text),
+        const richPlan = buildTelegramDraftRichPlan(preview);
+        warnTelegramRichHtmlDegradations({
+          context: "stream preview edit",
+          reasons: richPlan.degradationReasons,
+          warn: (message) => params.warn?.(message),
         });
+        try {
+          await getTelegramRichRawApi(params.api).editMessageText({
+            chat_id: chatId,
+            message_id: streamMessageId,
+            rich_message: richPlan.richMessage,
+          });
+        } catch (err) {
+          const fallbackPlan = buildTelegramPlainFallbackPlan({
+            html: richPlan.richMessage.html,
+            err,
+            context: "stream preview edit",
+            warn: (message) => params.warn?.(message),
+          });
+          if (!fallbackPlan) {
+            throw err;
+          }
+          await params.api.editMessageText(chatId, streamMessageId, fallbackPlan.plainText);
+        }
         return true;
       }
       const transportPreview = normalizeTelegramDraftTransportPreview(preview);
@@ -632,7 +686,11 @@ export function createTelegramDraftStream(params: {
     // Rewind WITHOUT deleting; the old id is captured above.
     resetStreamToNewMessage();
     if (typeof supersededMessageId === "number" && Number.isFinite(supersededMessageId)) {
-      scheduleDetachedDelete(supersededMessageId, supersededVisibleSince, REPOSITION_DELETE_DELAY_MS);
+      scheduleDetachedDelete(
+        supersededMessageId,
+        supersededVisibleSince,
+        REPOSITION_DELETE_DELAY_MS,
+      );
       return supersededMessageId;
     }
     return undefined;
@@ -651,9 +709,7 @@ export function createTelegramDraftStream(params: {
     return streamMessageId;
   };
 
-  const finalizeToPreview = async (
-    preview: TelegramDraftPreview,
-  ): Promise<number | undefined> => {
+  const finalizeToPreview = async (preview: TelegramDraftPreview): Promise<number | undefined> => {
     const text = preview.text.trimEnd();
     if (!text) {
       return undefined;

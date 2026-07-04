@@ -40,6 +40,7 @@ extension AgentProTab {
         .refreshable {
             await self.refreshOverview(force: true)
         }
+        .font(OpenClawType.body)
         .toolbar {
             if let headerLeadingAction {
                 ToolbarItem(placement: .topBarLeading) {
@@ -70,6 +71,7 @@ extension AgentProTab {
                     self.skillsList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -113,6 +115,7 @@ extension AgentProTab {
                     self.cronJobsList(limit: nil)
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -142,6 +145,7 @@ extension AgentProTab {
                     self.usageDailyList
                 }
                 .padding(.vertical, 18)
+                .font(OpenClawType.body)
             }
             .refreshable {
                 await self.refreshOverview(force: true)
@@ -172,8 +176,8 @@ extension AgentProTab {
             OpenClawAdaptiveHeaderRow(
                 title: title,
                 subtitle: subtitle,
-                titleFont: .title3.weight(.semibold),
-                subtitleFont: .callout)
+                titleFont: OpenClawType.title3SemiBold,
+                subtitleFont: OpenClawType.subheadMedium)
             {
                 OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
             } accessory: {
@@ -199,9 +203,9 @@ extension AgentProTab {
                 ProIconBadge(systemName: icon, color: color)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)

@@ -12,17 +12,30 @@ expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
 child process, and manages a per-user launchd service to keep the Gateway
 running (or attaches to an existing local Gateway if one is already running).
 
-## Install the CLI (required for local mode)
+## Automatic setup
 
-Node 24 is the default runtime on the Mac. Node 22 LTS, currently `22.19+`, still works for compatibility. Then install `openclaw` globally:
+On a fresh Mac, choose **This Mac** during onboarding. The app runs its signed,
+bundled installer before the Gateway wizard, installs a user-space Node runtime
+and the matching `openclaw` CLI under `~/.openclaw`, then installs and starts the
+per-user launchd service. This path does not require Terminal, Homebrew, or
+administrator access.
+
+The app bundles the installer script, not the Node or Gateway payload. Setup
+therefore needs an internet connection to download the runtime and matching
+OpenClaw package.
+
+## Manual recovery
+
+Node 24 is recommended for a manual install. Node 22 LTS, currently `22.19+`,
+also works. Then install `openclaw` globally:
 
 ```bash
 npm install -g openclaw@<version>
 ```
 
-The macOS app's **Install CLI** button runs the same global install flow the app
-uses internally: it prefers npm first, then pnpm, then bun if that is the only
-detected package manager. Node remains the recommended Gateway runtime.
+Use **Retry setup** after a failed automatic setup. If that still fails, install
+the CLI manually with the command above, then choose **Check again** in
+onboarding. Node remains the recommended Gateway runtime.
 
 ## Launchd (Gateway as LaunchAgent)
 
@@ -54,8 +67,10 @@ Logging:
 
 ## Version compatibility
 
-The macOS app checks the gateway version against its own version. If they're
-incompatible, update the global CLI to match the app version.
+The macOS app checks the Gateway version against its own version. Onboarding
+automatically runs managed setup when an existing CLI is missing or
+incompatible. Use **Retry setup** to repeat the installation or **Check again**
+after repairing an external CLI.
 
 ## State directory on macOS
 

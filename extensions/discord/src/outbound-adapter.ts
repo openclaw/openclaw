@@ -2,6 +2,7 @@
 import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  attachChannelToResult,
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
@@ -177,6 +178,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       identity,
       silent,
       formatting,
+      onDeliveryResult,
     }) => {
       if (!silent) {
         const webhookResult = await maybeSendDiscordWebhookText({
@@ -209,6 +211,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
             silent: silent ?? undefined,
             cfg,
             ...resolveDiscordFormattingOptions({ formatting }),
+            onDeliveryResult: onDeliveryResult
+              ? async (result) => {
+                  await onDeliveryResult(attachChannelToResult("discord", result));
+                }
+              : undefined,
           }),
       });
     },
@@ -229,6 +236,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
       threadId,
       silent,
       formatting,
+      onDeliveryResult,
     }) => {
       const send =
         resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
@@ -267,6 +275,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
               silent: silent ?? undefined,
               cfg,
               ...formattingOptions,
+              onDeliveryResult: onDeliveryResult
+                ? async (result) => {
+                    await onDeliveryResult(attachChannelToResult("discord", result));
+                  }
+                : undefined,
             }),
         });
         return await withDiscordDeliveryRetry({
@@ -283,6 +296,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
               silent: silent ?? undefined,
               cfg,
               ...formattingOptions,
+              onDeliveryResult: onDeliveryResult
+                ? async (result) => {
+                    await onDeliveryResult(attachChannelToResult("discord", result));
+                  }
+                : undefined,
             }),
         });
       }
@@ -305,6 +323,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
             silent: silent ?? undefined,
             cfg,
             ...formattingOptions,
+            onDeliveryResult: onDeliveryResult
+              ? async (result) => {
+                  await onDeliveryResult(attachChannelToResult("discord", result));
+                }
+              : undefined,
           }),
       });
     },
