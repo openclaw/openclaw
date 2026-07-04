@@ -19,7 +19,7 @@ import {
   type UiSettings,
 } from "../../app/settings.ts";
 import { I18nController, t } from "../../i18n/index.ts";
-import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../../lib/cron/index.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
@@ -326,9 +326,7 @@ export class OverviewPage extends LitElement {
       `${blocked.length} skill${blocked.length === 1 ? "" : "s"} blocked`,
     );
 
-    const failedCron = this.cron.cronJobs.filter(
-      (job) => resolveCronJobLastRunStatus(job) === "error",
-    );
+    const failedCron = this.cron.cronJobs.filter(isCronJobActiveFailure);
     addNamedAttention(
       items,
       failedCron,

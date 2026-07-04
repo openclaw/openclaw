@@ -51,6 +51,13 @@ export function pathForRoute(routeId: RouteId, basePath = ""): string {
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
   const normalizedPath = normalizePath(pathname);
   const normalizedBasePath = normalizeBasePath(basePath);
+  const isWithinBasePath =
+    !normalizedBasePath ||
+    normalizedPath === normalizedBasePath ||
+    normalizedPath.startsWith(`${normalizedBasePath}/`);
+  if (!isWithinBasePath) {
+    return null;
+  }
   const routePath = normalizedBasePath
     ? normalizedPath.slice(normalizedBasePath.length) || "/"
     : normalizedPath;

@@ -391,6 +391,9 @@ export function resolveChatAvatarUrl(
   >,
 ): string | null {
   const agentId = resolveChatAgentId(state);
+  if (state.chatAvatarUrl) {
+    return state.chatAvatarUrl;
+  }
   const localAvatar = loadLocalAssistantIdentity({ agentId }).avatar;
   if (localAvatar) {
     return localAvatar;
@@ -403,9 +406,6 @@ export function resolveChatAvatarUrl(
     if (state.assistantAgentId === agentId) {
       return assistantAvatar;
     }
-  }
-  if (state.chatAvatarUrl) {
-    return state.chatAvatarUrl;
   }
   const agent = state.agentsList?.agents?.find((candidate) => candidate.id === agentId) as
     | { identity?: { avatar?: string; avatarUrl?: string } }

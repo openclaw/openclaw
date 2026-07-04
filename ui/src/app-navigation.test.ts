@@ -200,6 +200,11 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
   });
 
+  it("rejects route-shaped paths outside the configured base path", () => {
+    expect(routeIdFromPath("/xx/chat", "/ui")).toBeNull();
+    expect(routeIdFromPath("/other/sessions", "/apps/openclaw")).toBeNull();
+  });
+
   it("returns null for unknown path", () => {
     expect(routeIdFromPath("/unknown")).toBeNull();
   });

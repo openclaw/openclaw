@@ -49,7 +49,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = new OpenClawTerminalPanel();
+    const panel = document.createElement("openclaw-terminal-panel") as OpenClawTerminalPanel;
     panel.client = client;
     panel.agentId = "ops";
     panel.available = true;
