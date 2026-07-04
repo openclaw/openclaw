@@ -56,11 +56,14 @@ with clear ownership.
 
 ## Technical details
 
-The root `openclaw` npm package and OpenClaw-owned npm plugin packages include
-`npm-shrinkwrap.json` when they publish. Suitable OpenClaw-owned plugin
-packages can also publish with explicit `bundledDependencies`, so their runtime
-dependency files are carried in the plugin tarball instead of depending only on
-install-time resolution.
+The root `openclaw` npm package, OpenClaw-owned npm plugin packages, and
+publishable workspace packages such as [`@openclaw/ai`](/reference/openclaw-ai)
+include `npm-shrinkwrap.json` when they publish. Workspace dependencies are
+omitted from the root shrinkwrap because they publish beside the root package;
+each publishable workspace package pins its own transitive tree instead.
+Suitable OpenClaw-owned plugin packages can also publish with explicit
+`bundledDependencies`, so their runtime dependency files are carried in the
+plugin tarball instead of depending only on install-time resolution.
 
 Maintain the boundary like this:
 
