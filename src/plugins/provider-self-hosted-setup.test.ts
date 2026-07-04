@@ -636,4 +636,24 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
     expect(ctx.resolveApiKey).not.toHaveBeenCalled();
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
+
+  it("wraps malformed discovery JSON with a descriptive error", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("not valid json {", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release: vi.fn(async () => undefined),
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "malformed-test",
+      env: {},
+    });
+
+    // Malformed JSON is caught and a warning is logged; discovery returns an empty list.
+    expect(models).toEqual([]);
+  });
 });
