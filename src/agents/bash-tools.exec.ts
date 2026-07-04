@@ -1800,18 +1800,18 @@ export function createExecTool(
               ),
             )
           : undefined;
-      if ((host === "gateway" || host === "sandbox") && workdir) {
-        await rejectUnsafeExecBroadSearchShellCommand({
-          command: params.command,
-          workdir: host === "sandbox" ? (containerWorkdir ?? workdir) : workdir,
-          env: searchGuardEnv,
-          additionalProtectedRoots: sandboxProtectedRoots,
-          protectEnvHome: host !== "sandbox",
-        });
-      }
       let run: ExecProcessHandle;
       let effectiveTimeout: number;
       try {
+        if ((host === "gateway" || host === "sandbox") && workdir) {
+          await rejectUnsafeExecBroadSearchShellCommand({
+            command: params.command,
+            workdir: host === "sandbox" ? (containerWorkdir ?? workdir) : workdir,
+            env: searchGuardEnv,
+            additionalProtectedRoots: sandboxProtectedRoots,
+            protectEnvHome: host !== "sandbox",
+          });
+        }
         if (elevatedRequested) {
           logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
         }

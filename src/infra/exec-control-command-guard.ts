@@ -262,9 +262,16 @@ const DYNAMIC_SHELL_EXPANSION_ROOT = "<dynamic shell-expanded search path>";
 const XARGS_DYNAMIC_APPENDED_SEARCH_PATH_ROOT = "<dynamic xargs-appended search path>";
 
 function commandPayloadKey(payload: CommandPayload): string {
+  const envKey = payload.env
+    ? Object.entries(payload.env)
+        .filter((entry): entry is [string, string] => entry[1] !== undefined)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => `${key}=${value}`)
+        .join("\0")
+    : "";
   return `${payload.workdir ?? ""}\0${
     payload.stdinFromPipe === true ? "pipe" : ""
-  }\0${payload.argv.join("\0")}`;
+  }\0${envKey}\0${payload.argv.join("\0")}`;
 }
 
 function payloadFromArgv(
@@ -345,18 +352,65 @@ function isSupportedCdOption(commandName: string, token: string): boolean {
   return false;
 }
 
+function cdResolutionArgv(argv: readonly string[]): readonly string[] {
+  const commandName = normalizeCommandBaseName(argv[0]);
+  if (commandName === "builtin" && ["cd", "pushd"].includes(normalizeCommandBaseName(argv[1]))) {
+    return argv.slice(1);
+  }
+  if (commandName !== "command") {
+    return argv;
+  }
+  let index = 1;
+  while (index < argv.length) {
+    const token = argv[index] ?? "";
+    if (token === "--") {
+      index += 1;
+      break;
+    }
+    if (token === "-p") {
+      index += 1;
+      continue;
+    }
+    if (token === "-v" || token === "-V" || token.startsWith("-v") || token.startsWith("-V")) {
+      return argv;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      break;
+    }
+    return argv;
+  }
+  return ["cd", "pushd"].includes(normalizeCommandBaseName(argv[index])) ? argv.slice(index) : argv;
+}
+
+function hasUnresolvedCdExpansion(
+  target: string | undefined,
+  context?: SearchGuardContext,
+): boolean {
+  if (!target) {
+    return false;
+  }
+  return (
+    target.includes("$(") ||
+    target.includes("`") ||
+    hasDynamicShellParameterExpansion(target) ||
+    hasUnresolvedSimpleShellVariable(target, context?.env) ||
+    hasUnresolvedTildeUserPrefix(target)
+  );
+}
+
 function resolveCdWorkdir(
   argv: readonly string[],
   currentWorkdir: string,
   context?: SearchGuardContext,
 ): string | null {
-  const commandName = normalizeCommandBaseName(argv[0]);
+  const resolvedArgv = cdResolutionArgv(argv);
+  const commandName = normalizeCommandBaseName(resolvedArgv[0]);
   if (commandName !== "cd" && commandName !== "pushd") {
     return null;
   }
   const operands: string[] = [];
   let optionMode = true;
-  for (const token of argv.slice(1)) {
+  for (const token of resolvedArgv.slice(1)) {
     if (optionMode && token === "--") {
       optionMode = false;
       continue;
@@ -404,7 +458,10 @@ function resolveCdWorkdir(
     }
   }
   const resolved = resolveSearchTargetPath(target ?? "~", currentWorkdir, context);
-  return resolved ? maybeRealpath(resolved) : null;
+  const realpath = resolved ? maybeRealpath(resolved) : null;
+  return (
+    realpath ?? (hasUnresolvedCdExpansion(target, context) ? controlFlowUnknownWorkdir() : null)
+  );
 }
 
 function resolveEnvChdirWorkdir(
@@ -426,6 +483,21 @@ function resolveEnvChdirWorkdir(
     }
     if (token.startsWith("--chdir=")) {
       return resolveSearchTargetPath(token.slice("--chdir=".length), currentWorkdir, context);
+    }
+    if (token === "-u" || token === "--unset" || token === "-S" || token === "--split-string") {
+      index += 1;
+      continue;
+    }
+    if (
+      token.startsWith("-u") ||
+      token.startsWith("--unset=") ||
+      token.startsWith("-S") ||
+      token.startsWith("--split-string=")
+    ) {
+      continue;
+    }
+    if (parseEnvAssignment(token)) {
+      continue;
     }
     if (!token.startsWith("-")) {
       return null;
@@ -876,12 +948,15 @@ function shellPayloadTextsFromArgv(argv: readonly string[]): string[] {
   return [];
 }
 
-function splitTopLevelShellStatements(source: string): string[] {
-  const statements: string[] = [];
+function splitTopLevelShellStatementParts(
+  source: string,
+): Array<{ text: string; conditional: boolean }> {
+  const statements: Array<{ text: string; conditional: boolean }> = [];
   let start = 0;
   let quote: "'" | '"' | null = null;
   let escaped = false;
   let braceDepth = 0;
+  let nextConditional = false;
   for (let index = 0; index < source.length; index += 1) {
     const char = source[index] ?? "";
     if (escaped) {
@@ -916,17 +991,18 @@ function splitTopLevelShellStatements(source: string): string[] {
     if (braceDepth === 0 && (char === ";" || char === "\n" || isConditionalSeparator)) {
       const statement = source.slice(start, index).trim();
       if (statement.length > 0) {
-        statements.push(statement);
+        statements.push({ text: statement, conditional: nextConditional });
       }
       if (isConditionalSeparator) {
         index += 1;
       }
+      nextConditional = isConditionalSeparator;
       start = index + 1;
     }
   }
   const tail = source.slice(start).trim();
   if (tail.length > 0) {
-    statements.push(tail);
+    statements.push({ text: tail, conditional: nextConditional });
   }
   return statements;
 }
@@ -1016,9 +1092,9 @@ function collectPayloadsForShellScriptText(
   const payloads: CommandPayload[] = [];
   let shellWorkdir = workdir;
   let shellEnv = opts.env;
-  const shellStatements = splitTopLevelShellStatements(scriptText);
+  const shellStatements = splitTopLevelShellStatementParts(scriptText);
   for (const statement of shellStatements) {
-    const statementArgv = splitShellArgs(statement);
+    const statementArgv = splitShellArgs(statement.text);
     if (!statementArgv) {
       continue;
     }
@@ -1049,11 +1125,13 @@ function collectPayloadsForShellScriptText(
     );
     if (shellWorkdir) {
       const nextWorkdir = resolveCdWorkdir(statementStepArgv, shellWorkdir, statementContext);
-      shellEnv =
-        nextWorkdir !== null
-          ? envWithTrackedPwd(statementContext.env, shellWorkdir, nextWorkdir)
-          : statementContext.env;
-      shellWorkdir = nextWorkdir ?? shellWorkdir;
+      if (nextWorkdir !== null) {
+        const effectiveWorkdir = statement.conditional ? controlFlowUnknownWorkdir() : nextWorkdir;
+        shellEnv = envWithTrackedPwd(statementContext.env, shellWorkdir, effectiveWorkdir);
+        shellWorkdir = effectiveWorkdir;
+      } else {
+        shellEnv = statementContext.env;
+      }
     }
   }
   return payloads;
@@ -1414,7 +1492,7 @@ function createCommandPayloads(
       new Set<string>(),
     );
     try {
-      const explanation = await explainShellCommand(rawCommand.trim());
+      const explanation = await explainShellCommand(rawCommand);
       if (explanation.ok) {
         const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands].toSorted(
           (a, b) => a.span.startIndex - b.span.startIndex,

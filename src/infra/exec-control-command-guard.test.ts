@@ -392,6 +392,19 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("preserves source offsets when tracking short-circuit cwd changes", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "  false && cd /tmp; rg timeout",
+        workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("fails closed after cwd changes in short-circuit chains", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -444,11 +457,47 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("tracks cwd changes through command and builtin cd wrappers", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "command cd; rg timeout",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "builtin cd; rg timeout",
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("preserves cwd when a failed cd would leave the shell in place", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
         command: "cd /definitely-missing-openclaw-search-guard; rg timeout",
         workdir: homeDir,
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("fails closed on unresolved shell-expanded cd targets", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "cd ~root; rg timeout",
+        workdir: "/tmp",
       }),
     ).resolves.toMatchObject({
       executable: "rg",
@@ -793,6 +842,19 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("skips env option operands before honoring later chdir", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: 'env -u FOO -C "$HOME" rg timeout',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
   it("preserves sudo --chdir cwd when unwrapping command carriers", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -1050,6 +1112,19 @@ describe("exec broad search command guard", () => {
     });
   });
 
+  it("keeps payloads distinct when shell env changes", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command:
+          'SESSION_ROOT=/tmp; rg token "$SESSION_ROOT"; SESSION_ROOT=$HOME/.codex/sessions; rg token "$SESSION_ROOT"',
+        workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      protectedRoot: path.join(homeDir, ".codex", "sessions"),
+    });
+  });
+
   it("ignores unexecuted shell assignments when expanding later paths", async () => {
     await expect(
       detectUnsafeExecBroadSearchShellCommand({
@@ -1243,6 +1318,19 @@ describe("exec broad search command guard", () => {
       detectUnsafeExecBroadSearchShellCommand({
         command: "eval 'cd \"$HOME\" && rg timeout'",
         workdir: "/tmp",
+      }),
+    ).resolves.toMatchObject({
+      executable: "rg",
+      path: ".",
+      protectedRoot: homeDir,
+    });
+  });
+
+  it("keeps conditional cwd changes conditional inside static shell payloads", async () => {
+    await expect(
+      detectUnsafeExecBroadSearchShellCommand({
+        command: "eval 'false && cd /tmp; rg timeout'",
+        workdir: homeDir,
       }),
     ).resolves.toMatchObject({
       executable: "rg",

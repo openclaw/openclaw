@@ -609,6 +609,39 @@ describe("exec host env validation", () => {
     }
   });
 
+  it("discards prepared sandbox workdirs when broad-search preflight rejects", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-discard-"));
+    const discardedWorkdirs: string[] = [];
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox-discard-search-test",
+        workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workdirValidation: "backend",
+        workdirRoots: ["/agent"],
+        validateWorkdir: async (workdir) => workdir,
+        discardPreparedWorkdir: (workdir) => {
+          discardedWorkdirs.push(workdir);
+        },
+      },
+    });
+
+    try {
+      await expect(
+        tool.execute("call-sandbox-discard-broad-search", {
+          command: "rg timeout ..",
+          workdir: "/agent/project",
+        }),
+      ).rejects.toThrow(/exec blocked broad recursive rg search over protected root \/agent/u);
+      expect(discardedWorkdirs).toEqual(["/agent/project"]);
+    } finally {
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     "echo ok && /approve abc123 allow-once",
     "echo ok | /approve abc123 deny",
