@@ -641,6 +641,12 @@ public final class OpenClawChatViewModel {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !role.isEmpty else { return nil }
 
+        // The gateway persists this key with the canonical user row. Prefer it
+        // so a server timestamp change cannot replace the optimistic row's ID.
+        if let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey) {
+            return [role, "idempotency", idempotencyKey].joined(separator: "|")
+        }
+
         let timestamp: String = {
             guard let value = message.timestamp, value.isFinite else { return "" }
             return String(format: "%.3f", value)
@@ -692,6 +698,23 @@ public final class OpenClawChatViewModel {
     private static func normalizedIdempotencyKey(_ key: String?) -> String? {
         let trimmed = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func adoptingCanonicalMessage(
+        _ incoming: OpenClawChatMessage,
+        over existing: OpenClawChatMessage) -> OpenClawChatMessage
+    {
+        OpenClawChatMessage(
+            id: existing.id,
+            role: incoming.role,
+            content: incoming.content,
+            timestamp: incoming.timestamp ?? existing.timestamp,
+            idempotencyKey: incoming.idempotencyKey,
+            toolCallId: incoming.toolCallId,
+            toolName: incoming.toolName,
+            usage: incoming.usage,
+            stopReason: incoming.stopReason,
+            errorMessage: incoming.errorMessage)
     }
 
     private func currentRunMessageScope() -> RunMessageScope {
@@ -800,11 +823,15 @@ public final class OpenClawChatViewModel {
     }
 
     private func adoptPendingLocalUserEcho(incoming: OpenClawChatMessage) -> Bool {
+        // Same-content turns can arrive from another client. Without the
+        // persisted client key, preserving both rows is safer than erasing one.
         guard let incomingKey = Self.normalizedIdempotencyKey(incoming.idempotencyKey) else { return false }
-        guard let matchIndex = messages.lastIndex(where: { existing in
-            self.pendingLocalUserEchoMessageIDsByRunID.values.contains(existing.id)
-                && Self.normalizedIdempotencyKey(existing.idempotencyKey) == incomingKey
-        }) else {
+        let pendingMessageIDs = Set(self.pendingLocalUserEchoMessageIDsByRunID.values)
+        let matchIndex = self.messages.lastIndex { existing in
+            pendingMessageIDs.contains(existing.id) &&
+                Self.normalizedIdempotencyKey(existing.idempotencyKey) == incomingKey
+        }
+        guard let matchIndex else {
             return false
         }
 
@@ -813,17 +840,7 @@ public final class OpenClawChatViewModel {
             $0.value != existing.id
         }
         var updated = self.messages
-        updated[matchIndex] = OpenClawChatMessage(
-            id: existing.id,
-            role: incoming.role,
-            content: incoming.content,
-            timestamp: incoming.timestamp ?? existing.timestamp,
-            idempotencyKey: incoming.idempotencyKey,
-            toolCallId: incoming.toolCallId,
-            toolName: incoming.toolName,
-            usage: incoming.usage,
-            stopReason: incoming.stopReason,
-            errorMessage: incoming.errorMessage)
+        updated[matchIndex] = Self.adoptingCanonicalMessage(incoming, over: existing)
         self.replaceMessages(Self.dedupeMessages(updated))
         self.prunePendingLocalUserEchoMessageIDs()
         return true
@@ -846,17 +863,7 @@ public final class OpenClawChatViewModel {
         let existing = self.messages[matchIndex]
         let provisional = self.provisionalFinalMessagesByID[existing.id]
         var updated = self.messages
-        updated[matchIndex] = OpenClawChatMessage(
-            id: existing.id,
-            role: incoming.role,
-            content: incoming.content,
-            timestamp: incoming.timestamp ?? existing.timestamp,
-            idempotencyKey: incoming.idempotencyKey,
-            toolCallId: incoming.toolCallId,
-            toolName: incoming.toolName,
-            usage: incoming.usage,
-            stopReason: incoming.stopReason,
-            errorMessage: incoming.errorMessage)
+        updated[matchIndex] = Self.adoptingCanonicalMessage(incoming, over: existing)
         self.provisionalFinalMessagesByID.removeValue(forKey: existing.id)
         if let runId = provisional?.runId {
             self.runMessageScopesByRunID.removeValue(forKey: runId)
@@ -873,37 +880,27 @@ public final class OpenClawChatViewModel {
     {
         guard !previous.isEmpty, !incoming.isEmpty else { return incoming }
 
-        var idsByKey: [String: [UUID]] = [:]
+        var previousMessagesByKey: [String: [OpenClawChatMessage]] = [:]
         for message in previous {
             guard let key = Self.messageIdentityKey(for: message) else { continue }
-            idsByKey[key, default: []].append(message.id)
+            previousMessagesByKey[key, default: []].append(message)
         }
 
         return incoming.map { message in
             guard let key = Self.messageIdentityKey(for: message),
-                  var ids = idsByKey[key],
-                  let reusedId = ids.first
+                  var matches = previousMessagesByKey[key],
+                  let existing = matches.first
             else {
                 return message
             }
-            ids.removeFirst()
-            if ids.isEmpty {
-                idsByKey.removeValue(forKey: key)
+            matches.removeFirst()
+            if matches.isEmpty {
+                previousMessagesByKey.removeValue(forKey: key)
             } else {
-                idsByKey[key] = ids
+                previousMessagesByKey[key] = matches
             }
-            guard reusedId != message.id else { return message }
-            return OpenClawChatMessage(
-                id: reusedId,
-                role: message.role,
-                content: message.content,
-                timestamp: message.timestamp,
-                idempotencyKey: message.idempotencyKey,
-                toolCallId: message.toolCallId,
-                toolName: message.toolName,
-                usage: message.usage,
-                stopReason: message.stopReason,
-                errorMessage: message.errorMessage)
+            guard existing.id != message.id else { return message }
+            return Self.adoptingCanonicalMessage(message, over: existing)
         }
     }
 
@@ -922,10 +919,10 @@ public final class OpenClawChatViewModel {
         }
 
         var reconciled = Self.reconcileMessageIDs(previous: previous, incoming: incoming)
-        let incomingIdentityKeys = Set(reconciled.compactMap(Self.messageIdentityKey(for:)))
-        var incomingIdempotencyKeys = Set(reconciled.compactMap { message in
+        let incomingIdempotencyKeys = Set(reconciled.compactMap { message in
             Self.normalizedIdempotencyKey(message.idempotencyKey)
         })
+        let incomingIdentityKeys = Set(reconciled.compactMap(Self.messageIdentityKey(for:)))
         var remainingIncomingUserRefreshCounts = countKeys(
             reconciled.compactMap(Self.userRefreshIdentityKey(for:)))
 
@@ -943,25 +940,15 @@ public final class OpenClawChatViewModel {
             remainingIncomingUserRefreshCounts[userKey] = remaining - 1
         }
 
-        let lastCanonicalPreviousIndex = previous.lastIndex { message in
-            guard let identityKey = Self.messageIdentityKey(for: message) else { return false }
-            return incomingIdentityKeys.contains(identityKey)
-        }
-        let trailingLocalCandidates = lastCanonicalPreviousIndex.map { index in
-            previous[previous.index(after: index)...]
-        } ?? []
-
-        // Transcript idempotency owns pending-send correlation. Content equality
-        // can otherwise erase another client's identical user turn.
+        // Exact client correlation owns pending-send adoption. A metadata-free
+        // row is ambiguous across clients, so retain both rather than lose a turn.
         let pendingLocalUsers = previous.filter { message in
             guard message.role.lowercased() == "user", pendingLocalUserEchoIDs.contains(message.id) else {
                 return false
             }
-            guard let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey),
-                  incomingIdempotencyKeys.remove(idempotencyKey) != nil
-            else {
-                return true
-            }
+            let matched = Self.normalizedIdempotencyKey(message.idempotencyKey)
+                .map(incomingIdempotencyKeys.contains) ?? false
+            guard matched else { return true }
             if let userKey = Self.userRefreshIdentityKey(for: message),
                let remaining = remainingIncomingUserRefreshCounts[userKey],
                remaining > 0
@@ -970,6 +957,15 @@ public final class OpenClawChatViewModel {
             }
             return false
         }
+
+        let lastCanonicalPreviousIndex = previous.lastIndex { message in
+            guard let identityKey = Self.messageIdentityKey(for: message) else { return false }
+            return incomingIdentityKeys.contains(identityKey)
+        }
+        let trailingLocalCandidates = lastCanonicalPreviousIndex.map { index in
+            previous[previous.index(after: index)...]
+        } ?? []
+
         let trailingLocalUsers = trailingLocalCandidates.filter { message in
             guard message.role.lowercased() == "user" else { return false }
             guard !pendingLocalUserEchoIDs.contains(message.id) else { return false }

@@ -329,14 +329,17 @@ private final class CallbackBox {
 
 private actor AsyncGate {
     private var continuation: CheckedContinuation<Void, Never>?
+    private var isOpen = false
 
     func wait() async {
+        guard !self.isOpen else { return }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }
 
     func open() {
+        self.isOpen = true
         self.continuation?.resume()
         self.continuation = nil
     }
@@ -1336,6 +1339,8 @@ struct ChatViewModelTests {
     @Test func `does not duplicate user message when refresh returns canonical timestamp`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
+        let refreshGate = AsyncGate()
+        let historyCallCount = AsyncCounter()
         let history1 = historyPayload(
             sessionId: sessionId,
             messages: [
@@ -1346,6 +1351,11 @@ struct ChatViewModelTests {
             ])
         let (_, vm) = await makeViewModel(
             historyResponses: [history1],
+            requestHistoryHook: { _ in
+                if await historyCallCount.increment() == 2 {
+                    await refreshGate.wait()
+                }
+            },
             historyResponseHook: { _, index, sentRunIds in
                 guard index == 1, let runId = sentRunIds.last else { return nil }
                 return historyPayload(
@@ -1368,6 +1378,11 @@ struct ChatViewModelTests {
             })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
         await sendUserMessage(vm, text: "hello from mac webchat")
+        try await waitUntil("canonical refresh starts") { await historyCallCount.current() == 2 }
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        await refreshGate.open()
 
         try await waitUntil("send acknowledgement refresh keeps one user message") {
             await MainActor.run {
@@ -1382,6 +1397,56 @@ struct ChatViewModelTests {
                 return hasAssistant && userMessages.count == 1
             }
         }
+        #expect(await MainActor.run { vm.messages.last(where: { $0.role == "user" })?.id } == optimisticID)
+    }
+
+    @Test func `metadata free canonical refresh keeps ambiguous user turns distinct`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let refreshGate = AsyncGate()
+        let historyCallCount = AsyncCounter()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: sessionId)],
+            requestHistoryHook: { _ in
+                if await historyCallCount.increment() == 2 {
+                    await refreshGate.wait()
+                }
+            },
+            historyResponseHook: { _, index, _ in
+                guard index == 1 else { return nil }
+                return historyPayload(
+                    sessionId: sessionId,
+                    messages: [
+                        chatTextMessage(
+                            role: "user",
+                            text: "legacy echo",
+                            timestamp: now + 5000),
+                        chatTextMessage(
+                            role: "assistant",
+                            text: "legacy answer",
+                            timestamp: now + 6000),
+                    ])
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        await sendUserMessage(vm, text: "legacy echo")
+        try await waitUntil("legacy refresh starts") { await historyCallCount.current() == 2 }
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        await refreshGate.open()
+
+        try await waitUntil("metadata free canonical refresh preserves both user rows") {
+            await MainActor.run {
+                vm.messages.count(where: { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "legacy echo"
+                }) == 2 && vm.messages.contains(where: { message in
+                    message.role == "assistant" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "legacy answer"
+                })
+            }
+        }
+        #expect(await MainActor.run { vm.messages.contains(where: { $0.id == optimisticID }) })
     }
 
     @Test func `preserves local echo when another client sends identical text during refresh`() async throws {
@@ -1896,6 +1961,82 @@ struct ChatViewModelTests {
                 msg.role == "user" && msg.content.first?.text == "echo me"
             }) == 1
         })
+    }
+
+    @Test func `metadata free same text event cannot consume pending local identity`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageStatus: "pending")
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }
+
+        await sendUserMessage(vm, text: "legacy echo")
+        let runId = try await waitForLastSentRunId(transport)
+        let optimisticID = try await MainActor.run {
+            try #require(vm.messages.last(where: { $0.role == "user" })?.id)
+        }
+        let canonicalTimestamp = Date().timeIntervalSince1970 * 1000 + 5000
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "legacy echo",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: canonicalTimestamp),
+                    messageId: "srv-legacy-echo-1",
+                    messageSeq: 1)))
+
+        try await waitUntil("ambiguous metadata free event remains distinct") {
+            await MainActor.run {
+                vm.messages.count(where: { message in
+                    message.role == "user" && message.content.first?.text == "legacy echo"
+                }) == 2
+            }
+        }
+
+        let localCanonicalTimestamp = canonicalTimestamp + 1000
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "legacy echo",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: localCanonicalTimestamp,
+                        idempotencyKey: "\(runId):user"),
+                    messageId: "srv-local-echo-1",
+                    messageSeq: 2)))
+
+        try await waitUntil("later correlated local echo adopts only the optimistic row") {
+            await MainActor.run {
+                vm.messages.count(where: { message in
+                    message.role == "user" && message.content.first?.text == "legacy echo"
+                }) == 2 && vm.messages.contains(where: { message in
+                    message.id == optimisticID &&
+                        message.timestamp == localCanonicalTimestamp &&
+                        message.idempotencyKey == "\(runId):user"
+                }) && vm.messages.contains(where: { message in
+                    message.timestamp == canonicalTimestamp && message.idempotencyKey == nil
+                })
+            }
+        }
     }
 
     @Test func `appends same content user transcript when it is not local echo`() async throws {
