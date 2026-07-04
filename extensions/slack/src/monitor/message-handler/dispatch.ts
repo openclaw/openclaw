@@ -631,7 +631,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         await ctx.setSlackThreadStatus({
           channelId: message.channel,
           threadTs: statusThreadTs,
-          status: "is thinking...",
+          status: "is typing...",
           loadingMessages: SLACK_THREAD_LOADING_MESSAGES,
         });
         if (typingReaction && message.ts) {

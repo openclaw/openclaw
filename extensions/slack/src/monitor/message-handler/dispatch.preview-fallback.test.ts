@@ -1739,7 +1739,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",
       threadTs: THREAD_TS,
-      status: "is thinking...",
+      status: "is typing...",
       loadingMessages: [
         "Reading the thread...",
         "Checking context...",

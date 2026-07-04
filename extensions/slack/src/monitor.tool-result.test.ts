@@ -442,7 +442,7 @@ describe("monitorSlackProvider tool results", () => {
       token: "bot-token",
       channel_id: "C1",
       thread_ts: "123",
-      status: "is thinking...",
+      status: "is typing...",
       loading_messages: [
         "Reading the thread...",
         "Checking context...",
