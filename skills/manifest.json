@@ -225,13 +225,13 @@
     }
   },
   {
-    "contentHash": "sha256:364136a789a7d77ce2da440bd271d4573aec9bfb970275f21095cd4d435074a3",
+    "contentHash": "sha256:ade525884346fa316c7936db269854db12541801aab0adc5bd07c3647a4710e0",
     "description": "Generate a short music/audio clip from a text prompt via OpenRouter (Google Lyria) and send it as a file.",
     "emoji": "🎵",
     "name": "music-gen",
     "path": "skills/music-gen/SKILL.md",
     "requires": {
-      "bins": ["curl", "jq"],
+      "bins": ["python3"],
       "env": ["OPENROUTER_API_KEY"]
     }
   },
