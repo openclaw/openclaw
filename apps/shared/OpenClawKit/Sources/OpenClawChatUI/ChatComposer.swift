@@ -656,6 +656,7 @@ struct OpenClawChatComposer: View {
                 HStack(spacing: 10) {
                     ProgressView()
                     Text("Loading commands")
+                        .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 96)
@@ -664,13 +665,16 @@ struct OpenClawChatComposer: View {
             {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Commands unavailable")
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawChatTypography.footnoteSemiBold)
                     Text(error)
-                        .font(.caption)
+                        .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
-                    Button("Retry") {
+                    Button {
                         self.viewModel.refreshSlashCommands()
+                    } label: {
+                        Text("Retry")
+                            .font(OpenClawChatTypography.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -679,6 +683,7 @@ struct OpenClawChatComposer: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else if matches.isEmpty {
                 Text("No matching commands")
+                    .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 96)
             } else {
@@ -724,11 +729,14 @@ struct OpenClawChatComposer: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(command.displayInvocation)
-                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                    .font(OpenClawChatTypography.mono(
+                        size: 15,
+                        weight: .semibold,
+                        relativeTo: .subheadline))
                     .lineLimit(1)
                 if !command.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(command.description)
-                        .font(.caption)
+                        .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
