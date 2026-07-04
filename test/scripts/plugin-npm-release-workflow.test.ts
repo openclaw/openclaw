@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { assertExtendedStableReleaseVersion } from "../../scripts/lib/extended-stable-plugin-acceptance.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 
@@ -41,8 +42,9 @@ describe("plugin npm extended-stable publication", () => {
       "Validate extended-stable release line",
     );
     expect(releaseLine.run).toContain("extended-stable/([0-9]{4})");
-    expect(releaseLine.run).toContain("patch 33 or above");
-    expect(releaseLine.run).toContain('"${BASH_REMATCH[1]}" != "${branch_year}"');
+    expect(releaseLine.run).toContain("assertExtendedStableReleaseVersion");
+    expect(releaseLine.run).toContain('"${root_year}" != "${branch_year}"');
+    expect(releaseLine.run).not.toContain("[3-9][0-9]|[1-9][0-9]{2,}");
     expect(step(parsed.jobs?.preview_plugins_npm, "Resolve plugin release plan").run).toContain(
       "matrix_selector='.all'",
     );
@@ -64,6 +66,15 @@ describe("plugin npm extended-stable publication", () => {
     const provenance = step(publish, "Verify extended-stable npm provenance");
     expect(provenance.run).toContain("dist.attestations.provenance.predicateType");
     expect(provenance.run).toContain("npm audit signatures");
+  });
+
+  it("rejects patches 30-32 before accepting the extended-stable release line", () => {
+    for (const patch of [30, 31, 32]) {
+      expect(() => assertExtendedStableReleaseVersion(`2026.7.${patch}`)).toThrow(
+        "patch must be 33 or above",
+      );
+    }
+    expect(assertExtendedStableReleaseVersion("2026.7.33")).toBe("2026.7.33");
   });
 
   it("emits one closed aggregate without mutating shared dist-tags", () => {

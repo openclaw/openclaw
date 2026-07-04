@@ -103,11 +103,10 @@ jobs:
           branch_year="${BASH_REMATCH[1]}"
           branch_month="${BASH_REMATCH[2]}"
           root_version="$(node -p "require('./package.json').version")"
-          if [[ ! "${root_version}" =~ ^([0-9]{4})\.([1-9][0-9]*)\.([3-9][0-9]|[1-9][0-9]{2,})$ ]]; then
-            echo "Extended-stable plugin publication requires an exact final YYYY.M.P version with patch 33 or above." >&2
-            exit 1
-          fi
-          if [[ "${BASH_REMATCH[1]}" != "${branch_year}" || "${BASH_REMATCH[2]}" != "${branch_month}" ]]; then
+          ROOT_VERSION="${root_version}" node --import tsx --input-type=module -e \
+            'import { assertExtendedStableReleaseVersion } from "./scripts/lib/extended-stable-plugin-acceptance.ts"; assertExtendedStableReleaseVersion(process.env.ROOT_VERSION ?? "");'
+          IFS=. read -r root_year root_month _ <<< "${root_version}"
+          if [[ "${root_year}" != "${branch_year}" || "${root_month}" != "${branch_month}" ]]; then
             echo "Extended-stable plugin package month ${root_version} does not match ${WORKFLOW_REF}." >&2
             exit 1
           fi
