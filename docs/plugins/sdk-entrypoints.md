@@ -94,9 +94,8 @@ export default defineToolPlugin({
 
 **Import:** `openclaw/plugin-sdk/tool-results`
 
-Use `textResult(text, details)` when model-facing text and structured details
-differ. Use `jsonResult(payload)` when the model should receive pretty-printed
-JSON and `details` should preserve the typed payload.
+Use `textResult(text, details)` for custom text or `jsonResult(payload)` for
+pretty-printed JSON with the typed payload in `details`.
 
 ```typescript
 import { jsonResult, textResult } from "openclaw/plugin-sdk/tool-results";
@@ -105,9 +104,8 @@ return jsonResult({ ok: true, messageId });
 return textResult("Message sent.", { ok: true, messageId });
 ```
 
-These helpers build portable agent tool results only. MCP `structuredContent`,
-transport envelopes, media blocks, approval actions, and channel presentation
-remain owned by their specific contracts.
+These helpers do not cover MCP, transport, media, approval, or channel-specific
+results.
 
 ## `definePluginEntry`
 
