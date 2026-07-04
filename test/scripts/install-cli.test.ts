@@ -41,6 +41,12 @@ function linkRequiredShellTools(bin: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("does not clean an unrelated legacy checkout during the default npm install", () => {
+    const main = script.slice(script.indexOf("\nmain() {"));
+    expect(main).not.toContain("cleanup_legacy_submodules");
+    expect(script).toContain('cleanup_legacy_submodules "$repo_dir"');
+  });
+
   it("rejects installer options with missing values", () => {
     const result = runInstallCliShell(`
       set -euo pipefail
@@ -166,10 +172,7 @@ describe("install-cli.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(
-      join(outer, "package.json"),
-      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
-    );
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',

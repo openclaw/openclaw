@@ -17,14 +17,101 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `page order omits workspace and identity steps`() {
-        let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
         #expect(!order.contains(7))
         #expect(order.contains(3))
     }
 
     @Test func `page order omits onboarding chat when identity known`() {
-        let order = OnboardingView.pageOrder(for: .local, showOnboardingChat: false)
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
         #expect(!order.contains(8))
+    }
+
+    @Test func `fresh local setup installs CLI before starting gateway wizard`() {
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: true)
+
+        #expect(order.firstIndex(of: 2) == 2)
+        #expect(order.firstIndex(of: 3) == 3)
+    }
+
+    @Test func `configured local setup skips CLI install page`() {
+        let order = OnboardingView.pageOrder(
+            for: .local,
+            showOnboardingChat: false,
+            requiresCLIInstall: false)
+
+        #expect(!order.contains(2))
+    }
+
+    @Test func `fresh onboarding defaults to this Mac`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        #expect(view.selectedConnectionMode == .local)
+        #expect(view.isConnectionSelectionBlocking)
+        #expect(state.connectionMode == .unconfigured)
+    }
+
+    @Test func `reopened onboarding preserves configure later selection`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = true
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        #expect(view.selectedConnectionMode == .unconfigured)
+        #expect(!view.isConnectionSelectionBlocking)
+        #expect(state.connectionMode == .unconfigured)
+    }
+
+    @Test func `advancing from recommended this Mac commits local mode`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+
+        #expect(state.connectionMode == .local)
+    }
+
+    @Test func `automatic CLI setup waits for the initial status probe`() {
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: false,
+            installed: false,
+            installing: false))
+        #expect(OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: true,
+            installed: false,
+            installing: false))
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: false,
+            statusKnown: true,
+            installed: false,
+            installing: false))
+    }
+
+    @Test func `paused onboarding defers the local gateway wizard`() {
+        #expect(!OnboardingWizardModel.shouldStart(mode: .local, paused: true))
+        #expect(OnboardingWizardModel.shouldStart(mode: .local, paused: false))
     }
 
     @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {

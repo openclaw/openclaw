@@ -1505,18 +1505,15 @@ function buildQaEnv(port: number): NodeJS.ProcessEnv {
   return env;
 }
 
-function childQaOutputDir(outputDir: string, repoRoot = process.cwd()): string {
-  if (!path.isAbsolute(outputDir)) {
-    return outputDir;
-  }
-  const relative = path.relative(repoRoot, outputDir);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+function resolveQaOutputDir(outputDir: string, repoRoot = process.cwd()): string {
+  const relative = path.relative(repoRoot, path.resolve(repoRoot, outputDir));
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error("--output-dir must stay within the repo root");
   }
-  return relative;
+  return relative ? relative.split(path.sep).join("/") : ".";
 }
 
-function buildQaArgs(options: CliOptions): string[] {
+function buildQaArgs(options: CliOptions, repoRoot = process.cwd()): string[] {
   const args = [
     "qa",
     "suite",
@@ -1527,7 +1524,7 @@ function buildQaArgs(options: CliOptions): string[] {
     "--concurrency",
     "1",
     "--output-dir",
-    childQaOutputDir(options.outputDir),
+    resolveQaOutputDir(options.outputDir, repoRoot),
     "--fast",
   ];
   if (options.primaryModel) {
@@ -2029,9 +2026,8 @@ export const testing = {
   appendGatewayStdoutArtifactLogs,
   appendCapturedBodyText,
   assertSmoke,
-  buildQaEnv,
   buildQaArgs,
-  childQaOutputDir,
+  buildQaEnv,
   createBoundedTextAccumulator,
   createStdoutDiagnosticLogCapture,
   decodeRequestBody,

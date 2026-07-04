@@ -285,6 +285,15 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
+echo "📦 Copying CLI installer"
+INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+if [ ! -f "$INSTALL_CLI_SRC" ]; then
+  echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
+  exit 1
+fi
+cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
+chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
+
 echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
   --output "$APP_ROOT/Contents/Resources"

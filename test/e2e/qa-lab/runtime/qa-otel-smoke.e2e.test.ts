@@ -200,6 +200,27 @@ describe("qa-otel-smoke receiver bounds", () => {
     );
   });
 
+  it("passes a repo-relative output dir to the child QA suite", () => {
+    const repoRoot = path.join(path.sep, "repo");
+    const options = testing.parseArgs([
+      "--output-dir",
+      path.join(repoRoot, ".artifacts", "qa-e2e", "otel-smoke"),
+    ]);
+
+    expect(testing.buildQaArgs(options, repoRoot)).toContain(".artifacts/qa-e2e/otel-smoke");
+    const repoRootArgs = testing.buildQaArgs(
+      testing.parseArgs(["--output-dir", repoRoot]),
+      repoRoot,
+    );
+    expect(repoRootArgs[repoRootArgs.indexOf("--output-dir") + 1]).toBe(".");
+    expect(() =>
+      testing.buildQaArgs(
+        testing.parseArgs(["--output-dir", path.join(path.sep, "outside", "otel-smoke")]),
+        repoRoot,
+      ),
+    ).toThrow("--output-dir must stay within the repo root");
+  });
+
   it("parses body-size limit env values as strict positive integers", () => {
     expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
     expect(
@@ -254,43 +275,6 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT).toBe("http://127.0.0.1:4318/v1/metrics");
     expect(env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT).toBe("http://127.0.0.1:4318/v1/logs");
     expect(env.OTEL_SERVICE_NAME).toBe("openclaw-qa-lab-otel-smoke");
-  });
-
-  it("passes repo-relative output dirs to the child QA suite", () => {
-    const repoRoot = path.join(os.tmpdir(), "openclaw-qa-otel-repo");
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "smoke-ci-profile",
-      "script",
-      "qa-otel-smoke",
-    );
-    const childOutputDir = path.join(
-      ".artifacts",
-      "qa-e2e",
-      "smoke-ci-profile",
-      "script",
-      "qa-otel-smoke",
-    );
-
-    const currentRepoOutputDir = path.join(process.cwd(), childOutputDir);
-    const childArgs = testing.buildQaArgs({
-      ...testing.parseArgs([]),
-      outputDir: currentRepoOutputDir,
-    });
-
-    expect(testing.childQaOutputDir(outputDir, repoRoot)).toBe(childOutputDir);
-    expect(childArgs).toContain(childOutputDir);
-  });
-
-  it("rejects child QA output dirs outside the repo", () => {
-    const repoRoot = path.join(os.tmpdir(), "openclaw-qa-otel-repo");
-    const outputDir = path.join(os.tmpdir(), "openclaw-qa-otel-outside");
-
-    expect(() => testing.childQaOutputDir(outputDir, repoRoot)).toThrow(
-      "--output-dir must stay within the repo root",
-    );
   });
 
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
