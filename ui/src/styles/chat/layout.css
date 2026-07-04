@@ -2182,19 +2182,21 @@
   display: none;
 }
 
+/* Composer controls are quiet text controls: no borders/fills at rest so the
+   composer frame stays the only chrome; hover/open get a soft wash. */
 .chat-controls__inline-select-trigger {
   box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 10px 0 12px;
-  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
+  height: 30px;
+  min-height: 30px;
+  padding: 0 6px 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text);
   font-size: 13px;
   line-height: 1.35;
@@ -2203,9 +2205,10 @@
   user-select: none;
 }
 
-.chat-controls__inline-select-trigger:hover {
-  border-color: color-mix(in srgb, var(--text) 18%, var(--input));
-  background: color-mix(in srgb, var(--card) 82%, var(--bg-elevated) 18%);
+.chat-controls__inline-select-trigger:hover,
+.chat-controls__inline-select[open] > .chat-controls__inline-select-trigger {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text-strong);
 }
 
 .chat-controls__inline-select-trigger:focus-visible {
@@ -2357,6 +2360,165 @@
   transform: translateX(0);
 }
 
+.chat-controls__reasoning-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-controls__reasoning-value {
+  padding-right: 8px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Discrete effort slider: native range input for keyboard/a11y, decorative
+   stop dots layered underneath (pointer-events: none). Dot inset must track
+   half the thumb width so dots align with the thumb's travel. */
+.chat-controls__reasoning-slider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 26px;
+  margin: 2px 8px 0;
+}
+
+.chat-controls__reasoning-dots {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 5px;
+  pointer-events: none;
+}
+
+.chat-controls__reasoning-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+}
+
+.chat-controls__reasoning-dot--default {
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+.chat-controls__reasoning-range {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.chat-controls__reasoning-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chat-controls__reasoning-range:focus-visible {
+  outline: none;
+}
+
+/* --reasoning-fill is set inline (and live-updated on drag) so the filled
+   segment tracks the thumb; pseudo-elements inherit the custom property. */
+.chat-controls__reasoning-range::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text) 45%, transparent) var(--reasoning-fill, 0%),
+    color-mix(in srgb, var(--text) 14%, transparent) var(--reasoning-fill, 0%)
+  );
+}
+
+.chat-controls__reasoning-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.chat-controls__reasoning-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: var(--focus-ring);
+}
+
+/* Inherited default (no override): hollow-looking muted thumb. */
+.chat-controls__reasoning-range--inherit::-webkit-slider-thumb {
+  background: var(--muted);
+}
+
+.chat-controls__reasoning-range::-moz-range-track {
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.chat-controls__reasoning-range::-moz-range-progress {
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+}
+
+.chat-controls__reasoning-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.chat-controls__reasoning-range--inherit::-moz-range-thumb {
+  background: var(--muted);
+}
+
+.chat-controls__reasoning-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-controls__reasoning-reset {
+  margin: 2px 8px 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-controls__reasoning-reset:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.chat-controls__reasoning-reset:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .chat-controls__reasoning-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2420,12 +2582,12 @@
   justify-content: center;
   gap: 4px;
   box-sizing: border-box;
-  min-width: 104px;
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 86%, var(--bg-elevated) 14%);
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--fg);
   font-size: 12px;
   font-weight: 650;
@@ -2435,8 +2597,7 @@
 }
 
 .chat-controls__quota:hover {
-  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle) 28%, var(--card));
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 .chat-controls__quota-label {
