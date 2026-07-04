@@ -780,6 +780,194 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("✅ Subagent");
   });
 
+  it("includes sibling fan-in snapshot when parallel child announces race", async () => {
+    const now = 10_000;
+    const siblingRuns: MockSubagentRun[] = [
+      {
+        runId: "run-a",
+        childSessionKey: "agent:main:subagent:a",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "branch A",
+        cleanup: "keep",
+        createdAt: now,
+        endedAt: now + 10,
+        label: "Branch A",
+        frozenResultText: "A branch result",
+        outcome: { status: "ok" },
+      },
+      {
+        runId: "run-b",
+        childSessionKey: "agent:main:subagent:b",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "branch B",
+        cleanup: "keep",
+        createdAt: now + 1,
+        endedAt: now + 11,
+        label: "Branch B",
+        frozenResultText: "B branch result",
+        outcome: { status: "ok" },
+      },
+      {
+        runId: "run-stale",
+        childSessionKey: "agent:main:subagent:stale",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "stale old branch",
+        cleanup: "keep",
+        createdAt: now - 60 * 60 * 1000,
+        endedAt: now - 60 * 60 * 1000 + 10,
+        label: "Stale branch",
+        frozenResultText: "stale old result",
+        outcome: { status: "ok" },
+      },
+    ];
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? siblingRuns : [],
+    );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
+      (childSessionKey: string) =>
+        siblingRuns.find((run) => run.childSessionKey === childSessionKey),
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:b",
+      childRunId: "run-b",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      task: "branch B",
+      label: "Branch B",
+      roundOneReply: "B branch result",
+      waitForCompletion: false,
+    });
+
+    const call = getAgentCall() as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{ result?: string; replyInstruction?: string }>;
+      };
+    };
+    const msg = call?.params?.message as string;
+    const event = call?.params?.internalEvents?.[0];
+    expect(event?.result).toContain("Sibling fan-in snapshot");
+    expect(event?.result).toContain("expected_children: 2");
+    expect(event?.result).toContain("terminal_children: 2");
+    expect(event?.result).toContain("pending_children: 0");
+    expect(event?.result).toContain("snapshot_truncated: false");
+    expect(event?.result).toContain("A branch result");
+    expect(event?.result).toContain("B branch result");
+    expect(event?.result).not.toContain("stale old result");
+    expect(event?.replyInstruction).toContain(
+      "Treat the sibling fan-in snapshot above as authoritative",
+    );
+    expect(msg).toContain("If every expected child in the snapshot is terminal");
+  });
+
+  it("suppresses non-owner sibling fan-in announces after all children are terminal", async () => {
+    const now = 15_000;
+    const siblingRuns: MockSubagentRun[] = [
+      {
+        runId: "run-a",
+        childSessionKey: "agent:main:subagent:a",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "branch A",
+        cleanup: "keep",
+        createdAt: now,
+        endedAt: now + 10,
+        label: "Branch A",
+        frozenResultText: "A branch result",
+        outcome: { status: "ok" },
+      },
+      {
+        runId: "run-b",
+        childSessionKey: "agent:main:subagent:b",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "branch B",
+        cleanup: "keep",
+        createdAt: now + 1,
+        endedAt: now + 11,
+        label: "Branch B",
+        frozenResultText: "B branch result",
+        outcome: { status: "ok" },
+      },
+    ];
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? siblingRuns : [],
+    );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
+      (childSessionKey: string) =>
+        siblingRuns.find((run) => run.childSessionKey === childSessionKey),
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:a",
+      childRunId: "run-a",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      task: "branch A",
+      label: "Branch A",
+      roundOneReply: "A branch result",
+      waitForCompletion: false,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("includes a bounded sibling fan-in snapshot for four child branches", async () => {
+    const now = 20_000;
+    const siblingRuns: MockSubagentRun[] = Array.from({ length: 4 }, (_, index) => {
+      const branch = String.fromCharCode("A".charCodeAt(0) + index);
+      return {
+        runId: `run-${branch.toLowerCase()}`,
+        childSessionKey: `agent:main:subagent:${branch.toLowerCase()}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: `branch ${branch}`,
+        cleanup: "keep" as const,
+        createdAt: now + index,
+        endedAt: now + 100 + index,
+        label: `Branch ${branch}`,
+        frozenResultText: `${branch} branch result`,
+        outcome: { status: "ok" as const },
+      };
+    });
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:main" ? siblingRuns : [],
+    );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
+      (childSessionKey: string) =>
+        siblingRuns.find((run) => run.childSessionKey === childSessionKey),
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:d",
+      childRunId: "run-d",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      task: "branch D",
+      label: "Branch D",
+      roundOneReply: "D branch result",
+      waitForCompletion: false,
+    });
+
+    const call = getAgentCall() as { params?: { internalEvents?: Array<{ result?: string }> } };
+    const result = call?.params?.internalEvents?.[0]?.result ?? "";
+    expect(result).toContain("expected_children: 4");
+    expect(result).toContain("terminal_children: 4");
+    expect(result).toContain("snapshot_truncated: false");
+    expect(result).toContain("A branch result");
+    expect(result).toContain("B branch result");
+    expect(result).toContain("C branch result");
+    expect(result).toContain("D branch result");
+  });
+
   it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",

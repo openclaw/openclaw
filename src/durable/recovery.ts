@@ -3,6 +3,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isDurableWorkerEnabled } from "./config.js";
 import { reconcileDurableFanIn, type DurableFanInPolicy } from "./fan-in.js";
 import {
+  isDurableResultMailboxAcknowledged,
+  upsertDurableChildResultMailbox,
+} from "./result-mailbox.js";
+import {
   DURABLE_AGENT_TURN_OPERATION_KIND,
   DURABLE_CHAT_SEND_OPERATION_KIND,
   DURABLE_SUBAGENT_RUN_OPERATION_KIND,
@@ -388,6 +392,40 @@ function markSubagentRunLost(params: {
         ...(recoveryDiagnostic ? { recoveryDiagnostic } : {}),
       },
     });
+    const mailbox = upsertDurableChildResultMailbox({
+      store: params.store,
+      parentRuntimeRunId: link.parentRuntimeRunId,
+      parentStepId: link.parentStepId,
+      childRuntimeRunId: params.run.runtimeRunId,
+      childSessionKey: firstString(
+        params.run.metadata?.childSessionKey,
+        link.metadata?.childSessionKey,
+        params.run.sourceRef,
+      ),
+      agentInvocationId: params.run.idempotencyKey,
+      linkStatus: "lost",
+      terminalStatus: "lost",
+      terminalOutcome: "lost",
+      reason: params.reason,
+      summary: "Subagent run was marked lost during durable recovery.",
+      now: params.now,
+    });
+    if (!isDurableResultMailboxAcknowledged(mailbox)) {
+      params.store.appendEvent({
+        runtimeRunId: link.parentRuntimeRunId,
+        eventType: "subagent.child.result_mailbox_queued",
+        eventTime: params.now,
+        stepId: link.parentStepId,
+        agentInvocationId: params.run.idempotencyKey,
+        correlationId: params.run.sourceRef,
+        payload: {
+          childRuntimeRunId: params.run.runtimeRunId,
+          status: "lost",
+          reason: params.reason,
+          processInstanceId: params.processInstanceId,
+        },
+      });
+    }
     reconcileDurableFanIn({
       store: params.store,
       parentRuntimeRunId: link.parentRuntimeRunId,

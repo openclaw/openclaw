@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import { isDurableRuntimesEnabled } from "./config.js";
 import { reconcileDurableFanIn, type DurableFanInPolicy } from "./fan-in.js";
 import {
+  isDurableResultMailboxAcknowledged,
+  recordDurableResultMailboxDeliveryAttempt,
+  upsertDurableChildResultMailbox,
+} from "./result-mailbox.js";
+import {
   DURABLE_AGENT_TURN_OPERATION_KIND,
   DURABLE_SUBAGENT_RUN_OPERATION_KIND,
 } from "./runtime-ids.js";
@@ -13,6 +18,7 @@ import type {
   DurableRuntimeStore,
 } from "./types.js";
 const SUBAGENT_PARENT_STEP_ID = "subagents";
+const SUBAGENT_ANNOUNCE_IDEMPOTENCY_PREFIX = "announce:v1:";
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -42,26 +48,60 @@ function safeCall(action: () => void): void {
   }
 }
 
-function findLatestOpenParentRun(params: {
+function isSubagentAnnounceContinuationRun(run: DurableRuntimeRun): boolean {
+  return run.idempotencyKey?.startsWith(SUBAGENT_ANNOUNCE_IDEMPOTENCY_PREFIX) === true;
+}
+
+type DurableParentBindingResult =
+  | {
+      status: "linked";
+      parent: DurableRuntimeRun;
+      reason: "requester_run_id_match" | "newest_same_session_fallback";
+      candidateCount: number;
+    }
+  | {
+      status: "missing";
+      reason:
+        | "requester_run_id_not_found"
+        | "no_open_parent_for_session"
+        | "no_requester_session_key";
+      candidateCount: number;
+    };
+
+function findOpenParentRun(params: {
   store: DurableRuntimeStore;
   requesterSessionKey: string;
   requesterRunId?: string;
-}): DurableRuntimeRun | undefined {
+}): DurableParentBindingResult {
+  if (!params.requesterSessionKey.trim()) {
+    return { status: "missing", reason: "no_requester_session_key", candidateCount: 0 };
+  }
   const requesterRunId = params.requesterRunId?.trim();
   const candidates = params.store
     .listOpenRuns({ operationKind: DURABLE_AGENT_TURN_OPERATION_KIND, limit: 5000 })
     .filter(
       (run) =>
-        run.sourceRef === params.requesterSessionKey ||
-        run.metadata?.sessionKey === params.requesterSessionKey,
+        !isSubagentAnnounceContinuationRun(run) &&
+        (run.sourceRef === params.requesterSessionKey ||
+          run.metadata?.sessionKey === params.requesterSessionKey),
     );
   if (requesterRunId) {
     const exactRun = candidates.find((run) => run.idempotencyKey === requesterRunId);
     if (exactRun) {
-      return exactRun;
+      return {
+        status: "linked",
+        parent: exactRun,
+        reason: "requester_run_id_match",
+        candidateCount: candidates.length,
+      };
     }
+    return {
+      status: "missing",
+      reason: "requester_run_id_not_found",
+      candidateCount: candidates.length,
+    };
   }
-  return candidates.toSorted((a, b) => {
+  const parent = candidates.toSorted((a, b) => {
     const createdDelta = b.createdAt - a.createdAt;
     if (createdDelta !== 0) {
       return createdDelta;
@@ -72,6 +112,19 @@ function findLatestOpenParentRun(params: {
     }
     return b.runtimeRunId.localeCompare(a.runtimeRunId);
   })[0];
+  if (!parent) {
+    return {
+      status: "missing",
+      reason: "no_open_parent_for_session",
+      candidateCount: candidates.length,
+    };
+  }
+  return {
+    status: "linked",
+    parent,
+    reason: "newest_same_session_fallback",
+    candidateCount: candidates.length,
+  };
 }
 
 function normalizeSubagentTerminalStatus(status: string | undefined): string | undefined {
@@ -145,11 +198,12 @@ export function recordDurableSubagentRegistered(params: {
     const now = Date.now();
     const store = openDurableRuntimeStore({ env });
     try {
-      const parent = findLatestOpenParentRun({
+      const parentBinding = findOpenParentRun({
         store,
         requesterSessionKey: params.requesterSessionKey,
         requesterRunId: params.requesterRunId,
       });
+      const parent = parentBinding.status === "linked" ? parentBinding.parent : undefined;
       const metadata = {
         childSessionKey: params.childSessionKey,
         requesterSessionKey: params.requesterSessionKey,
@@ -162,6 +216,12 @@ export function recordDurableSubagentRegistered(params: {
         agentId: params.agentId,
         requesterAgentId: params.requesterAgentId,
         requesterRunId: params.requesterRunId,
+        parentBinding: {
+          status: parentBinding.status,
+          reason: parentBinding.reason,
+          candidateCount: parentBinding.candidateCount,
+          ...(parent ? { parentRuntimeRunId: parent.runtimeRunId } : {}),
+        },
       };
       const child = store.createRun({
         operationKind: DURABLE_SUBAGENT_RUN_OPERATION_KIND,
@@ -198,6 +258,21 @@ export function recordDurableSubagentRegistered(params: {
         payload: metadata,
       });
       if (!parent) {
+        store.appendEvent({
+          runtimeRunId: child.runtimeRunId,
+          eventType: "subagent.parent.binding_missing",
+          eventTime: now,
+          stepId: "subagent_run",
+          agentInvocationId: params.runId,
+          idempotencyKey: `${params.runId}:parent-binding:${parentBinding.reason}`,
+          correlationId: params.requesterSessionKey,
+          payload: {
+            requesterSessionKey: params.requesterSessionKey,
+            requesterRunId: params.requesterRunId,
+            reason: parentBinding.reason,
+            candidateCount: parentBinding.candidateCount,
+          },
+        });
         return;
       }
       store.createStep({
@@ -372,6 +447,36 @@ export function recordDurableSubagentTerminal(params: {
             summary: params.summary,
           },
         });
+        const mailbox = upsertDurableChildResultMailbox({
+          store,
+          parentRuntimeRunId: link.parentRuntimeRunId,
+          parentStepId: link.parentStepId,
+          childRuntimeRunId: child.runtimeRunId,
+          childSessionKey: params.childSessionKey,
+          agentInvocationId: params.runId,
+          linkStatus,
+          terminalStatus: params.status,
+          terminalOutcome: linkStatus,
+          error: params.error,
+          summary: params.summary,
+          now,
+        });
+        if (!isDurableResultMailboxAcknowledged(mailbox)) {
+          store.appendEvent({
+            runtimeRunId: link.parentRuntimeRunId,
+            eventType: "subagent.child.result_mailbox_queued",
+            eventTime: now,
+            stepId: link.parentStepId,
+            agentInvocationId: params.runId,
+            correlationId: params.childSessionKey,
+            payload: {
+              childRuntimeRunId: child.runtimeRunId,
+              status: linkStatus,
+              error: params.error,
+              summary: params.summary,
+            },
+          });
+        }
         reconcileDurableFanIn({
           store,
           parentRuntimeRunId: link.parentRuntimeRunId,
@@ -531,12 +636,18 @@ export function recordDurableSubagentAnnounceDelivery(params: {
         idempotencyKey: params.directIdempotencyKey,
       });
       for (const link of store.listParentLinks(child.runtimeRunId)) {
+        const deliveryAcknowledged =
+          params.delivered &&
+          params.path === "direct" &&
+          directRun?.status === "succeeded" &&
+          directRun.recoveryState === "terminal";
         const payload = {
           childRuntimeRunId: child.runtimeRunId,
           childSessionKey: params.childSessionKey,
           directRuntimeRunId: directRun?.runtimeRunId,
           directIdempotencyKey: params.directIdempotencyKey,
           delivered: params.delivered,
+          acknowledged: deliveryAcknowledged,
           path: params.path,
           error: params.error,
           reason: params.reason,
@@ -551,6 +662,22 @@ export function recordDurableSubagentAnnounceDelivery(params: {
           agentInvocationId: params.runId,
           correlationId: params.childSessionKey,
           payload,
+        });
+        recordDurableResultMailboxDeliveryAttempt({
+          store,
+          parentRuntimeRunId: link.parentRuntimeRunId,
+          parentStepId: link.parentStepId,
+          childRuntimeRunId: child.runtimeRunId,
+          childSessionKey: params.childSessionKey,
+          agentInvocationId: params.runId,
+          directRuntimeRunId: directRun?.runtimeRunId,
+          directIdempotencyKey: params.directIdempotencyKey,
+          delivered: params.delivered,
+          acknowledged: deliveryAcknowledged,
+          path: params.path,
+          error: params.error,
+          reason: params.reason,
+          now,
         });
         const parent = store.getRun(link.parentRuntimeRunId);
         if (!parent || isTerminalRunStatus(parent.status)) {
@@ -568,7 +695,9 @@ export function recordDurableSubagentAnnounceDelivery(params: {
           params.delivered &&
           params.path === "direct" &&
           directRun?.status === "succeeded" &&
-          directRun.recoveryState === "terminal"
+          directRun.recoveryState === "terminal" &&
+          deliveryAcknowledged &&
+          isParentFanInComplete({ store, parentRuntimeRunId: parent.runtimeRunId })
         ) {
           store.updateRun({
             runtimeRunId: parent.runtimeRunId,

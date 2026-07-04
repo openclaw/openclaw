@@ -63,6 +63,18 @@ type SubagentAnnounceDeps = {
   loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
+type DirectChildCompletionRow = Parameters<
+  typeof filterCurrentDirectChildCompletionRows
+>[0][number];
+type SiblingFanInFindings = {
+  text: string;
+  terminalCount: number;
+  pendingCount: number;
+  snapshotTruncated: boolean;
+  allListedChildrenTerminal: boolean;
+  currentChildOwnsFinal: boolean;
+};
+
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -164,6 +176,218 @@ function stripAndClassifyReply(text: string): string | null {
     return null;
   }
   return result;
+}
+
+const SIBLING_FAN_IN_WINDOW_MS = 30 * 60 * 1000;
+const SIBLING_FAN_IN_MAX_ROWS = 8;
+
+function asUsableTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function hasCompletionText(child: DirectChildCompletionRow): boolean {
+  return Boolean(
+    normalizeOptionalString(child.completion?.resultText) ??
+    normalizeOptionalString(child.delivery?.payload?.frozenResultText) ??
+    normalizeOptionalString(child.completion?.fallbackResultText) ??
+    normalizeOptionalString(child.delivery?.payload?.fallbackFrozenResultText) ??
+    normalizeOptionalString(child.frozenResultText),
+  );
+}
+
+function isTerminalChildCompletionRow(child: DirectChildCompletionRow): boolean {
+  const status = child.outcome?.status;
+  return (
+    status === "ok" ||
+    status === "error" ||
+    status === "timeout" ||
+    typeof child.endedAt === "number"
+  );
+}
+
+function patchCurrentChildCompletionRow(params: {
+  child: DirectChildCompletionRow;
+  currentChildRunId: string;
+  currentFindings: string;
+}): DirectChildCompletionRow {
+  if (params.child.runId !== params.currentChildRunId || hasCompletionText(params.child)) {
+    return params.child;
+  }
+  return {
+    ...params.child,
+    completion: {
+      ...params.child.completion,
+      resultText: params.currentFindings,
+    },
+  };
+}
+
+function buildSyntheticCurrentChildRow(params: {
+  currentChildSessionKey: string;
+  currentChildRunId: string;
+  requesterSessionKey: string;
+  task: string;
+  label?: string;
+  createdAt: number;
+  endedAt?: number;
+  currentFindings: string;
+  outcome?: SubagentRunOutcome;
+}): DirectChildCompletionRow {
+  return {
+    runId: params.currentChildRunId,
+    childSessionKey: params.currentChildSessionKey,
+    requesterSessionKey: params.requesterSessionKey,
+    task: params.task,
+    label: params.label,
+    createdAt: params.createdAt,
+    endedAt: params.endedAt,
+    outcome: params.outcome,
+    completion: {
+      resultText: params.currentFindings,
+    },
+  };
+}
+
+function compareChildCompletionFinalOwner(
+  a: DirectChildCompletionRow,
+  b: DirectChildCompletionRow,
+): number {
+  const aEnded = asUsableTimestamp(a.endedAt) ?? asUsableTimestamp(a.createdAt) ?? 0;
+  const bEnded = asUsableTimestamp(b.endedAt) ?? asUsableTimestamp(b.createdAt) ?? 0;
+  if (aEnded !== bEnded) {
+    return aEnded - bEnded;
+  }
+  const aCreated = asUsableTimestamp(a.createdAt) ?? 0;
+  const bCreated = asUsableTimestamp(b.createdAt) ?? 0;
+  if (aCreated !== bCreated) {
+    return aCreated - bCreated;
+  }
+  return a.runId.localeCompare(b.runId);
+}
+
+function buildRequesterSiblingFanInFindings(params: {
+  registryRuntime: Awaited<ReturnType<typeof loadSubagentRegistryRuntime>> | undefined;
+  requesterSessionKey: string;
+  currentChildSessionKey: string;
+  currentChildRunId: string;
+  task: string;
+  label?: string;
+  startedAt?: number;
+  endedAt?: number;
+  currentFindings: string;
+  outcome?: SubagentRunOutcome;
+}): SiblingFanInFindings | undefined {
+  if (
+    !params.registryRuntime ||
+    typeof params.registryRuntime.listSubagentRunsForRequester !== "function"
+  ) {
+    return undefined;
+  }
+
+  const allChildren = params.registryRuntime.listSubagentRunsForRequester(
+    params.requesterSessionKey,
+  );
+  if (!Array.isArray(allChildren) || allChildren.length === 0) {
+    return undefined;
+  }
+
+  const directChildren = filterCurrentDirectChildCompletionRows(allChildren, {
+    requesterSessionKey: params.requesterSessionKey,
+    getLatestSubagentRunByChildSessionKey:
+      params.registryRuntime.getLatestSubagentRunByChildSessionKey,
+  }) as DirectChildCompletionRow[];
+  const latestChildren = dedupeLatestChildCompletionRows(
+    directChildren,
+  ) as DirectChildCompletionRow[];
+  const currentChild =
+    latestChildren.find((child) => child.runId === params.currentChildRunId) ??
+    latestChildren.find((child) => child.childSessionKey === params.currentChildSessionKey);
+  const currentCreatedAt =
+    asUsableTimestamp(currentChild?.createdAt) ??
+    asUsableTimestamp(params.startedAt) ??
+    asUsableTimestamp(params.endedAt) ??
+    Date.now();
+
+  const syntheticCurrent = buildSyntheticCurrentChildRow({
+    currentChildSessionKey: params.currentChildSessionKey,
+    currentChildRunId: params.currentChildRunId,
+    requesterSessionKey: params.requesterSessionKey,
+    task: params.task,
+    label: params.label,
+    createdAt: currentCreatedAt,
+    endedAt: params.endedAt,
+    currentFindings: params.currentFindings,
+    outcome: params.outcome,
+  });
+  const latestByRunId = new Map<string, DirectChildCompletionRow>();
+  for (const child of latestChildren) {
+    latestByRunId.set(child.runId, child);
+  }
+  latestByRunId.set(
+    params.currentChildRunId,
+    latestByRunId.get(params.currentChildRunId) ?? syntheticCurrent,
+  );
+
+  const matchingCohort = [...latestByRunId.values()]
+    .filter((child) => {
+      const createdAt = asUsableTimestamp(child.createdAt) ?? currentCreatedAt;
+      return Math.abs(createdAt - currentCreatedAt) <= SIBLING_FAN_IN_WINDOW_MS;
+    })
+    .toSorted((a, b) => {
+      const aDistance = Math.abs(
+        (asUsableTimestamp(a.createdAt) ?? currentCreatedAt) - currentCreatedAt,
+      );
+      const bDistance = Math.abs(
+        (asUsableTimestamp(b.createdAt) ?? currentCreatedAt) - currentCreatedAt,
+      );
+      if (aDistance !== bDistance) {
+        return aDistance - bDistance;
+      }
+      return (asUsableTimestamp(a.createdAt) ?? 0) - (asUsableTimestamp(b.createdAt) ?? 0);
+    });
+  const snapshotTruncated = matchingCohort.length > SIBLING_FAN_IN_MAX_ROWS;
+  const cohort = matchingCohort
+    .slice(0, SIBLING_FAN_IN_MAX_ROWS)
+    .map((child) =>
+      patchCurrentChildCompletionRow({
+        child,
+        currentChildRunId: params.currentChildRunId,
+        currentFindings: params.currentFindings,
+      }),
+    )
+    .toSorted(
+      (a, b) => (asUsableTimestamp(a.createdAt) ?? 0) - (asUsableTimestamp(b.createdAt) ?? 0),
+    );
+
+  if (cohort.length < 2) {
+    return undefined;
+  }
+
+  const findings = buildChildCompletionFindings(cohort);
+  if (!findings?.trim()) {
+    return undefined;
+  }
+
+  const terminalCount = cohort.filter(isTerminalChildCompletionRow).length;
+  const pendingCount = Math.max(0, cohort.length - terminalCount);
+  const finalOwner = [...cohort].toSorted(compareChildCompletionFinalOwner).at(-1);
+  const text = [
+    "Sibling fan-in snapshot (authoritative for this requester session):",
+    `expected_children: ${cohort.length}`,
+    `terminal_children: ${terminalCount}`,
+    `pending_children: ${pendingCount}`,
+    `snapshot_truncated: ${snapshotTruncated}`,
+    "",
+    findings,
+  ].join("\n");
+  return {
+    text,
+    terminalCount,
+    pendingCount,
+    snapshotTruncated,
+    allListedChildrenTerminal: pendingCount === 0,
+    currentChildOwnsFinal: finalOwner?.runId === params.currentChildRunId,
+  };
 }
 
 async function wakeSubagentRunAfterDescendants(params: {
@@ -485,26 +709,6 @@ export async function runSubagentAnnounceFlow(params: {
       outcome = { status: "unknown" };
     }
 
-    const taskLabel = params.label || params.task || "task";
-    const announceSessionId = childSessionId || "unknown";
-    const findings = childCompletionFindings || reply || "(no output)";
-    const terminalResult =
-      expectsCompletionMessage && outcome.status === "ok"
-        ? resolveRequiredCompletionTerminalResult(findings)
-        : {};
-
-    // Build status label
-    const statusLabel =
-      terminalResult.terminalOutcome === "blocked"
-        ? `blocked: ${terminalResult.terminalSummary || "needs follow-up"}`
-        : outcome.status === "ok"
-          ? "completed; ready for parent review"
-          : outcome.status === "timeout"
-            ? "timed out"
-            : outcome.status === "error"
-              ? `failed: ${outcome.error || "unknown error"}`
-              : "finished with unknown status";
-
     let requesterIsSubagent = requesterIsInternalSession();
     if (requesterIsSubagent) {
       const {
@@ -534,11 +738,65 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    const taskLabel = params.label || params.task || "task";
+    const announceSessionId = childSessionId || "unknown";
+    const baseFindings = childCompletionFindings || reply || "(no output)";
+    const siblingFanIn = buildRequesterSiblingFanInFindings({
+      registryRuntime: subagentRegistryRuntime,
+      requesterSessionKey: targetRequesterSessionKey,
+      currentChildSessionKey: params.childSessionKey,
+      currentChildRunId: params.childRunId,
+      task: params.task,
+      label: params.label,
+      startedAt: params.startedAt,
+      endedAt: params.endedAt,
+      currentFindings: baseFindings,
+      outcome,
+    });
+    if (
+      siblingFanIn?.allListedChildrenTerminal &&
+      !siblingFanIn.snapshotTruncated &&
+      !siblingFanIn.currentChildOwnsFinal
+    ) {
+      return true;
+    }
+    const siblingFanInFindings = siblingFanIn?.text;
+    const findings = siblingFanInFindings || baseFindings;
+    const terminalResult =
+      expectsCompletionMessage && outcome.status === "ok"
+        ? resolveRequiredCompletionTerminalResult(findings)
+        : {};
+
+    // Build status label
+    const statusLabel =
+      terminalResult.terminalOutcome === "blocked"
+        ? `blocked: ${terminalResult.terminalSummary || "needs follow-up"}`
+        : outcome.status === "ok"
+          ? "completed; ready for parent review"
+          : outcome.status === "timeout"
+            ? "timed out"
+            : outcome.status === "error"
+              ? `failed: ${outcome.error || "unknown error"}`
+              : "finished with unknown status";
+
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
     });
+    const effectiveReplyInstruction = siblingFanInFindings
+      ? [
+          replyInstruction,
+          [
+            "Sibling fan-in rule: Treat the sibling fan-in snapshot above as authoritative",
+            "for this requester session. If every expected child in the snapshot is terminal,",
+            "and snapshot_truncated is false, synthesize the final parent answer now instead",
+            "of saying a listed sibling is missing.",
+            "If any child is still pending, report the partial state and the specific pending child.",
+            "If snapshot_truncated is true, report partial state or query more sibling status instead of finalizing solely from the listed children.",
+          ].join(" "),
+        ].join("\n\n")
+      : replyInstruction;
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
@@ -556,7 +814,7 @@ export async function runSubagentAnnounceFlow(params: {
         statusLabel,
         result: findings,
         statsLine,
-        replyInstruction,
+        replyInstruction: effectiveReplyInstruction,
       },
     ];
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
