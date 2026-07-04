@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
   clearMatrixApprovalReactionTargetsForTest,
-  resolveMatrixApprovalReactionTarget,
+  resolveMatrixApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 
 type MatrixDeliverPendingParams = Parameters<
@@ -304,7 +304,7 @@ describe("matrixApprovalNativeRuntime", () => {
     });
     const reactMessage = vi.fn().mockImplementation(async () => {
       expect(
-        resolveMatrixApprovalReactionTarget({
+        await resolveMatrixApprovalReactionTargetWithPersistence({
           roomId: "!room:example.org",
           eventId: "$approval",
           reactionKey: "✅",
@@ -510,7 +510,7 @@ describe("matrixApprovalNativeRuntime", () => {
       eventId: "$primary",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!room:example.org",
         eventId: "$primary",
         reactionKey: "✅",
@@ -520,7 +520,7 @@ describe("matrixApprovalNativeRuntime", () => {
       decision: "allow-once",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!room:example.org",
         eventId: "$last",
         reactionKey: "✅",
