@@ -438,9 +438,15 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/utf16-slice",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "utf16-slice.ts"),
+      },
+      {
         find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
+      sourcePackageAlias("markdown-core", "code-spans"),
+      sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),

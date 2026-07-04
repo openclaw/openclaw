@@ -12,38 +12,60 @@ const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const privateQaExcludedPluginSdkSubpaths = new Set(["ssrf-runtime-internal"]);
-const workspacePackageAliases = [
-  {
-    name: "@openclaw/llm-core",
-    subpath: "",
-    srcFile: "src/index.ts",
-    distFile: "dist/index.mjs",
+// Subpath -> source entry for private/bundled workspace packages that internal
+// source imports by package name. Dist paths mirror each package's export map.
+const workspacePackageAliasEntries = {
+  "@openclaw/llm-core": {
+    dir: "llm-core",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      diagnostics: { srcFile: "src/utils/diagnostics.ts", distFile: "dist/utils/diagnostics.mjs" },
+      "event-stream": {
+        srcFile: "src/utils/event-stream.ts",
+        distFile: "dist/utils/event-stream.mjs",
+      },
+      types: { srcFile: "src/types.ts", distFile: "dist/types.mjs" },
+      validation: { srcFile: "src/validation.ts", distFile: "dist/validation.mjs" },
+    },
   },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "diagnostics",
-    srcFile: "src/utils/diagnostics.ts",
-    distFile: "dist/utils/diagnostics.mjs",
+  "@openclaw/ai": {
+    dir: "ai",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+      providers: { srcFile: "src/providers.ts", distFile: "dist/providers.mjs" },
+      diagnostics: { srcFile: "src/utils/diagnostics.ts", distFile: "dist/diagnostics.mjs" },
+      "event-stream": { srcFile: "src/utils/event-stream.ts", distFile: "dist/event-stream.mjs" },
+      types: { srcFile: "src/types.ts", distFile: "dist/types.mjs" },
+      validation: { srcFile: "src/validation.ts", distFile: "dist/validation.mjs" },
+      "internal/anthropic": {
+        srcFile: "src/internal/anthropic.ts",
+        distFile: "dist/internal/anthropic.mjs",
+      },
+      "internal/openai": {
+        srcFile: "src/internal/openai.ts",
+        distFile: "dist/internal/openai.mjs",
+      },
+      "internal/runtime": {
+        srcFile: "src/internal/runtime.ts",
+        distFile: "dist/internal/runtime.mjs",
+      },
+      "internal/shared": {
+        srcFile: "src/internal/shared.ts",
+        distFile: "dist/internal/shared.mjs",
+      },
+    },
   },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "event-stream",
-    srcFile: "src/utils/event-stream.ts",
-    distFile: "dist/utils/event-stream.mjs",
-  },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "types",
-    srcFile: "src/types.ts",
-    distFile: "dist/types.mjs",
-  },
-  {
-    name: "@openclaw/llm-core",
-    subpath: "validation",
-    srcFile: "src/validation.ts",
-    distFile: "dist/validation.mjs",
-  },
-];
+};
+const workspacePackageAliases = Object.entries(workspacePackageAliasEntries).flatMap(
+  ([name, pkg]) =>
+    Object.entries(pkg.subpaths).map(([subpath, files]) => ({
+      name,
+      dir: pkg.dir,
+      subpath,
+      srcFile: files.srcFile,
+      distFile: files.distFile,
+    })),
+);
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
@@ -358,13 +380,13 @@ function buildPluginSdkAliasMap(useDist) {
     const preferred = path.join(
       packageRoot,
       "packages",
-      "llm-core",
+      entry.dir,
       useDist ? entry.distFile : entry.srcFile,
     );
     const fallback = path.join(
       packageRoot,
       "packages",
-      "llm-core",
+      entry.dir,
       useDist ? entry.srcFile : entry.distFile,
     );
     const target = fs.existsSync(preferred) ? preferred : fs.existsSync(fallback) ? fallback : null;

@@ -156,6 +156,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "record-coerce"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
+    sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
   ];
 }
@@ -212,6 +213,14 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
     apply: "build",
     closeBundle() {
       const swPath = path.join(outDir, "sw.js");
+      console.error("[sw-debug] closeBundle", {
+        swPath,
+        exists: fs.existsSync(swPath),
+        placeholders:
+          (fs.existsSync(swPath) ? fs.readFileSync(swPath, "utf8") : "").split(
+            "__OPENCLAW_CONTROL_UI_BUILD_ID__",
+          ).length - 1,
+      });
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(fs.existsSync(swPath) ? swPath : publicSwPath, "utf8");
       const placeholder = '"__OPENCLAW_CONTROL_UI_BUILD_ID__"';
@@ -228,7 +237,8 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
-  const bootstrapConfigPath = base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
+  const bootstrapConfigPath =
+    base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
   const controlUiBuildId = resolveControlUiBuildId();
   return {
     base,

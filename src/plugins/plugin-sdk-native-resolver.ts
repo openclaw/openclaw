@@ -62,6 +62,26 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["record-coerce", "record-coerce.ts"],
       ["string-coerce", "string-coerce.ts"],
       ["string-normalization", "string-normalization.ts"],
+      ["utf16-slice", "utf16-slice.ts"],
+    ],
+  },
+  {
+    // Mirrors packages/ai/package.json exports; dist file names do not follow
+    // the src layout (dist/diagnostics.mjs <- src/utils/diagnostics.ts), so the
+    // generic export-map derivation cannot be used here.
+    packageName: "@openclaw/ai",
+    packageDir: "ai",
+    subpaths: [
+      ["", "index.ts"],
+      ["providers", "providers.ts"],
+      ["diagnostics", path.join("utils", "diagnostics.ts")],
+      ["event-stream", path.join("utils", "event-stream.ts")],
+      ["types", "types.ts"],
+      ["validation", "validation.ts"],
+      ["internal/anthropic", path.join("internal", "anthropic.ts")],
+      ["internal/openai", path.join("internal", "openai.ts")],
+      ["internal/runtime", path.join("internal", "runtime.ts")],
+      ["internal/shared", path.join("internal", "shared.ts")],
     ],
   },
   {
