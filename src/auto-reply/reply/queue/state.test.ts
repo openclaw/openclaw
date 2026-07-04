@@ -1,5 +1,6 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
 import { afterEach, describe, expect, it } from "vitest";
+import { enqueueFollowupRun } from "./enqueue.js";
 import { clearFollowupQueue, getFollowupQueue, refreshQueuedFollowupSession } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
@@ -121,6 +122,19 @@ describe("refreshQueuedFollowupSession", () => {
 });
 
 describe("getFollowupQueue", () => {
+  it("aborts work owned by a cleared queue", () => {
+    const queuedRun: FollowupRun = {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    };
+    enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
+
+    expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
+    clearFollowupQueue(QUEUE_KEY);
+    expect(queuedRun.queueAbortSignal?.aborted).toBe(true);
+  });
+
   it("trims overflow metadata when a live queue cap shrinks", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 3 });
     for (const [contextKey, count] of [

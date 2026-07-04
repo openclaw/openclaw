@@ -1,11 +1,12 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -44,6 +45,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -61,7 +63,11 @@ import {
   type StageSandboxMediaResult,
 } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
-import { resolveSessionFilePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionWorkStartError,
+  updateSessionStoreEntry,
+} from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -101,6 +107,7 @@ import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/se
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
@@ -127,6 +134,7 @@ import {
   type ChatAbortOps,
   isChatStopCommandText,
   registerChatAbortController,
+  resolveChatRunExpiresAtMs,
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "../chat-abort.js";
@@ -156,8 +164,17 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
+import {
+  chatAbortMarkerTimestampMs,
+  createChatAbortMarker,
+  type ChatRunTiming,
+} from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
+import {
+  PENDING_CHAT_SEND_DEDUPE_PREFIX,
+  pendingChatSendDedupeKey,
+  type DedupeEntry,
+} from "../server-shared.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -229,12 +246,15 @@ type ChatAbortRequester = {
 
 type PreRegisteredAgentDedupePayload = {
   agentId?: unknown;
+  attemptId?: unknown;
   controlUiVisible?: unknown;
   dedupeKeys?: unknown;
+  expiresAtMs?: unknown;
   ownerConnId?: unknown;
   ownerDeviceId?: unknown;
   runId?: unknown;
   sessionKey?: unknown;
+  sessionKeyAliases?: unknown;
   status?: unknown;
 };
 
@@ -634,27 +654,6 @@ type ChatSendOriginatingRoute = {
   explicitDeliverRoute: boolean;
 };
 
-const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
-
-function resolveActiveChatSendRunId(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const runId = (value as { runId?: unknown }).runId;
-  return typeof runId === "string" && runId.trim() ? runId : null;
-}
-
-function clearActiveChatSendDedupeRun(
-  dedupe: GatewayRequestContext["dedupe"],
-  key: string | null,
-  runId: string,
-) {
-  if (!key || resolveActiveChatSendRunId(dedupe.get(key)?.payload) !== runId) {
-    return;
-  }
-  dedupe.delete(key);
-}
-
 function buildAbortedChatSendPayload(params: {
   runId: string;
   endedAt: number;
@@ -667,34 +666,6 @@ function buildAbortedChatSendPayload(params: {
     ...(params.stopReason ? { stopReason: params.stopReason } : {}),
     endedAt: params.endedAt,
   };
-}
-
-function buildActiveChatSendDedupeKey(params: {
-  attachmentCount: number;
-  explicitDeliverRoute: boolean;
-  message: string;
-  originatingChannel: string;
-  sessionKey: string;
-  systemScope?: string;
-}): string | null {
-  const message = params.message.trim();
-  if (
-    !message ||
-    message.startsWith("/") ||
-    params.attachmentCount > 0 ||
-    params.explicitDeliverRoute ||
-    normalizeMessageChannel(params.originatingChannel) !== INTERNAL_MESSAGE_CHANNEL
-  ) {
-    return null;
-  }
-  const dedupeParts = params.systemScope?.trim()
-    ? [params.sessionKey, message, params.systemScope.trim()]
-    : [params.sessionKey, message];
-  const digest = createHash("sha256")
-    .update(JSON.stringify(dedupeParts))
-    .digest("hex")
-    .slice(0, 32);
-  return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
 }
 
 function validateChatSelectedAgent(params: {
@@ -2214,7 +2185,13 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
   if (payloadRunId && payloadRunId !== params.runId) {
     return undefined;
   }
-  if (normalizeUnknownText(payload.sessionKey) !== params.sessionKey) {
+  const payloadSessionKeys = new Set([
+    normalizeUnknownText(payload.sessionKey),
+    ...(Array.isArray(payload.sessionKeyAliases)
+      ? payload.sessionKeyAliases.map(normalizeUnknownText)
+      : []),
+  ]);
+  if (!payloadSessionKeys.has(params.sessionKey)) {
     return undefined;
   }
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
@@ -2236,11 +2213,12 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
   return payload;
 }
 
-function readPreRegisteredAgentRun(params: {
+function readPreRegisteredRun(params: {
   key: string;
   entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  keyPrefix: string;
 }): PreRegisteredAgentRun | undefined {
-  if (!params.key.startsWith("agent:") || !params.entry?.ok) {
+  if (!params.key.startsWith(params.keyPrefix) || !params.entry?.ok) {
     return undefined;
   }
   const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
@@ -2250,7 +2228,9 @@ function readPreRegisteredAgentRun(params: {
   if (payload.controlUiVisible === false) {
     return undefined;
   }
-  const runId = normalizeUnknownText(payload.runId) ?? normalizeOptionalText(params.key.slice(6));
+  const runId =
+    normalizeUnknownText(payload.runId) ??
+    normalizeOptionalText(params.key.slice(params.keyPrefix.length));
   const sessionKey = normalizeUnknownText(payload.sessionKey);
   if (!runId || !sessionKey) {
     return undefined;
@@ -2258,7 +2238,7 @@ function readPreRegisteredAgentRun(params: {
   return { runId, sessionKey, payload };
 }
 
-function canRequesterAbortPreRegisteredAgentRun(
+function canRequesterAbortPreRegisteredRun(
   payload: PreRegisteredAgentDedupePayload,
   requester: ChatAbortRequester,
 ): boolean {
@@ -2332,12 +2312,42 @@ function writePreRegisteredAgentAbort(params: {
   }
 }
 
-function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
+function writePreRegisteredChatAbort(params: {
+  context: GatewayRequestContext;
+  runId: string;
+  stopReason: string;
+  endedAt?: number;
+  attemptId?: string;
+}) {
+  const endedAt = params.endedAt ?? Date.now();
+  const payload = buildAbortedChatSendPayload({
+    runId: params.runId,
+    stopReason: params.stopReason,
+    endedAt,
+  });
+  params.context.chatAbortedRuns.set(params.runId, createChatAbortMarker(endedAt));
+  const pendingKey = pendingChatSendDedupeKey(params.runId);
+  const pendingAttemptId = normalizeUnknownText(
+    (params.context.dedupe.get(pendingKey)?.payload as PreRegisteredAgentDedupePayload | undefined)
+      ?.attemptId,
+  );
+  if (!params.attemptId || pendingAttemptId === params.attemptId) {
+    params.context.dedupe.delete(pendingKey);
+  }
+  setGatewayDedupeEntry({
+    dedupe: params.context.dedupe,
+    key: `chat:${params.runId}`,
+    entry: { ts: endedAt, ok: true, payload },
+  });
+}
+
+function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
   agentId?: string;
   defaultAgentId: string;
   requester: ChatAbortRequester;
+  keyPrefix: string;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -2347,8 +2357,17 @@ function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
   let matchedSessionRuns = 0;
   for (const [key, entry] of params.context.dedupe) {
-    const run = readPreRegisteredAgentRun({ key, entry });
-    if (!run || !sessionKeys.has(run.sessionKey)) {
+    const run = readPreRegisteredRun({ key, entry, keyPrefix: params.keyPrefix });
+    if (!run) {
+      continue;
+    }
+    const runSessionKeys = [
+      run.sessionKey,
+      ...(Array.isArray(run.payload.sessionKeyAliases)
+        ? run.payload.sessionKeyAliases.map(normalizeUnknownText)
+        : []),
+    ];
+    if (!runSessionKeys.some((sessionKey) => Boolean(sessionKey && sessionKeys.has(sessionKey)))) {
       continue;
     }
     if (params.context.chatAbortControllers.has(run.runId)) {
@@ -2366,7 +2385,7 @@ function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
       continue;
     }
     matchedSessionRuns += 1;
-    if (canRequesterAbortPreRegisteredAgentRun(run.payload, params.requester)) {
+    if (canRequesterAbortPreRegisteredRun(run.payload, params.requester)) {
       authorizedByRunId.set(run.runId, run);
     }
   }
@@ -2447,18 +2466,33 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   const {
     matchedSessionRuns: matchedPendingAgentRuns,
     authorizedRuns: authorizedPendingAgentRuns,
-  } = resolveAuthorizedPreRegisteredAgentRunsForSessionKeys({
+  } = resolveAuthorizedPreRegisteredRunsForSessionKeys({
     context: params.context,
     sessionKeys,
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
+    keyPrefix: "agent:",
   });
-  if (authorizedRuns.length === 0 && authorizedPendingAgentRuns.length === 0) {
+  const { matchedSessionRuns: matchedPendingChatRuns, authorizedRuns: authorizedPendingChatRuns } =
+    resolveAuthorizedPreRegisteredRunsForSessionKeys({
+      context: params.context,
+      sessionKeys,
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+      requester: params.requester,
+      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    });
+  if (
+    authorizedRuns.length === 0 &&
+    authorizedPendingAgentRuns.length === 0 &&
+    authorizedPendingChatRuns.length === 0
+  ) {
     return {
       aborted: false,
       runIds: [],
-      unauthorized: matchedSessionRuns > 0 || matchedPendingAgentRuns > 0,
+      unauthorized:
+        matchedSessionRuns > 0 || matchedPendingAgentRuns > 0 || matchedPendingChatRuns > 0,
     };
   }
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
@@ -2489,6 +2523,16 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
       payload,
       stopReason,
       endedAt,
+    });
+    runIds.push(runId);
+  }
+  for (const { runId, payload } of authorizedPendingChatRuns) {
+    writePreRegisteredChatAbort({
+      context: params.context,
+      runId,
+      stopReason,
+      endedAt,
+      attemptId: normalizeUnknownText(payload.attemptId),
     });
     runIds.push(runId);
   }
@@ -3283,10 +3327,11 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const active = context.chatAbortControllers.get(runId);
     if (!active) {
-      const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
-      const pendingAgentMatch = (() => {
+      const readPendingRunForAbort = (
+        entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never,
+      ) => {
         const canonicalMatch = readPreRegisteredAgentDedupePayloadForSession({
-          entry: pendingAgentEntry,
+          entry,
           runId,
           sessionKey: canonicalAbortSessionKey,
           agentId: abortAgentId,
@@ -3300,7 +3345,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const aliasMatch = readPreRegisteredAgentDedupePayloadForSession({
-          entry: pendingAgentEntry,
+          entry,
           runId,
           sessionKey: rawSessionKey,
           agentId: abortAgentId,
@@ -3308,10 +3353,29 @@ export const chatHandlers: GatewayRequestHandlers = {
           includeHidden: true,
         });
         return aliasMatch ? { sessionKey: rawSessionKey, payload: aliasMatch } : undefined;
-      })();
+      };
+      const pendingChatMatch = readPendingRunForAbort(
+        context.dedupe.get(pendingChatSendDedupeKey(runId)),
+      );
+      if (pendingChatMatch) {
+        if (!canRequesterAbortPreRegisteredRun(pendingChatMatch.payload, requester)) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+          return;
+        }
+        writePreRegisteredChatAbort({
+          context,
+          runId,
+          stopReason: "rpc",
+          attemptId: normalizeUnknownText(pendingChatMatch.payload.attemptId),
+        });
+        respond(true, { ok: true, aborted: true, runIds: [runId] });
+        return;
+      }
+      const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
+      const pendingAgentMatch = readPendingRunForAbort(pendingAgentEntry);
       if (pendingAgentMatch) {
         const pendingAgentPayload = pendingAgentMatch.payload;
-        if (!canRequesterAbortPreRegisteredAgentRun(pendingAgentPayload, requester)) {
+        if (!canRequesterAbortPreRegisteredRun(pendingAgentPayload, requester)) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
           return;
         }
@@ -3471,10 +3535,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
-    const systemDedupeScope =
-      systemInputProvenance || systemProvenanceReceipt
-        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
-        : undefined;
     const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
@@ -3489,6 +3549,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const rawSessionKey = p.sessionKey;
     const agentIdOverride = normalizeOptionalText(p.agentId);
     const clientRunId = p.idempotencyKey;
+    const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
     const requestedAgentId = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: rawSessionKey,
@@ -3509,7 +3570,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       },
     );
     const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
-    const { cfg, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
+    const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -3634,12 +3695,30 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const pendingChatSend = readPreRegisteredRun({
+      key: pendingChatSendKey,
+      entry: context.dedupe.get(pendingChatSendKey),
+      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    });
+    if (pendingChatSend) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
         cached: true,
         runId: clientRunId,
       });
+      return;
+    }
+    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
+    if (archivedSessionError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
       return;
     }
     const chatSendTraceAttributes = {
@@ -3661,62 +3740,216 @@ export const chatHandlers: GatewayRequestHandlers = {
       mainKey: cfg.session?.mainKey,
       sessionKey,
     });
-    const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({
-      attachmentCount: normalizedAttachments.length,
-      explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
-      message: rawMessage,
-      originatingChannel: originatingRoute.originatingChannel,
-      sessionKey: activeRunScopeKey,
-      systemScope: systemDedupeScope,
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const pendingAttemptId = randomUUID();
+    const pendingExpiresAtMs = resolveChatRunExpiresAtMs({ now, timeoutMs });
+    // Keep the run abortable while lifecycle mutation owns the session. Admission
+    // must reject an expired/missing reservation instead of reviving evicted work.
+    context.dedupe.set(pendingChatSendKey, {
+      ts: now,
+      ok: true,
+      payload: {
+        runId: clientRunId,
+        attemptId: pendingAttemptId,
+        status: "accepted" as const,
+        sessionKey,
+        ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
+        ...(sessionKey === "global" && selectedAgent.agentId
+          ? { agentId: selectedAgent.agentId }
+          : {}),
+        ownerConnId: normalizeOptionalText(client?.connId),
+        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        expiresAtMs: pendingExpiresAtMs,
+      },
     });
-    if (activeChatSendDedupeKey) {
-      const activeRunId = resolveActiveChatSendRunId(
-        context.dedupe.get(activeChatSendDedupeKey)?.payload,
-      );
-      if (activeRunId && context.chatAbortControllers.has(activeRunId)) {
-        respond(true, { runId: activeRunId, status: "in_flight" as const }, undefined, {
+    const clearPendingChatSendReservation = () => {
+      const pending = readPreRegisteredRun({
+        key: pendingChatSendKey,
+        entry: context.dedupe.get(pendingChatSendKey),
+        keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+      });
+      if (
+        pending?.runId === clientRunId &&
+        normalizeUnknownText(pending.payload.attemptId) === pendingAttemptId
+      ) {
+        context.dedupe.delete(pendingChatSendKey);
+      }
+    };
+    let admittedSessionId = backingSessionId ?? clientRunId;
+    let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
+    let reservationSuperseded = false;
+    let supersedingResult: DedupeEntry | undefined;
+    try {
+      gatewayWorkAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey, backingSessionId],
+        assertAllowed: () => {
+          if (context.chatAbortedRuns.has(clientRunId)) {
+            return;
+          }
+          const pendingReservation = readPreRegisteredRun({
+            key: pendingChatSendKey,
+            entry: context.dedupe.get(pendingChatSendKey),
+            keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+          });
+          if (
+            pendingReservation &&
+            normalizeUnknownText(pendingReservation.payload.attemptId) !== pendingAttemptId
+          ) {
+            reservationSuperseded = true;
+            return;
+          }
+          if (!pendingReservation) {
+            const terminalResult = context.dedupe.get(`chat:${clientRunId}`);
+            if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
+              reservationSuperseded = true;
+              supersedingResult = terminalResult;
+              return;
+            }
+          }
+          if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+            writePreRegisteredChatAbort({
+              context,
+              runId: clientRunId,
+              stopReason: "restart",
+              attemptId: pendingAttemptId,
+            });
+            return;
+          }
+          if (
+            !pendingReservation ||
+            !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, {
+              nowMs: Date.now(),
+            })
+          ) {
+            writePreRegisteredChatAbort({
+              context,
+              runId: clientRunId,
+              stopReason: "timeout",
+              attemptId: pendingAttemptId,
+            });
+            return;
+          }
+          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+          if (entry && !latestEntry) {
+            throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
+          }
+          // Admission can queue behind reset. Never route a request captured
+          // against the old session into the replacement transcript.
+          if (
+            backingSessionId &&
+            latestEntry?.sessionId &&
+            latestEntry.sessionId !== backingSessionId
+          ) {
+            throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+          }
+          const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+          if (archivedError) {
+            throw new Error(archivedError);
+          }
+          admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+          admittedRunAbort = registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId: clientRunId,
+            sessionId: admittedSessionId,
+            sessionKey,
+            agentId: selectedAgent.agentId,
+            timeoutMs,
+            now,
+            ownerConnId: normalizeOptionalText(client?.connId),
+            ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+            providerId: resolvedSessionModel.provider,
+            authProviderId: resolvedSessionAuthProvider,
+            isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
+            kind: "chat-send",
+            lifecycleGeneration,
+          });
+        },
+        onInterrupt: () => {
+          if (admittedRunAbort?.entry) {
+            admittedRunAbort.entry.abortStopReason = "restart";
+          }
+          admittedRunAbort?.controller.abort(createAgentRunRestartAbortError());
+        },
+      });
+    } catch (err) {
+      clearPendingChatSendReservation();
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+      return;
+    }
+    clearPendingChatSendReservation();
+    const activeRunAbort = admittedRunAbort;
+    if (reservationSuperseded) {
+      gatewayWorkAdmission.release();
+      const supersedingCached = supersedingResult ?? context.dedupe.get(`chat:${clientRunId}`);
+      if (supersedingCached) {
+        respond(supersedingCached.ok, supersedingCached.payload, supersedingCached.error, {
           cached: true,
-          runId: activeRunId,
+          runId: clientRunId,
         });
         return;
       }
-    }
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const activeRunAbort = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
-      runId: clientRunId,
-      sessionId: backingSessionId ?? clientRunId,
-      sessionKey,
-      agentId: selectedAgent.agentId,
-      timeoutMs,
-      now,
-      ownerConnId: normalizeOptionalText(client?.connId),
-      ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-      providerId: resolvedSessionModel.provider,
-      authProviderId: resolvedSessionAuthProvider,
-      isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
-      kind: "chat-send",
-      lifecycleGeneration,
-    });
-    if (!activeRunAbort.registered) {
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
         cached: true,
         runId: clientRunId,
       });
       return;
     }
+    if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+      if (activeRunAbort) {
+        if (activeRunAbort.entry) {
+          activeRunAbort.entry.abortStopReason = "restart";
+        }
+        activeRunAbort.controller.abort();
+        activeRunAbort.cleanup({ force: true });
+      }
+      gatewayWorkAdmission.release();
+      if (!context.dedupe.has(`chat:${clientRunId}`)) {
+        writePreRegisteredChatAbort({
+          context,
+          runId: clientRunId,
+          stopReason: activeRunAbort?.entry?.abortStopReason ?? "restart",
+          attemptId: pendingAttemptId,
+        });
+      }
+      const aborted = context.dedupe.get(`chat:${clientRunId}`);
+      respond(aborted?.ok ?? true, aborted?.payload, aborted?.error, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+    if (!activeRunAbort) {
+      gatewayWorkAdmission.release();
+      const aborted = context.dedupe.get(`chat:${clientRunId}`);
+      if (aborted) {
+        respond(aborted.ok, aborted.payload, aborted.error, {
+          cached: true,
+          runId: clientRunId,
+        });
+        return;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "chat run admission failed"));
+      return;
+    }
+    if (!activeRunAbort.registered) {
+      gatewayWorkAdmission.release();
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+    const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
+      activeRunAbort.cleanup(options);
+      gatewayWorkAdmission?.release();
+    };
     claimAgentRunContext(clientRunId, {
       sessionKey,
-      sessionId: backingSessionId ?? clientRunId,
+      sessionId: admittedSessionId,
       lifecycleGeneration,
     });
-    if (activeChatSendDedupeKey) {
-      context.dedupe.set(activeChatSendDedupeKey, {
-        ts: now,
-        ok: true,
-        payload: { runId: clientRunId },
-      });
-    }
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
@@ -3788,9 +4021,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           performance.now() - prepareAttachmentsStartedAtMs,
         );
       } catch (err) {
-        activeRunAbort.cleanup({ force: true });
+        cleanupAdmittedRun({ force: true });
         clearAgentRunContext(clientRunId, lifecycleGeneration);
-        clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
         respond(
           false,
@@ -3811,7 +4043,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         stopReason,
         endedAt,
       });
-      clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${clientRunId}`,
@@ -3821,6 +4052,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           payload,
         },
       });
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
       respond(true, payload, undefined, { runId: clientRunId });
       return;
     }
@@ -4216,109 +4449,114 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
       };
-      void measureDiagnosticsTimelineSpan(
-        "gateway.chat_send.dispatch_inbound",
-        async () => {
-          applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
-          const dispatchResult = await dispatchInboundMessage({
-            ctx,
-            cfg,
-            dispatcher,
-            onSessionMetadataChanges: (changes) => {
-              for (const change of changes) {
-                emitSessionsChanged(context, change);
-              }
-            },
-            replyOptions: {
-              runId: clientRunId,
-              ...(isOperatorUiClient(clientInfo)
-                ? {
-                    promptCacheKey: resolveWebchatPromptCacheKey({
-                      agentId,
-                      provider: resolvedSessionModel.provider,
-                      model: resolvedSessionModel.model,
-                      sessionKey: activeRunScopeKey,
-                    }),
+      void gatewayWorkAdmission
+        .run(() =>
+          measureDiagnosticsTimelineSpan(
+            "gateway.chat_send.dispatch_inbound",
+            async () => {
+              applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
+              const dispatchResult = await dispatchInboundMessage({
+                ctx,
+                cfg,
+                dispatcher,
+                onSessionMetadataChanges: (changes) => {
+                  for (const change of changes) {
+                    emitSessionsChanged(context, change);
                   }
-                : {}),
-              requestedSessionId,
-              resumeRequestedSession: controlUiReconnectResume.resumeRequested,
-              abortSignal: activeRunAbort.controller.signal,
-              images: replyOptionImages,
-              imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
-              thinkingLevelOverride: p.thinking,
-              fastModeOverride: p.fastMode,
-              userTurnTranscriptRecorder: userTurnRecorder,
-              fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
-              onAgentRunStart: (runId) => {
-                agentRunStarted = true;
-                emitServerTiming(
-                  "agent-run-started",
-                  runId !== clientRunId ? { agentRunId: runId } : undefined,
-                  dispatchStartedAtMs,
-                );
-                const connId = typeof client?.connId === "string" ? client.connId : undefined;
-                const wantsToolEvents = hasGatewayClientCap(
-                  client?.connect?.caps,
-                  GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-                );
-                if (connId && wantsToolEvents) {
-                  context.registerToolEventRecipient(runId, connId);
-                  // Register for any other active runs *in the same session* so
-                  // late-joining clients (e.g. page refresh mid-response) receive
-                  // in-progress tool events without leaking cross-session data.
-                  const defaultAgentId = resolveDefaultAgentId(cfg);
-                  const selectedGlobalAgentId =
-                    sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : undefined;
-                  for (const [activeRunId, active] of context.chatAbortControllers) {
-                    const activeGlobalAgentId =
-                      active.sessionKey === "global"
-                        ? (active.agentId ?? defaultAgentId)
-                        : undefined;
-                    const sameSelectedGlobalAgent =
-                      sessionKey === "global" &&
-                      selectedGlobalAgentId !== undefined &&
-                      activeGlobalAgentId === selectedGlobalAgentId;
-                    const sameSession =
-                      active.sessionKey === sessionKey &&
-                      (sessionKey !== "global" || sameSelectedGlobalAgent);
-                    if (activeRunId !== runId && sameSession) {
-                      context.registerToolEventRecipient(activeRunId, connId);
-                    }
-                  }
-                }
-              },
-              onModelSelected: (modelSelection) => {
-                updateChatRunProvider(context.chatAbortControllers, {
+                },
+                replyOptions: {
                   runId: clientRunId,
-                  providerId: modelSelection.provider,
-                  authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
-                    config: cfg,
-                  }),
-                });
-                onModelSelected(modelSelection);
-                emitServerTiming(
-                  "model-selected",
-                  {
-                    provider: modelSelection.provider,
-                    model: modelSelection.model,
+                  ...(isOperatorUiClient(clientInfo)
+                    ? {
+                        promptCacheKey: resolveWebchatPromptCacheKey({
+                          agentId,
+                          provider: resolvedSessionModel.provider,
+                          model: resolvedSessionModel.model,
+                          sessionKey: activeRunScopeKey,
+                        }),
+                      }
+                    : {}),
+                  requestedSessionId,
+                  resumeRequestedSession: controlUiReconnectResume.resumeRequested,
+                  abortSignal: activeRunAbort.controller.signal,
+                  images: replyOptionImages,
+                  imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+                  thinkingLevelOverride: p.thinking,
+                  fastModeOverride: p.fastMode,
+                  userTurnTranscriptRecorder: userTurnRecorder,
+                  fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
+                  onAgentRunStart: (runId) => {
+                    agentRunStarted = true;
+                    emitServerTiming(
+                      "agent-run-started",
+                      runId !== clientRunId ? { agentRunId: runId } : undefined,
+                      dispatchStartedAtMs,
+                    );
+                    const connId = typeof client?.connId === "string" ? client.connId : undefined;
+                    const wantsToolEvents = hasGatewayClientCap(
+                      client?.connect?.caps,
+                      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+                    );
+                    if (connId && wantsToolEvents) {
+                      context.registerToolEventRecipient(runId, connId);
+                      // Register for any other active runs *in the same session* so
+                      // late-joining clients (e.g. page refresh mid-response) receive
+                      // in-progress tool events without leaking cross-session data.
+                      const defaultAgentId = resolveDefaultAgentId(cfg);
+                      const selectedGlobalAgentId =
+                        sessionKey === "global"
+                          ? (selectedAgent.agentId ?? defaultAgentId)
+                          : undefined;
+                      for (const [activeRunId, active] of context.chatAbortControllers) {
+                        const activeGlobalAgentId =
+                          active.sessionKey === "global"
+                            ? (active.agentId ?? defaultAgentId)
+                            : undefined;
+                        const sameSelectedGlobalAgent =
+                          sessionKey === "global" &&
+                          selectedGlobalAgentId !== undefined &&
+                          activeGlobalAgentId === selectedGlobalAgentId;
+                        const sameSession =
+                          active.sessionKey === sessionKey &&
+                          (sessionKey !== "global" || sameSelectedGlobalAgent);
+                        if (activeRunId !== runId && sameSession) {
+                          context.registerToolEventRecipient(activeRunId, connId);
+                        }
+                      }
+                    }
                   },
-                  dispatchStartedAtMs,
-                );
-              },
+                  onModelSelected: (modelSelection) => {
+                    updateChatRunProvider(context.chatAbortControllers, {
+                      runId: clientRunId,
+                      providerId: modelSelection.provider,
+                      authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
+                        config: cfg,
+                      }),
+                    });
+                    onModelSelected(modelSelection);
+                    emitServerTiming(
+                      "model-selected",
+                      {
+                        provider: modelSelection.provider,
+                        model: modelSelection.model,
+                      },
+                      dispatchStartedAtMs,
+                    );
+                  },
+                },
+              });
+              if (dispatchResult.beforeAgentRunBlocked === true) {
+                userTurnRecorder.markBlocked();
+              }
+              return dispatchResult;
             },
-          });
-          if (dispatchResult.beforeAgentRunBlocked === true) {
-            userTurnRecorder.markBlocked();
-          }
-          return dispatchResult;
-        },
-        {
-          phase: "agent-turn",
-          config: cfg,
-          attributes: chatSendTraceAttributes,
-        },
-      )
+            {
+              phase: "agent-turn",
+              config: cfg,
+              attributes: chatSendTraceAttributes,
+            },
+          ),
+        )
         .then(async () => {
           emitServerTiming("dispatch-completed", undefined, dispatchStartedAtMs);
           const postDispatchStartedAtMs = performance.now();
@@ -5272,9 +5510,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
-          activeRunAbort.cleanup();
+          cleanupAdmittedRun();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
-          clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
           if (!pendingDispatchLifecycleError) {
             return;
@@ -5325,9 +5562,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           void persistDispatchLifecycleError();
         });
     } catch (err) {
-      activeRunAbort.cleanup({ force: true });
+      cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
-      clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
@@ -5411,17 +5647,47 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: selectedAgent.agentId,
     });
 
-    const appended = await appendAssistantTranscriptMessage({
-      sessionKey,
-      message: p.message,
-      label: p.label,
-      sessionId,
-      storePath,
-      sessionFile: entry?.sessionFile,
-      agentId,
-      createIfMissing: true,
-      cfg,
-    });
+    let appended: Awaited<ReturnType<typeof appendAssistantTranscriptMessage>>;
+    try {
+      const admission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        assertAllowed: () => {
+          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+          if (!latestEntry) {
+            throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
+          }
+          if (latestEntry.sessionId !== sessionId) {
+            throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
+          }
+          const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+          if (archivedError) {
+            throw new Error(archivedError);
+          }
+        },
+      });
+      try {
+        appended = await admission.run(
+          async () =>
+            await appendAssistantTranscriptMessage({
+              sessionKey,
+              message: p.message,
+              label: p.label,
+              sessionId,
+              storePath,
+              sessionFile: entry.sessionFile,
+              agentId,
+              createIfMissing: true,
+              cfg,
+            }),
+        );
+      } finally {
+        admission.release();
+      }
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+      return;
+    }
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(
         false,

@@ -170,6 +170,69 @@ async function withTempSessionStore<T>(
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("preserves a concurrent rename and unpin during final accounting", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-management-race";
+      const sessionId = "test-management-race-session";
+      const staleEntry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        label: "Old label",
+        pinnedAt: 100,
+        chatType: "direct",
+        elevatedLevel: "full",
+        inheritedToolAllow: ["exec"],
+        sendPolicy: "allow",
+      };
+      const sessionStore = { [sessionKey]: staleEntry };
+      const concurrentEntry: SessionEntry = {
+        ...staleEntry,
+        chatType: "group",
+        label: "Renamed while running",
+        sendPolicy: "deny",
+        updatedAt: 2,
+      };
+      delete concurrentEntry.elevatedLevel;
+      delete concurrentEntry.inheritedToolAllow;
+      delete concurrentEntry.pinnedAt;
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: concurrentEntry,
+        }),
+      );
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]).toMatchObject({
+        chatType: "group",
+        label: "Renamed while running",
+        model: "gpt-5.5",
+        sendPolicy: "deny",
+      });
+      expect(sessionStore[sessionKey]?.elevatedLevel).toBeUndefined();
+      expect(sessionStore[sessionKey]?.inheritedToolAllow).toBeUndefined();
+      expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+      expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
+        sessionStore[sessionKey],
+      );
+    });
+  });
+
   it("passes resolved maintenance config to the gateway turn store write", async () => {
     sessionStoreMocks.updateSessionStore.mockClear();
     await withTempSessionStore(async ({ storePath }) => {

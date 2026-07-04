@@ -1640,6 +1640,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
+    public let archived: Bool?
 
     public init(
         limit: Int?,
@@ -1653,7 +1654,8 @@ public struct SessionsListParams: Codable, Sendable {
         label: String?,
         spawnedby: String?,
         agentid: String? = nil,
-        search: String?)
+        search: String?,
+        archived: Bool? = nil)
     {
         self.limit = limit
         self.offset = offset
@@ -1667,6 +1669,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.spawnedby = spawnedby
         self.agentid = agentid
         self.search = search
+        self.archived = archived
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1682,6 +1685,7 @@ public struct SessionsListParams: Codable, Sendable {
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case search
+        case archived
     }
 }
 
@@ -2433,6 +2437,8 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let label: AnyCodable?
+    public let archived: Bool?
+    public let pinned: Bool?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let verboselevel: AnyCodable?
@@ -2460,6 +2466,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         agentid: String? = nil,
         label: AnyCodable?,
+        archived: Bool? = nil,
+        pinned: Bool? = nil,
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
         verboselevel: AnyCodable?,
@@ -2486,6 +2494,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.label = label
+        self.archived = archived
+        self.pinned = pinned
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.verboselevel = verboselevel
@@ -2514,6 +2524,8 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case label
+        case archived
+        case pinned
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case verboselevel = "verboseLevel"
@@ -2617,17 +2629,26 @@ public struct SessionsDeleteParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
     public let deletetranscript: Bool?
+    public let expectedsessionid: String?
+    public let expectedlifecyclerevision: String?
+    public let expectedsessionupdatedat: Double?
     public let emitlifecyclehooks: Bool?
 
     public init(
         key: String,
         agentid: String? = nil,
         deletetranscript: Bool?,
+        expectedsessionid: String? = nil,
+        expectedlifecyclerevision: String? = nil,
+        expectedsessionupdatedat: Double? = nil,
         emitlifecyclehooks: Bool?)
     {
         self.key = key
         self.agentid = agentid
         self.deletetranscript = deletetranscript
+        self.expectedsessionid = expectedsessionid
+        self.expectedlifecyclerevision = expectedlifecyclerevision
+        self.expectedsessionupdatedat = expectedsessionupdatedat
         self.emitlifecyclehooks = emitlifecyclehooks
     }
 
@@ -2635,6 +2656,9 @@ public struct SessionsDeleteParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case deletetranscript = "deleteTranscript"
+        case expectedsessionid = "expectedSessionId"
+        case expectedlifecyclerevision = "expectedLifecycleRevision"
+        case expectedsessionupdatedat = "expectedSessionUpdatedAt"
         case emitlifecyclehooks = "emitLifecycleHooks"
     }
 }

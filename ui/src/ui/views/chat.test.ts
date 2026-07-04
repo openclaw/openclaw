@@ -50,6 +50,7 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
+const patchSessionMock = vi.hoisted(() => vi.fn(async () => true));
 const buildChatItemsMock = vi.hoisted(() =>
   vi.fn((props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
     if (
@@ -193,6 +194,7 @@ vi.mock("../controllers/agents.ts", () => ({
 
 vi.mock("../controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
+  patchSession: patchSessionMock,
   syncSelectedSessionMessageSubscription: vi.fn(async () => undefined),
 }));
 
@@ -977,6 +979,44 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
+  it("keeps archived sessions read-only across composer interactions", () => {
+    const onSend = vi.fn();
+    const onAttachmentsChange = vi.fn();
+    const disabledReason = "Restore this session to send messages.";
+    const container = renderChatView({
+      canSend: false,
+      disabledReason,
+      draft: "unsent draft",
+      onSend,
+      onAttachmentsChange,
+    });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const fileInput = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const attachButton = container.querySelector<HTMLButtonElement>(
+      `[aria-label="${t("chat.composer.attachFile")}"]`,
+    );
+    const sendButton = container.querySelector<HTMLButtonElement>(".chat-send-btn");
+    const chat = container.querySelector<HTMLElement>(".card.chat");
+
+    expect(textarea?.disabled).toBe(true);
+    expect(textarea?.placeholder).toBe(disabledReason);
+    expect(fileInput?.disabled).toBe(true);
+    expect(attachButton?.disabled).toBe(true);
+    expect(sendButton?.disabled).toBe(true);
+
+    textarea?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    sendButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    fileInput?.dispatchEvent(new Event("change", { bubbles: true }));
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    chat?.dispatchEvent(drop);
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    expect(drop.defaultPrevented).toBe(true);
+  });
+
   it("renders session controls in the composer and workspace files in the expanded rail", () => {
     const onToggleCollapsed = vi.fn();
     const onRefresh = vi.fn();
@@ -1180,6 +1220,7 @@ afterEach(() => {
   renderMessageGroupMock.mockClear();
   assistantAttachmentRenderVersionMock.value = 0;
   loadSessionsMock.mockClear();
+  patchSessionMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
@@ -3125,6 +3166,85 @@ describe("chat session controls", () => {
 
     expect(onSwitchSession).toHaveBeenCalledWith(state, targetSessionKey);
   });
+
+  it("pins sessions from the chat session picker", async () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    await vi.waitFor(() => expect(state.chatSessionPickerResult).not.toBeNull());
+    render(renderChatSessionSelect(state), container);
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-pin="true"]')!.click();
+
+    await vi.waitFor(() =>
+      expect(patchSessionMock).toHaveBeenCalledWith(
+        state,
+        "main",
+        { pinned: true },
+        {
+          activeMinutes: 0,
+          configuredAgentsOnly: true,
+          includeGlobal: true,
+          includeUnknown: true,
+          limit: 50,
+          preserveSessionsViewResult: true,
+          showArchived: false,
+        },
+      ),
+    );
+  });
+
+  it("switches away after archiving a selected legacy session alias", async () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "Agent:Main:Work";
+    state.settings.sessionKey = state.sessionKey;
+    state.sessionsResult = createSessionsResultFromRows([
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ]);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = state.sessionsResult;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-archive="true"]')!.click();
+
+    await vi.waitFor(() => expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:main:main"));
+  });
+
+  it.each([
+    [
+      "Matrix room",
+      "agent:main:matrix:channel:!MixedRoomAbC:example.org",
+      "agent:main:matrix:channel:!mixedroomabc:example.org",
+    ],
+    ["Signal group", "agent:main:signal:group:AbC123=", "agent:main:signal:group:abc123="],
+  ])(
+    "does not switch after archiving a case-distinct opaque %s",
+    async (_name, selectedKey, rowKey) => {
+      const { state } = createChatHeaderState();
+      const onSwitchSession = vi.fn();
+      state.sessionKey = selectedKey;
+      state.settings.sessionKey = selectedKey;
+      state.sessionsResult = createSessionsResultFromRows([
+        { key: rowKey, kind: "direct", label: "Other session", updatedAt: 1 },
+      ]);
+      state.chatSessionPickerOpen = true;
+      state.chatSessionPickerSurface = "desktop";
+      state.chatSessionPickerResult = state.sessionsResult;
+      const container = document.createElement("div");
+      render(renderChatSessionSelect(state, onSwitchSession), container);
+
+      container
+        .querySelector<HTMLButtonElement>('button[data-chat-session-archive="true"]')!
+        .click();
+
+      await vi.waitFor(() => expect(patchSessionMock).toHaveBeenCalled());
+      expect(onSwitchSession).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears applied chat session picker search when the input is cleared", async () => {
     const { state } = createChatHeaderState();

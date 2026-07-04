@@ -38,6 +38,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     showArchived: false,
+    mainKey: "main",
     filtersCollapsed: false,
     basePath: "",
     searchQuery: "",
@@ -158,6 +159,71 @@ describe("sessions view", () => {
     expect(onAddToWorkboard).toHaveBeenCalledWith(session);
   });
 
+  it("pins, archives, and restores sessions from row actions", async () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: Date.now(),
+            pinned: false,
+            archived: false,
+          }),
+        ),
+        onPatch,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    container.querySelector<HTMLButtonElement>('button[title="Pin session"]')!.click();
+    container.querySelector<HTMLButtonElement>('button[title="Archive session"]')!.click();
+    expect(onPatch).toHaveBeenNthCalledWith(1, "agent:main:dashboard:1", { pinned: true });
+    expect(onPatch).toHaveBeenNthCalledWith(2, "agent:main:dashboard:1", { archived: true });
+
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: Date.now(),
+            archived: true,
+          }),
+        ),
+        onPatch,
+      }),
+      container,
+    );
+    await Promise.resolve();
+    container.querySelector<HTMLButtonElement>('button[title="Restore session"]')!.click();
+    expect(onPatch).toHaveBeenLastCalledWith("agent:main:dashboard:1", { archived: false });
+  });
+
+  it("keeps pinned sessions above newer unpinned sessions", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "newer", kind: "direct", updatedAt: 200 },
+            { key: "pinned", kind: "direct", updatedAt: 100, pinned: true, pinnedAt: 300 },
+          ]),
+        ),
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const keys = Array.from(container.querySelectorAll("tbody .session-data-row")).map((row) =>
+      row.querySelector(".session-key-cell")?.textContent?.trim(),
+    );
+    expect(keys).toEqual(["pinned", "newer"]);
+  });
+
   it("marks sessions that already have workboard cards", async () => {
     const container = document.createElement("div");
     render(
@@ -214,7 +280,7 @@ describe("sessions view", () => {
     expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
     expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
     expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
-    expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
+    expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Show only archived sessions.");
     expect(
       Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
     ).toStrictEqual([]);

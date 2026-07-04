@@ -19,6 +19,7 @@ import {
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import { switchChatSession } from "./app-render.helpers.ts";
 import {
   applySettings,
   loadCron,
@@ -550,6 +551,31 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   return buildAgentMainSessionKey({
     agentId: defaultAgentId,
     mainKey: configuredMainKey,
+  });
+}
+
+function resolveDeletedSessionFallback(
+  host: GatewayHost,
+  deletedSession: { key: string; agentId?: string },
+): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const defaults = snapshot?.sessionDefaults;
+  const configuredMainKey = defaults?.mainKey?.trim() || host.agentsList?.mainKey?.trim();
+  const parsedConfiguredMainKey = parseAgentSessionKey(configuredMainKey ?? "");
+  const parsedSelectedKey = parseAgentSessionKey(host.sessionKey);
+  const parsedDeletedKey = parseAgentSessionKey(deletedSession.key);
+  return buildAgentMainSessionKey({
+    agentId:
+      parsedSelectedKey?.agentId ??
+      parsedDeletedKey?.agentId ??
+      deletedSession.agentId ??
+      resolveDefaultAgentId(host),
+    mainKey:
+      parsedConfiguredMainKey?.rest ??
+      configuredMainKey ??
+      parseAgentSessionKey(defaults?.mainSessionKey ?? "")?.rest,
   });
 }
 
@@ -1386,6 +1412,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
             | { clientRunId?: unknown; runId?: unknown; sessionKey?: unknown }
             | undefined,
           runIdBeforeApply,
+        );
+      }
+      if (result.deletedSession?.selected) {
+        switchChatSession(
+          host as unknown as Parameters<typeof switchChatSession>[0],
+          resolveDeletedSessionFallback(host, result.deletedSession),
         );
       }
       return;

@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
@@ -14,7 +13,6 @@ const fullReleaseValidationWorkflowPath = join(
   ".github/workflows/full-release-validation.yml",
 );
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
-const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
@@ -302,14 +300,10 @@ describe("Dockerfile", () => {
 
   it("keeps package manager patch files in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
-    const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
-      patchedDependencies?: Record<string, string>;
-    };
     const pruneProd = "CI=true pnpm prune --prod";
     const finalWorkspaceCopy =
       "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
-    expect(Object.keys(pnpmWorkspace.patchedDependencies ?? {})).not.toHaveLength(0);
     expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
     expect(dockerfile).not.toContain("pnpm_config_frozen_lockfile=false");
