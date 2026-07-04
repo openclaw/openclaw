@@ -1,6 +1,3 @@
-// import { page as overviewPage } from "./pages/overview/route.ts";
-// import { page as usagePage } from "./pages/usage/route.ts";
-// import { page as workboardPage } from "./pages/workboard/route.ts";
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
 import type { ApplicationContext } from "./app/context.ts";
@@ -17,6 +14,9 @@ import { page as logsPage } from "./pages/logs/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
+// import { page as overviewPage } from "./pages/overview/route.ts";
+// import { page as usagePage } from "./pages/usage/route.ts";
+import { page as workboardPage } from "./pages/workboard/route.ts";
 
 export type AppRouteModule = {
   render: (data: unknown) => unknown;
@@ -40,6 +40,7 @@ export const APP_ROUTE_TREE = [
   agentsPage,
   channelsPage,
   ...configPages,
+  workboardPage,
   debugPage,
   logsPage,
   skillWorkshopPage,

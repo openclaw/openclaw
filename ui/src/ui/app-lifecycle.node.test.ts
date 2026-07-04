@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { configureWorkboardPolling, getWorkboardState } from "../lib/workboard/index.ts";
 import { loadChatComposerSnapshot } from "../pages/chat/composer-persistence.ts";
-import { configureWorkboardPolling, getWorkboardState } from "../pages/workboard/data.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { handleDisconnected, handleUpdated } from "./app-lifecycle.ts";
 

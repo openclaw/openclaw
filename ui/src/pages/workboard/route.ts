@@ -1,63 +1,23 @@
 import { definePage } from "@openclaw/uirouter";
-import type { RouteRenderContext } from "../../app-routes.ts";
-import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { loadAgents } from "../../lib/agents/index.ts";
-import { loadConfig } from "../../lib/config/index.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadWorkboard, stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./data.ts";
+import { html } from "lit";
+import type { ApplicationContext } from "../../app/context.ts";
 
-type WorkboardRenderContext = RouteRenderContext;
-type WorkboardLoadContext = { host: SettingsHost; app: SettingsAppHost };
+async function loadWorkboardRoute(context: ApplicationContext) {
+  const sessions = context.sessions.state;
+  await Promise.all([
+    context.runtimeConfig.ensureLoaded(),
+    context.agents.ensureList(),
+    sessions.result || sessions.loading ? Promise.resolve() : context.sessions.refresh(),
+  ]);
+}
 
 export const page = definePage({
   id: "workboard",
   path: "/workboard",
-  loader: ({ host, app }: WorkboardLoadContext) =>
-    Promise.all([
-      loadConfig(app),
-      loadAgents(app),
-      loadWorkboard({
-        host,
-        client: app.client,
-        requestUpdate: host.requestUpdate,
-        refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
-      }),
-    ]).then(() => undefined),
-  onLeave: ({ host }: WorkboardLoadContext) => {
-    stopWorkboardPolling(host);
-    stopWorkboardLifecycleRefresh(host);
-  },
+  loader: loadWorkboardRoute,
   component: () =>
-    import("./view.ts").then((module) => ({
-      render: ({ state, navigate }: WorkboardRenderContext) => {
-        const requestUpdate = (state as AppViewState & { requestUpdate?: () => void })
-          .requestUpdate;
-        const auth =
-          (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ?? null;
-        return module.renderWorkboard({
-          host: state,
-          client: state.client,
-          connected: state.connected,
-          canWrite: hasOperatorWriteAccess(auth),
-          canModelOverride: hasOperatorAdminAccess(auth),
-          pluginEnabled: state.configSnapshot
-            ? isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
-                enabledByDefault: false,
-              })
-            : null,
-          pluginEnablementError:
-            !state.configSnapshot && !state.configLoading ? state.lastError : null,
-          agentsList: state.agentsList,
-          sessions: state.sessionsResult?.sessions ?? [],
-          onOpenSession: (sessionKey) => {
-            navigate("chat", { search: searchForSession(sessionKey) });
-          },
-          onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
-          onRequestUpdate: requestUpdate,
-        });
-      },
+    import("./workboard-page.ts").then(() => ({
+      header: true,
+      render: () => html`<openclaw-workboard-page></openclaw-workboard-page>`,
     })),
 });

@@ -1,12 +1,12 @@
 // Control UI view renders workboard screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs } from "../../lib/format.ts";
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -18,16 +18,12 @@ import {
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
-  loadWorkboard,
   moveWorkboardCard,
   refreshWorkboard,
   saveWorkboardCardDraft,
   startWorkboardCard,
   stopWorkboardCard,
-  stopWorkboardLifecycleRefresh,
-  stopWorkboardPolling,
   summarizeWorkboardHealth,
-  syncWorkboardLifecycle,
   workboardCardMatchesHealthKey,
   workboardHasActiveWrites,
   workboardMutationsReady,
@@ -46,7 +42,7 @@ import {
   type WorkboardTaskSummary,
   type WorkboardTemplateId,
   type WorkboardUiState,
-} from "./data.ts";
+} from "../../lib/workboard/index.ts";
 
 type WorkboardAgentRow = AgentsListResult["agents"][number];
 type WorkboardConfiguredAgentOption = {
@@ -2500,33 +2496,6 @@ function renderColumn(props: WorkboardProps, status: WorkboardStatus, cards: Wor
 
 export function renderWorkboard(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
-  if (!props.connected || props.pluginEnabled !== true) {
-    stopWorkboardPolling(props.host);
-    stopWorkboardLifecycleRefresh(props.host);
-  }
-  configureWorkboardPolling({
-    host: props.host,
-    client: props.client,
-    enabled: props.connected && props.pluginEnabled === true && state.autoRefreshIntervalMs > 0,
-    requestUpdate: props.onRequestUpdate,
-  });
-  if (props.connected && props.pluginEnabled === true) {
-    void loadWorkboard({
-      host: props.host,
-      client: props.client,
-      requestUpdate: props.onRequestUpdate,
-      refreshDiagnostics: canWrite(props),
-    });
-    if (!state.pollRefreshInProgress && !state.dispatching) {
-      void syncWorkboardLifecycle({
-        host: props.host,
-        client: props.client,
-        sessions: props.sessions,
-        canWrite: props.canWrite,
-        requestUpdate: props.onRequestUpdate,
-      });
-    }
-  }
 
   if (props.pluginEnabled === null) {
     if (props.pluginEnablementError) {

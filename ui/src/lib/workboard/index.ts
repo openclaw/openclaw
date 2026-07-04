@@ -1,7 +1,7 @@
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { requestSessionCreate } from "../../lib/sessions/index.ts";
+import { requestSessionCreate } from "../sessions/index.ts";
 // Control UI controller manages workboard gateway state.
-import { GatewayRequestError, type GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export const WORKBOARD_STATUSES = [
   "triage",

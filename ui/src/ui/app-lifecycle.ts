@@ -2,11 +2,11 @@ import { appRouter, type ApplicationContext, startAppRouter } from "../app-route
 import { createBrowserHistory } from "../app/browser.ts";
 import { observeTopbar } from "../app/topbar.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../lib/workboard/index.ts";
 import {
   persistChatComposerState,
   restoreChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
-import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../pages/workboard/data.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import {

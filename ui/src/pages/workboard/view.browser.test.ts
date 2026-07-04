@@ -1,7 +1,7 @@
 // Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it } from "vitest";
-import { getWorkboardState } from "./data.ts";
+import { getWorkboardState } from "../../lib/workboard/index.ts";
 import { renderWorkboard } from "./view.ts";
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
