@@ -538,10 +538,7 @@ export async function resolveInstallerKindReadiness(kind: string): Promise<Skill
     }
     case "go": {
       if (deps.hasBinary("go")) {
-        if (!(await isGoUsableForAutoInstall())) {
-          return { ready: false, reason: "go" };
-        }
-        return !brewExe || (await canUseBrewForAutoInstall(brewExe))
+        return (await isGoUsableForAutoInstall())
           ? { ready: true }
           : { ready: false, reason: "go" };
       }
@@ -689,6 +686,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     return withWarnings(uvInstallFailure, warnings);
   }
 
+  const goWasAlreadyInstalled = spec.kind === "go" && deps.hasBinary("go");
   const goInstallFailure = await ensureGoInstalled({ spec, brewExe, timeoutMs });
   if (goInstallFailure) {
     return withWarnings(goInstallFailure, warnings);
@@ -703,7 +701,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   if (spec.kind === "node") {
     Object.assign(envOverrides, await buildNodeInstallEnv(prefs));
   }
-  if (spec.kind === "go" && brewExe) {
+  if (spec.kind === "go" && brewExe && !goWasAlreadyInstalled) {
     const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) {
       envOverrides.GOBIN = brewBin;

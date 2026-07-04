@@ -274,6 +274,29 @@ describe("skills-install fallback edge cases", () => {
     }
   });
 
+  it("does not redirect existing Go installs into the Homebrew bin", async () => {
+    mockAvailableBinaries(["go", "brew"]);
+    runCommandWithTimeoutMock.mockResolvedValue({
+      code: 0,
+      stdout: "ok",
+      stderr: "",
+      signal: null,
+      killed: false,
+    });
+
+    const result = await installSkill({
+      workspaceDir,
+      skillName: "go-tool-single",
+      installId: "deps",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    const installCall = commandCallAt(0);
+    expect(installCall[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+    expect(installCall[1].env?.GOBIN).toBeUndefined();
+  });
+
   describe("resolveInstallerKindReadiness", () => {
     function withUid<T>(uid: number, fn: () => Promise<T>): Promise<T> {
       const spy = vi.spyOn(process, "getuid").mockReturnValue(uid);
@@ -381,22 +404,17 @@ describe("skills-install fallback edge cases", () => {
       expect(commandCallAt(1)[0]).toEqual(["brew", "doctor", "check_access_directories"]);
     });
 
-    it("skips usable Go when its Homebrew install destination is not writable", async () => {
+    it("keeps usable Go ready without consulting an unrelated Homebrew install", async () => {
       mockAvailableBinaries(["go", "brew"]);
       runCommandWithTimeoutMock.mockResolvedValueOnce({
         code: 0,
         stdout: "go version go1.24.12 linux/amd64\n",
         stderr: "",
       });
-      runCommandWithTimeoutMock.mockResolvedValueOnce({
-        code: 1,
-        stdout: "",
-        stderr: "directories are not writable",
-      });
 
-      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+      expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
       expect(commandCallAt(0)[0]).toEqual(["go", "version"]);
-      expect(commandCallAt(1)[0]).toEqual(["brew", "doctor", "check_access_directories"]);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     });
 
     it("skips too-old Go even though the binary exists", async () => {
