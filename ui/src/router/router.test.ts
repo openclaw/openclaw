@@ -49,4 +49,44 @@ describe("router revalidation", () => {
 
     expect(router.getState().matches[0]?.data).toBe("fresh");
   });
+
+  it("restarts an aborted load when navigating back to the same route", async () => {
+    const calls: LoadCall[] = [];
+    const page = definePage({
+      id: "page",
+      path: "/page",
+      component: async () => ({ render: () => undefined }),
+      loader: (context: string, options: RouteHookOptions) =>
+        new Promise<string>((resolve) => calls.push({ context, options, resolve })),
+    });
+    const other = definePage({
+      id: "other",
+      path: "/other",
+      component: async () => ({ render: () => undefined }),
+      loader: async () => "other",
+    });
+    const router = createRouter({ routes: [page, other] });
+
+    const initialLoad = router.start(createHistory(), "", "initial");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await router.navigateLocation({ pathname: "/other", search: "", hash: "" }, "other-context");
+
+    const returnLoad = router.navigateLocation(
+      { pathname: "/page", search: "?source=return", hash: "" },
+      "return-context",
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]?.options.signal.aborted).toBe(true);
+    expect(calls[1]?.options.signal.aborted).toBe(false);
+
+    calls[1]?.resolve("fresh");
+    await returnLoad;
+    calls[0]?.resolve("stale");
+    await initialLoad;
+
+    const active = router.getState().matches[0];
+    expect(active?.routeId).toBe("page");
+    expect(active?.data).toBe("fresh");
+    expect(active?.module).toBeDefined();
+  });
 });
