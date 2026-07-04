@@ -147,10 +147,15 @@ describe("readResponseText", () => {
     expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
-  it("truncates text-only fallback responses when maxBytes is set", async () => {
+  it("truncates text-only fallback responses at byte boundaries when maxBytes is set", async () => {
     // Foreign Response without a body stream (no getReader) — the .text()
-    // fallback path must still honor maxBytes.
-    const longText = "y".repeat(10_000);
+    // fallback path must still honor maxBytes at byte-level granularity.
+    // Use multi-byte UTF-8: "中" = 3 bytes, "🔥" = 4 bytes.
+    // 50 x's (50 bytes) + "中文" (6 bytes) + "🔥" (4 bytes) + 50 y's (50 bytes)
+    const longText = "x".repeat(50) + "中文🔥" + "y".repeat(50);
+    const bytes = new TextEncoder().encode(longText);
+    const CAP = 53; // lands at clean boundary after 50 x's + "中" (3 bytes)
+    expect(bytes.byteLength).toBeGreaterThan(CAP);
     const response = {
       body: null as unknown,
       headers: new Headers(),
@@ -159,11 +164,15 @@ describe("readResponseText", () => {
       },
     } as unknown as Response;
 
-    // With maxBytes → truncated
-    const capped = await readResponseText(response, { maxBytes: 100 });
-    expect(capped.text).toBe("y".repeat(100));
+    // With maxBytes → byte-truncated
+    const capped = await readResponseText(response, { maxBytes: CAP });
     expect(capped.truncated).toBe(true);
-    expect(capped.bytesRead).toBe(100);
+    expect(capped.bytesRead).toBe(CAP);
+    // Verify truncation is byte-accurate: decode the expected prefix
+    const expected = new TextDecoder().decode(bytes.slice(0, CAP));
+    expect(capped.text).toBe(expected);
+    // Verify truncation preserves valid UTF-8 (no replacement characters)
+    expect(capped.text).not.toContain("�");
 
     // Without maxBytes → passes through (regression)
     const noCapResponse = {
@@ -176,5 +185,6 @@ describe("readResponseText", () => {
     const full = await readResponseText(noCapResponse);
     expect(full.text).toBe(longText);
     expect(full.truncated).toBe(false);
+    expect(full.bytesRead).toBe(bytes.byteLength);
   });
 });

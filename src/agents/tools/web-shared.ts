@@ -313,10 +313,12 @@ export async function readResponseText(
 
   try {
     const text = await res.text();
-    if (maxBytes !== undefined && text.length > maxBytes) {
-      return { text: text.slice(0, maxBytes), truncated: true, bytesRead: maxBytes };
+    const bytes = new TextEncoder().encode(text);
+    if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+      const truncated = new TextDecoder().decode(bytes.slice(0, maxBytes));
+      return { text: truncated, truncated: true, bytesRead: maxBytes };
     }
-    return { text, truncated: false, bytesRead: text.length };
+    return { text, truncated: false, bytesRead: bytes.byteLength };
   } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }
