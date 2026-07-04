@@ -259,7 +259,14 @@ function setFindingConfigValues(
 ): RepairPatch {
   const next = cloneConfig(cfg);
   const changes: string[] = [];
+  const warnings: string[] = [];
   for (const finding of findings) {
+    if (isScopedInheritedChannelDefaultFinding(finding)) {
+      warnings.push(
+        `Skipped scoped channel ingress repair for ${configPathLabel(finding.ocPath ?? "")}. The finding reports inherited channels.defaults config, so changing it would affect more than the scoped channel target.`,
+      );
+      continue;
+    }
     if (
       finding.ocPath === undefined ||
       configPathSegments(finding.ocPath).at(-1) !== fieldName ||
@@ -270,8 +277,8 @@ function setFindingConfigValues(
     changes.push(`Set ${configPathLabel(finding.ocPath)}=${String(value)} for policy conformance.`);
   }
   return changes.length > 0
-    ? { config: next as OpenClawConfig, changes: uniqueStrings(changes) }
-    : { config: cfg, changes };
+    ? { config: next as OpenClawConfig, changes: uniqueStrings(changes), warnings }
+    : { config: cfg, changes, warnings: uniqueStrings(warnings) };
 }
 
 function cloneConfig(cfg: OpenClawConfig): ConfigRecord {
@@ -327,15 +334,41 @@ function configPathSegments(ocPath: string): readonly string[] {
   if (!ocPath.startsWith(prefix)) {
     return [];
   }
-  return ocPath
-    .slice(prefix.length)
-    .split("/")
-    .filter(Boolean)
-    .map((segment) =>
-      segment.length >= 2 && segment.startsWith('"') && segment.endsWith('"')
-        ? segment.slice(1, -1)
-        : segment,
-    );
+  return splitConfigPath(ocPath.slice(prefix.length));
+}
+
+function splitConfigPath(path: string): readonly string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quoted = false;
+  let escaped = false;
+  for (const char of path) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char === "/") {
+      if (current !== "") {
+        segments.push(current);
+      }
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current !== "") {
+    segments.push(current);
+  }
+  return quoted ? [] : segments;
 }
 
 function configPathLabel(ocPath: string): string {
@@ -413,6 +446,13 @@ function hasScopedPolicyRequirement(findings: readonly HealthFinding[]): boolean
 
 function skippedUnsafeScopedRepair(cfg: OpenClawConfig, warning: string): RepairPatch {
   return { config: cfg, changes: [], warnings: [warning] };
+}
+
+function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean {
+  return (
+    hasScopedPolicyRequirement([finding]) &&
+    finding.ocPath?.startsWith("oc://openclaw.config/channels/defaults/") === true
+  );
 }
 
 function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
