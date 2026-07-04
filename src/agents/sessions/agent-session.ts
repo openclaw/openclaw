@@ -2391,7 +2391,9 @@ export class AgentSession {
             this.extensionAbortHandler();
             return;
           }
-          void this.abort().catch(() => {});
+          void this.abort().catch((err: unknown) => {
+            process.stderr.write(`agent-session: extension abort failed: ${String(err)}\n`);
+          });
         },
         hasPendingMessages: () => this.pendingMessageCount > 0,
         shutdown: () => {
