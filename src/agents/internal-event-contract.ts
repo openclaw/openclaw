@@ -4,6 +4,7 @@ export const AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION = "task_completion" as co
 
 const AGENT_INTERNAL_EVENT_SOURCES = [
   "subagent",
+  "acp",
   "cron",
   "image_generation",
   "video_generation",

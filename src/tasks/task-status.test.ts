@@ -144,4 +144,18 @@ describe("task status formatting", () => {
       ),
     ).toBe("");
   });
+
+  it("strips ACP internal completion events from task status text", () => {
+    expect(
+      sanitizeTaskStatusText(
+        [
+          "OpenClaw runtime context (internal):",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "[Internal task completion event]",
+          "source: acp",
+        ].join("\n"),
+      ),
+    ).toBe("");
+  });
 });
