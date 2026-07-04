@@ -94,4 +94,46 @@ describe("compileSlackInteractiveReplies", () => {
     );
     expect(result.interactive).toBeUndefined();
   });
+
+  it("keeps colons inside button labels (e.g. times) with the label, not the value", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Fr 10.07. 9:00:slot_fr_0900, Mo 13.07. 10:45:slot_mo_1045]]",
+    });
+
+    const buttonsBlock = result.interactive?.blocks.find((block) => block.type === "buttons");
+    expect(buttonsBlock).toEqual({
+      type: "buttons",
+      buttons: [
+        { label: "Fr 10.07. 9:00", value: "slot_fr_0900" },
+        { label: "Mo 13.07. 10:45", value: "slot_mo_1045" },
+      ],
+    });
+  });
+
+  it("still strips a trailing :style suffix on labeled buttons, including colon labels", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Retry:retry:primary, Slot 9:00:slot_0900:danger]]",
+    });
+
+    const buttonsBlock = result.interactive?.blocks.find((block) => block.type === "buttons");
+    expect(buttonsBlock).toEqual({
+      type: "buttons",
+      buttons: [
+        { label: "Retry", value: "retry", style: "primary" },
+        { label: "Slot 9:00", value: "slot_0900", style: "danger" },
+      ],
+    });
+  });
+
+  it("does not treat a single-colon label:style entry as a styled button", () => {
+    const result = compileSlackInteractiveReplies({
+      text: "[[slack_buttons: Approve:primary]]",
+    });
+
+    const buttonsBlock = result.interactive?.blocks.find((block) => block.type === "buttons");
+    expect(buttonsBlock).toEqual({
+      type: "buttons",
+      buttons: [{ label: "Approve", value: "primary" }],
+    });
+  });
 });

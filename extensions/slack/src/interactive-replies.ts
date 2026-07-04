@@ -26,36 +26,40 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   if (!trimmed) {
     return null;
   }
-  const delimiter = trimmed.indexOf(":");
-  if (delimiter === -1) {
-    return {
-      label: trimmed,
-      value: trimmed,
-    };
-  }
-  const label = trimmed.slice(0, delimiter).trim();
-  let value = trimmed.slice(delimiter + 1).trim();
-  if (!label || !value) {
-    return null;
-  }
+  // Strip an optional trailing `:style` suffix before splitting label/value, but
+  // only when a label:value colon still remains after it. A bare `label:style`
+  // (single colon) is a plain value today, not a styled button. (#99823)
+  let working = trimmed;
   let style: SlackChoice["style"];
   if (options?.allowStyle) {
-    const styleDelimiter = value.lastIndexOf(":");
-    if (styleDelimiter !== -1) {
-      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
+    const styleDelimiter = working.lastIndexOf(":");
+    if (styleDelimiter !== -1 && working.slice(0, styleDelimiter).includes(":")) {
+      const maybeStyle = normalizeLowercaseStringOrEmpty(working.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
         maybeStyle === "success" ||
         maybeStyle === "danger"
       ) {
-        const unstyledValue = value.slice(0, styleDelimiter).trim();
-        if (unstyledValue) {
-          value = unstyledValue;
+        const unstyled = working.slice(0, styleDelimiter).trim();
+        if (unstyled) {
+          working = unstyled;
           style = maybeStyle;
         }
       }
     }
+  }
+  // Split label/value at the LAST remaining colon so colons inside the label
+  // (e.g. a time like "9:00") stay with the label and only the trailing token
+  // becomes the value. Single-colon entries are unaffected. (#99823)
+  const delimiter = working.lastIndexOf(":");
+  if (delimiter === -1) {
+    return { label: working, value: working };
+  }
+  const label = working.slice(0, delimiter).trim();
+  const value = working.slice(delimiter + 1).trim();
+  if (!label || !value) {
+    return null;
   }
   return style ? { label, value, style } : { label, value };
 }
