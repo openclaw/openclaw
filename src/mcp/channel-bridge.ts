@@ -148,7 +148,9 @@ export class OpenClawChannelBridge {
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
-        void this.handleGatewayEvent(event).catch(() => {});
+        void this.handleGatewayEvent(event).catch((err: unknown) => {
+          process.stderr.write(`openclaw mcp: gateway event handler failed: ${String(err)}\n`);
+        });
       },
       onHelloOk: () => {
         this.retryingInitialConnect = false;
