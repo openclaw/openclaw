@@ -1,5 +1,6 @@
 // Probe script for OpenWebUI E2E connectivity.
 import { Agent, setGlobalDispatcher } from "undici";
+import { escapeRegExp } from "../lib/regexp.mjs";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response-text.mjs";
 
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
@@ -156,10 +157,6 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, clampTimerTimeoutMs(ms, 0));
   });
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function redactDiagnosticText(text, extraSecrets = []) {

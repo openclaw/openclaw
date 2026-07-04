@@ -1,6 +1,9 @@
 /** Resolves plugin ids that should load during Gateway startup. */
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  buildModelCatalogMergeKey,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -406,19 +409,9 @@ function listModelProviderRefs(value: unknown): string[] {
 
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
   return listModelProviderRefs(value)
-    .map((ref) => {
-      const slashIndex = ref.indexOf("/");
-      if (slashIndex <= 0 || slashIndex >= ref.length - 1) {
-        return undefined;
-      }
-      return {
-        providerId: normalizeProviderId(ref.slice(0, slashIndex)),
-        modelId: ref.slice(slashIndex + 1).trim(),
-      };
-    })
-    .filter((entry): entry is { providerId: string; modelId: string } =>
-      Boolean(entry?.providerId && entry.modelId),
-    );
+    .map(parseModelCatalogRef)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
 }
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {

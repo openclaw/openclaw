@@ -2466,6 +2466,7 @@ async function runAgentTurnWithFallbackInternal(
                     allowEmptyAssistantReplyAsSilent:
                       params.followupRun.run.allowEmptyAssistantReplyAsSilent,
                     extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                    cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
                     ownerNumbers: params.followupRun.run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
@@ -2696,7 +2697,7 @@ async function runAgentTurnWithFallbackInternal(
                         }
                         // Trigger typing when tools start executing.
                         // Must await to ensure typing indicator starts before tool summaries are emitted.
-                        if (evt.stream === "tool") {
+                        if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
                           const phase = readStringValue(evt.data.phase) ?? "";
                           const name = readStringValue(evt.data.name);
                           const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
@@ -2740,6 +2741,8 @@ async function runAgentTurnWithFallbackInternal(
                           evt.stream === "item" &&
                           evt.data.suppressChannelProgress === true &&
                           Boolean(params.opts?.onToolStart);
+                        const hideItemFromChannelProgress =
+                          evt.stream === "item" && evt.data.hideFromChannelProgress === true;
                         const itemPhase =
                           evt.stream === "item" ? readStringValue(evt.data.phase) : "";
                         const itemName =
@@ -2792,6 +2795,7 @@ async function runAgentTurnWithFallbackInternal(
                         }
                         if (
                           evt.stream === "item" &&
+                          !hideItemFromChannelProgress &&
                           !suppressItemChannelProgress &&
                           (!suppressProgressAfterMessageToolDelivery ||
                             completedMessageToolDelivery)

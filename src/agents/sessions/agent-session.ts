@@ -32,6 +32,7 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import type {
   Agent,
   AgentEvent,
@@ -2609,11 +2610,7 @@ export class AgentSession {
       return false;
     }
 
-    const err = message.errorMessage;
-    // Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
-    return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
-      err,
-    );
+    return isRetryableAssistantError(message);
   }
 
   /**

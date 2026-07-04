@@ -171,6 +171,7 @@ export function enqueueFollowupRun(
     return false;
   }
 
+  run.queueAbortSignal = queue.abortController.signal;
   queue.items.push(run);
   markFollowupRunEnqueued(run);
   if (recentMessageIdKey) {

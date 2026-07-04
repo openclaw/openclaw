@@ -70,7 +70,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
-  "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
+  "update.channel":
+    'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only and foreground-only.',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
   "update.auto.stableDelayHours":
@@ -92,6 +93,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
     "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+  "gateway.terminal":
+    "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
+  "gateway.terminal.enabled":
+    "Enables the operator terminal for admin-scope clients when true (default: false). This exposes a browser/mobile shell with the gateway process environment, so enable it only for trusted operator deployments. Changing this restarts the gateway so connected clients reload with the correct terminal availability and content-security policy.",
+  "gateway.terminal.shell":
+    "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.auth":
     "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
   "gateway.auth.mode":
@@ -166,6 +173,8 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "gateway.remote.sshHostKeyPolicy":
+    'macOS SSH host-key verification policy. "strict" requires an already trusted host key; "openssh" explicitly delegates to effective OpenSSH configuration.',
   "talk.provider": 'Active Talk provider id (for example "acme-speech").',
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",

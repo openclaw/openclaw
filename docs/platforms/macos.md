@@ -29,10 +29,10 @@ app from source with [macOS dev setup](/platforms/mac/dev-setup).
 ## First run
 
 1. Install and launch **OpenClaw.app**.
-2. Complete the macOS permission checklist.
-3. Pick **Local** or **Remote** mode.
-4. Install the `openclaw` CLI if the app asks for it.
-5. Open WebChat from the menu bar and send a test message.
+2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
+3. For local mode, wait while the app installs its user-space runtime and Gateway.
+4. Complete provider setup and the macOS permission checklist.
+5. Send the onboarding test message.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
@@ -44,8 +44,9 @@ For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 | Local  | This Mac should run the Gateway and keep it alive with launchd.                         | [Gateway on macOS](/platforms/mac/bundled-gateway) |
 | Remote | Another host runs the Gateway and this Mac should control it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-Local mode requires an installed `openclaw` CLI. The app can install it, or you
-can follow [Gateway on macOS](/platforms/mac/bundled-gateway).
+Local mode requires an installed `openclaw` CLI. On a fresh Mac, the app installs
+the matching CLI and runtime automatically before starting the Gateway wizard.
+See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 

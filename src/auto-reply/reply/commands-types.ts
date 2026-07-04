@@ -49,6 +49,8 @@ export type HandleCommandsParams = {
     failures: Array<{ gate: string; key: string }>;
   };
   sessionEntry?: SessionEntry;
+  /** Snapshot captured before command handlers mutate the active entry. */
+  initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;

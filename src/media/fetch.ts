@@ -3,11 +3,13 @@ import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { isAbortError } from "../infra/abort-signal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
+  readChunkWithIdleTimeout,
   readResponseTextSnippet,
   readResponseWithLimit,
-} from "@openclaw/media-core/read-response-with-limit";
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+} from "../infra/http-body.js";
 import {
   fetchWithSsrFGuard,
   withStrictGuardedFetchMode,
@@ -15,9 +17,8 @@ import {
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
-import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
+import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
@@ -393,43 +394,6 @@ function resolveResponseContentType(params: {
     return params.fallbackContentType;
   }
   return params.headerContentType ?? params.fallbackContentType;
-}
-
-async function readChunkWithIdleTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  chunkTimeoutMs: number,
-): Promise<Awaited<ReturnType<typeof reader.read>>> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  return await new Promise((resolve, reject) => {
-    const clear = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-    const resolvedChunkTimeoutMs = resolveTimerTimeoutMs(chunkTimeoutMs, 1);
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      clear();
-      void reader.cancel().catch(() => undefined);
-      reject(new Error(`Media download stalled: no data received for ${resolvedChunkTimeoutMs}ms`));
-    }, resolvedChunkTimeoutMs);
-    void reader.read().then(
-      (result) => {
-        clear();
-        if (!timedOut) {
-          resolve(result);
-        }
-      },
-      (err: unknown) => {
-        clear();
-        if (!timedOut) {
-          reject(toErrorObject(err, "Non-Error rejection"));
-        }
-      },
-    );
-  });
 }
 
 async function* responseBodyChunks(

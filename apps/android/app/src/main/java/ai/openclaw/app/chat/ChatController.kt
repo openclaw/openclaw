@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 class ChatController internal constructor(
@@ -70,6 +72,9 @@ class ChatController internal constructor(
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
+  private val _commands = MutableStateFlow<List<ChatCommandEntry>>(emptyList())
+  val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
+
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
 
@@ -79,13 +84,17 @@ class ChatController internal constructor(
 
   // Drops stale history responses after session switches or refresh races.
   private val historyLoadGeneration = AtomicLong(0)
+  private val newChatCreateInFlight = AtomicBoolean(false)
 
   private var lastHealthPollAtMs: Long? = null
+  private var commandsAgentId: String? = null
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     _healthOk.value = false
     _errorText.value = null
+    _commands.value = emptyList()
+    commandsAgentId = null
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
@@ -139,6 +148,59 @@ class ChatController internal constructor(
     scope.launch { fetchSessions(limit = limit) }
   }
 
+  /** Starts a fresh chat for the active gateway session key. */
+  fun startNewChat() {
+    scope.launch { startNewChatAwait() }
+  }
+
+  /** Starts a fresh chat and returns whether the gateway created the session. */
+  suspend fun startNewChatAwait(): Boolean {
+    val parentKey = normalizeRequestedSessionKey(_sessionKey.value)
+    if (parentKey.isEmpty()) return false
+    if (_pendingRunCount.value > 0) {
+      _errorText.value = "Wait for the current response to finish before starting a new chat."
+      return false
+    }
+    if (!newChatCreateInFlight.compareAndSet(false, true)) {
+      return false
+    }
+    val requestGeneration = historyLoadGeneration.get()
+    _errorText.value = null
+    _historyLoading.value = true
+    return try {
+      val label = nextNewChatSessionLabel(_sessions.value)
+      val hasLoadedParentSession = !_sessionId.value.isNullOrBlank()
+      val params =
+        buildJsonObject {
+          put("agentId", JsonPrimitive(resolveAgentIdForSessionKey(parentKey)))
+          if (hasLoadedParentSession) {
+            put("parentSessionKey", JsonPrimitive(parentKey))
+            put("emitCommandHooks", JsonPrimitive(true))
+          }
+          put("label", JsonPrimitive(label))
+        }
+      val res = requestGateway("sessions.create", params.toString())
+      if (!isCurrentHistoryLoad(parentKey, _sessionKey.value, requestGeneration, historyLoadGeneration.get())) {
+        return false
+      }
+      val createdKey = parseCreatedSessionKey(json, res) ?: parentKey
+      val generation = beginHistoryLoad(createdKey, clearMessages = true)
+      bootstrap(sessionKey = createdKey, generation = generation, forceHealth = true, refreshSessions = true)
+      true
+    } catch (err: Throwable) {
+      _errorText.value = err.message
+      _historyLoading.value = false
+      false
+    } finally {
+      newChatCreateInFlight.set(false)
+    }
+  }
+
+  /** Refreshes the available text slash commands for the current gateway. */
+  fun refreshCommands() {
+    scope.launch { fetchCommands() }
+  }
+
   /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
@@ -163,6 +225,11 @@ class ChatController internal constructor(
   ): Long {
     val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
+    val nextAgentId = resolveAgentIdForSessionKey(key)
+    if (commandsAgentId != nextAgentId) {
+      _commands.value = emptyList()
+      commandsAgentId = null
+    }
     _errorText.value = null
     _healthOk.value = false
     clearPendingRuns()
@@ -183,6 +250,9 @@ class ChatController internal constructor(
     if (key == "main" && appliedMainSessionKey != "main") return appliedMainSessionKey
     return key
   }
+
+  private fun resolveAgentIdForSessionKey(parentKey: String): String =
+    resolveAgentIdFromMainSessionKey(parentKey) ?: "main"
 
   /** Queues a chat send without waiting for gateway acceptance. */
   fun sendMessage(
@@ -350,6 +420,7 @@ class ChatController internal constructor(
       }
       "health" -> {
         _healthOk.value = true
+        refreshCommandsAfterReconnect()
       }
       "seqGap" -> {
         _errorText.value = "Event stream interrupted; try refreshing."
@@ -427,6 +498,28 @@ class ChatController internal constructor(
     }
   }
 
+  private suspend fun fetchCommands() {
+    val agentId = resolveAgentIdForSessionKey(_sessionKey.value)
+    try {
+      val params =
+        buildJsonObject {
+          put("agentId", JsonPrimitive(agentId))
+          put("scope", JsonPrimitive("text"))
+          put("includeArgs", JsonPrimitive(true))
+        }
+      val res = requestGateway("commands.list", params.toString())
+      if (agentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
+        _commands.value = parseChatCommands(json, res)
+        commandsAgentId = agentId
+      }
+    } catch (_: Throwable) {
+      if (agentId == resolveAgentIdForSessionKey(_sessionKey.value)) {
+        _commands.value = emptyList()
+        commandsAgentId = null
+      }
+    }
+  }
+
   private fun refreshSessionsForCurrentWindow() {
     scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
   }
@@ -439,9 +532,17 @@ class ChatController internal constructor(
     try {
       requestGateway("health", null)
       _healthOk.value = true
+      if (_commands.value.isEmpty() || commandsAgentId != resolveAgentIdForSessionKey(_sessionKey.value)) {
+        fetchCommands()
+      }
     } catch (_: Throwable) {
       _healthOk.value = false
     }
+  }
+
+  private fun refreshCommandsAfterReconnect() {
+    if (_commands.value.isNotEmpty() && commandsAgentId == resolveAgentIdForSessionKey(_sessionKey.value)) return
+    scope.launch { fetchCommands() }
   }
 
   private fun handleChatEvent(payloadJson: String) {
@@ -811,6 +912,25 @@ class ChatController internal constructor(
     }
 }
 
+private const val NEW_CHAT_SESSION_LABEL = "New chat"
+
+internal fun nextNewChatSessionLabel(sessions: List<ChatSessionEntry>): String {
+  val baseLabel = NEW_CHAT_SESSION_LABEL
+  val existingLabels =
+    sessions
+      .mapNotNull { session -> session.displayName?.trim()?.takeIf { it.isNotEmpty() } }
+      .toSet()
+  if (baseLabel !in existingLabels) return baseLabel
+
+  var suffix = 2
+  while (newChatSessionLabelWithSuffix(suffix) in existingLabels) {
+    suffix += 1
+  }
+  return newChatSessionLabelWithSuffix(suffix)
+}
+
+private fun newChatSessionLabelWithSuffix(suffix: Int): String = NEW_CHAT_SESSION_LABEL + ' ' + suffix
+
 internal fun isCurrentHistoryLoad(
   requestedSessionKey: String,
   currentSessionKey: String,
@@ -853,6 +973,50 @@ internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent>
     return listOf(ChatMessageContent(type = "text", text = text))
   }
   return emptyList()
+}
+
+private fun parseCreatedSessionKey(json: Json, sessionJson: String): String? {
+  val root = runCatching { json.parseToJsonElement(sessionJson).asObjectOrNull() }.getOrNull() ?: return null
+  fun clean(value: String?): String? = value?.trim()?.takeIf { it.isNotEmpty() }
+  return clean(root["key"].asStringOrNull())
+    ?: clean(root["sessionKey"].asStringOrNull())
+    ?: root["session"].asObjectOrNull()?.let { session ->
+      clean(session["key"].asStringOrNull()) ?: clean(session["sessionKey"].asStringOrNull())
+    }
+}
+
+internal fun parseChatCommands(
+  json: Json,
+  commandsJson: String,
+): List<ChatCommandEntry> {
+  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
+  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
+  return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
+}
+
+private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
+  if (obj == null) return null
+  val aliases =
+    obj["textAliases"]
+      .asArrayOrNull()
+      ?.mapNotNull { alias -> alias.asStringOrNull()?.trim()?.takeIf { it.startsWith("/") && it.length > 1 } }
+      ?.distinct()
+      .orEmpty()
+  val name =
+    obj["name"]
+      .asStringOrNull()
+      ?.trim()
+      ?.removePrefix("/")
+      ?.takeIf { it.isNotEmpty() }
+      ?: aliases.firstOrNull()?.removePrefix("/")
+      ?: return null
+  return ChatCommandEntry(
+    name = name,
+    description = obj["description"].asStringOrNull()?.trim().orEmpty(),
+    category = obj["category"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    textAliases = aliases,
+    acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
+  )
 }
 
 internal data class MainSessionState(

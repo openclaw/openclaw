@@ -49,6 +49,8 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   gatewayClientScopes?: string[];
   commandAuthorized?: boolean;
   senderIsOwner?: boolean;
+  /** Internal handoff for mixed inline directives to avoid retrying rejected writes. */
+  persistenceState?: { sessionChangesApplied: boolean };
 };
 
 /** Inputs for applying inline directives before the full reply run is prepared. */

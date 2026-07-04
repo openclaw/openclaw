@@ -5,7 +5,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "../format.js";
+import { markdownToTelegramHtml } from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
@@ -15,15 +15,16 @@ import {
 } from "../reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
 import {
-  buildTelegramRichMessage,
+  buildTelegramRichMessagePlan,
   getTelegramRichRawApi,
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "../rich-message.js";
 import {
+  buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
-  isTelegramRichEntityInvalidError,
-} from "../send-error-predicates.js";
+  warnTelegramRichHtmlDegradations,
+} from "../rich-plain-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -140,9 +141,14 @@ export async function sendTelegramText(
   };
 
   if (opts?.richMessages === true) {
-    const richMessage = buildTelegramRichMessage(text, textMode, {
+    const richPlan = buildTelegramRichMessagePlan(text, textMode, {
       skipEntityDetection: opts.linkPreview === false,
       tableMode: opts.tableMode,
+    });
+    warnTelegramRichHtmlDegradations({
+      context: "sendRichMessage",
+      reasons: richPlan.degradationReasons,
+      warn: (message) => runtime.log?.(message),
     });
     try {
       const res = await sendTelegramWithThreadFallback({
@@ -154,7 +160,7 @@ export async function sendTelegramText(
         send: (effectiveParams) =>
           getTelegramRichRawApi(bot.api).sendRichMessage({
             chat_id: chatId,
-            rich_message: richMessage,
+            rich_message: richPlan.richMessage,
             ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
             ...effectiveParams,
           }),
@@ -162,16 +168,16 @@ export async function sendTelegramText(
       runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
       return res.message_id;
     } catch (err) {
-      if (!isTelegramRichEntityInvalidError(err) || !hasFallbackText) {
+      const fallbackPlan = buildTelegramPlainFallbackPlan({
+        html: richPlan.richMessage.html,
+        err,
+        context: "sendRichMessage",
+        warn: (message) => runtime.log?.(message),
+      });
+      if (!fallbackPlan || !hasFallbackText) {
         throw err;
       }
-      const errText = formatErrorMessage(err);
-      const richFallbackText =
-        opts?.plainText ?? (textMode === "html" ? telegramHtmlToPlainTextFallback(text) : text);
-      runtime.log?.(
-        `telegram sendRichMessage rejected invalid entity; falling back to plain text: ${errText}`,
-      );
-      return await sendPlainFallback(richFallbackText);
+      return await sendPlainFallback(fallbackPlan.plainText);
     }
   }
 

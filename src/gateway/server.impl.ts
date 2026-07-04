@@ -823,6 +823,8 @@ export async function startGatewayServer(
       log,
     }),
   );
+  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -910,6 +912,7 @@ export async function startGatewayServer(
       strictTransportSecurityHeader,
       resolvedAuth,
       rateLimiter: authRateLimiter,
+      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       gatewayTls,
       getResolvedAuth,
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
@@ -940,6 +943,12 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
+  const { TerminalSessionManager } = await import("./terminal/session-manager.js");
+  // One PTY store per gateway. Emits each session's bytes only to the owning
+  // connection so terminals stay private to the operator that opened them.
+  const terminalSessions = new TerminalSessionManager({
+    emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+  });
   applyGatewayLaneConcurrency(cfgAtStart);
 
   runtimeState = createGatewayServerLiveState({
@@ -1418,6 +1427,8 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
+          isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           pluginApprovalManager,
           loadGatewayModelCatalog,
@@ -1446,6 +1457,7 @@ export async function startGatewayServer(
             });
           },
           nodeRegistry,
+          terminalSessions,
           agentRunSeq,
           chatAbortControllers,
           chatAbortedRuns: chatRunState.abortedRuns,
@@ -1599,7 +1611,11 @@ export async function startGatewayServer(
       pluginServices: runtimeState.pluginServices,
     } = await startupTrace.measure("runtime.post-attach", () =>
       loadGatewayStartupPostAttachModule().then(
-        ({ startGatewayPostAttachRuntime, stopPostReadySidecarsAfterCloseStarted }) =>
+        ({
+          shouldSkipProviderAuthStartupPrewarm,
+          startGatewayPostAttachRuntime,
+          stopPostReadySidecarsAfterCloseStarted,
+        }) =>
           startGatewayPostAttachRuntime({
             minimalTestGateway,
             cfgAtStart,
@@ -1687,7 +1703,10 @@ export async function startGatewayServer(
             startupTrace,
             deferSidecars: deferStartupSidecars,
             logReadyOnSidecars: !deferStartupSidecars,
-            providerAuthPrewarm: { getConfig: getRuntimeConfig },
+            providerAuthPrewarm: {
+              startupEnabled: !shouldSkipProviderAuthStartupPrewarm(),
+              getConfig: getRuntimeConfig,
+            },
           }),
       ),
     ));
@@ -1742,6 +1761,13 @@ export async function startGatewayServer(
       onCronRestart: () => {
         gatewayCronStartHandled = true;
       },
+      reconcileTerminalSessions: (plan, nextConfig) => {
+        terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+        terminalSessions.closeDisallowedAgents(
+          (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
+        );
+      },
+      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
       channelManager,
       activateRuntimeSecrets,
       resolveSharedGatewaySessionGenerationForConfig,
@@ -1805,6 +1831,8 @@ export async function startGatewayServer(
     close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
+        // Kill any live operator shells before the socket layer tears down.
+        terminalSessions.disposeAll();
         await stopRegisteredGatewayLifetimeSidecars();
         await stopRegisteredPostReadySidecars();
         // Run gateway_stop plugin hook before shutdown

@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderNodes, type NodesProps } from "./nodes.ts";
 
 function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
@@ -13,6 +13,11 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
       pending: [],
       paired: [],
     },
+    devicePairSetupOpen: false,
+    devicePairSetupLoading: false,
+    devicePairSetupError: null,
+    devicePairSetup: null,
+    canPairDevice: true,
     configForm: null,
     configLoading: false,
     configSaving: false,
@@ -28,6 +33,10 @@ function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
     execApprovalsTargetNodeId: null,
     onRefresh: () => undefined,
     onDevicesRefresh: () => undefined,
+    onDevicePairSetupOpen: () => undefined,
+    onDevicePairSetupRefresh: () => undefined,
+    onDevicePairSetupClose: () => undefined,
+    onDevicePairSetupCopy: () => undefined,
     onDeviceApprove: () => undefined,
     onDeviceReject: () => undefined,
     onDeviceRotate: () => undefined,
@@ -188,5 +197,61 @@ describe("nodes devices pending rendering", () => {
     const details = getPendingDeviceDetails(container);
 
     expect(details[1]).toBe("requested: roles: node, operator \u00b7 scopes: operator.read");
+  });
+});
+
+describe("nodes mobile device pairing", () => {
+  it("opens pairing from the Devices card", () => {
+    const onOpen = vi.fn();
+    const container = renderNodesContainer({ onDevicePairSetupOpen: onOpen });
+
+    const button = getDevicesCard(container).querySelector<HTMLButtonElement>("button.primary");
+    expect(button?.textContent).toContain("Pair mobile device");
+    button?.click();
+
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("disables setup-code creation without administrator access", () => {
+    const container = renderNodesContainer({ canPairDevice: false });
+    const button = getDevicesCard(container).querySelector<HTMLButtonElement>("button.primary");
+
+    expect(button?.disabled).toBe(true);
+    expect(button?.title).toBe("Administrator access is required to create setup codes.");
+  });
+
+  it("renders the QR and pending approval state in the pairing dialog", () => {
+    const setupCode = "OPENCLAW-SETUP-CODE";
+    const container = renderNodesContainer({
+      devicePairSetupOpen: true,
+      devicePairSetup: {
+        setupCode,
+        qrDataUrl: "data:image/png;base64,cXItZGF0YQ==",
+        gatewayUrl: "wss://gateway.example.com",
+        auth: "token",
+        urlSource: "config",
+      },
+      devicesList: {
+        pending: [
+          {
+            requestId: "req-1",
+            deviceId: "phone-1",
+            publicKey: "key-1",
+            ts: Date.now(),
+          },
+        ],
+        paired: [],
+      },
+    });
+
+    expect(container.querySelector<HTMLImageElement>(".device-pair-setup__qr")?.src).toBe(
+      "data:image/png;base64,cXItZGF0YQ==",
+    );
+    expect(container.querySelector(".device-pair-setup__pending")?.textContent).toContain(
+      "Device requests waiting for review: 1",
+    );
+    expect(container.querySelector(".device-pair-setup__fallback code")?.textContent).toBe(
+      setupCode,
+    );
   });
 });

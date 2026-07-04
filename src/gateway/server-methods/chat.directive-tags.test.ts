@@ -22,6 +22,8 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { getAgentRunContext } from "../../infra/agent-events.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -3285,6 +3287,71 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       throw new Error("Expected broadcast message");
     }
     expect(extractFirstTextBlock(broadcastPayload)).toBe("");
+  });
+
+  it("chat.inject rejects archived sessions without appending", async () => {
+    createTranscriptFixture("openclaw-chat-inject-archived-");
+    mockState.sessionEntry = { archivedAt: Date.now() };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: { sessionKey: "main", message: "must stay read-only" },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const response = lastRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toMatch(/archived/i);
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(readTranscriptJsonLines(mockState.transcriptPath)).toHaveLength(1);
+  });
+
+  it("chat.inject rechecks archive state after lifecycle admission waits", async () => {
+    createTranscriptFixture("openclaw-chat-inject-archive-race-");
+    const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
+    const mutationStarted = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: ["main", mockState.sessionId],
+      run: async () => {
+        mutationStarted.resolve();
+        await releaseMutation.promise;
+      },
+    });
+    await mutationStarted.promise;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    try {
+      const inject = chatHandlers["chat.inject"]({
+        params: { sessionKey: "main", message: "must lose the archive race" },
+        respond,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+      await waitForAssertion(() => expect(mockState.loadSessionEntryCalls).toHaveLength(1));
+      mockState.sessionEntry = { archivedAt: Date.now() };
+      releaseMutation.resolve();
+      await mutation;
+      await inject;
+
+      const response = lastRespondCall(respond);
+      expect(response?.[0]).toBe(false);
+      expect(response?.[2]?.message).toMatch(/archived/i);
+      expect(context.broadcast).not.toHaveBeenCalled();
+      expect(readTranscriptJsonLines(mockState.transcriptPath)).toHaveLength(1);
+    } finally {
+      releaseMutation.resolve();
+      await mutation;
+    }
   });
 
   it("chat.send non-streaming final keeps message defined for directive-only assistant text", async () => {

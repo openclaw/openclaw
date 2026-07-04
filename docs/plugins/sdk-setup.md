@@ -43,6 +43,12 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "name": "@myorg/openclaw-my-plugin",
       "version": "1.0.0",
       "type": "module",
+      "dependencies": {
+        "typebox": "1.1.39"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.3.24-beta.2"
+      },
       "openclaw": {
         "extensions": ["./index.ts"],
         "compat": {

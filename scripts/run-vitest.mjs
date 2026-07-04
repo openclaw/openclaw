@@ -425,12 +425,7 @@ export function resolveVitestSpawnParams(env = process.env, platform = process.p
  * Applies local Vitest scheduling and native worker budget env.
  */
 export function resolveVitestSpawnEnv(env = process.env) {
-  const nextEnv = resolveLocalVitestEnv(env);
-  const linkedSourceBundledPluginsEnv = resolveLinkedSourceBundledPluginsEnv(nextEnv);
-  const baseEnv =
-    Object.keys(linkedSourceBundledPluginsEnv).length > 0
-      ? { ...nextEnv, ...linkedSourceBundledPluginsEnv }
-      : nextEnv;
+  const baseEnv = resolveLocalVitestEnv(env);
   if (!shouldApplyNativeWorkerBudget(baseEnv)) {
     return baseEnv;
   }
@@ -458,59 +453,6 @@ function resolveNativeWorkerCount(env) {
 
 function resolveExplicitVitestWorkerBudget(env) {
   return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
-}
-
-function hasUsableSourceBundledPluginsDir(extensionsDir, fsImpl = fs) {
-  if (!fsImpl.existsSync(extensionsDir)) {
-    return false;
-  }
-  try {
-    return fsImpl.readdirSync(extensionsDir, { withFileTypes: true }).some((entry) => {
-      if (!entry.isDirectory()) {
-        return false;
-      }
-      const pluginDir = path.join(extensionsDir, entry.name);
-      return (
-        fsImpl.existsSync(path.join(pluginDir, "package.json")) ||
-        fsImpl.existsSync(path.join(pluginDir, "openclaw.plugin.json"))
-      );
-    });
-  } catch {
-    return false;
-  }
-}
-
-function isSymlinkedNodeModules(baseDir, fsImpl = fs) {
-  try {
-    return fsImpl.lstatSync(path.join(baseDir, "node_modules")).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-export function resolveLinkedSourceBundledPluginsEnv(
-  env = process.env,
-  { baseDir = repoRoot, fsImpl = fs } = {},
-) {
-  if (env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()) {
-    return {};
-  }
-  const workingDir = env.PWD?.trim();
-  if (!workingDir || path.resolve(workingDir) !== path.resolve(baseDir)) {
-    return {};
-  }
-  if (!isSymlinkedNodeModules(baseDir, fsImpl)) {
-    return {};
-  }
-  const extensionsDir = path.join(baseDir, "extensions");
-  if (!hasUsableSourceBundledPluginsDir(extensionsDir, fsImpl)) {
-    return {};
-  }
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: extensionsDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR:
-      env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR?.trim() || "1",
-  };
 }
 
 /**

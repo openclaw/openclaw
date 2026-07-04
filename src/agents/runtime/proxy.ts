@@ -3,8 +3,8 @@
  * The server manages auth and proxies requests to LLM providers.
  */
 
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { readResponseWithLimit } from "../../infra/http-body.js";
 // Internal import for JSON parsing utility
 import type {
   AssistantMessage,

@@ -53,6 +53,7 @@ internal data class GatewayConnectPlan(
 internal enum class GatewayEndpointValidationError {
   INVALID_URL,
   INSECURE_REMOTE_URL,
+  IPV6_ZONE_ID_UNSUPPORTED,
 }
 
 /** User input source used to choose endpoint-validation wording. */
@@ -201,12 +202,12 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   val uri =
     runCatching { URI(normalized) }.getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host =
-    uri.host
-      ?.trim()
-      ?.trim('[', ']')
-      .orEmpty()
+  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  // OkHttp rejects scoped IPv6 hosts after URI decoding, so fail before saving an endpoint that can never dial.
+  if (host.contains(':') && host.contains('%')) {
+    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED)
+  }
 
   val scheme =
     uri.scheme
@@ -295,6 +296,15 @@ internal fun gatewayEndpointValidationMessage(
           "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
         GatewayEndpointInputSource.MANUAL ->
           "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
+      }
+    GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
+      when (source) {
+        GatewayEndpointInputSource.SETUP_CODE ->
+          "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+        GatewayEndpointInputSource.QR_SCAN ->
+          "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname."
+        GatewayEndpointInputSource.MANUAL ->
+          "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname."
       }
     GatewayEndpointValidationError.INVALID_URL ->
       when (source) {

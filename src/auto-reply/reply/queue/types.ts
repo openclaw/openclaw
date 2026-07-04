@@ -2,6 +2,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
+import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
@@ -61,6 +62,8 @@ export type FollowupRun = {
   currentInboundContext?: CurrentInboundPromptContext;
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
+  /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
+  queueAbortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
   /** Provider message ID, when available (for deduplication). */
@@ -149,6 +152,7 @@ export type FollowupRun = {
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     silentReplyPromptMode?: SilentReplyPromptMode;
     extraSystemPromptStatic?: string;
+    cliSessionBindingFacts?: CliSessionBindingFacts;
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
@@ -158,8 +162,10 @@ export type FollowupRun = {
   };
 };
 
-export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
-  return run.abortSignal?.aborted === true;
+export function isFollowupRunAborted(
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+): boolean {
+  return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
 }
 
 const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();

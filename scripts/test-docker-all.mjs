@@ -28,6 +28,7 @@ import {
   parseProfile,
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mjs";
+import { sleep } from "./lib/sleep.mjs";
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
@@ -224,12 +225,6 @@ function orderLanes(poolLanes, timingStore) {
     .map((poolLane, index) => ({ index, poolLane, seconds: timingSeconds(timingStore, poolLane) }))
     .toSorted((a, b) => b.seconds - a.seconds || a.index - b.index)
     .map(({ poolLane }) => poolLane);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function utcStampForPath() {

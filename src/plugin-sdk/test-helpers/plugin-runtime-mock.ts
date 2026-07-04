@@ -455,6 +455,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             undefined,
           ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
+        runWithWorkAdmission: vi.fn(
+          async (_params, run) => await run(new AbortController().signal),
+        ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],
         saveSessionStore: vi
           .fn()
           .mockResolvedValue(

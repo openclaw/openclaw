@@ -73,6 +73,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
       chatType: "channel",
+      senderIsOwner: true,
       internalEvents,
       onAgentToolResult,
     },
@@ -84,6 +85,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
       chatType: "channel",
+      senderIsOwner: true,
       onAgentToolResult,
     },
   } satisfies {
