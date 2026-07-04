@@ -89,21 +89,37 @@ describe("syncModelFromStoreEntry", () => {
     authStorage.set("switched-provider", { type: "api_key", key: "switch-key" });
 
     const modelRegistry = ModelRegistry.inMemory(authStorage);
-    // Add models by directly accessing the internal list (inMemory creates empty)
-    // Since inMemory creates with no models.json, models are empty.
-    // We need to use refresh or push to internal array.
-    // For test purposes, we'll mock modelRegistry.find and hasConfiguredAuth.
-    vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) => {
-      if (provider === "test-provider" && id === "test-model") {
-        return testModel;
-      }
-      if (provider === "switched-provider" && id === "switched-model") {
-        return switchedModel;
-      }
-      return undefined;
+    modelRegistry.registerProvider("test-provider", {
+      baseUrl: "https://example.test",
+      apiKey: "test-provider-key",
+      api: {} as never,
+      models: [
+        {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 1000,
+        },
+      ],
     });
-    vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation((m) => {
-      return m.provider === "test-provider" || m.provider === "switched-provider";
+    modelRegistry.registerProvider("switched-provider", {
+      baseUrl: "https://example.test",
+      apiKey: "switched-provider-key",
+      api: {} as never,
+      models: [
+        {
+          id: "switched-model",
+          name: "Switched Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 2000,
+        },
+      ],
     });
 
     mockReadSessionEntry.mockReturnValue({
@@ -147,9 +163,91 @@ describe("syncModelFromStoreEntry", () => {
       // Expected - no real agent configured
     }
 
+    expect(mockReadSessionEntry).toHaveBeenCalledWith("/tmp/sessions.json", "main", {
+      hydrateSkillPromptRefs: false,
+    });
+
     // Model should be synced from store entry
     expect(session.model?.provider).toBe("switched-provider");
     expect(session.model?.id).toBe("switched-model");
+    expect(appendModelChangeSpy).toHaveBeenCalledWith("switched-provider", "switched-model");
+  });
+
+  it("syncs model state before session stats reads context usage", async () => {
+    const { createAgentSession } = await import("./sdk.js");
+    const { AuthStorage } = await import("./auth-storage.js");
+    const { ModelRegistry } = await import("./model-registry.js");
+    const { SessionManager } = await import("./session-manager.js");
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
+    authStorage.set("switched-provider", { type: "api_key", key: "switch-key" });
+
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    modelRegistry.registerProvider("test-provider", {
+      baseUrl: "https://example.test",
+      apiKey: "test-provider-key",
+      api: {} as never,
+      models: [
+        {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 1000,
+        },
+      ],
+    });
+    modelRegistry.registerProvider("switched-provider", {
+      baseUrl: "https://example.test",
+      apiKey: "switched-provider-key",
+      api: {} as never,
+      models: [
+        {
+          id: "switched-model",
+          name: "Switched Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 2000,
+        },
+      ],
+    });
+
+    mockReadSessionEntry.mockReturnValue({
+      sessionId: "test-session",
+      updatedAt: Date.now(),
+      liveModelSwitchPending: true,
+      providerOverride: "switched-provider",
+      modelOverride: "switched-model",
+    });
+
+    const sessionManager = SessionManager.inMemory();
+    const appendModelChangeSpy = vi.spyOn(sessionManager, "appendModelChange");
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createMockResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry,
+      storePath: "/tmp/sessions.json",
+      sessionKey: "main",
+    });
+
+    appendModelChangeSpy.mockClear();
+
+    const stats = session.getSessionStats();
+
+    expect(stats.contextUsage?.contextWindow).toBe(200_000);
+    expect(session.model?.provider).toBe("switched-provider");
+    expect(session.model?.id).toBe("switched-model");
+    expect(mockReadSessionEntry).toHaveBeenCalledWith("/tmp/sessions.json", "main", {
+      hydrateSkillPromptRefs: false,
+    });
     expect(appendModelChangeSpy).toHaveBeenCalledWith("switched-provider", "switched-model");
   });
 
@@ -282,7 +380,7 @@ describe("syncModelFromStoreEntry", () => {
     expect(session.model?.provider).toBe("test-provider");
   });
 
-  it("does not sync when auth not configured for the target model", async () => {
+  it("syncs even when auth is not configured for the target model", async () => {
     const { createAgentSession } = await import("./sdk.js");
     const { AuthStorage } = await import("./auth-storage.js");
     const { ModelRegistry } = await import("./model-registry.js");
@@ -329,7 +427,8 @@ describe("syncModelFromStoreEntry", () => {
       // Expected
     }
 
-    expect(session.model?.provider).toBe("test-provider");
+    expect(session.model?.provider).toBe("switched-provider");
+    expect(session.model?.id).toBe("switched-model");
   });
 
   it("does not crash when storePath is undefined (no-op)", async () => {
@@ -467,6 +566,85 @@ describe("syncModelFromStoreEntry", () => {
     // Model unchanged because modelOverride is missing
     expect(session.model?.provider).toBe("test-provider");
     expect(appendModelChangeSpy).not.toHaveBeenCalled();
+  });
+
+  it("syncs to the session default when a pending switch reset clears overrides", async () => {
+    const { createAgentSession } = await import("./sdk.js");
+    const { AuthStorage } = await import("./auth-storage.js");
+    const { ModelRegistry } = await import("./model-registry.js");
+    const { SessionManager } = await import("./session-manager.js");
+
+    const authStorage = AuthStorage.inMemory();
+    authStorage.set("test-provider", { type: "api_key", key: "test-key" });
+    authStorage.set("switched-provider", { type: "api_key", key: "switch-key" });
+
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    modelRegistry.registerProvider("test-provider", {
+      baseUrl: "https://example.test",
+      apiKey: "test-provider-key",
+      api: {} as never,
+      models: [
+        {
+          id: "test-model",
+          name: "Test Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 1000,
+        },
+      ],
+    });
+    modelRegistry.registerProvider("switched-provider", {
+      baseUrl: "https://example.test",
+      apiKey: "switched-provider-key",
+      api: {} as never,
+      models: [
+        {
+          id: "switched-model",
+          name: "Switched Model",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 2000,
+        },
+      ],
+    });
+
+    mockReadSessionEntry.mockReturnValue({
+      sessionId: "test-session",
+      updatedAt: Date.now(),
+      liveModelSwitchPending: true,
+    });
+
+    const sessionManager = SessionManager.inMemory();
+    const appendModelChangeSpy = vi.spyOn(sessionManager, "appendModelChange");
+
+    const settingsManager = SettingsManager.inMemory();
+    settingsManager.setDefaultModelAndProvider("switched-provider", "switched-model");
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      resourceLoader: createMockResourceLoader(),
+      sessionManager,
+      settingsManager,
+      modelRegistry,
+      storePath: "/tmp/sessions.json",
+      sessionKey: "main",
+    });
+
+    appendModelChangeSpy.mockClear();
+
+    try {
+      await session.prompt("test message");
+    } catch {
+      // Expected
+    }
+
+    expect(session.model?.provider).toBe("switched-provider");
+    expect(session.model?.id).toBe("switched-model");
+    expect(appendModelChangeSpy).toHaveBeenCalledWith("switched-provider", "switched-model");
   });
 
   it("does not crash on readSessionEntry error", async () => {

@@ -3083,6 +3083,7 @@ export const registerTelegramHandlers = ({
                       model: selection.model,
                       isDefault: isDefaultSelection,
                     },
+                    markLiveSwitchPending: true,
                   });
                   return entry;
                 },

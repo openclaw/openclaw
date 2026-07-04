@@ -1164,6 +1164,9 @@ export class AgentSession {
     let messages: AgentMessage[] | undefined;
 
     try {
+      // Sync model state before any command or prompt-side reads.
+      this.syncModelFromStoreEntry();
+
       // Handle extension commands first (execute immediately, even during streaming)
       // Extension commands manage their own LLM interaction via the session API.
       if (expandPromptTemplates && text.startsWith("/")) {
@@ -1219,9 +1222,6 @@ export class AgentSession {
 
       // Flush any pending bash messages before the new prompt
       this.flushPendingBashMessages();
-
-      // Sync model from session store if there's a pending live model switch
-      this.syncModelFromStoreEntry();
 
       // Validate model
       if (!this.model) {
@@ -2346,22 +2346,27 @@ export class AgentSession {
 
     const provider = normalizeOptionalString(entry.providerOverride);
     const modelId = normalizeOptionalString(entry.modelOverride);
-    if (!provider || !modelId) {
+    if (provider && modelId) {
+      // Keep the explicit switch path on the persisted override when the
+      // session entry still names a concrete provider/model pair.
+    } else if (provider || modelId) {
       return;
     }
 
-    // Skip if the model is already up-to-date (handles repeated prompt() calls
-    // before shouldSwitchToLiveModel clears the file flag).
-    if (this.model?.provider === provider && this.model?.id === modelId) {
+    const selectedProvider = provider ?? normalizeOptionalString(this.settingsManager.getDefaultProvider());
+    const selectedModelId = modelId ?? normalizeOptionalString(this.settingsManager.getDefaultModel());
+    if (!selectedProvider || !selectedModelId) {
       return;
     }
 
-    const resolvedModel = this.sessionModelRegistry.find(provider, modelId);
+    // Reset-to-default clears the explicit override fields, so fall back to the
+    // session defaults when the pending flag is still set.
+    if (this.model?.provider === selectedProvider && this.model?.id === selectedModelId) {
+      return;
+    }
+
+    const resolvedModel = this.sessionModelRegistry.find(selectedProvider, selectedModelId);
     if (!resolvedModel) {
-      return;
-    }
-
-    if (!this.sessionModelRegistry.hasConfiguredAuth(resolvedModel)) {
       return;
     }
 
@@ -3210,6 +3215,8 @@ export class AgentSession {
   }
 
   getContextUsage(): ContextUsage | undefined {
+    this.syncModelFromStoreEntry();
+
     const model = this.model;
     if (!model) {
       return undefined;

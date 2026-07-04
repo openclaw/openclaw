@@ -23,6 +23,8 @@ describe("runEmbeddedAttempt resource loader wiring", () => {
         sessionManager: {},
         settingsManager: {},
         resourceLoader,
+        storePath: "/tmp/sessions.json",
+        sessionKey: "main",
       },
     });
 
@@ -33,5 +35,7 @@ describe("runEmbeddedAttempt resource loader wiring", () => {
       throw new Error("Expected createAgentSession options");
     }
     expect(options.resourceLoader).toBe(resourceLoader);
+    expect(options.storePath).toBe("/tmp/sessions.json");
+    expect(options.sessionKey).toBe("main");
   });
 });
