@@ -420,11 +420,22 @@ export function loadSessionStore(
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
+    } catch (err) {
       if (attempt < maxReadAttempts - 1) {
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
+        // Only retry on transient read errors (EAGAIN/EINTR) that occur
+        // when the kernel races with an atomic write-rename. Permanent
+        // failures (ENOENT, EACCES) fall through to the empty-store
+        // fallback immediately without blocking the event loop.
+        // (#99994)
+        const code = (err as NodeJS.ErrnoException).code;
+        const errno = (err as NodeJS.ErrnoException).errno;
+        const isTransient = code === "EAGAIN" || code === "EINTR" || errno === -11 || errno === -4;
+        if (isTransient) {
+          Atomics.wait(retryBuf!, 0, 0, 50);
+          continue;
+        }
       }
+      break;
     }
   }
 

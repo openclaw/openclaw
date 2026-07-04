@@ -90,4 +90,36 @@ describe("loadSessionStore EAGAIN retry", () => {
     expect(store).toHaveProperty("agent:default:test");
     expect(readFileSyncSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("returns an empty store immediately for missing files (ENOENT) without retry waits", () => {
+    let calls = 0;
+    readFileSyncSpy.mockImplementation(() => {
+      calls++;
+      const err = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      err.errno = -2;
+      throw err;
+    });
+
+    const store = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    expect(calls).toBe(1);
+    expect(store).toEqual({});
+  });
+
+  it("returns an empty store immediately for permission errors (EACCES) without retry waits", () => {
+    let calls = 0;
+    readFileSyncSpy.mockImplementation(() => {
+      calls++;
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      err.errno = -13;
+      throw err;
+    });
+
+    const store = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    expect(calls).toBe(1);
+    expect(store).toEqual({});
+  });
 });
