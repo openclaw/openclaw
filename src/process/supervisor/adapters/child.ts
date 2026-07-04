@@ -191,6 +191,7 @@ export async function createChildAdapter(params: {
         listener(text);
       }
     });
+    child.stdout.on("error", () => {});
     child.stdout.once("end", flush);
     child.stdout.once("close", flush);
   };
@@ -214,6 +215,7 @@ export async function createChildAdapter(params: {
         listener(text);
       }
     });
+    child.stderr.on("error", () => {});
     child.stderr.once("end", flush);
     child.stderr.once("close", flush);
   };
