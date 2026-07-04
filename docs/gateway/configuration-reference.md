@@ -1163,7 +1163,7 @@ Notes:
 ```json5
 {
   update: {
-    channel: "stable", // stable | beta | dev
+    channel: "stable", // stable | extended-stable | beta | dev
     checkOnStart: true,
 
     auto: {
@@ -1176,7 +1176,9 @@ Notes:
 }
 ```
 
-- `channel`: release channel for npm/git installs - `"stable"`, `"beta"`, or `"dev"`.
+- `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or
+  `"dev"`. Extended-stable is a package-only, foreground/on-demand channel; it
+  is skipped by startup checks and background auto-update.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
 - `auto.enabled`: enable background auto-update for package installs (default: `false`).
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
