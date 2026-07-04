@@ -279,7 +279,7 @@ final class NodePairingApprovalPrompter {
         self.isPresenting = true
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if await self.trySilentApproveIfPossible(next) {
+            if await self.tryAutomaticApproveIfPossible(next) {
                 return
             }
             self.presentAlert(for: next)
@@ -409,10 +409,20 @@ final class NodePairingApprovalPrompter {
         let port: Int
     }
 
-    private func trySilentApproveIfPossible(_ req: PendingRequest) async -> Bool {
+    private func tryAutomaticApproveIfPossible(_ req: PendingRequest) async -> Bool {
+        let localNodeId = DeviceIdentityStore.loadOrCreate(
+            profile: MacNodeModeCoordinator.nodeIdentityProfile).deviceId
+        if Self.shouldAutoApproveOwnLocalNode(
+            connectionMode: AppStateStore.shared.connectionMode,
+            requestNodeId: req.nodeId,
+            localNodeId: localNodeId)
+        {
+            guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
+            return await self.approveAutomatically(req, via: "local-node", notify: false)
+        }
+
         guard req.silent == true else { return false }
-        if self.autoApproveAttempts.contains(req.requestId) { return false }
-        self.autoApproveAttempts.insert(req.requestId)
+        guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
 
         guard let target = await self.resolveSSHTarget() else {
             self.logger.info("silent pairing skipped (no ssh target) requestId=\(req.requestId, privacy: .public)")
@@ -431,12 +441,20 @@ final class NodePairingApprovalPrompter {
             return false
         }
 
+        return await self.approveAutomatically(req, via: "silent-ssh", notify: true)
+    }
+
+    private func approveAutomatically(_ req: PendingRequest, via: String, notify: Bool) async -> Bool {
         guard await self.approve(requestId: req.requestId) else {
-            self.logger.info("silent pairing approve failed requestId=\(req.requestId, privacy: .public)")
+            self.logger.info("automatic pairing approve failed requestId=\(req.requestId, privacy: .public)")
             return false
         }
 
-        await self.notify(resolution: .approved, request: req, via: "silent-ssh")
+        self.logger.info(
+            "automatically approved node pairing requestId=\(req.requestId, privacy: .public) via=\(via, privacy: .public)")
+        if notify {
+            await self.notify(resolution: .approved, request: req, via: via)
+        }
         if self.queue.first == req {
             self.queue.removeFirst()
         } else {
@@ -448,6 +466,20 @@ final class NodePairingApprovalPrompter {
         self.presentNextIfNeeded()
         self.updateReconcileLoop()
         return true
+    }
+
+    private func beginAutoApproveAttempt(requestId: String) -> Bool {
+        self.autoApproveAttempts.insert(requestId).inserted
+    }
+
+    static func shouldAutoApproveOwnLocalNode(
+        connectionMode: AppState.ConnectionMode,
+        requestNodeId: String,
+        localNodeId: String) -> Bool
+    {
+        // The signed node identity is the same app-owned node already connecting to this Mac's Gateway.
+        // Keep remote and mismatched identities on the explicit approval path.
+        connectionMode == .local && requestNodeId == localNodeId
     }
 
     private func resolveSSHTarget() async -> SSHTarget? {
@@ -632,7 +664,7 @@ extension NodePairingApprovalPrompter {
 
         prompter.queue = [pending]
         _ = prompter.shouldPoll
-        _ = await prompter.trySilentApproveIfPossible(pending)
+        _ = await prompter.tryAutomaticApproveIfPossible(pending)
         prompter.queue.removeAll()
     }
 }
