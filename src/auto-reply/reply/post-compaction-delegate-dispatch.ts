@@ -1,6 +1,10 @@
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { deriveContinuationDelegateChildSessionKey } from "../../agents/subagent-continuation-ids.js";
 import {
+  getSubagentRunByChildSessionKey,
+  hasLiveContinuationDelegateChildRun,
+} from "../../agents/subagent-registry-read.js";
+import {
   spawnSubagentDirect,
   type SpawnSubagentContext,
   type SpawnSubagentParams,
@@ -397,6 +401,54 @@ function failSourceBackedPostCompactionDelivery(
   }
 }
 
+function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
+  acceptedChildSessionKey: string | undefined;
+  deps: PostCompactionDelegateDeliveryDeps;
+  entry: QueuedPostCompactionDelegateDelivery;
+}): boolean {
+  const { acceptedChildSessionKey, deps, entry } = params;
+  if (
+    !entry.sourceFlowId ||
+    entry.sourceExpectedRevision === undefined ||
+    !acceptedChildSessionKey
+  ) {
+    return false;
+  }
+  if (
+    !getSubagentRunByChildSessionKey(acceptedChildSessionKey) &&
+    !hasLiveContinuationDelegateChildRun({
+      childSessionKey: acceptedChildSessionKey,
+      flowId: entry.sourceFlowId,
+    })
+  ) {
+    return false;
+  }
+  const committed = deps.markPendingDelegateSpawnAccepted(
+    {
+      flowId: entry.sourceFlowId,
+      expectedRevision: entry.sourceExpectedRevision,
+      task: entry.task,
+    },
+    acceptedChildSessionKey,
+  );
+  if (!committed) {
+    throw new Error(
+      `[continuation:post-compaction-source-accept-not-committed] flowId=${entry.sourceFlowId}`,
+    );
+  }
+  deps.enqueueSystemEvent(
+    `[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: ${entry.task}`,
+    {
+      sessionKey: entry.sessionKey,
+      ...(entry.traceparent ? { traceparent: entry.traceparent } : {}),
+    },
+  );
+  deps.log(
+    `[continuation:post-compaction-source-accepted-recovered] flowId=${entry.sourceFlowId} child=${acceptedChildSessionKey}`,
+  );
+  return true;
+}
+
 async function persistPostCompactionDelegateChainState(params: {
   count: number;
   log: (message: string) => void;
@@ -528,6 +580,18 @@ export async function deliverQueuedPostCompactionDelegate(
     sessionKey: params.entry.sessionKey,
     config: cfg,
   });
+  const sourceAcceptedChildSessionKey = params.entry.sourceFlowId
+    ? deriveContinuationDelegateChildSessionKey(agentId, params.entry.sourceFlowId)
+    : undefined;
+  if (
+    maybeFinalizePreviouslyAcceptedSourceBackedDelivery({
+      acceptedChildSessionKey: sourceAcceptedChildSessionKey,
+      deps,
+      entry: params.entry,
+    })
+  ) {
+    return;
+  }
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
   const sessionStore = deps.loadSessionStore(storePath);
   const resolved = resolveSessionStoreEntry({
@@ -684,9 +748,7 @@ export async function deliverQueuedPostCompactionDelegate(
     throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
   }
   if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
-    const acceptedChildSessionKey =
-      spawnResult.childSessionKey ??
-      deriveContinuationDelegateChildSessionKey(agentId, params.entry.sourceFlowId);
+    const acceptedChildSessionKey = spawnResult.childSessionKey ?? sourceAcceptedChildSessionKey!;
     const committed = deps.markPendingDelegateSpawnAccepted(
       {
         flowId: params.entry.sourceFlowId,
