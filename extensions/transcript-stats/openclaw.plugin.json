@@ -1,0 +1,17 @@
+{
+  "id": "transcript-stats",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "name": "Transcript Stats",
+  "description": "Aggregate message/tool counts over OpenClaw JSONL session transcripts. Read-only; does not modify session files.",
+  "contracts": {
+    "tools": ["transcript_stats"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

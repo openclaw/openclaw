@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/transcript-stats",
+  "version": "2026.6.11",
+  "description": "OpenClaw transcript stats plugin — aggregate counts over JSONL session transcripts.",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
