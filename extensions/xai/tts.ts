@@ -32,6 +32,10 @@ type XaiTtsWebSocketFactory = (
   options: XaiTtsWebSocketOptions,
 ) => XaiTtsWebSocket | Promise<XaiTtsWebSocket>;
 
+function isClosedXaiTtsWebSocket(ws: XaiTtsWebSocket): boolean {
+  return ws.readyState === XAI_TTS_WS_CLOSED;
+}
+
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
@@ -257,11 +261,10 @@ export async function xaiTTSStream(params: {
   const closeSocket = () => {
     if (ws.readyState === XAI_TTS_WS_OPEN || ws.readyState === XAI_TTS_WS_CONNECTING) {
       ws.close(1000, "tts complete");
-      const socket = ws as XaiTtsWebSocket;
-      if (socket.readyState !== XAI_TTS_WS_CLOSED) {
+      if (!isClosedXaiTtsWebSocket(ws)) {
         closeTimer = setTimeout(() => {
-          if (socket.readyState !== XAI_TTS_WS_CLOSED) {
-            socket.close(1000, "tts complete");
+          if (!isClosedXaiTtsWebSocket(ws)) {
+            ws.close(1000, "tts complete");
           }
         }, XAI_TTS_CLOSE_TIMEOUT_MS);
       }
@@ -314,8 +317,9 @@ export async function xaiTTSStream(params: {
           handoffComplete = true;
           resolve();
         } catch (err) {
-          reject(err);
-          failStream(err instanceof Error ? err : new Error(String(err)));
+          const error = err instanceof Error ? err : new Error(String(err));
+          reject(error);
+          failStream(error);
         }
       },
       { once: true },
@@ -384,7 +388,6 @@ export async function xaiTTSStream(params: {
         return;
       case "error":
         failStream(new Error(readXaiTtsErrorMessage(event.message ?? event.error)));
-        return;
       default:
     }
   });
