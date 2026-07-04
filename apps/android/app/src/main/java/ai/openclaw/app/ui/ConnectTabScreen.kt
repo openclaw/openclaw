@@ -145,6 +145,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     remember(manualHostInput, manualPortInput, manualTlsInput) {
       composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
     }
+  val defaultManualPortPlaceholder =
+    remember(manualHostInput, manualTlsInput) {
+      if (!manualTlsInput) {
+        "18789"
+      } else {
+        resolveEmptyManualPort(manualHostInput, tls = true)?.toString() ?: "18789"
+      }
+    }
 
   val activeEndpoint =
     remember(isConnected, remoteAddress, setupResolvedEndpoint, manualResolvedEndpoint, inputMode) {
@@ -481,7 +489,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             )
 
             Text(
-              if (manualTlsInput) "Port (optional, defaults to 443)" else "Port",
+              if (manualTlsInput) "Port (optional, defaults to $defaultManualPortPlaceholder)" else "Port",
               style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
               color = mobileTextSecondary,
             )
@@ -491,7 +499,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
                 manualPortInput = it
                 validationText = null
               },
-              placeholder = { Text(if (manualTlsInput) "443" else "18789", style = mobileBody, color = mobileTextTertiary) },
+              placeholder = { Text(defaultManualPortPlaceholder, style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
               keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

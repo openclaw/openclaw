@@ -324,6 +324,24 @@ private fun gatewayPort(
     else -> null
   }
 
+/** Tailscale MagicDNS hosts default to HTTPS/WSS port 443 when the port field is blank. */
+internal fun shouldForceTlsForGatewayHost(host: String): Boolean {
+  val trimmed = host.trim().trimEnd('/').lowercase()
+  if (trimmed.isEmpty()) return false
+  return trimmed.endsWith(".ts.net") || trimmed.endsWith(".ts.net.")
+}
+
+/** Resolves the default manual port when TLS is on and the port field is blank. */
+internal fun resolveEmptyManualPort(
+  hostInput: String,
+  tls: Boolean,
+): Int? {
+  if (!tls) return null
+  val host = hostInput.trim().trimEnd('/')
+  if (host.isEmpty() || host.contains('/')) return null
+  return if (shouldForceTlsForGatewayHost(host)) 443 else 18789
+}
+
 /** Builds a URL from manual host/port/tls fields for shared endpoint parsing. */
 internal fun composeGatewayManualUrl(
   hostInput: String,
@@ -343,7 +361,7 @@ internal fun composeGatewayManualUrl(
   val portTrimmed = portInput.trim()
   val port =
     if (portTrimmed.isEmpty()) {
-      if (tls) 443 else return null
+      resolveEmptyManualPort(bareHost, tls) ?: return null
     } else {
       portTrimmed.toIntOrNull() ?: return null
     }

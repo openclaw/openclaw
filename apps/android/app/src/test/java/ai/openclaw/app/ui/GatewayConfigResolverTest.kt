@@ -1,7 +1,9 @@
 package ai.openclaw.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -804,6 +806,28 @@ class GatewayConfigResolverTest {
     val url = composeGatewayManualUrl("mydevice.tail1234.ts.net", "", tls = true)
 
     assertEquals("https://mydevice.tail1234.ts.net:443", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo18789ForNonTailnetTlsHostsWhenPortBlank() {
+    val url = composeGatewayManualUrl("gateway.example.com", "", tls = true)
+
+    assertEquals("https://gateway.example.com:18789", url)
+  }
+
+  @Test
+  fun composeGatewayManualUrlDefaultsPortTo443ForTailnetHostWithTrailingDotWhenPortBlank() {
+    val url = composeGatewayManualUrl("device.sample.ts.net.", "", tls = true)
+
+    assertEquals("https://device.sample.ts.net.:443", url)
+  }
+
+  @Test
+  fun shouldForceTlsForGatewayHost_matchesIosTailnetSuffixRules() {
+    assertTrue(shouldForceTlsForGatewayHost("device.sample.ts.net"))
+    assertTrue(shouldForceTlsForGatewayHost("device.sample.ts.net."))
+    assertFalse(shouldForceTlsForGatewayHost("gateway.example.com"))
+    assertFalse(shouldForceTlsForGatewayHost("gateway.ts.net.evil.com"))
   }
 
   @Test
