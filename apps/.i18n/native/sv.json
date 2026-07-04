@@ -7974,6 +7974,26 @@
       "translated": "\\(user)@\\(host):\\(port)"
     },
     {
+      "id": "native.apple.cfc2509b8bbcf1d7",
+      "source": "OpenClaw Gateway \\(version) is ready.",
+      "translated": "OpenClaw Gateway \\(version) är redo."
+    },
+    {
+      "id": "native.apple.9b767e46895714f9",
+      "source": "OpenClaw Gateway is not installed yet.",
+      "translated": "OpenClaw Gateway är inte installerad ännu."
+    },
+    {
+      "id": "native.apple.b4dc58a1b294e140",
+      "source": "The OpenClaw Gateway could not be verified. Setup will repair it.",
+      "translated": "OpenClaw Gateway kunde inte verifieras. Installationen reparerar den."
+    },
+    {
+      "id": "native.apple.4088056ae7b0f3b4",
+      "source": "Gateway \\(found) does not match app \\(required). Setup will update it.",
+      "translated": "Gateway \\(found) matchar inte appen \\(required). Installationen uppdaterar den."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "Kamera"
@@ -10229,29 +10249,54 @@
       "translated": "Välkommen till OpenClaw"
     },
     {
-      "id": "native.apple.69f81c58c14a5df4",
-      "source": "OpenClaw is a powerful personal AI assistant that can connect to WhatsApp or Telegram.",
-      "translated": "OpenClaw är en kraftfull personlig AI-assistent som kan ansluta till WhatsApp eller Telegram."
+      "id": "native.apple.dd7411f18b0fe203",
+      "source": "OpenClaw is your personal AI assistant. It can answer questions, work with files and apps, and connect to services like WhatsApp and Telegram through a Gateway you control.",
+      "translated": "OpenClaw är din personliga AI-assistent. Den kan svara på frågor, arbeta med filer och appar och ansluta till tjänster som WhatsApp och Telegram via en Gateway som du styr."
     },
     {
-      "id": "native.apple.e75671ec2ae4bf9d",
-      "source": "Security notice",
-      "translated": "Säkerhetsmeddelande"
+      "id": "native.apple.86e4509eb0626ec8",
+      "source": "Ask, create, and automate",
+      "translated": "Fråga, skapa och automatisera"
     },
     {
-      "id": "native.apple.c4778e8647a5aa9f",
-      "source": "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, including running commands, reading/writing files, and capturing screenshots — depending on the permissions you grant.\n\nOnly enable OpenClaw if you understand the risks and trust the prompts and integrations you use.",
-      "translated": "Den anslutna AI-agenten (t.ex. Claude) kan utlösa kraftfulla åtgärder på din Mac, inklusive att köra kommandon, läsa/skriva filer och ta skärmbilder — beroende på vilka behörigheter du beviljar.\n\nAktivera endast OpenClaw om du förstår riskerna och litar på de prompter och integrationer du använder."
+      "id": "native.apple.a6950fed99ae450d",
+      "source": "Give your assistant tasks and let it help across your Mac.",
+      "translated": "Ge din assistent uppgifter och låt den hjälpa till på din Mac."
     },
     {
-      "id": "native.apple.9fb535bde270a73e",
-      "source": "Choose your Gateway",
-      "translated": "Välj din Gateway"
+      "id": "native.apple.16ab10ed9293b718",
+      "source": "Connect the tools you use",
+      "translated": "Anslut verktygen du använder"
     },
     {
-      "id": "native.apple.16dfe3ecc39e7bd5",
-      "source": "OpenClaw uses a single Gateway that stays running. Pick this Mac, connect to a discovered gateway nearby, or configure later.",
-      "translated": "OpenClaw använder en enda Gateway som fortsätter att köras. Välj denna Mac, anslut till en upptäckt gateway i närheten eller konfigurera senare."
+      "id": "native.apple.687c1c2abdb8581e",
+      "source": "Bring conversations and services together in one assistant.",
+      "translated": "Samla konversationer och tjänster i en enda assistent."
+    },
+    {
+      "id": "native.apple.caf822c2d393914f",
+      "source": "Stay in control",
+      "translated": "Behåll kontrollen"
+    },
+    {
+      "id": "native.apple.203bfa5e80135faa",
+      "source": "Choose where the Gateway runs and which permissions OpenClaw receives.",
+      "translated": "Välj var Gateway körs och vilka behörigheter OpenClaw får."
+    },
+    {
+      "id": "native.apple.fb64a5b187cfdc15",
+      "source": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "translated": "OpenClaw kan utföra åtgärder med de behörigheter och tjänster du aktiverar. Granska uppmaningar och anslut bara verktyg du litar på."
+    },
+    {
+      "id": "native.apple.2033d33228ce52d7",
+      "source": "Where should OpenClaw run?",
+      "translated": "Var ska OpenClaw köras?"
+    },
+    {
+      "id": "native.apple.4791cce2ae762f19",
+      "source": "For the simplest setup, run the Gateway on this Mac. OpenClaw installs it and keeps it running for you.",
+      "translated": "För den enklaste konfigurationen kör du Gateway på denna Mac. OpenClaw installerar den och ser till att den körs åt dig."
     },
     {
       "id": "native.apple.300a583f28880928",
@@ -10434,39 +10479,44 @@
       "translated": "Uppdatera status"
     },
     {
-      "id": "native.apple.507f071d2b76be9e",
-      "source": "Install the CLI",
-      "translated": "Installera CLI"
+      "id": "native.apple.8d7590f1d8f61a1d",
+      "source": "Setting up OpenClaw",
+      "translated": "Konfigurerar OpenClaw"
     },
     {
-      "id": "native.apple.5ced9b0fad1555e0",
-      "source": "Required for local mode: installs `openclaw` so launchd can run the gateway.",
-      "translated": "Krävs för lokalt läge: installerar `openclaw` så att launchd kan köra Gateway."
+      "id": "native.apple.e88512a0fe7fb140",
+      "source": "OpenClaw is installing the local Gateway and its managed runtime.",
+      "translated": "OpenClaw installerar den lokala Gateway och dess hanterade körningsmiljö."
     },
     {
-      "id": "native.apple.fa55cb789ef49397",
-      "source": "Install CLI",
-      "translated": "Installera CLI"
+      "id": "native.apple.0c05ab4b362710de",
+      "source": "Checking existing setup…",
+      "translated": "Kontrollerar befintlig konfiguration…"
     },
     {
-      "id": "native.apple.03ab2f6a2e08734d",
-      "source": "Reinstall CLI",
-      "translated": "Installera om CLI"
+      "id": "native.apple.56b68eb592ecf449",
+      "source": "Installing the Gateway…",
+      "translated": "Installerar Gateway…"
     },
     {
-      "id": "native.apple.d977c700e4ece7fb",
-      "source": "Copy install command",
-      "translated": "Kopiera installationskommando"
+      "id": "native.apple.80155398d97fbe63",
+      "source": "Gateway installed",
+      "translated": "Gateway installerad"
     },
     {
-      "id": "native.apple.e6a9668517354178",
-      "source": "Installed at \\(loc)",
-      "translated": "Installerat på \\(loc)"
+      "id": "native.apple.2d2acbf2e16f8604",
+      "source": "Retry setup",
+      "translated": "Försök konfigurera igen"
     },
     {
-      "id": "native.apple.ac9f9e9da6ae6605",
-      "source": "Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).\nRerun anytime to reinstall or update.",
-      "translated": "Installerar en användarbaserad Node 22.19+-runtime och CLI (ingen Homebrew).\nKör igen när som helst för att installera om eller uppdatera."
+      "id": "native.apple.4d58294df8d0b1e6",
+      "source": "Check again",
+      "translated": "Kontrollera igen"
+    },
+    {
+      "id": "native.apple.15cfa96c75b57b04",
+      "source": "Uses a private user-space install. No Terminal, administrator access, or Homebrew required.",
+      "translated": "Använder en privat installation i användarutrymmet. Ingen Terminal, administratörsåtkomst eller Homebrew krävs."
     },
     {
       "id": "native.apple.155fc8bc8b9f8c3f",
@@ -10672,6 +10722,21 @@
       "id": "native.apple.5ad203347ffbe0e8",
       "source": "Retry",
       "translated": "Försök igen"
+    },
+    {
+      "id": "native.apple.4850230e903ad303",
+      "source": "Setup is paused",
+      "translated": "Installationen är pausad"
+    },
+    {
+      "id": "native.apple.860797a4ad8455d2",
+      "source": "Resume OpenClaw to start the local Gateway and continue setup.",
+      "translated": "Återuppta OpenClaw för att starta den lokala Gateway och fortsätta installationen."
+    },
+    {
+      "id": "native.apple.9781249acc361d32",
+      "source": "Resume setup",
+      "translated": "Återuppta installationen"
     },
     {
       "id": "native.apple.48cc28b5b02b9140",

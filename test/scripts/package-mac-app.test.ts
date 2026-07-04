@@ -48,6 +48,17 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getSwiftToolchainBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("REQUIRED_SWIFT_TOOLS_MAJOR=");
+  const end = script.indexOf("merge_framework_machos()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getSparkleBuildHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("sparkle_canonical_build_from_version()");
@@ -283,6 +294,71 @@ describe("package-mac-app plist stamping", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("pnpm is not on PATH and corepack pnpm is unavailable");
+  });
+
+  it("checks the selected Swift toolchain before dependency install work", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const installIndex = script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]');
+    const preInstallBlock = script.slice(0, installIndex);
+
+    expect(preInstallBlock).toContain("\nrequire_swift_toolchain\n");
+  });
+
+  it("fails with an actionable error when Swift tools are too old", () => {
+    const helperBlock = getSwiftToolchainBlock();
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+    tempDirs.push(toolsDir);
+
+    const swiftPath = path.join(toolsDir, "swift");
+    writeFileSync(
+      swiftPath,
+      [
+        "#!/usr/bin/env bash",
+        "echo 'swift-driver version: 1.115.1 Apple Swift version 6.0.3 (swiftlang-6.0.3.1.10 clang-1600.0.30.1)'",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(swiftPath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      ${helperBlock}
+      require_swift_toolchain
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
+    expect(result.stderr).toContain("Current Swift is 6.0");
+  });
+
+  it("accepts Swift tools 6.2 or newer", () => {
+    const helperBlock = getSwiftToolchainBlock();
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+    tempDirs.push(toolsDir);
+
+    const swiftPath = path.join(toolsDir, "swift");
+    writeFileSync(
+      swiftPath,
+      [
+        "#!/usr/bin/env bash",
+        "echo 'swift-driver version: 1.120.0 Apple Swift version 6.2.1 (swiftlang-6.2.1 clang-1700.0.13.5)'",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(swiftPath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      ${helperBlock}
+      require_swift_toolchain
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   it("runs Sparkle build metadata derivation from the repository root", () => {
