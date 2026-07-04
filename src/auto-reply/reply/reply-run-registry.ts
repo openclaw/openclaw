@@ -1,5 +1,6 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
@@ -170,9 +171,7 @@ export class ReplyRunFollowupAdmissionBlockedError extends Error {
 }
 
 function createUserAbortError(): Error {
-  const err = new Error("Reply operation aborted by user");
-  err.name = "AbortError";
-  return err;
+  return createAbortError("Reply operation aborted by user");
 }
 
 function registerWaitSessionId(sessionKey: string, sessionId: string): void {

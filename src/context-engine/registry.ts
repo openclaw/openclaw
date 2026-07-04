@@ -1,6 +1,7 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isStringOption } from "../utils/string-readers.js";
@@ -737,11 +738,9 @@ function contextEngineAbortError(methodParams: unknown): Error | undefined {
   if (reason instanceof Error) {
     return reason;
   }
-  const error = new Error(
+  return createAbortError(
     typeof reason === "string" && reason ? reason : "Context engine operation aborted.",
   );
-  error.name = "AbortError";
-  return error;
 }
 
 function isContextEngineAbortRejection(error: unknown, methodParams: unknown): boolean {
