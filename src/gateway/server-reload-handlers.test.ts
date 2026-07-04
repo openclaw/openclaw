@@ -155,6 +155,12 @@ vi.mock("../agents/model-provider-auth.js", () => ({
   },
 }));
 
+vi.mock("../agents/embedded-agent-runner/model-discovery-cache.js", () => ({
+  resetModelDiscoveryCache: () => {
+    hoisted.reloadEvents.push("reset-model-discovery-cache");
+  },
+}));
+
 vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
@@ -340,9 +346,11 @@ describe("gateway hot reload model state", () => {
     expect(firstResetIndex).toBeGreaterThanOrEqual(0);
     expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
       "reset-model-catalog",
+      "reset-model-discovery-cache",
       "clear-provider-auth",
       "reload-plugins",
       "reset-model-catalog",
+      "reset-model-discovery-cache",
       "clear-provider-auth",
       "refresh-context-window",
       "load-model-catalog",
