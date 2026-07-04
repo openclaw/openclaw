@@ -218,7 +218,7 @@ import os
         #expect(appModel.gatewayStatusText.contains("\(host):\(port)"))
     }
 
-    @Test @MainActor func discoveredFirstUseTLSProbeFailureClearsStaleTrustPrompt() async {
+    @Test @MainActor func newDiscoveredAttemptClearsStaleTrustPromptBeforeResolution() async {
         let staleHost = "stale-\(UUID().uuidString).example.com"
         let stalePort = 18789
         let staleStableID = "manual|\(staleHost.lowercased())|\(stalePort)"
@@ -236,13 +236,21 @@ import os
             GatewayTLSFingerprintProbeResult.fingerprint("abc123"),
             .failure(.tlsHandshakeTimeout),
         ])
+        let resolverStarted = AsyncStream<Void>.makeStream()
+        let resolverResults = AsyncStream<(host: String, port: Int)>.makeStream()
         let appModel = NodeAppModel()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in true },
             tlsFingerprintProbe: { _ in tlsResults.withLock { $0.removeFirst() } },
-            serviceEndpointResolver: { _ in (host: discoveredHost, port: discoveredPort) })
+            serviceEndpointResolver: { _ in
+                resolverStarted.continuation.yield()
+                for await result in resolverResults.stream {
+                    return result
+                }
+                return nil
+            })
 
         await controller.connectManual(host: staleHost, port: stalePort, useTLS: true)
         #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
@@ -253,9 +261,15 @@ import os
             tailnetDns: discoveredHost,
             gatewayPort: discoveredPort,
             fingerprint: nil)
-        let message = await controller.connectWithDiagnostics(gateway)
+        var startedIterator = resolverStarted.stream.makeAsyncIterator()
+        let connectTask = Task { await controller.connectWithDiagnostics(gateway) }
+        _ = await startedIterator.next()
 
         #expect(controller.pendingTrustPrompt == nil)
+        resolverResults.continuation.yield((host: discoveredHost, port: discoveredPort))
+        resolverResults.continuation.finish()
+        let message = await connectTask.value
+
         #expect(message?.contains("TLS fingerprint verification timed out") == true)
         #expect(message?.contains("\(discoveredHost):\(discoveredPort)") == true)
         #expect(appModel.gatewayStatusText == message)

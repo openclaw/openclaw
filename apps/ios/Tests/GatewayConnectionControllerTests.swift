@@ -420,6 +420,209 @@ import UIKit
         #expect(appModel.activeGatewayConnectConfig?.stableID == currentConfig.stableID)
     }
 
+    @Test @MainActor func newerExplicitConnectImmediatelyInvalidatesQueuedConfig() async {
+        let host = "new-target.gateway.invalid"
+        let stableID = "manual|\(host)|443"
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+
+        let probeStarted = AsyncStream<Void>.makeStream()
+        let probeResults = AsyncStream<GatewayTLSFingerprintProbeResult>.makeStream()
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in
+                probeStarted.continuation.yield()
+                for await result in probeResults.stream {
+                    return result
+                }
+                return .failure(.certificateUnavailable)
+            })
+        let staleGeneration = appModel.beginGatewayConnectAttempt()
+        let staleConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://old-target.gateway.invalid")!,
+            stableID: "manual|old-target.gateway.invalid|443")
+        let duringResolutionConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://resolution-window.gateway.invalid")!,
+            stableID: "manual|resolution-window.gateway.invalid|443")
+        var startedIterator = probeStarted.stream.makeAsyncIterator()
+
+        let connectTask = Task {
+            await controller.connectManual(host: host, port: 443, useTLS: true)
+        }
+        _ = await startedIterator.next()
+        appModel.applyGatewayConnectConfig(staleConfig, expectedGeneration: staleGeneration)
+
+        #expect(appModel.activeGatewayConnectConfig == nil)
+
+        let duringResolutionGeneration = appModel.gatewayConnectGeneration
+        probeResults.continuation.yield(.fingerprint("new-target-fingerprint"))
+        probeResults.continuation.finish()
+        await connectTask.value
+        await controller.acceptPendingTrustPrompt()
+        appModel.applyGatewayConnectConfig(
+            duringResolutionConfig,
+            expectedGeneration: duringResolutionGeneration)
+
+        #expect(appModel.activeGatewayConnectConfig?.stableID != duringResolutionConfig.stableID)
+    }
+
+    @Test @MainActor func cancelDuringForcedResetRestoresCurrentGateway() async {
+        let host = "replacement.gateway.invalid"
+        let stableID = "manual|\(host)|443"
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.saveFingerprint("replacement-fingerprint", stableID: stableID)
+
+        let resetFinished = AsyncStream<Void>.makeStream()
+        let resetRelease = AsyncStream<Void>.makeStream()
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://current.gateway.invalid")!,
+            stableID: "manual|current.gateway.invalid|443")
+        appModel.applyGatewayConnectConfig(currentConfig)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            forceReconnectReset: { appModel in
+                await appModel.resetGatewaySessionsForForcedReconnect()
+                resetFinished.continuation.yield()
+                for await _ in resetRelease.stream {
+                    return
+                }
+            })
+        var finishedIterator = resetFinished.stream.makeAsyncIterator()
+
+        await controller.connectManual(host: host, port: 443, useTLS: true, forceReconnect: true)
+        _ = await finishedIterator.next()
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+
+        controller.cancelPendingConnectionAttempts()
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while !appModel._test_hasGatewayLoopTasks().node, ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true)
+        #expect(appModel._test_hasGatewayLoopTasks().node)
+    }
+
+    @Test @MainActor func cancelWithoutPendingTaskPreservesReconnectPause() async {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(currentConfig)
+        await appModel.resetGatewaySessionsForForcedReconnect()
+        let problem = GatewayConnectionProblem(
+            kind: .protocolMismatch,
+            owner: .gateway,
+            title: "Protocol mismatch",
+            message: "Upgrade the gateway before reconnecting.",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        controller.cancelPendingConnectionAttempts()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true)
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+    }
+
+    @Test @MainActor func newConnectWaitsForSupersededForcedReset() async {
+        let forceHost = "force-reset.gateway.invalid"
+        let forceStableID = "manual|\(forceHost)|443"
+        defer { GatewayTLSStore.clearFingerprint(stableID: forceStableID) }
+        GatewayTLSStore.saveFingerprint("force-reset-fingerprint", stableID: forceStableID)
+
+        let resetFinished = AsyncStream<Void>.makeStream()
+        let resetRelease = AsyncStream<Void>.makeStream()
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let currentConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://current.gateway.invalid")!,
+            stableID: "manual|current.gateway.invalid|443")
+        appModel.applyGatewayConnectConfig(currentConfig)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            forceReconnectReset: { appModel in
+                await appModel.resetGatewaySessionsForForcedReconnect()
+                resetFinished.continuation.yield()
+                for await _ in resetRelease.stream {
+                    return
+                }
+            })
+        var finishedIterator = resetFinished.stream.makeAsyncIterator()
+
+        await controller.connectManual(host: forceHost, port: 443, useTLS: true, forceReconnect: true)
+        _ = await finishedIterator.next()
+        await controller.connectManual(host: "192.168.1.40", port: 18789, useTLS: false)
+
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true)
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
+        let replacementStableID = "manual|192.168.1.40|18789"
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.stableID != replacementStableID,
+              ContinuousClock().now < deadline
+        {
+            await Task.yield()
+        }
+
+        #expect(appModel.activeGatewayConnectConfig?.stableID == replacementStableID)
+        #expect(appModel._test_hasGatewayLoopTasks().node)
+    }
+
+    @Test @MainActor func newConnectWaitsForModelOwnedResetBarrier() async {
+        let resetRelease = AsyncStream<Void>.makeStream()
+        let appModel = NodeAppModel()
+        defer {
+            appModel._test_setGatewaySessionResetTask(nil)
+            appModel.disconnectGateway()
+        }
+        let currentConfig = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://current.gateway.invalid")!,
+            stableID: "manual|current.gateway.invalid|443")
+        appModel.applyGatewayConnectConfig(currentConfig)
+        let modelResetTask = Task {
+            for await _ in resetRelease.stream {
+                return
+            }
+        }
+        appModel._test_setGatewaySessionResetTask(modelResetTask)
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        await controller.connectManual(host: "192.168.1.41", port: 18789, useTLS: false)
+        await Task.yield()
+
+        #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: currentConfig) == true)
+
+        resetRelease.continuation.yield()
+        resetRelease.continuation.finish()
+        let replacementStableID = "manual|192.168.1.41|18789"
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while appModel.activeGatewayConnectConfig?.stableID != replacementStableID,
+              ContinuousClock().now < deadline
+        {
+            await Task.yield()
+        }
+
+        #expect(appModel.activeGatewayConnectConfig?.stableID == replacementStableID)
+    }
+
     @Test @MainActor func explicitConnectionSuppressesPersistedAutoConnectWhileSuspended() async {
         let defaults = UserDefaults.standard
         let updates: [String: Any?] = [

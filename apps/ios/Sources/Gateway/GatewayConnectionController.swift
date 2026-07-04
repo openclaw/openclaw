@@ -31,6 +31,7 @@ enum GatewayTLSFingerprintProbeResult: Equatable {
 typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
 typealias GatewayTLSFingerprintProbeFunction = @Sendable (URL) async -> GatewayTLSFingerprintProbeResult
 typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
+typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
 
 private enum GatewayTLSFingerprintProbeBudget {
     static let tcpConnectTimeoutSeconds = 3.0
@@ -146,6 +147,7 @@ final class GatewayConnectionController {
         let stableID: String
         let isManual: Bool
         let authOverride: ManualAuthOverride?
+        let gatewayGeneration: UInt64?
     }
 
     struct TrustPrompt: Identifiable, Equatable {
@@ -177,9 +179,12 @@ final class GatewayConnectionController {
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
     private var autoConnectSuppressionGeneration: UInt64?
+    @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
+    private let forceReconnectReset: GatewayForceReconnectReset
 
     private struct SavedManualEndpoint: Equatable {
         let host: String
@@ -193,7 +198,10 @@ final class GatewayConnectionController {
         deferDiscoveryUntilLocalNetworkRequest: Bool = false,
         tcpReachabilityProbe: @escaping GatewayTCPReachabilityProbe = defaultGatewayTCPReachabilityProbe,
         tlsFingerprintProbe: @escaping GatewayTLSFingerprintProbeFunction = defaultGatewayTLSFingerprintProbe,
-        serviceEndpointResolver: GatewayServiceEndpointResolver? = nil)
+        serviceEndpointResolver: GatewayServiceEndpointResolver? = nil,
+        forceReconnectReset: @escaping GatewayForceReconnectReset = { appModel in
+            await appModel.resetGatewaySessionsForForcedReconnect()
+        })
     {
         self.discoveryEnabled = startDiscovery
         self.appModel = appModel
@@ -201,6 +209,7 @@ final class GatewayConnectionController {
         self.tcpReachabilityProbe = tcpReachabilityProbe
         self.tlsFingerprintProbe = tlsFingerprintProbe
         self.serviceEndpointResolver = serviceEndpointResolver
+        self.forceReconnectReset = forceReconnectReset
 
         GatewaySettingsStore.bootstrapPersistence()
         let defaults = UserDefaults.standard
@@ -281,8 +290,8 @@ final class GatewayConnectionController {
         _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
         forceReconnect: Bool = false) async -> String?
     {
-        let connectGeneration = self.beginConnectAttempt()
-        defer { self.finishConnectAttempt(connectGeneration) }
+        let connectAttempt = self.beginConnectAttempt()
+        defer { self.finishConnectAttempt(connectAttempt.controllerGeneration) }
         self.requestLocalNetworkAccess(reason: "connect_discovered_gateway", allowAutoReconnect: false)
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -299,7 +308,7 @@ final class GatewayConnectionController {
         } else {
             await self.resolveServiceEndpoint(gateway.endpoint)
         }
-        guard self.connectAttemptGeneration == connectGeneration else { return nil }
+        guard self.connectAttemptGeneration == connectAttempt.controllerGeneration else { return nil }
         guard let target else {
             return "Failed to resolve the discovered gateway endpoint."
         }
@@ -323,14 +332,15 @@ final class GatewayConnectionController {
                 url: url,
                 queueLabel: "gateway.tls.discovered")
             else { return nil }
-            guard self.connectAttemptGeneration == connectGeneration else { return nil }
+            guard self.connectAttemptGeneration == connectAttempt.controllerGeneration else { return nil }
             switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = PendingTrustConnect(
                     url: url,
                     stableID: stableID,
                     isManual: false,
-                    authOverride: nil)
+                    authOverride: nil,
+                    gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
                     gatewayName: gateway.name,
@@ -368,7 +378,8 @@ final class GatewayConnectionController {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            forceReconnect: forceReconnect)
+            forceReconnect: forceReconnect,
+            expectedGeneration: connectAttempt.gatewayGeneration)
         return nil
     }
 
@@ -383,8 +394,8 @@ final class GatewayConnectionController {
         authOverride: ManualAuthOverride? = nil,
         forceReconnect: Bool = false) async
     {
-        let connectGeneration = self.beginConnectAttempt()
-        defer { self.finishConnectAttempt(connectGeneration) }
+        let connectAttempt = self.beginConnectAttempt()
+        defer { self.finishConnectAttempt(connectAttempt.controllerGeneration) }
         self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let token =
@@ -411,14 +422,15 @@ final class GatewayConnectionController {
                 url: url,
                 queueLabel: "gateway.tls.manual")
             else { return }
-            guard self.connectAttemptGeneration == connectGeneration else { return }
+            guard self.connectAttemptGeneration == connectAttempt.controllerGeneration else { return }
             switch probeResult {
             case let .fingerprint(fp):
                 self.pendingTrustConnect = PendingTrustConnect(
                     url: url,
                     stableID: stableID,
                     isManual: true,
-                    authOverride: pendingAuthOverride)
+                    authOverride: pendingAuthOverride,
+                    gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
                     gatewayName: "\(host):\(resolvedPort)",
@@ -458,7 +470,8 @@ final class GatewayConnectionController {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            forceReconnect: forceReconnect)
+            forceReconnect: forceReconnect,
+            expectedGeneration: connectAttempt.gatewayGeneration)
     }
 
     func connectLastKnown() async {
@@ -513,6 +526,7 @@ final class GatewayConnectionController {
         self.connectAttemptGeneration &+= 1
         self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
         self.clearPendingTrustPrompt()
+        _ = self.reserveGatewayConnectAttempt()
     }
 
     func acceptPendingTrustPrompt() async {
@@ -555,7 +569,8 @@ final class GatewayConnectionController {
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
-            password: password)
+            password: password,
+            expectedGeneration: pending.gatewayGeneration)
         self.autoConnectSuppressionGeneration = nil
     }
 
@@ -838,17 +853,40 @@ final class GatewayConnectionController {
         token: String?,
         bootstrapToken: String?,
         password: String?,
-        forceReconnect: Bool = false)
+        forceReconnect: Bool = false,
+        expectedGeneration: UInt64? = nil)
     {
         guard let appModel else { return }
+        if let expectedGeneration {
+            guard expectedGeneration == appModel.gatewayConnectGeneration else { return }
+        }
+        let previousTask = self.pendingAutoConnectTask
+        previousTask?.cancel()
+        // Advancing again at handoff rejects work that captured the reservation generation while
+        // endpoint resolution or trust verification was suspended.
         let generation = appModel.beginGatewayConnectAttempt()
+        self.pendingAutoConnectGeneration = generation
         appModel.gatewayStatusText = "Connecting…"
-        Task { [weak self, weak appModel] in
+        let task = Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
+            defer {
+                if self.pendingAutoConnectGeneration == generation {
+                    self.pendingAutoConnectTask = nil
+                    self.pendingAutoConnectGeneration = nil
+                }
+            }
+            await previousTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            guard !Task.isCancelled, generation == appModel.gatewayConnectGeneration else { return }
             if forceReconnect {
-                await appModel.resetGatewaySessionsForForcedReconnect()
+                await self.forceReconnectReset(appModel)
+                guard !Task.isCancelled, generation == appModel.gatewayConnectGeneration else { return }
             }
             let nodeOptions = await self.makeConnectOptions(stableID: gatewayStableID)
+            // Permission reads above can suspend long enough for a model-owned reconnect reset
+            // to start, so close the reset barrier again immediately before the synchronous apply.
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            guard !Task.isCancelled, generation == appModel.gatewayConnectGeneration else { return }
             let cfg = GatewayConnectConfig(
                 url: url,
                 stableID: gatewayStableID,
@@ -862,6 +900,7 @@ final class GatewayConnectionController {
                 forceReconnect: forceReconnect,
                 expectedGeneration: generation)
         }
+        self.pendingAutoConnectTask = task
     }
 
     private func resolveDiscoveredTLSParams(
@@ -930,10 +969,52 @@ final class GatewayConnectionController {
         return result
     }
 
-    private func beginConnectAttempt() -> UInt64 {
+    private func beginConnectAttempt() -> (controllerGeneration: UInt64, gatewayGeneration: UInt64?) {
         self.connectAttemptGeneration &+= 1
         self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
-        return self.connectAttemptGeneration
+        self.clearPendingTrustPrompt()
+        // Allocate both tokens before any resolution or trust work. A new explicit target must
+        // invalidate queued config construction from the previous target immediately.
+        let gatewayGeneration = self.reserveGatewayConnectAttempt()
+        return (self.connectAttemptGeneration, gatewayGeneration)
+    }
+
+    private func reserveGatewayConnectAttempt() -> UInt64? {
+        let previousTask = self.pendingAutoConnectTask
+        previousTask?.cancel()
+        guard let appModel else { return nil }
+        let generation = appModel.beginGatewayConnectAttempt()
+        let activeConfig = appModel.activeGatewayConnectConfig
+        let shouldRestoreActiveConfig = appModel.gatewayAutoReconnectEnabled &&
+            !appModel.gatewayPairingPaused &&
+            appModel.lastGatewayProblem?.pauseReconnect != true &&
+            (previousTask != nil || appModel.hasGatewaySessionResetInFlight)
+        self.pendingAutoConnectGeneration = generation
+        // The barrier owns any superseded teardown until it finishes. If the replacement never
+        // reaches handoff, restore the still-current route after that teardown completes.
+        let barrier = Task { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            defer {
+                if self.pendingAutoConnectGeneration == generation {
+                    self.pendingAutoConnectTask = nil
+                    self.pendingAutoConnectGeneration = nil
+                }
+            }
+            await previousTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            guard !Task.isCancelled,
+                  generation == appModel.gatewayConnectGeneration,
+                  shouldRestoreActiveConfig,
+                  let activeConfig,
+                  appModel.gatewayAutoReconnectEnabled,
+                  !appModel.gatewayPairingPaused,
+                  appModel.lastGatewayProblem?.pauseReconnect != true,
+                  appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: activeConfig) == true
+            else { return }
+            appModel.applyGatewayConnectConfig(activeConfig, expectedGeneration: generation)
+        }
+        self.pendingAutoConnectTask = barrier
+        return generation
     }
 
     private func finishConnectAttempt(_ generation: UInt64) {

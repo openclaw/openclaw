@@ -186,6 +186,7 @@ final class NodeAppModel {
     private var nodeGatewayTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetTask: Task<Void, Never>?
+    @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
     @ObservationIgnored private(set) var gatewayConnectGeneration: UInt64 = 0
     private var forceOperatorTalkPermissionUpgradeRequest = false
     private var lastTalkPermissionReconnectAttemptAt: Date?
@@ -2166,6 +2167,16 @@ extension NodeAppModel {
         self.gatewayConnectGeneration &+= 1
     }
 
+    var hasGatewaySessionResetInFlight: Bool {
+        self.gatewaySessionResetTask != nil
+    }
+
+    func waitForGatewaySessionResetIfNeeded() async {
+        while let gatewaySessionResetTask = self.gatewaySessionResetTask {
+            await gatewaySessionResetTask.value
+        }
+    }
+
     func resetGatewaySessionsForForcedReconnect() async {
         if let gatewaySessionResetTask {
             await gatewaySessionResetTask.value
@@ -2179,6 +2190,8 @@ extension NodeAppModel {
         self.operatorGatewayTask = nil
         let operatorGateway = self.operatorGateway
         let nodeGateway = self.nodeGateway
+        self.gatewaySessionResetGeneration &+= 1
+        let resetGeneration = self.gatewaySessionResetGeneration
         // Concurrent reconnect triggers share one teardown. Otherwise a later reset can miss the
         // captured loop tasks and let their shutdown cleanup clobber a replacement connection.
         let gatewaySessionResetTask = Task {
@@ -2190,10 +2203,12 @@ extension NodeAppModel {
             if let nodeGatewayTask {
                 await nodeGatewayTask.value
             }
+            if self.gatewaySessionResetGeneration == resetGeneration {
+                self.gatewaySessionResetTask = nil
+            }
         }
         self.gatewaySessionResetTask = gatewaySessionResetTask
         await gatewaySessionResetTask.value
-        self.gatewaySessionResetTask = nil
     }
 
     func resetGatewaySessionsForTargetSwitch() async {
@@ -5484,6 +5499,21 @@ extension NodeAppModel {
 
     func _test_hasGatewayLoopTasks() -> (node: Bool, operator: Bool) {
         (self.nodeGatewayTask != nil, self.operatorGatewayTask != nil)
+    }
+
+    func _test_setGatewaySessionResetTask(_ task: Task<Void, Never>?) {
+        self.gatewaySessionResetGeneration &+= 1
+        let resetGeneration = self.gatewaySessionResetGeneration
+        guard let task else {
+            self.gatewaySessionResetTask = nil
+            return
+        }
+        self.gatewaySessionResetTask = Task {
+            await task.value
+            if self.gatewaySessionResetGeneration == resetGeneration {
+                self.gatewaySessionResetTask = nil
+            }
+        }
     }
 
     func _test_restartGatewaySessionsAfterForegroundStaleConnection() async {
