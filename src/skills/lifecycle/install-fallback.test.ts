@@ -67,7 +67,7 @@ function assertNoAptGetFallbackCalls() {
       return false;
     }
     const argv = call[0] as string[];
-    const isPermissionCheck = argv[0] === "sudo" && argv[1] === "-n" && argv[2] === "-l";
+    const isPermissionCheck = argv[0] === "sudo" && argv.includes("-l");
     return argv.includes("apt-get") && !isPermissionCheck;
   });
   expect(aptCalls).toHaveLength(0);
@@ -199,6 +199,39 @@ describe("skills-install fallback edge cases", () => {
       const sudoCall = commandCallAt(0);
       expect(sudoCall?.[0], testCase.label).toEqual([
         "sudo",
+        "-k",
+        "-n",
+        "-l",
+        "apt-get",
+        "update",
+        "-qq",
+      ]);
+      expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
+      assertNoAptGetFallbackCalls();
+    }
+  });
+
+  it("rejects sudo when apt install is not passwordless", async () => {
+    await withUid(1000, async () => {
+      mockAvailableBinaries(["apt-get", "sudo"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "sudo: a password is required",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(commandCallAt(0)[0]).toEqual(["sudo", "-k", "-n", "-l", "apt-get", "update", "-qq"]);
+      expect(commandCallAt(1)[0]).toEqual([
+        "sudo",
+        "-k",
         "-n",
         "-l",
         "apt-get",
@@ -206,9 +239,8 @@ describe("skills-install fallback edge cases", () => {
         "-y",
         "golang-go",
       ]);
-      expect(sudoCall?.[1]?.timeoutMs, testCase.label).toBe(5_000);
       assertNoAptGetFallbackCalls();
-    }
+    });
   });
 
   it("uv not installed and no brew returns helpful error without curl auto-install", async () => {
@@ -342,10 +374,13 @@ describe("skills-install fallback edge cases", () => {
       await withUid(1000, async () => {
         mockAvailableBinaries(["apt-get", "sudo"]);
         runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+        runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(commandCallAt(0)[0]).toEqual([
+        expect(commandCallAt(0)[0]).toEqual(["sudo", "-k", "-n", "-l", "apt-get", "update", "-qq"]);
+        expect(commandCallAt(1)[0]).toEqual([
           "sudo",
+          "-k",
           "-n",
           "-l",
           "apt-get",
@@ -353,7 +388,7 @@ describe("skills-install fallback edge cases", () => {
           "-y",
           "golang-go",
         ]);
-        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+        expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
       });
     });
 
@@ -492,6 +527,38 @@ describe("skills-install fallback edge cases", () => {
       expectAptPolicyCall(1);
       expect(commandCallAt(2)[0]).toEqual(["apt-get", "install", "-y", "golang-go"]);
       expect(commandCallAt(3)[0]).toEqual(["go", "install", "example.com/tool@latest"]);
+    });
+  });
+
+  it("keeps sudo apt probes and execution noninteractive", async () => {
+    await withUid(1000, async () => {
+      mockAvailableBinaries(["apt-get", "sudo"]);
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 0,
+        stdout: "golang-go:\n  Installed: (none)\n  Candidate: 2:1.22.1-1ubuntu1\n",
+        stderr: "",
+      });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "go-tool-single",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock.mock.calls.map((call) => call[0])).toEqual([
+        ["sudo", "-k", "-n", "-l", "apt-get", "update", "-qq"],
+        ["sudo", "-k", "-n", "-l", "apt-get", "install", "-y", "golang-go"],
+        ["sudo", "-n", "apt-get", "update", "-qq"],
+        ["apt-cache", "policy", "golang-go"],
+        ["sudo", "-n", "apt-get", "install", "-y", "golang-go"],
+        ["go", "install", "example.com/tool@latest"],
+      ]);
     });
   });
 

@@ -354,7 +354,11 @@ const APT_GO_PACKAGE = "golang-go";
 const APT_GO_POLICY_ARGV = ["apt-cache", "policy", APT_GO_PACKAGE];
 const APT_GO_UPDATE_ARGV = ["apt-get", "update", "-qq"];
 const APT_GO_INSTALL_ARGV = ["apt-get", "install", "-y", APT_GO_PACKAGE];
-const SUDO_APT_GO_INSTALL_CHECK_ARGV = ["sudo", "-n", "-l", ...APT_GO_INSTALL_ARGV];
+const SUDO_NONINTERACTIVE_PREFIX = ["sudo", "-n"];
+const SUDO_APT_GO_CHECK_ARGVS = [
+  ["sudo", "-k", "-n", "-l", ...APT_GO_UPDATE_ARGV],
+  ["sudo", "-k", "-n", "-l", ...APT_GO_INSTALL_ARGV],
+];
 const GO_VERSION_ENV_ARGV = ["go", "env", "GOVERSION"];
 
 type GoVersion = { major: number; minor: number };
@@ -401,13 +405,13 @@ async function resolveAptCommandAccess(): Promise<AptCommandAccess> {
   if (!getSkillsInstallDeps().hasBinary("sudo")) {
     return { available: false, reason: "sudo-missing" };
   }
-  const sudoCheck = await runCommandSafely(SUDO_APT_GO_INSTALL_CHECK_ARGV, {
-    timeoutMs: 5_000,
-  });
-  if (sudoCheck.code !== 0) {
-    return { available: false, reason: "sudo-unusable", failure: sudoCheck };
+  for (const argv of SUDO_APT_GO_CHECK_ARGVS) {
+    const sudoCheck = await runCommandSafely(argv, { timeoutMs: 5_000 });
+    if (sudoCheck.code !== 0) {
+      return { available: false, reason: "sudo-unusable", failure: sudoCheck };
+    }
   }
-  return { available: true, prefix: ["sudo"] };
+  return { available: true, prefix: SUDO_NONINTERACTIVE_PREFIX };
 }
 
 async function readGoAptCandidate(timeoutMs: number): Promise<{
