@@ -122,4 +122,23 @@ describe("loadSessionStore EAGAIN retry", () => {
     expect(calls).toBe(1);
     expect(store).toEqual({});
   });
+
+  it("retries on transient unparseable JSON and loads the store once content is valid", () => {
+    let calls = 0;
+    readFileSyncSpy.mockImplementation(((
+      filePath: fs.PathOrFileDescriptor,
+      encoding?: BufferEncoding,
+    ) => {
+      calls++;
+      if (calls < 3) {
+        return "{ invalid json ---";
+      }
+      return origReadFileSync(filePath as string, encoding);
+    }) as typeof fs.readFileSync);
+
+    const store = loadSessionStore(fixture.storePath(), { skipCache: true });
+
+    expect(calls).toBe(3);
+    expect(store).toHaveProperty("agent:default:test");
+  });
 });

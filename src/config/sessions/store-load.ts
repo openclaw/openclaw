@@ -422,15 +422,14 @@ export function loadSessionStore(
       break;
     } catch (err) {
       if (attempt < maxReadAttempts - 1) {
-        // Only retry on transient read errors (EAGAIN/EINTR) that occur
-        // when the kernel races with an atomic write-rename. Permanent
-        // failures (ENOENT, EACCES) fall through to the empty-store
-        // fallback immediately without blocking the event loop.
-        // (#99994)
+        // Retry everything except permanent filesystem errors. EAGAIN/EINTR
+        // are transient kernel races; JSON parse errors (SyntaxError) can
+        // also be transient when the file is mid-write during an atomic
+        // swap. Only ENOENT/EACCES/EPERM skip the wait and fall through to
+        // the empty-store fallback immediately. (#99994)
         const code = (err as NodeJS.ErrnoException).code;
-        const errno = (err as NodeJS.ErrnoException).errno;
-        const isTransient = code === "EAGAIN" || code === "EINTR" || errno === -11 || errno === -4;
-        if (isTransient) {
+        const isPermanent = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+        if (!isPermanent) {
           Atomics.wait(retryBuf!, 0, 0, 50);
           continue;
         }
