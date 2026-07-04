@@ -470,37 +470,42 @@ async function isGoUsableForAutoInstall(): Promise<boolean> {
   );
 }
 
-async function canBootstrapGoViaApt(): Promise<boolean> {
-  const deps = getSkillsInstallDeps();
-  if (!deps.hasBinary("apt-get")) {
-    return false;
-  }
-  // installGoViaApt installs the distro's unversioned golang-go; on older
-  // suites (Ubuntu 22.04 → 1.18, Debian 12 → 1.19) that still fails newer
-  // module directives, so require a 1.21+ candidate before calling it ready.
-  const policy = await runCommandSafely(["apt-cache", "policy", "golang-go"], {
-    timeoutMs: 10_000,
-  });
-  if (policy.code !== 0) {
-    return false;
-  }
-  const candidate = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(policy.stdout);
-  if (!candidate) {
-    return false;
-  }
-  const major = Number(candidate[1]);
-  const minor = Number(candidate[2]);
-  if (major < MIN_AUTO_GO_MAJOR || (major === MIN_AUTO_GO_MAJOR && minor < MIN_AUTO_GO_MINOR)) {
-    return false;
-  }
+async function canRunAptGetAsPrivileged(): Promise<boolean> {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return true;
   }
-  if (!deps.hasBinary("sudo")) {
+  if (!getSkillsInstallDeps().hasBinary("sudo")) {
     return false;
   }
   const sudoCheck = await runCommandSafely(["sudo", "-n", "true"], { timeoutMs: 5_000 });
   return sudoCheck.code === 0;
+}
+
+async function canBootstrapGoViaApt(): Promise<boolean> {
+  if (!getSkillsInstallDeps().hasBinary("apt-get")) {
+    return false;
+  }
+  if (!(await canRunAptGetAsPrivileged())) {
+    return false;
+  }
+  // installGoViaApt installs the distro's unversioned golang-go; a visible
+  // candidate older than 1.21 (Ubuntu 22.04 → 1.18, Debian 12 → 1.19) would
+  // still fail newer module directives, so veto it here. An absent or
+  // unreadable candidate stays the installer's call: installGoViaApt refreshes
+  // indexes first, which is how fresh containers with cleared lists succeed.
+  const policy = await runCommandSafely(["apt-cache", "policy", "golang-go"], {
+    timeoutMs: 10_000,
+  });
+  if (policy.code !== 0) {
+    return true;
+  }
+  const candidate = /Candidate:\s*(?:\d+:)?(\d+)\.(\d+)/.exec(policy.stdout);
+  if (!candidate) {
+    return true;
+  }
+  const major = Number(candidate[1]);
+  const minor = Number(candidate[2]);
+  return major > MIN_AUTO_GO_MAJOR || (major === MIN_AUTO_GO_MAJOR && minor >= MIN_AUTO_GO_MINOR);
 }
 
 /**

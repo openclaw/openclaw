@@ -301,11 +301,23 @@ describe("skills-install fallback edge cases", () => {
     it("keeps missing-Go recipes ready when passwordless sudo can run apt-get", async () => {
       await withUid(1000, async () => {
         mockAvailableBinaries(["apt-get", "sudo"]);
+        runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
         runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
+
+        expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
+        expect(commandCallAt(0)[0]).toEqual(["sudo", "-n", "true"]);
+        expect(commandCallAt(1)[0]).toEqual(["apt-cache", "policy", "golang-go"]);
+      });
+    });
+
+    it("keeps missing-Go recipes ready when a fresh container has no apt candidate yet", async () => {
+      await withUid(0, async () => {
+        mockAvailableBinaries(["apt-get"]);
+        // Cleared /var/lib/apt/lists: installGoViaApt refreshes indexes before
+        // installing, so the preflight must not veto on the empty cache.
         runCommandWithTimeoutMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: true });
-        expect(commandCallAt(1)[0]).toEqual(["sudo", "-n", "true"]);
       });
     });
 
@@ -324,10 +336,11 @@ describe("skills-install fallback edge cases", () => {
 
     it("skips missing-Go recipes when neither brew nor a usable apt path exists", async () => {
       await withUid(1000, async () => {
+        // apt-get exists but there is no root, sudo, or brew to run it with.
         mockAvailableBinaries(["apt-get"]);
-        runCommandWithTimeoutMock.mockResolvedValueOnce(usableAptCandidate);
 
         expect(await resolveInstallerKindReadiness("go")).toEqual({ ready: false, reason: "go" });
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
       });
     });
 
