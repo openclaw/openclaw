@@ -32,6 +32,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import {
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
+  type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
@@ -443,16 +444,18 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
+  const skipUserTurn = gapFill || params.skipUserTurn === true;
 
   return await persistTextTurnTranscript({
-    body: gapFill ? "" : params.body,
-    transcriptBody: gapFill ? undefined : params.transcriptBody,
-    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
+    body: skipUserTurn ? "" : params.body,
+    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -486,6 +489,7 @@ export async function runAgentAttempt(params: {
   workspaceDir: string;
   cwd?: string;
   body: string;
+  transcriptBody?: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
@@ -520,6 +524,7 @@ export async function runAgentAttempt(params: {
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
@@ -682,6 +687,7 @@ export async function runAgentAttempt(params: {
           cwd: params.cwd,
           config: params.cfg,
           prompt: cliPrompt,
+          transcriptPrompt: params.transcriptBody,
           provider: cliExecutionProvider,
           model: params.modelOverride,
           thinkLevel: params.resolvedThinkLevel,
@@ -721,6 +727,8 @@ export async function runAgentAttempt(params: {
           cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
           cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
           oneShotCliRun: params.opts.oneShotCliRun,
+          userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+          suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
           ...(mutableCliSessionStore
             ? {
                 onBeforeFreshCliSessionRetry: async (retry) => {
@@ -926,6 +934,7 @@ export async function runAgentAttempt(params: {
       agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
       skillsSnapshot: params.skillsSnapshot,
       prompt: effectivePrompt,
+      transcriptPrompt: params.transcriptBody,
       images: params.isFallbackRetry ? undefined : params.opts.images,
       imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
       clientTools: params.opts.clientTools,
@@ -972,6 +981,7 @@ export async function runAgentAttempt(params: {
       deferTerminalLifecycle: params.deferTerminalLifecycle,
       deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       onUserMessagePersisted: params.onUserMessagePersisted,
       onExecutionStarted: (info) => {
         if (info?.lifecycleGeneration) {

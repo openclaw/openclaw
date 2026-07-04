@@ -16,6 +16,10 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readBuildArtifactsTestboxWorkflow() {
+  return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
+}
+
 function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
@@ -287,10 +291,19 @@ describe("ci workflow guards", () => {
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
+    const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(source).toContain("createNodeTestShardBundles");
     expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(
+      buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
+        (step: { name?: string }) => step.name === "Build dist on cache miss",
+      ).env.NODE_OPTIONS,
+    ).toBe("--max-old-space-size=16384");
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );

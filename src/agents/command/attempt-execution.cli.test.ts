@@ -17,6 +17,7 @@ import {
   parseDiagnosticTraceparent,
   resetDiagnosticTraceContextForTest,
 } from "../../infra/diagnostic-trace-context.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -62,7 +63,6 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
   ),
 }));
 const INHERITED_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
-
 
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
@@ -227,6 +227,9 @@ describe("CLI attempt execution", () => {
   async function runOpenClawEmbeddedAttemptForTest(overrides?: {
     opts?: Partial<RunAgentAttemptParams["opts"]>;
     runId?: string;
+    body?: string;
+    transcriptBody?: string;
+    userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
   }) {
     const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
     const sessionKey = `agent:main:direct:${runId}`;
@@ -251,7 +254,8 @@ describe("CLI attempt execution", () => {
       sessionAgentId: "main",
       sessionFile: path.join(tmpDir, `${runId}.jsonl`),
       workspaceDir: tmpDir,
-      body: "stream gate",
+      body: overrides?.body ?? "stream gate",
+      transcriptBody: overrides?.transcriptBody,
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
@@ -271,6 +275,7 @@ describe("CLI attempt execution", () => {
       sessionStore,
       storePath,
       sessionHasHistory: false,
+      userTurnTranscriptRecorder: overrides?.userTurnTranscriptRecorder,
     });
 
     return firstEmbeddedAgentArg();
@@ -1329,6 +1334,52 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
+  it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
+    const sessionKey = "agent:main:direct:cli-recorder-owned-user";
+    const sessionFile = path.join(tmpDir, "session-cli-recorder-owned-user.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-recorder-owned-user",
+      sessionFile,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      sessionId: sessionEntry.sessionId,
+      cwd: tmpDir,
+      config: {},
+      message: {
+        role: "user",
+        content: "canonical current ask",
+        timestamp: Date.now(),
+      },
+    });
+
+    await persistCliTurnTranscript({
+      body: "canonical current ask",
+      result: makeCliResult("hello from cli"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      skipUserTurn: true,
+    });
+
+    const messages = await readSessionMessages(sessionFile);
+    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "hello from cli" }],
+      }),
+    );
+  });
+
   it("does not append a CLI transcript after the session is deleted", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-deleted";
     const staleSessionFile = path.join(tmpDir, "session-cli-stale.jsonl");
@@ -1967,6 +2018,16 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("timestamped cli"));
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "canonical timestamp question" },
+      target: {
+        transcriptPath: path.join(tmpDir, "session.jsonl"),
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        agentId: "main",
+        cwd: tmpDir,
+      },
+    });
 
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -1980,6 +2041,7 @@ describe("CLI attempt execution", () => {
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "what time is it?",
+      transcriptBody: "canonical timestamp question",
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
@@ -1996,10 +2058,14 @@ describe("CLI attempt execution", () => {
       sessionStore,
       storePath,
       sessionHasHistory: false,
+      userTurnTranscriptRecorder,
     });
 
     expectMockArgFields(runCliAgentMock, {
       prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
+      transcriptPrompt: "canonical timestamp question",
+      userTurnTranscriptRecorder,
+      suppressNextUserMessagePersistence: false,
     });
   });
 
@@ -2213,6 +2279,34 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
+  });
+
+  it("forwards canonical transcript text without replacing embedded image content", async () => {
+    const recorder = createUserTurnTranscriptRecorder({
+      target: {
+        transcriptPath: path.join(tmpDir, "embedded-image-turn.jsonl"),
+        sessionId: "session-embedded-image-turn",
+        sessionKey: "agent:main:direct:embedded-image-turn",
+        agentId: "main",
+        cwd: tmpDir,
+      },
+    });
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-image-turn",
+      body: "runtime image prompt",
+      transcriptBody: "canonical image caption",
+      opts: { images },
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    expect(embeddedArg).toMatchObject({
+      prompt: "runtime image prompt",
+      transcriptPrompt: "canonical image caption",
+      images,
+      userTurnTranscriptRecorder: recorder,
+      suppressNextUserMessagePersistence: false,
+    });
   });
 
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {
