@@ -26,10 +26,11 @@ type XaiTtsWebSocket = {
     options?: { once?: boolean },
   ) => void;
 };
+type XaiTtsWebSocketOptions = { headers: Record<string, string>; handshakeTimeout: number };
 type XaiTtsWebSocketFactory = (
   url: string,
-  options: { headers: Record<string, string>; handshakeTimeout: number },
-) => XaiTtsWebSocket;
+  options: XaiTtsWebSocketOptions,
+) => XaiTtsWebSocket | Promise<XaiTtsWebSocket>;
 
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
@@ -228,13 +229,12 @@ export async function xaiTTSStream(params: {
     Authorization: `Bearer ${apiKey}`,
     ...xaiUserAgentHeaderFor(XAI_BASE_URL),
   };
-  const websocketFactory =
-    params.websocketFactory ??
-    ((wsUrl, options) => new globalThis.WebSocket(wsUrl, options) as XaiTtsWebSocket);
-  const ws = websocketFactory(url, {
+  const websocketFactory = params.websocketFactory ?? createXaiTtsWebSocket;
+  const wsResult = websocketFactory(url, {
     headers,
     handshakeTimeout: timeoutMs,
   });
+  const ws = isPromiseLikeXaiTtsWebSocket(wsResult) ? await wsResult : wsResult;
 
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   let handoffComplete = false;
@@ -257,10 +257,11 @@ export async function xaiTTSStream(params: {
   const closeSocket = () => {
     if (ws.readyState === XAI_TTS_WS_OPEN || ws.readyState === XAI_TTS_WS_CONNECTING) {
       ws.close(1000, "tts complete");
-      if (ws.readyState !== XAI_TTS_WS_CLOSED) {
+      const socket = ws as XaiTtsWebSocket;
+      if (socket.readyState !== XAI_TTS_WS_CLOSED) {
         closeTimer = setTimeout(() => {
-          if (ws.readyState !== XAI_TTS_WS_CLOSED) {
-            ws.close(1000, "tts complete");
+          if (socket.readyState !== XAI_TTS_WS_CLOSED) {
+            socket.close(1000, "tts complete");
           }
         }, XAI_TTS_CLOSE_TIMEOUT_MS);
       }
@@ -395,4 +396,21 @@ export async function xaiTTSStream(params: {
     await release();
     throw err;
   }
+}
+
+async function createXaiTtsWebSocket(
+  url: string,
+  options: XaiTtsWebSocketOptions,
+): Promise<XaiTtsWebSocket> {
+  const { WebSocket } = await import("ws");
+  return new WebSocket(url, {
+    headers: options.headers,
+    handshakeTimeout: options.handshakeTimeout,
+  }) as XaiTtsWebSocket;
+}
+
+function isPromiseLikeXaiTtsWebSocket(
+  value: XaiTtsWebSocket | Promise<XaiTtsWebSocket>,
+): value is Promise<XaiTtsWebSocket> {
+  return typeof (value as { then?: unknown }).then === "function";
 }
