@@ -74,6 +74,10 @@ type QueueEntry = {
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  reserveForPriority?: {
+    slots: number;
+    priority: number;
+  };
 };
 
 type LaneState = {
@@ -259,6 +263,37 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
   }
 }
 
+function normalizeReserveForPriority(
+  reserveForPriority: CommandQueueEnqueueOptions["reserveForPriority"],
+): QueueEntry["reserveForPriority"] {
+  if (!reserveForPriority) {
+    return undefined;
+  }
+  const slots = Math.floor(reserveForPriority.slots);
+  if (!Number.isFinite(slots) || slots <= 0) {
+    return undefined;
+  }
+  return {
+    slots,
+    priority: resolveQueuePriority(reserveForPriority.priority),
+  };
+}
+
+function canStartQueueEntry(state: LaneState, entry: QueueEntry): boolean {
+  const reserve = entry.reserveForPriority;
+  if (!reserve || entry.priority >= reserve.priority) {
+    return true;
+  }
+  if (state.maxConcurrent <= reserve.slots) {
+    return true;
+  }
+  const availableSlots = Math.max(0, state.maxConcurrent - state.activeTaskIds.size);
+  if (availableSlots <= reserve.slots) {
+    return false;
+  }
+  return true;
+}
+
 function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
   const insertAt = state.queue.findIndex(
     (queued) =>
@@ -391,7 +426,11 @@ function drainLane(lane: string) {
   const pump = () => {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-        const entry = state.queue.shift() as QueueEntry;
+        const entry = state.queue[0];
+        if (!canStartQueueEntry(state, entry)) {
+          return;
+        }
+        state.queue.shift();
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
@@ -501,6 +540,7 @@ export function enqueueCommandInLane<T>(
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
+      reserveForPriority: normalizeReserveForPriority(opts?.reserveForPriority),
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);

@@ -728,6 +728,9 @@ async function runEmbeddedAgentInternal(
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
+      ...(globalLane === "main" && sessionQueuePriority !== "foreground"
+        ? { reserveForPriority: { slots: 1, priority: "foreground" } as const }
+        : {}),
     };
     const taskWithCurrentLifecycle = () => {
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });

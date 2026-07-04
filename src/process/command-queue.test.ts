@@ -219,6 +219,79 @@ describe("command queue", () => {
     expect(calls).toEqual(["first", "second"]);
   });
 
+  it("preserves reserved lane capacity for foreground work", async () => {
+    setCommandLaneConcurrency(CommandLane.Main, 3);
+    const releaseBackground = createDeferred();
+    const calls: string[] = [];
+    const backgroundOpts = {
+      priority: "background" as const,
+      reserveForPriority: { slots: 1, priority: "foreground" as const },
+    };
+
+    const background1 = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background-1");
+        await releaseBackground.promise;
+      },
+      backgroundOpts,
+    );
+    const background2 = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background-2");
+        await releaseBackground.promise;
+      },
+      backgroundOpts,
+    );
+    const background3 = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background-3");
+      },
+      backgroundOpts,
+    );
+
+    await vi.waitFor(() => expect(calls).toEqual(["background-1", "background-2"]));
+    expectLaneSnapshotFields(CommandLane.Main, {
+      activeCount: 2,
+      queuedCount: 1,
+    });
+
+    const foreground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("foreground");
+      },
+      { priority: "foreground" },
+    );
+
+    await foreground;
+    expect(calls).toEqual(["background-1", "background-2", "foreground"]);
+
+    releaseBackground.resolve();
+    await Promise.all([background1, background2, background3]);
+    expect(calls).toEqual(["background-1", "background-2", "foreground", "background-3"]);
+  });
+
+  it("does not reserve all capacity on a single-slot lane", async () => {
+    setCommandLaneConcurrency(CommandLane.Main, 1);
+    const calls: string[] = [];
+
+    await enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background");
+      },
+      {
+        priority: "background",
+        reserveForPriority: { slots: 1, priority: "foreground" },
+      },
+    );
+
+    expect(calls).toEqual(["background"]);
+  });
+
   it("reports queueAhead after priority insertion", async () => {
     vi.useFakeTimers();
     try {

@@ -12,6 +12,7 @@ import {
   rotateAgentEventLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { CommandLane } from "../../process/lanes.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -42,6 +43,7 @@ import {
   mockedResolveAuthProfileOrder,
   mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
+  mockedResolveGlobalLane,
   mockedResolveModelAsync,
   mockedRunContextEngineMaintenance,
   mockedRunEmbeddedAttempt,
@@ -1078,36 +1080,51 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
   it("marks user-triggered session queue work as foreground", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-    const observedPriorities: unknown[] = [];
+    const observedOpts: unknown[] = [];
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "user",
       runId: "run-user-session-priority",
       enqueue: async (task, opts) => {
-        observedPriorities.push(opts?.priority);
+        observedOpts.push(opts);
         return await task();
       },
     });
 
-    expect(observedPriorities[0]).toBe("foreground");
+    expect(observedOpts.map((opts) => (opts as { priority?: string })?.priority)).toEqual([
+      "foreground",
+      "foreground",
+    ]);
+    expect(
+      observedOpts.some((opts) =>
+        Boolean((opts as { reserveForPriority?: unknown })?.reserveForPriority),
+      ),
+    ).toBe(false);
   });
 
-  it("marks cron-triggered session queue work as background", async () => {
+  it("marks cron-triggered session queue work as background with a foreground reserve", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-    const observedPriorities: unknown[] = [];
+    mockedResolveGlobalLane.mockReturnValue(CommandLane.Main);
+    const observedOpts: unknown[] = [];
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "cron",
       runId: "run-cron-session-priority",
       enqueue: async (task, opts) => {
-        observedPriorities.push(opts?.priority);
+        observedOpts.push(opts);
         return await task();
       },
     });
 
-    expect(observedPriorities[0]).toBe("background");
+    expect(observedOpts.map((opts) => (opts as { priority?: string })?.priority)).toEqual([
+      "background",
+      "background",
+    ]);
+    expect(observedOpts[1]).toMatchObject({
+      reserveForPriority: { slots: 1, priority: "foreground" },
+    });
   });
 
   it("forwards explicit OpenAI Codex auth profiles to codex plugin harnesses", async () => {
