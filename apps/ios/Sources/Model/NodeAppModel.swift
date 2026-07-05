@@ -363,7 +363,7 @@ final class NodeAppModel {
         if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
             return cache
         }
-        guard let databaseURL = self.chatTranscriptCacheDatabaseURL() else { return nil }
+        guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
         let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
         self.chatTranscriptCachesByGatewayID[gatewayID] = cache
         return cache
@@ -383,10 +383,11 @@ final class NodeAppModel {
     /// disposable database during a full onboarding reset.
     func purgeChatTranscriptCache(gatewayID: String? = nil) async {
         if let gatewayID, !gatewayID.isEmpty {
-            guard let databaseURL = self.chatTranscriptCacheDatabaseURL() else { return }
-            let cache = self.chatTranscriptCachesByGatewayID[gatewayID]
-                ?? OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
-            await cache.purgeGatewayRows()
+            guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
+            if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
+                await cache.retire()
+            }
+            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
             self.chatTranscriptCachesByGatewayID.removeValue(forKey: gatewayID)
             self.chatTranscriptCacheGeneration &+= 1
             return
@@ -397,8 +398,8 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
-        if let databaseURL = self.chatTranscriptCacheDatabaseURL() {
-            OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+        if let directoryURL = self.chatTranscriptCacheDirectoryURL() {
+            try? FileManager.default.removeItem(at: directoryURL)
         }
         self.chatTranscriptCachesByGatewayID.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
@@ -407,15 +408,23 @@ final class NodeAppModel {
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
-        guard let databaseURL = self.chatTranscriptCacheDatabaseURL() else { return }
-        OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+        guard let directoryURL = self.chatTranscriptCacheDirectoryURL() else { return }
+        try? FileManager.default.removeItem(at: directoryURL)
         self.chatTranscriptCachesByGatewayID.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
     }
 
-    private func chatTranscriptCacheDatabaseURL() -> URL? {
+    private func chatTranscriptCacheDirectoryURL() -> URL? {
         try? OpenClawNodeStorage.appSupportDir()
-            .appendingPathComponent("chat-cache.sqlite", isDirectory: false)
+            .appendingPathComponent("chat-cache", isDirectory: true)
+    }
+
+    private func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
+        let digest = SHA256.hash(data: Data(gatewayID.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return self.chatTranscriptCacheDirectoryURL()?
+            .appendingPathComponent("\(digest).sqlite", isDirectory: false)
     }
 
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?

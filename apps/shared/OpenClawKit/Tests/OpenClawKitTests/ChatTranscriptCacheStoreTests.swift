@@ -200,11 +200,13 @@ struct ChatTranscriptCacheStoreTests {
         #expect(await readerB.loadTranscript(sessionKey: "main").isEmpty)
     }
 
-    @Test func `target purge preserves other gateway rows`() async throws {
-        let url = try makeDatabaseURL()
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-a")
-        let storeB = OpenClawChatSQLiteTranscriptCache(databaseURL: url, gatewayID: "gw-b")
+    @Test func `removing one gateway database preserves another`() async throws {
+        let urlA = try makeDatabaseURL()
+        let directory = urlA.deletingLastPathComponent()
+        let urlB = directory.appendingPathComponent("chat-cache-b.sqlite", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeA = OpenClawChatSQLiteTranscriptCache(databaseURL: urlA, gatewayID: "gw-a")
+        let storeB = OpenClawChatSQLiteTranscriptCache(databaseURL: urlB, gatewayID: "gw-b")
         await storeA.storeSessions([cacheSessionEntry(key: "a", updatedAt: 1)])
         await storeA.storeTranscript(
             sessionKey: "a",
@@ -214,10 +216,12 @@ struct ChatTranscriptCacheStoreTests {
             sessionKey: "b",
             messages: [cacheMessage(role: "user", text: "gateway B", timestamp: 2)])
 
-        await storeA.purgeGatewayRows()
+        await storeA.retire()
+        OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: urlA)
 
-        #expect(await storeA.loadSessions().isEmpty)
-        #expect(await storeA.loadTranscript(sessionKey: "a").isEmpty)
+        let readerA = OpenClawChatSQLiteTranscriptCache(databaseURL: urlA, gatewayID: "gw-a")
+        #expect(await readerA.loadSessions().isEmpty)
+        #expect(await readerA.loadTranscript(sessionKey: "a").isEmpty)
         #expect(await storeB.loadSessions().map(\.key) == ["b"])
         #expect(await messageTexts(storeB.loadTranscript(sessionKey: "b")) == ["gateway B"])
     }

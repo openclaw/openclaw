@@ -20,9 +20,9 @@ public protocol OpenClawChatTranscriptCache: Sendable {
     func storeTranscript(sessionKey: String, messages: [OpenClawChatMessage]) async
 }
 
-/// SQLite-backed transcript cache. One database file can hold rows for several
-/// gateways; every query is scoped by the `gatewayID` this instance was created
-/// with, so a store never observes another gateway's rows.
+/// SQLite-backed transcript cache for one gateway identity. Owners should use
+/// one database file per gateway so reset can physically remove that gateway's
+/// cached transcript bytes without disturbing other paired gateways.
 ///
 /// The cache is disposable: any open, schema, or decode mismatch drops the
 /// affected state and rebuilds silently. There are no migrations.
@@ -172,26 +172,6 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache {
         // A queued write then either finishes before retirement or becomes a
         // no-op. Closing the handle lets the owner delete the whole cache file.
         self.isRetired = true
-        self.db = nil
-    }
-
-    /// Retire this gateway scope and delete only its rows. Bootstrap replacement
-    /// must not erase cached conversations for other paired gateways.
-    public func purgeGatewayRows() async {
-        guard !self.isRetired else { return }
-        guard let db = await self.handle() else {
-            self.isRetired = true
-            return
-        }
-        self.isRetired = true
-        self.execute(
-            db,
-            sql: "DELETE FROM cached_transcripts WHERE gateway_id = ?1",
-            bindings: [self.gatewayID])
-        self.execute(
-            db,
-            sql: "DELETE FROM cached_sessions WHERE gateway_id = ?1",
-            bindings: [self.gatewayID])
         self.db = nil
     }
 
