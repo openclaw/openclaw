@@ -146,6 +146,34 @@ describe("skills-cli", () => {
       expect(eligibleOnly).toContain("ready-one");
       expect(eligibleOnly).not.toContain("agent-excluded");
     });
+
+    it("shows shadowed sources in table and JSON output", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "shadowing-skill",
+          source: "openclaw-workspace",
+          shadows: [
+            {
+              source: "openclaw-extra",
+              filePath: "/tmp/plugin/skills/shadowing-skill/SKILL.md",
+              baseDir: "/tmp/plugin/skills/shadowing-skill",
+            },
+          ],
+        }),
+      ]);
+
+      expect(formatSkillsList(report, {})).toContain("shadows: openclaw-extra");
+      const parsed = JSON.parse(formatSkillsList(report, { json: true })) as {
+        skills: Array<{ shadows?: Array<{ source: string }> }>;
+      };
+      expect(parsed.skills[0]?.shadows).toEqual([
+        {
+          source: "openclaw-extra",
+          filePath: "/tmp/plugin/skills/shadowing-skill/SKILL.md",
+          baseDir: "/tmp/plugin/skills/shadowing-skill",
+        },
+      ]);
+    });
   });
 
   describe("formatSkillInfo", () => {
@@ -185,6 +213,28 @@ describe("skills-cli", () => {
       expect(output).toContain("node");
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
+    });
+
+    it("shows shadowed source paths in skill details", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "shadowing-skill",
+          source: "openclaw-workspace",
+          shadows: [
+            {
+              source: "openclaw-extra",
+              filePath: "/tmp/plugin/skills/shadowing-skill/SKILL.md",
+              baseDir: "/tmp/plugin/skills/shadowing-skill",
+            },
+          ],
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "shadowing-skill", {});
+
+      expect(output).toContain("Shadows:");
+      expect(output).toContain("openclaw-extra");
+      expect(output).toContain("shadowing-skill/SKILL.md");
     });
 
     it("resolves skill info case-insensitively", () => {

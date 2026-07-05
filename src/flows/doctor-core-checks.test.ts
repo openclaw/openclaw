@@ -83,6 +83,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
       return [];
     },
+    async detectShadowedSkills(): Promise<readonly SkillStatusEntry[]> {
+      return [];
+    },
     async collectSecurityWarnings(): Promise<readonly string[]> {
       return [];
     },
@@ -376,6 +379,68 @@ describe("CORE_HEALTH_CHECKS", () => {
         target: "skills.entries.missing-tool.enabled",
       }),
     );
+  });
+
+  it("reports active skill source shadowing without repairing it", async () => {
+    const shadowedSkill = createSkill({
+      name: "shadowing-skill",
+      source: "openclaw-workspace",
+      skillKey: "shadowing-skill",
+      eligible: true,
+      modelVisible: true,
+      commandVisible: true,
+      missing: {
+        bins: [],
+        anyBins: [],
+        env: [],
+        config: [],
+        os: [],
+      },
+      shadows: [
+        {
+          source: "openclaw-extra",
+          filePath: "/tmp/plugin/skills/shadowing-skill/SKILL.md",
+          baseDir: "/tmp/plugin/skills/shadowing-skill",
+        },
+      ],
+    });
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async detectShadowedSkills(): Promise<readonly SkillStatusEntry[]> {
+            return [shadowedSkill];
+          },
+        }),
+      ),
+      "core/doctor/skills-readiness",
+    );
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {},
+      cwd: "/tmp/openclaw-test-workspace",
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skills-readiness",
+        severity: "warning",
+        path: "skills.entries.shadowing-skill.enabled",
+        requirement: "skill-source-shadowing",
+      }),
+    ]);
+    expect(findings[0]?.message).toContain("shadows lower-precedence skill source(s)");
+    const repaired = await check.repair?.(
+      {
+        mode: "fix",
+        runtime,
+        cfg: {},
+        cwd: "/tmp/openclaw-test-workspace",
+      },
+      findings,
+    );
+    expect(repaired?.changes).toEqual([]);
   });
 
   it("converts security doctor warnings into health findings", async () => {

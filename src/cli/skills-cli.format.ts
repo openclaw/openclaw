@@ -114,6 +114,14 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
+function formatSkillSource(skill: SkillStatusEntry): string {
+  if (!skill.shadows || skill.shadows.length === 0) {
+    return skill.source;
+  }
+  const sources = skill.shadows.map((entry) => entry.source).join(", ");
+  return `${skill.source} (shadows: ${sources})`;
+}
+
 /** Render skill discovery status as sanitized JSON or a terminal table. */
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
@@ -136,6 +144,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         userInvocable: s.userInvocable,
         commandVisible: s.commandVisible,
         source: s.source,
+        shadows: s.shadows,
         bundled: s.bundled,
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
@@ -160,7 +169,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       Status: formatSkillStatus(skill),
       Skill: formatSkillName(skill),
       Description: theme.muted(skill.description),
-      Source: skill.source,
+      Source: formatSkillSource(skill),
       Missing: missing ? theme.warn(missing) : "",
     };
   });
@@ -241,6 +250,14 @@ export function formatSkillInfo(
 
   lines.push(theme.heading("Details:"));
   lines.push(`${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`);
+  if (skill.shadows && skill.shadows.length > 0) {
+    lines.push(`${theme.muted("  Shadows:")}`);
+    for (const shadow of skill.shadows) {
+      lines.push(
+        `    ${sanitizeForLog(shadow.source)} ${theme.muted(shortenHomePath(shadow.filePath))}`,
+      );
+    }
+  }
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);

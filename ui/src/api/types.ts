@@ -741,6 +741,12 @@ export type SkillInstallOption = {
   bins: string[];
 };
 
+export type SkillShadowedSource = {
+  source: string;
+  filePath: string;
+  baseDir: string;
+};
+
 export type SkillClawHubLink =
   | {
       status: "linked";
@@ -804,6 +810,7 @@ export type SkillStatusEntry = {
   };
   configChecks: SkillsStatusConfigCheck[];
   install: SkillInstallOption[];
+  shadows?: SkillShadowedSource[];
   clawhub?: SkillClawHubLink;
   skillCard?: SkillCardStatus;
 };

@@ -17,6 +17,11 @@ export function collectUnavailableAgentSkills(report: SkillStatusReport): SkillS
   );
 }
 
+/** Returns active skills that hide lower-precedence same-name skill sources. */
+export function collectShadowedAgentSkills(report: SkillStatusReport): SkillStatusEntry[] {
+  return report.skills.filter((skill) => skill.shadows !== undefined && skill.shadows.length > 0);
+}
+
 export function formatMissingSkillSummary(skill: SkillStatusEntry): string {
   const missing: string[] = [];
   if (skill.missing.bins.length > 0) {

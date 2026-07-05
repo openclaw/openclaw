@@ -35,6 +35,7 @@ import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { resolveSkillSource } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
 const fsp = fs.promises;
@@ -64,8 +65,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -111,15 +112,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -217,6 +218,7 @@ type ResolvedSkillsLimits = {
 type LoadedSkillRecord = {
   skill: Skill;
   frontmatter?: ParsedSkillFrontmatter;
+  shadows?: SkillEntry["shadows"];
   syncSourceDir?: string;
   syncDirName?: string;
 };
@@ -1214,24 +1216,44 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, LoadedSkillRecord>();
+  const mergeSkillRecord = (record: LoadedSkillRecord) => {
+    const existing = merged.get(record.skill.name);
+    if (!existing) {
+      merged.set(record.skill.name, record);
+      return;
+    }
+
+    const shadowed = {
+      source: resolveSkillSource(existing.skill),
+      filePath: existing.skill.filePath,
+      baseDir: existing.skill.baseDir,
+    };
+    const shadows = [shadowed, ...(existing.shadows ?? []), ...(record.shadows ?? [])];
+    skillsLogger.warn("Skill source shadowing detected.", {
+      skill: record.skill.name,
+      activeSource: resolveSkillSource(record.skill),
+      shadowedSources: shadows.map((entry) => entry.source),
+    });
+    merged.set(record.skill.name, { ...record, shadows });
+  };
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const record of extraSkills) {
-    merged.set(record.skill.name, record);
+    mergeSkillRecord(record);
   }
   for (const record of bundledSkills) {
-    merged.set(record.skill.name, record);
+    mergeSkillRecord(record);
   }
   for (const record of managedSkills) {
-    merged.set(record.skill.name, record);
+    mergeSkillRecord(record);
   }
   for (const record of personalAgentsSkills) {
-    merged.set(record.skill.name, record);
+    mergeSkillRecord(record);
   }
   for (const record of projectAgentsSkills) {
-    merged.set(record.skill.name, record);
+    mergeSkillRecord(record);
   }
   for (const record of workspaceSkills) {
-    merged.set(record.skill.name, record);
+    mergeSkillRecord(record);
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
@@ -1266,6 +1288,9 @@ function loadSkillEntries(
       }
       if (record.syncDirName !== undefined) {
         entry.syncDirName = record.syncDirName;
+      }
+      if (record.shadows && record.shadows.length > 0) {
+        entry.shadows = record.shadows;
       }
       return entry;
     });

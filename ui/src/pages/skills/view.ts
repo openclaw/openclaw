@@ -542,6 +542,9 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           : skill.clawhub?.status === "invalid"
             ? html`<span class="chip chip-warn">ClawHub link invalid</span>`
             : nothing}
+        ${skill.shadows && skill.shadows.length > 0
+          ? html`<span class="chip chip-warn">Shadows ${skill.shadows.length}</span>`
+          : nothing}
         <label class="skill-toggle-wrap" @click=${(e: Event) => e.stopPropagation()}>
           <input
             type="checkbox"
@@ -722,6 +725,23 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             style="border-top: 1px solid var(--border); padding-top: 12px; display: grid; gap: 6px; font-size: 12px; color: var(--muted);"
           >
             <div><span style="font-weight: 600;">Source:</span> ${skill.source}</div>
+            ${skill.shadows && skill.shadows.length > 0
+              ? html`
+                  <div>
+                    <span style="font-weight: 600;">Shadows:</span>
+                    ${skill.shadows.map(
+                      (shadow) => html`
+                        <div style="margin-top: 4px;">
+                          ${shadow.source}
+                          <span style="font-family: var(--mono); word-break: break-all;">
+                            ${shadow.filePath}
+                          </span>
+                        </div>
+                      `,
+                    )}
+                  </div>
+                `
+              : nothing}
             <div style="font-family: var(--mono); word-break: break-all;">${skill.filePath}</div>
             ${(() => {
               const safeHref = safeExternalHref(skill.homepage);

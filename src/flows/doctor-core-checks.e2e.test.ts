@@ -112,4 +112,64 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
       }),
     );
   });
+
+  it("detects a real workspace skill shadowing a configured lower-precedence skill", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-skills-shadow-"));
+    const extraDir = join(tmp, "extra-skills");
+    const extraSkillDir = join(extraDir, "same-name");
+    const workspaceSkillDir = join(tmp, "skills", "same-name");
+    await fs.mkdir(extraSkillDir, { recursive: true });
+    await fs.mkdir(workspaceSkillDir, { recursive: true });
+    await fs.writeFile(
+      join(extraSkillDir, "SKILL.md"),
+      `---
+name: same-name
+description: Extra version
+---
+
+# Extra version
+`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceSkillDir, "SKILL.md"),
+      `---
+name: same-name
+description: Workspace version
+---
+
+# Workspace version
+`,
+      "utf-8",
+    );
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmp,
+        },
+      },
+      skills: {
+        load: {
+          extraDirs: [extraDir],
+        },
+      },
+    };
+    const check = getCheck("core/doctor/skills-readiness");
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+      cwd: tmp,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/skills-readiness",
+        severity: "warning",
+        path: "skills.entries.same-name.enabled",
+        requirement: "skill-source-shadowing",
+      }),
+    );
+  });
 });

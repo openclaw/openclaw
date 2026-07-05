@@ -80,12 +80,19 @@ export type SkillExposure = {
   userInvocable: boolean;
 };
 
+export type SkillShadowedSource = {
+  source: string;
+  filePath: string;
+  baseDir: string;
+};
+
 export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
   exposure?: SkillExposure;
+  shadows?: SkillShadowedSource[];
   syncSourceDir?: string;
   syncDirName?: string;
 };

@@ -33,7 +33,10 @@ import {
 } from "../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
-import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
+import {
+  collectShadowedAgentSkills,
+  collectUnavailableAgentSkills,
+} from "../commands/doctor-skills-core.js";
 import { gatewayProbeResultSawGateway } from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -66,6 +69,16 @@ export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[]
     agentId,
   });
   return collectUnavailableAgentSkills(report);
+}
+
+export function detectShadowedSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
+  const agentId = resolveDefaultAgentId(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const report = buildWorkspaceSkillStatus(workspaceDir, {
+    config: cfg,
+    agentId,
+  });
+  return collectShadowedAgentSkills(report);
 }
 
 export async function collectGatewayHealthFindings(

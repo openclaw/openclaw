@@ -26,6 +26,7 @@ import type {
   SkillEntry,
   SkillEligibilityContext,
   SkillInstallSpec,
+  SkillShadowedSource,
   SkillsInstallPreferences,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
@@ -72,6 +73,7 @@ export type SkillStatusEntry = {
   missing: Requirements;
   configChecks: RequirementConfigCheck[];
   install: SkillInstallOption[];
+  shadows?: SkillShadowedSource[];
   clawhub?: ClawHubSkillStatusLink;
   skillCard?: LocalSkillCardStatus;
 };
@@ -328,6 +330,7 @@ function buildSkillStatus(
     missing,
     configChecks,
     install: normalizeInstallOptions(entry, prefs),
+    ...(entry.shadows && entry.shadows.length > 0 ? { shadows: entry.shadows } : {}),
     ...(clawhub ? { clawhub } : {}),
     ...(skillCard ? { skillCard } : {}),
   };

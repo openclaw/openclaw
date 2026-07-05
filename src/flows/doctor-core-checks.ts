@@ -66,6 +66,7 @@ const loadDoctorWorkspaceModule = async () => await import("../commands/doctor-w
 
 export type CoreHealthCheckDeps = {
   readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
+  readonly detectShadowedSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
   readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
   readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
   readonly collectRuntimeToolSchemaFindings: (
@@ -87,6 +88,13 @@ async function detectUnavailableSkillsWithRuntime(
 ): Promise<readonly SkillStatusEntry[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
   return runtime.detectUnavailableSkills(cfg);
+}
+
+async function detectShadowedSkillsWithRuntime(
+  cfg: OpenClawConfig,
+): Promise<readonly SkillStatusEntry[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.detectShadowedSkills(cfg);
 }
 
 async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
@@ -140,6 +148,7 @@ async function collectGatewayDaemonFindingsWithRuntime(
 
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
+  detectShadowedSkills: detectShadowedSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
@@ -850,7 +859,14 @@ function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
         await deps.detectUnavailableSkills(ctx.cfg),
         scope?.paths,
       );
-      return unavailable.map(unavailableSkillToFinding);
+      const shadowed = filterShadowedSkillsForScope(
+        await deps.detectShadowedSkills(ctx.cfg),
+        scope?.paths,
+      );
+      return [
+        ...unavailable.map(unavailableSkillToFinding),
+        ...shadowed.map(shadowedSkillToFinding),
+      ];
     },
     async repair(ctx, findings) {
       const unavailable = filterUnavailableSkillsForScope(
@@ -875,6 +891,20 @@ function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
   };
 }
 
+function shadowedSkillToFinding(skill: SkillStatusEntry): HealthFinding {
+  const shadowSources = skill.shadows?.map((shadow) => shadow.source).join(", ") ?? "unknown";
+  return {
+    checkId: "core/doctor/skills-readiness",
+    severity: "warning",
+    message: `${skill.name} from ${skill.source} shadows lower-precedence skill source(s): ${shadowSources}.`,
+    path: skillReadinessPath(skill),
+    target: skill.name,
+    requirement: "skill-source-shadowing",
+    fixHint:
+      "Rename or remove the higher-precedence skill if this override is not intentional. Inspect `openclaw skills info <name>` for the shadowed paths.",
+  };
+}
+
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {
     checkId: "core/doctor/skills-readiness",
@@ -886,17 +916,31 @@ function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   };
 }
 
+function filterShadowedSkillsForScope(
+  shadowed: readonly SkillStatusEntry[],
+  paths: readonly (string | undefined)[] | undefined,
+): SkillStatusEntry[] {
+  return filterSkillsReadinessFindingsForScope(shadowed, paths);
+}
+
 function filterUnavailableSkillsForScope(
   unavailable: readonly SkillStatusEntry[],
+  paths: readonly (string | undefined)[] | undefined,
+): SkillStatusEntry[] {
+  return filterSkillsReadinessFindingsForScope(unavailable, paths);
+}
+
+function filterSkillsReadinessFindingsForScope(
+  skills: readonly SkillStatusEntry[],
   paths: readonly (string | undefined)[] | undefined,
 ): SkillStatusEntry[] {
   const scopedPaths = new Set(
     paths?.filter((pathLocal): pathLocal is string => pathLocal !== undefined) ?? [],
   );
   if (scopedPaths.size === 0) {
-    return [...unavailable];
+    return [...skills];
   }
-  return unavailable.filter((skill) => scopedPaths.has(skillReadinessPath(skill)));
+  return skills.filter((skill) => scopedPaths.has(skillReadinessPath(skill)));
 }
 
 function skillReadinessPath(skill: SkillStatusEntry): string {

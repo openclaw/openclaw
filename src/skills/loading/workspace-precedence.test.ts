@@ -6,7 +6,7 @@ import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildWorkspaceSkillsPrompt, loadWorkspaceSkillEntries } from "./workspace.js";
 
 vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
@@ -83,6 +83,73 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Managed version");
     expect(prompt).not.toContain("Bundled version");
   });
+
+  it("records shadowed lower-precedence skill sources on the active workspace skill", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("workspace-shadow");
+    const homeDir = await fixtureSuite.createCaseDir("workspace-shadow-home");
+    const managedDir = path.join(workspaceDir, ".managed");
+    const extraDir = path.join(workspaceDir, ".extra");
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const extraSkillDir = path.join(extraDir, "demo-skill");
+    const bundledSkillDir = path.join(bundledDir, "demo-skill");
+    const managedSkillDir = path.join(managedDir, "demo-skill");
+    const personalAgentSkillDir = path.join(homeDir, ".agents", "skills", "demo-skill");
+    const projectAgentSkillDir = path.join(workspaceDir, ".agents", "skills", "demo-skill");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");
+
+    await writeSkill({ dir: extraSkillDir, name: "demo-skill", description: "Extra version" });
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "demo-skill",
+      description: "Bundled version",
+    });
+    await writeSkill({
+      dir: managedSkillDir,
+      name: "demo-skill",
+      description: "Managed version",
+    });
+    await writeSkill({
+      dir: personalAgentSkillDir,
+      name: "demo-skill",
+      description: "Personal agent version",
+    });
+    await writeSkill({
+      dir: projectAgentSkillDir,
+      name: "demo-skill",
+      description: "Project agent version",
+    });
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "demo-skill",
+      description: "Workspace version",
+    });
+
+    const entries = withEnv({ HOME: homeDir, PATH: "" }, () =>
+      loadWorkspaceSkillEntries(workspaceDir, {
+        config: { skills: { load: { extraDirs: [extraDir] } } },
+        managedSkillsDir: managedDir,
+        bundledSkillsDir: bundledDir,
+      }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.skill.description).toBe("Workspace version");
+    expect(entries[0]?.shadows?.map((shadow) => shadow.source)).toEqual([
+      "agents-skills-project",
+      "agents-skills-personal",
+      "openclaw-managed",
+      "openclaw-bundled",
+      "openclaw-extra",
+    ]);
+    expect(entries[0]?.shadows?.map((shadow) => shadow.filePath.replaceAll("\\", "/"))).toEqual([
+      expect.stringContaining(".agents/skills/demo-skill/SKILL.md"),
+      expect.stringContaining(".agents/skills/demo-skill/SKILL.md"),
+      expect.stringContaining(".managed/demo-skill/SKILL.md"),
+      expect.stringContaining(".bundled/demo-skill/SKILL.md"),
+      expect.stringContaining(".extra/demo-skill/SKILL.md"),
+    ]);
+  });
+
   it("gates by bins, config, and always", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
     const entries = [

@@ -230,6 +230,38 @@ describe("renderSkills", () => {
     ).toContain("blocked");
   });
 
+  it("renders skill source shadow warnings", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [
+        createSkill({
+          source: "openclaw-workspace",
+          shadows: [
+            {
+              source: "openclaw-extra",
+              filePath: "/tmp/plugin/skills/repo-skill/SKILL.md",
+              baseDir: "/tmp/plugin/skills/repo-skill",
+            },
+          ],
+        }),
+      ],
+    };
+
+    render(renderSkills(createProps({ report, detailKey: "repo-skill" })), container);
+    await Promise.resolve();
+
+    expect(normalizeText(container)).toContain("Shadows 1");
+    expect(normalizeText(container)).toContain("Shadows: openclaw-extra");
+    expect(normalizeText(container)).toContain("/tmp/plugin/skills/repo-skill/SKILL.md");
+  });
+
   it("defers detail dialog opening until the dialog is connected", async () => {
     const container = document.createElement("div");
     const showModal = vi.fn(function (this: HTMLDialogElement) {

@@ -372,6 +372,30 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.commandVisible).toBe(false);
   });
 
+  it("surfaces skill source shadow metadata", () => {
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "shadowed-name",
+        description: "test",
+        filePath: "/tmp/workspace/skills/shadowed-name/SKILL.md",
+        baseDir: "/tmp/workspace/skills/shadowed-name",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+      shadows: [
+        {
+          source: "openclaw-extra",
+          filePath: "/tmp/plugin/skills/shadowed-name/SKILL.md",
+          baseDir: "/tmp/plugin/skills/shadowed-name",
+        },
+      ],
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+
+    expect(report.skills[0]?.shadows).toEqual(entry.shadows);
+  });
+
   it("uses default-visible exposure semantics when older entries omit exposure fields", () => {
     const entry: SkillEntry = {
       skill: createCanonicalFixtureSkill({
