@@ -30,10 +30,15 @@ describe("normalizeSubagentRunState", () => {
     const malformed = normalizeSubagentRunState(
       baseRun({ taskRunId: "   ", generation: Number.NaN }),
     );
+    const nonString = normalizeSubagentRunState({
+      ...baseRun(),
+      taskRunId: 42,
+    } as unknown as SubagentRunRecord);
 
     expect(entry).toMatchObject({ taskRunId: "run-task-owner", generation: 2 });
     expect(malformed.taskRunId).toBeUndefined();
     expect(malformed.generation).toBeUndefined();
+    expect(nonString.taskRunId).toBeUndefined();
   });
 
   it("preserves valid killed reconciliation ownership metadata", () => {

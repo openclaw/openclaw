@@ -48,7 +48,7 @@ type LegacyDeliveryState = SubagentCompletionDeliveryState & {
 /** Normalizes legacy subagent run fields into nested execution/completion/delivery state. */
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const legacy = entry as LegacySubagentRunRecord;
-  const taskRunId = entry.taskRunId?.trim();
+  const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
   entry.taskRunId = taskRunId || undefined;
   entry.generation =
     typeof entry.generation === "number" &&
