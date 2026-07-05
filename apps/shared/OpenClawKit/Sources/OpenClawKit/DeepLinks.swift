@@ -253,8 +253,8 @@ public enum DeepLinkParser {
             else {
                 return nil
             }
-            let port = query["port"].flatMap { Int($0) } ?? 18789
             let tls = (query["tls"] as NSString?)?.boolValue ?? false
+            let port = query["port"].flatMap { Int($0) } ?? (tls ? 443 : 18789)
             if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
                 return nil
             }
