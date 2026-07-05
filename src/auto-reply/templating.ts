@@ -288,6 +288,8 @@ export type MsgContext = {
   RequireMention?: boolean;
   /** Final mention decision after native/text detection and policy fallback. */
   EffectiveWasMentioned?: boolean;
+  /** True when require-mention policy skipped this group turn. */
+  MentionShouldSkip?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */
