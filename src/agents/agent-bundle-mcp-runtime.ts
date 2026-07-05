@@ -35,6 +35,7 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -66,9 +67,23 @@ const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
 const BUNDLE_MCP_CATALOG_CONNECT_CONCURRENCY = 6;
 const BUNDLE_MCP_METADATA_TEXT_LIMIT = 1_200;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
+const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
+type BundleMcpTestState = { disposeTimeoutMs?: number };
+
+function getBundleMcpTestState(): BundleMcpTestState {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[BUNDLE_MCP_TEST_STATE_KEY] as BundleMcpTestState | undefined;
+  if (existing) {
+    return existing;
+  }
+  const state: BundleMcpTestState = {};
+  globalStore[BUNDLE_MCP_TEST_STATE_KEY] = state;
+  return state;
+}
 
 type McpToolSelection = {
   include?: readonly string[];
@@ -287,6 +302,15 @@ function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
       ? Math.floor(timeoutMs)
       : undefined;
 }
+
+function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
+  // Non-isolated test workers can reload this module while a facade still
+  // references an older copy. Share the override across those copies.
+  getBundleMcpTestState().disposeTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : undefined;
+}
 async function listAllResources(client: Client, timeoutMs: number) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
@@ -386,14 +410,30 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
       : undefined,
   };
 }
-// Safety net for hung MCP servers, not a tuning parameter.
-const DISPOSE_TIMEOUT_MS = 5_000;
+async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return await Promise.race([
+    promise.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+    }).then(() => false),
+  ]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
 
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  await Promise.race([
+  const timeoutMs = getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS;
+  const closed = await settleWithin(
     (async () => {
       if (session.transportType === "streamable-http") {
         await (session.transport as StreamableHTTPClientTransport)
@@ -403,23 +443,17 @@ async function disposeSession(session: BundleMcpSession) {
       await session.transport.close().catch(() => {});
       await session.client.close().catch(() => {});
     })(),
-    new Promise<void>((resolve) => {
-      timer = setTimeout(() => {
-        timedOut = true;
-        resolve();
-      }, DISPOSE_TIMEOUT_MS);
-      timer.unref?.();
-    }),
-  ]).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  });
-  if (timedOut) {
+    timeoutMs,
+  );
+  if (!closed) {
     // Force-close transport and client so a hung terminateSession() DELETE
-    // gets its AbortSignal triggered by the transport teardown.
-    await session.transport.close().catch(() => {});
-    await session.client.close().catch(() => {});
+    // gets its AbortSignal triggered by teardown. Stdio owns a process group,
+    // so force it dead before disposal can report completion.
+    const transportClose =
+      session.transport instanceof OpenClawStdioClientTransport
+        ? session.transport.forceClose()
+        : session.transport.close();
+    await settleWithin(Promise.allSettled([transportClose, session.client.close()]), timeoutMs);
   }
 }
 
@@ -1275,11 +1309,13 @@ export const testing = {
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
     setBundleMcpCatalogListTimeoutMsForTest();
+    setBundleMcpDisposeTimeoutMsForTest();
   },
   getCachedSessionIds() {
     return getSessionMcpRuntimeManager().listSessionIds();
   },
   setBundleMcpCatalogListTimeoutMsForTest,
+  setBundleMcpDisposeTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
 };
 export { testing as __testing };

@@ -552,7 +552,7 @@ shift 2
         join(binDir, "docker"),
         `#!/bin/sh
 printf "captured docker build log\\n"
-/bin/sleep 2
+/bin/sleep 0.05
 `,
       );
       chmodSync(join(binDir, "docker"), 0o755);
@@ -567,7 +567,8 @@ export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
 
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
-output="$(docker_build_run e2e-build -t demo-image .)"
+printf "captured docker build log\\n" >"$TMPDIR/build.log"
+output="$(docker_build_maybe_print_heartbeat e2e-build 1 1 "$TMPDIR/build.log")"
 [[ "$output" = *"Docker build e2e-build still running ("* ]]
 [[ "$output" = *"log bytes captured"* ]]
 [[ "$output" != *"captured docker build log"* ]]
@@ -627,7 +628,7 @@ docker_build_run e2e-build -t demo-image .
           if (existsSync(filePath)) {
             return;
           }
-          await delay(100);
+          await delay(10);
         }
         throw new Error(`file was not written: ${filePath}`);
       };
@@ -642,7 +643,7 @@ docker_build_run e2e-build -t demo-image .
           } catch {
             return;
           }
-          await delay(100);
+          await delay(10);
         }
         throw new Error(`process stayed alive: ${pid}`);
       };
@@ -3099,10 +3100,11 @@ export ROOT_DIR TMPDIR
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
-output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 4')"
+printf "captured container log\\n" >"$TMPDIR/run.log"
+output="$(docker_e2e_maybe_print_log_heartbeat plugins-run 1 1 "$TMPDIR/run.log")"
 [[ "$output" = *"still running plugins-run ("* ]]
 [[ "$output" = *"log bytes captured"* ]]
-[[ "$output" = *"captured container log"* ]]
+[[ "$output" != *"captured container log"* ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
@@ -3121,17 +3123,18 @@ set -euo pipefail
 ROOT_DIR=${shellQuote(rootDir)}
 TMPDIR=${shellQuote(workDir)}
 export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS=1
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 command_pid_file="$TMPDIR/command.pid"
 (
-  run_logged_print_heartbeat plugins-run 30 bash -c 'printf "%s" "$$" > "$1"; while true; do /bin/sleep 1; done' bash "$command_pid_file"
+  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
 ) &
 wrapper_pid="$!"
 for _ in $(seq 1 100); do
   [ -s "$command_pid_file" ] && break
-  /bin/sleep 0.1
+  /bin/sleep 0.01
 done
 if [ ! -s "$command_pid_file" ]; then
   kill -TERM "$wrapper_pid" 2>/dev/null || true
@@ -3140,13 +3143,12 @@ if [ ! -s "$command_pid_file" ]; then
 fi
 command_pid="$(cat "$command_pid_file")"
 kill -TERM "$wrapper_pid"
-/bin/sleep 2
 for _ in $(seq 1 50); do
   if ! kill -0 "$command_pid" 2>/dev/null; then
     wait "$wrapper_pid" 2>/dev/null || true
     exit 0
   fi
-  /bin/sleep 0.1
+  /bin/sleep 0.01
 done
 kill -TERM "$command_pid" 2>/dev/null || true
 kill -TERM "$wrapper_pid" 2>/dev/null || true
@@ -3217,8 +3219,10 @@ docker() {
 
   test -n "$cidfile"
   printf "container-term\\n" >"$cidfile"
+  printf "started\\n" >"$TMPDIR/docker-started"
   printf "docker running\\n"
-  while true; do /bin/sleep 10; done
+  trap 'exit 143' TERM
+  while true; do /bin/sleep 0.05; done
 }
 export -f docker
 
@@ -3227,15 +3231,16 @@ export -f docker
 ) &
 wrapper_pid="$!"
 for _ in $(seq 1 50); do
-  [ -s "$TMPDIR/docker-rm-seen" ] && break
-  /bin/sleep 0.1
+  [ -s "$TMPDIR/docker-started" ] && break
+  /bin/sleep 0.01
   kill -0 "$wrapper_pid" 2>/dev/null || true
 done
+test -s "$TMPDIR/docker-started"
 kill -TERM "$wrapper_pid" 2>/dev/null || true
 wait "$wrapper_pid" 2>/dev/null || true
 for _ in $(seq 1 50); do
   grep -qx "container-term" "$TMPDIR/docker-rm-seen" 2>/dev/null && break
-  /bin/sleep 0.1
+  /bin/sleep 0.01
 done
 grep -qx "container-term" "$TMPDIR/docker-rm-seen"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"

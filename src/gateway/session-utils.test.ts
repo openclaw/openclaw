@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -100,6 +100,24 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
+  beforeAll(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
+      storePath: "",
+      store: {
+        "agent:main:main": {
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4.6",
+        },
+      },
+      opts: {},
+    });
+    resetConfigRuntimeState();
+    resetPluginRuntimeStateForTest();
+  });
+
   afterEach(() => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
@@ -403,6 +421,8 @@ describe("gateway session utils", () => {
       storePath: "",
       store: {},
       key: "agent:main:main",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
       entry: {
         sessionId: "session-1",
         updatedAt: 1,

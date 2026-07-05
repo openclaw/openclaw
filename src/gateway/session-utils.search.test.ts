@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -325,6 +325,21 @@ function childTranscriptEntry(sessionId: string, now: number): SessionEntry {
 }
 
 describe("listSessionsFromStore search", () => {
+  beforeAll(() => {
+    listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:main": {
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.4",
+        },
+      },
+      opts: { search: "openai" },
+    });
+  });
+
   afterEach(() => {
     resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
