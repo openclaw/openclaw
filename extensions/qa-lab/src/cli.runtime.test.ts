@@ -454,6 +454,12 @@ describe("qa cli runtime", () => {
         channel: "telegram",
         channelDriver: "crabline",
       });
+      expect(suiteArgs.channelDriverSelection).toEqual({
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      });
       expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
@@ -547,7 +553,12 @@ describe("qa cli runtime", () => {
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.channelDriver).toBe("crabline");
+    expect(suiteArgs.channelDriverSelection).toEqual({
+      capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+      channel: "telegram",
+      channelDriver: "crabline",
+      smokeArtifactPath: "crabline-fake-provider-smoke.json",
+    });
     expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
