@@ -5337,9 +5337,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     await runner(queued);
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenCalledTimes(3);
     const startRoute = requireMockCallArg(routeReplyMock, 0);
     const endRoute = requireMockCallArg(routeReplyMock, 1);
+    const fallbackRoute = requireMockCallArg(routeReplyMock, 2);
     expect(startRoute).toMatchObject({
       channel: "discord",
       to: "channel:C1",
@@ -5361,6 +5362,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToId: "current-msg-1",
       replyToCurrent: true,
       isCompactionNotice: true,
+    });
+    expect(fallbackRoute.replyKind).toBe("final");
+    expect(requireRecord(fallbackRoute.payload, "fallback payload")).toMatchObject({
+      isError: true,
     });
   });
 
@@ -5442,7 +5447,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(4);
+    expect(routeReplyMock).toHaveBeenCalledTimes(5);
     expect(
       requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "hook start"),
     ).toMatchObject({
@@ -5472,6 +5477,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       replyToId: "current-msg-1",
       replyToCurrent: true,
       isCompactionNotice: true,
+    });
+    const fallbackRoute = requireMockCallArg(routeReplyMock, 4);
+    expect(fallbackRoute.replyKind).toBe("final");
+    expect(requireRecord(fallbackRoute.payload, "fallback payload")).toMatchObject({
+      isError: true,
     });
   });
 
@@ -5510,13 +5520,18 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       }),
     );
 
-    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
     const payload = requireRecord(requireMockCallArg(routeReplyMock, 0).payload, "notice payload");
     expect(payload).toMatchObject({
       text: "🧹 Compacting context...",
       isCompactionNotice: true,
     });
     expect(payload.replyToId).toBeUndefined();
+    const fallbackRoute = requireMockCallArg(routeReplyMock, 1);
+    expect(fallbackRoute.replyKind).toBe("final");
+    const fallbackPayload = requireRecord(fallbackRoute.payload, "fallback payload");
+    expect(fallbackPayload).toMatchObject({ isError: true });
+    expect(fallbackPayload.replyToId).toBeUndefined();
   });
 
   it("plans queued compaction notices with the active fallback candidate", async () => {
