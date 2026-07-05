@@ -782,6 +782,17 @@ test("sessions.changed mutation events include session management metadata", asy
   });
 });
 
+test("sessions.changed mutation events clear label-derived display names", async () => {
+  await writeMainSessionStore({ label: "Dev" });
+
+  const result = await invokeSessionsPatch({ key: "main", label: null });
+
+  expectMainPatchBroadcast(result, {
+    label: null,
+    displayName: null,
+  });
+});
+
 test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {
   const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
 
