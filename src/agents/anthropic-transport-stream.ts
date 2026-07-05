@@ -1,3 +1,41 @@
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  applyAnthropicFallbackBoundary,
+  buildAnthropicServerSideFallbacks,
+  applyAnthropicRefusal,
+  findActiveAnthropicToolTurnAssistantIndex,
+  omitFoundryBearerCredentialHeaders,
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  requiresClaudeAdaptiveThinking,
+  resolveClaudeNativeThinkingLevelMap,
+  resolveOriginalAnthropicToolName,
+  readAnthropicFallbackBoundary,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+  usesFoundryBearerAuth,
+  type AnthropicOptions,
+  type AnthropicProjectedToolChoice,
+  type AnthropicThinkingDisplay,
+  type AnthropicToolProjection,
+} from "@openclaw/ai/internal/anthropic";
+import {
+  calculateCost,
+  clampThinkingLevel,
+  createDeferredEventBuffer,
+  getEnvApiKey,
+  notifyLlmRequestActivity,
+  parseStreamingJson,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
  * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
@@ -7,18 +45,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
 import { readResponseTextSnippet } from "../infra/http-body.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
-import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  findActiveAnthropicToolTurnAssistantIndex,
-} from "../llm/providers/anthropic-thinking-replay.js";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultBlockText,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -26,41 +52,12 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
-import {
-  omitFoundryBearerCredentialHeaders,
-  usesFoundryBearerAuth,
-} from "../shared/anthropic-auth-headers.js";
-import {
-  resolveClaudeNativeThinkingLevelMap,
-  requiresClaudeAdaptiveThinking,
-  supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
-  supportsClaudeNativeXhighEffort,
-  usesClaudeFable5MessagesContract,
-} from "../shared/anthropic-model-contract.js";
-import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
-import {
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
-  applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
-  readAnthropicFallbackBoundary,
-} from "../shared/anthropic-server-fallback.js";
+import "../llm/ai-transport-host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-import { notifyLlmRequestActivity } from "../shared/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
-import {
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
-  resolveOriginalAnthropicToolName,
-  type AnthropicProjectedToolChoice,
-  type AnthropicToolProjection,
-} from "./anthropic-tool-projection.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";

@@ -10,8 +10,6 @@ title: "QR"
 
 Generate a mobile pairing QR and setup code from your current Gateway configuration.
 
-## Usage
-
 ```bash
 openclaw qr
 openclaw qr --setup-code-only
@@ -20,39 +18,63 @@ openclaw qr --remote
 openclaw qr --url wss://gateway.example/ws
 ```
 
+Official OpenClaw iOS and Android apps connect automatically when their
+setup-code metadata matches. If a request remains pending (for example, for a
+non-official client or mismatched metadata), review and approve it:
+
+```bash
+openclaw devices list
+openclaw devices approve <requestId>
+```
+
 ## Options
 
-- `--remote`: prefer `gateway.remote.url`; if it is unset, `gateway.tailscale.mode=serve|funnel` can still provide the remote public URL
-- `--url <url>`: override gateway URL used in payload
-- `--public-url <url>`: override public URL used in payload
-- `--token <token>`: override which gateway token the bootstrap flow authenticates against
-- `--password <password>`: override which gateway password the bootstrap flow authenticates against
-- `--setup-code-only`: print only setup code
+- `--remote`: prefer `gateway.remote.url`; falls back to `gateway.tailscale.mode=serve|funnel` if that URL is unset. Ignores `device-pair` plugin `publicUrl`.
+- `--url <url>`: override the gateway URL used in the payload
+- `--public-url <url>`: override the public URL used in the payload
+- `--token <token>`: override the gateway token the bootstrap flow authenticates against
+- `--password <password>`: override the gateway password the bootstrap flow authenticates against
+- `--setup-code-only`: print only the setup code
 - `--no-ascii`: skip ASCII QR rendering
 - `--json`: emit JSON (`setupCode`, `gatewayUrl`, `auth`, `urlSource`)
 
-## Notes
+`--token` and `--password` are mutually exclusive.
 
-- `--token` and `--password` are mutually exclusive.
-- The setup code itself now carries an opaque short-lived `bootstrapToken`, not the shared gateway token/password.
-- Built-in setup-code bootstrap returns a primary `node` token with `scopes: []` plus a bounded `operator` handoff token for trusted mobile onboarding.
-- The handed-off operator token is limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`; pairing mutation scopes and `operator.admin` still require a separate approved operator pairing or token flow.
-- Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs. Private LAN addresses and `.local` Bonjour hosts remain supported over `ws://`, but Tailscale/public mobile routes should use Tailscale Serve/Funnel or a `wss://` gateway URL.
-- With `--remote`, OpenClaw requires either `gateway.remote.url` or
-  `gateway.tailscale.mode=serve|funnel`.
-- With `--remote`, if effectively active remote credentials are configured as SecretRefs and you do not pass `--token` or `--password`, the command resolves them from the active gateway snapshot. If gateway is unavailable, the command fails fast.
-- Without `--remote`, local gateway auth SecretRefs are resolved when no CLI auth override is passed:
-  - `gateway.auth.token` resolves when token auth can win (explicit `gateway.auth.mode="token"` or inferred mode where no password source wins).
-  - `gateway.auth.password` resolves when password auth can win (explicit `gateway.auth.mode="password"` or inferred mode with no winning token from auth/env).
-- If both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs) and `gateway.auth.mode` is unset, setup-code resolution fails until mode is set explicitly.
-- Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Official OpenClaw iOS and Android apps connect automatically when their
-  setup-code metadata matches. If a request remains pending (for example, for a
-  non-official client or mismatched metadata), review and approve it with:
-  - `openclaw devices list`
-  - `openclaw devices approve <requestId>`
+## Setup code contents
+
+The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. The built-in bootstrap flow issues:
+
+- a primary `node` token with `scopes: []`
+- a bounded `operator` handoff token limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`
+
+Pairing-mutation scopes and `operator.admin` still require a separate approved operator pairing or token flow.
+
+## Gateway URL resolution
+
+Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`.
+
+With `--remote`, one of `gateway.remote.url` or `gateway.tailscale.mode=serve|funnel` is required.
+
+## Auth resolution (no `--remote`)
+
+When no CLI auth override is passed, local gateway auth SecretRefs resolve as follows:
+
+| Condition                                                                                                                    | Resolves                                  |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `gateway.auth.mode="token"`, or inferred mode with no winning password source                                                | `gateway.auth.token`                      |
+| `gateway.auth.mode="password"`, or inferred mode with no winning token from auth/env                                         | `gateway.auth.password`                   |
+| Both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs) and `gateway.auth.mode` is unset | fails; set `gateway.auth.mode` explicitly |
+
+## Auth resolution (`--remote`)
+
+If effectively active remote credentials are configured as SecretRefs and neither `--token` nor `--password` is passed, the command resolves them from the active gateway snapshot. If the gateway is unavailable, the command fails fast.
+
+<Note>
+This command path requires a gateway that supports the `secrets.resolve` RPC method. Older gateways return an unknown-method error.
+</Note>
 
 ## Related
 
 - [CLI reference](/cli)
+- [Devices](/cli/devices)
 - [Pairing](/cli/pairing)

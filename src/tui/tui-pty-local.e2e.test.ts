@@ -386,6 +386,16 @@ describe("TUI PTY real backends", () => {
       const fixture = await startLocalModeTui();
       try {
         await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        for (const command of ["/status", "/compact", "/commands", "/context"]) {
+          await fixture.run.write(`${command}\r`);
+          await fixture.run.waitForOutput(
+            `${command} is not available in local embedded mode; message not sent`,
+          );
+        }
+        await fixture.run.write("/side\r");
+        await fixture.run.waitForOutput("Usage: /btw [side question]");
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+
         await fixture.run.write("send the local PTY smoke response\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,

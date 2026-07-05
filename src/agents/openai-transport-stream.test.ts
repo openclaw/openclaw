@@ -1,5 +1,6 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
@@ -26,7 +27,6 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
