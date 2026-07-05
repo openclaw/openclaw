@@ -121,9 +121,13 @@ class AutoreviewHardeningTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(SystemExit, "claude engine refused truncated review input"):
             self.helper["ensure_reviewer_input_complete"](
-                argparse.Namespace(engine="claude", tools=False),
+                argparse.Namespace(engine="claude", tools=True),
                 True,
             )
+        self.helper["ensure_reviewer_input_complete"](
+            argparse.Namespace(engine="droid", tools=True),
+            True,
+        )
 
     def test_safe_git_env_preserves_trusted_platform_and_helper_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

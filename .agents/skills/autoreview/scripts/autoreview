@@ -100,6 +100,7 @@ THINKING_LEVELS_BY_ENGINE = {
     "cursor": set(),
 }
 CLAUDE_SAFE_MODE_MIN_VERSION = (2, 1, 169)
+CLAUDE_FABLE_MIN_VERSION = (2, 1, 170)
 # Pi's reviewed-repo trust override first appears in the current
 # @earendil-works/pi-coding-agent 0.79.0 CLI line. Older legacy binaries can
 # ignore unknown flags, so the Pi engine must fail closed below this floor.
@@ -729,11 +730,11 @@ def bounded(text: str, limit: int = 180_000) -> str:
 
 
 def ensure_reviewer_input_complete(reviewer: argparse.Namespace, input_truncated: bool) -> None:
-    tools_disabled = reviewer.engine == "pi" or not reviewer.tools
-    if tools_disabled and input_truncated:
+    can_recover_full_diff = reviewer.tools and reviewer.engine in {"codex", "droid"}
+    if input_truncated and not can_recover_full_diff:
         raise SystemExit(
-            f"{reviewer.engine} engine refused truncated review input because its tools are disabled; "
-            "reduce the change/input size or choose a repository-confined reviewer"
+            f"{reviewer.engine} engine refused truncated review input because it cannot recover omitted diff hunks; "
+            "reduce the change/input size or choose codex or droid with tools enabled"
         )
 
 
@@ -1237,15 +1238,19 @@ def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> N
     claude_bin = resolve_command(args.claude_bin, repo)
     engine_env = safe_engine_env(repo, [Path(claude_bin).parent])
     result = run([claude_bin, "--version"], repo, check=False, env=engine_env)
+    selected_models = [args.model, *(getattr(args, "fallback_model", "") or "").split(",")]
+    uses_fable = "claude-fable-5" in selected_models
+    minimum_version = CLAUDE_FABLE_MIN_VERSION if uses_fable else CLAUDE_SAFE_MODE_MIN_VERSION
+    version_reason = "for claude-fable-5" if uses_fable else "for --safe-mode"
     if result.returncode != 0:
-        raise SystemExit(f"claude engine requires Claude Code >= {format_version(CLAUDE_SAFE_MODE_MIN_VERSION)}; --version failed")
+        raise SystemExit(f"claude engine requires Claude Code >= {format_version(minimum_version)}; --version failed")
     version = parse_cli_version(result.stdout or result.stderr)
     if version is None:
-        raise SystemExit(f"claude engine requires Claude Code >= {format_version(CLAUDE_SAFE_MODE_MIN_VERSION)} for --safe-mode; could not parse --version output")
-    if version < CLAUDE_SAFE_MODE_MIN_VERSION:
+        raise SystemExit(f"claude engine requires Claude Code >= {format_version(minimum_version)} {version_reason}; could not parse --version output")
+    if version < minimum_version:
         raise SystemExit(
-            f"claude engine requires Claude Code >= {format_version(CLAUDE_SAFE_MODE_MIN_VERSION)} "
-            f"for --safe-mode (found {format_version(version)})"
+            f"claude engine requires Claude Code >= {format_version(minimum_version)} "
+            f"{version_reason} (found {format_version(version)})"
         )
     help_result = run([claude_bin, "--help"], repo, check=False, env=engine_env)
     help_text = f"{help_result.stdout}\n{help_result.stderr}"
@@ -2615,6 +2620,17 @@ def self_test_engine_isolation() -> int:
                     raise
             else:
                 raise SystemExit("claude version floor self-test failed")
+
+            os.environ["AUTOREVIEW_FAKE_CLAUDE_VERSION"] = "2.1.169 (Claude Code)"
+            args.model = "claude-fable-5"
+            try:
+                ensure_claude_isolation_supported(args, repo)
+            except SystemExit as exc:
+                if ">= 2.1.170" not in str(exc):
+                    raise
+            else:
+                raise SystemExit("claude fable version floor self-test failed")
+            args.model = None
 
             os.environ["AUTOREVIEW_FAKE_CLAUDE_VERSION"] = "Claude Code unknown"
             try:
