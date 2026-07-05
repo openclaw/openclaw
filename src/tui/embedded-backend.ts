@@ -48,6 +48,7 @@ import {
   replaceOversizedChatHistoryMessages,
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
+import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import {
   capArrayByJsonBytes,
@@ -86,6 +87,7 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionCreateOptions,
 } from "./tui-backend.js";
 
 type LocalRunState = {
@@ -666,6 +668,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       reason: reason === "new" ? "new" : "reset",
       commandSource: "tui:embedded",
+    });
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+    return { ok: true as const, key: result.key, entry: result.entry };
+  }
+
+  async createSession(opts: TuiSessionCreateOptions) {
+    await this.ready;
+    const cfg = getRuntimeConfig();
+    const result = await createGatewaySession({
+      cfg,
+      ...opts,
+      emitCommandHooks: Boolean(opts.parentSessionKey),
+      commandSource: "tui:embedded",
+      loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
     });
     if (!result.ok) {
       throw new Error(result.error.message);

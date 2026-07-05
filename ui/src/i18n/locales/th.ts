@@ -1403,6 +1403,13 @@ export const th: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "รายละเอียดการใช้บริบท",
+        open: "เปิดรายละเอียดการใช้บริบท",
+        summary: "การใช้บริบทของเซสชัน: {used} จาก {limit} ({pct}%)",
+        contextWindow: "หน้าต่างบริบท",
+        latestRunTokens: "โทเค็นของการรันล่าสุด",
+      },
       dismissTalkError: "ปิดข้อผิดพลาด Talk",
       startTalk: "Start Talk",
       stillListening: "ยังฟังอยู่",

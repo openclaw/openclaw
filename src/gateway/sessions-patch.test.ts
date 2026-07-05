@@ -598,6 +598,32 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
+  test("persists provider-qualified aliases without cross-provider collisions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: OPENAI_GPT_MODEL },
+              models: {
+                "lmstudio-moe/qwen3.6-35b-a3b": { alias: "Local" },
+                "lmstudio-dense/qwen3.6-27b": { alias: "Local" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "lmstudio-moe/Local" },
+        loadGatewayModelCatalog: loadCatalog(
+          "lmstudio-moe/qwen3.6-35b-a3b",
+          "lmstudio-dense/qwen3.6-27b",
+        ),
+      }),
+    );
+
+    expectModelSelection(entry, "lmstudio-moe", "qwen3.6-35b-a3b");
+    expect(entry.modelOverrideSource).toBe("user");
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

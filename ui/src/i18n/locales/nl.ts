@@ -1441,6 +1441,13 @@ export const nl: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Details over contextgebruik",
+        open: "Details over contextgebruik openen",
+        summary: "Contextgebruik van sessie: {used} van {limit} ({pct}%)",
+        contextWindow: "Contextvenster",
+        latestRunTokens: "Tokens van laatste run",
+      },
       dismissTalkError: "Talk-fout sluiten",
       startTalk: "Start Talk",
       stillListening: "Luistert nog",
