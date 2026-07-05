@@ -53,7 +53,7 @@ import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
-import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { normalizeSlackEmojiName, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -97,31 +97,6 @@ import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
-// Slack reactions.add/remove expect shortcode names, not raw unicode emoji.
-const UNICODE_TO_SLACK: Record<string, string> = {
-  "👀": "eyes",
-  "🤔": "thinking_face",
-  "🔥": "fire",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "✅": "white_check_mark",
-  "👍": "thumbsup",
-  "❌": "x",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "⚠️": "warning",
-  "✍": "writing_hand",
-  "🗜️": "compression",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠️": "hammer_and_wrench",
-  "💻": "computer",
-};
 const SLACK_REASONING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
@@ -167,17 +142,6 @@ function resolveSlackBotLoopProtection(
     defaultEnabled: true,
     nowMs: resolveSlackMessageTimestampMs(prepared.message),
   };
-}
-
-function toSlackEmojiName(emoji: string): string {
-  let trimmed = emoji.trim();
-  while (trimmed.startsWith(":")) {
-    trimmed = trimmed.slice(1);
-  }
-  while (trimmed.endsWith(":")) {
-    trimmed = trimmed.slice(0, -1);
-  }
-  return UNICODE_TO_SLACK[trimmed] ?? trimmed;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -553,10 +517,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     cfg.messages?.statusReactions?.enabled === true;
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
-      await reactSlackMessage(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
-        token: ctx.botToken,
-        client: ctx.app.client,
-      }).catch((err: unknown) => {
+      await reactSlackMessage(
+        message.channel,
+        reactionMessageTs ?? "",
+        normalizeSlackEmojiName(emoji),
+        {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        },
+      ).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("already_reacted")) {
           return;
         }
@@ -564,10 +533,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
     removeReaction: async (emoji) => {
-      await removeSlackReaction(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
-        token: ctx.botToken,
-        client: ctx.app.client,
-      }).catch((err: unknown) => {
+      await removeSlackReaction(
+        message.channel,
+        reactionMessageTs ?? "",
+        normalizeSlackEmojiName(emoji),
+        {
+          token: ctx.botToken,
+          client: ctx.app.client,
+        },
+      ).catch((err: unknown) => {
         if (formatErrorMessage(err).includes("no_reaction")) {
           return;
         }

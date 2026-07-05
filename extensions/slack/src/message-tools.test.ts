@@ -210,6 +210,47 @@ describe("Slack message tools", () => {
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
 
+  it("describes the react emoji param as a Slack shortcode, not a raw character", () => {
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+    });
+
+    const { schema, property } = requireSchemaProperty(discovery, "emoji");
+
+    expect(schema.actions).toEqual(["react", "reactions"]);
+    expect(property.description).toContain("white_check_mark");
+    expect(property.description).toMatch(/not the emoji character/i);
+  });
+
+  it("omits the react emoji schema when reactions are disabled", () => {
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            actions: {
+              reactions: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const schemas = Array.isArray(discovery.schema)
+      ? discovery.schema
+      : discovery.schema
+        ? [discovery.schema]
+        : [];
+    const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
+    expect(propertyNames).not.toContain("emoji");
+  });
+
   it("describes Slack reply broadcasts as send-only thread hints", () => {
     const discovery = describeSlackMessageTool({
       cfg: {

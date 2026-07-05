@@ -22,6 +22,17 @@ function createSlackFileActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackReactionEmojiSchema(): Record<string, TSchema> {
+  return {
+    emoji: Type.Optional(
+      Type.String({
+        description:
+          'Slack emoji shortcode name (for example "white_check_mark" or "+1"), not the emoji character. Colons are optional: "white_check_mark" and ":white_check_mark:" both work.',
+      }),
+    ),
+  };
+}
+
 function createSlackMessageIdActionSchema(): Record<string, TSchema> {
   const description =
     'Slack message timestamp/message id (for example "1777423717.666499"). Used by react, reactions, edit, delete, pin, and unpin actions. Not used by download-file, which requires fileId from event.files[].id.';
@@ -90,6 +101,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackTopLevelActionSchema(),
       actions: ["upload-file"],
+    });
+  }
+  if (actions.includes("react")) {
+    schema.push({
+      properties: createSlackReactionEmojiSchema(),
+      actions: ["react", "reactions"],
     });
   }
   const messageIdActions: ChannelMessageActionName[] = [];

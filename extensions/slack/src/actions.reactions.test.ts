@@ -79,6 +79,80 @@ describe("reactSlackMessage", () => {
   });
 });
 
+describe("reactSlackMessage emoji normalization", () => {
+  it("maps a Unicode emoji glyph to its Slack shortname", async () => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", "✅", { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "white_check_mark",
+    });
+  });
+
+  it("passes through a colon-wrapped shortname unchanged", async () => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", ":fire:", { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "fire",
+    });
+  });
+
+  it("passes through a plain shortname unchanged", async () => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", "rocket", { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "rocket",
+    });
+  });
+
+  it("passes through an unmapped emoji glyph unchanged", async () => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", "🦄", { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "🦄",
+    });
+  });
+
+  it("strips a skin-tone modifier before mapping to a shortname", async () => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", "👍🏽", { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "thumbsup",
+    });
+  });
+
+  it("strips a variation selector before mapping to a shortname", async () => {
+    const client = createClient();
+
+    await reactSlackMessage("C1", "123.456", "⚠️", { client, token: "xoxb-test" });
+
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "123.456",
+      name: "warning",
+    });
+  });
+});
+
 describe("removeSlackReaction", () => {
   it("treats no_reaction as idempotent success", async () => {
     const client = createClient();
