@@ -3,6 +3,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
+import { handleMSTeamsLifecycleRemove } from "./monitor-handler/lifecycle-handler.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -15,6 +16,12 @@ export type MSTeamsActivityHandler = {
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   onMembersAdded: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onMembersRemoved: (
+    handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
+  ) => MSTeamsActivityHandler;
+  onInstallationUpdate: (
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   onReactionsAdded: (
@@ -221,6 +228,24 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       } else {
         deps.log.debug?.("member added", { member: member.id });
       }
+    }
+    await next();
+  });
+
+  handler.onMembersRemoved(async (context, next) => {
+    try {
+      await handleMSTeamsLifecycleRemove(context as MSTeamsTurnContext, deps);
+    } catch (err) {
+      deps.runtime.error(`msteams lifecycle handler failed: ${formatUnknownError(err)}`);
+    }
+    await next();
+  });
+
+  handler.onInstallationUpdate(async (context, next) => {
+    try {
+      await handleMSTeamsLifecycleRemove(context as MSTeamsTurnContext, deps);
+    } catch (err) {
+      deps.runtime.error(`msteams lifecycle handler failed: ${formatUnknownError(err)}`);
     }
     await next();
   });
