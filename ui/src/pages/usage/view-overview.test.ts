@@ -296,14 +296,14 @@ describe("renderDailyChartCompact", () => {
 
   it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
     const container = document.createElement("div");
-    const entry = {
+    const microCostDay = {
       ...dailyEntry("2026-05-04", 1_000, 0.00001),
       inputCost: 0.000004,
       outputCost: 0.000006,
     };
     render(
       renderDailyChartCompact(
-        [entry],
+        [microCostDay],
         [],
         "cost",
         "by-type",
