@@ -149,32 +149,57 @@ export function createSlackMessageHandler(params: {
               awaitDispatch: _awaitDispatch,
               ...lastOpts
             } = last.opts;
-            const prepared = await prepareSlackMessage({
-              ctx,
-              account,
-              message: syntheticMessage,
-              opts: {
-                ...lastOpts,
-                wasMentioned: combinedMentioned || last.opts.wasMentioned,
-              },
-            });
+            const appMentionRetryKey =
+              seenMessageKey && lastOpts.source === "app_mention" && !ctx.botUserId
+                ? seenMessageKey
+                : undefined;
+            if (appMentionRetryKey) {
+              // Keep a concurrent message copy from recording this timestamp while the trusted
+              // app_mention prepares and removes any already-recorded copy from its routed history.
+              appMentionPreparingKeys.add(appMentionRetryKey);
+            }
+            const prepared = await (async () => {
+              try {
+                const result = await prepareSlackMessage({
+                  ctx,
+                  account,
+                  message: syntheticMessage,
+                  opts: {
+                    ...lastOpts,
+                    wasMentioned: combinedMentioned || last.opts.wasMentioned,
+                    ...(seenMessageKey && lastOpts.source === "message"
+                      ? {
+                          shouldRecordDroppedHistory: () =>
+                            !appMentionPreparingKeys.has(seenMessageKey) &&
+                            !appMentionDispatchedKeys.has(seenMessageKey),
+                        }
+                      : {}),
+                  },
+                });
+                if (result && seenMessageKey) {
+                  pruneAppMentionRetryKeys(Date.now());
+                  if (last.opts.source === "app_mention") {
+                    // If app_mention wins the race and dispatches first, drop the later message.
+                    rememberExpiringAppMentionKey(appMentionDispatchedKeys, seenMessageKey);
+                  } else if (
+                    last.opts.source === "message" &&
+                    appMentionDispatchedKeys.has(seenMessageKey)
+                  ) {
+                    appMentionDispatchedKeys.delete(seenMessageKey);
+                    appMentionRetryKeys.delete(seenMessageKey);
+                    return null;
+                  }
+                  appMentionRetryKeys.delete(seenMessageKey);
+                }
+                return result;
+              } finally {
+                if (appMentionRetryKey) {
+                  appMentionPreparingKeys.delete(appMentionRetryKey);
+                }
+              }
+            })();
             if (!prepared) {
               return;
-            }
-            if (seenMessageKey) {
-              pruneAppMentionRetryKeys(Date.now());
-              if (last.opts.source === "app_mention") {
-                // If app_mention wins the race and dispatches first, drop the later message dispatch.
-                rememberExpiringAppMentionKey(appMentionDispatchedKeys, seenMessageKey);
-              } else if (
-                last.opts.source === "message" &&
-                appMentionDispatchedKeys.has(seenMessageKey)
-              ) {
-                appMentionDispatchedKeys.delete(seenMessageKey);
-                appMentionRetryKeys.delete(seenMessageKey);
-                return;
-              }
-              appMentionRetryKeys.delete(seenMessageKey);
             }
             if (entries.length > 1) {
               const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
@@ -226,6 +251,7 @@ export function createSlackMessageHandler(params: {
   const threadTsResolver = createSlackThreadTsResolver({ client: ctx.app.client });
   const pendingTopLevelDebounceKeys = new Map<string, Set<string>>();
   const appMentionRetryKeys = new Map<string, number>();
+  const appMentionPreparingKeys = new Set<string>();
   const appMentionDispatchedKeys = new Map<string, number>();
 
   const pruneAppMentionRetryKeys = (rawNow: number): boolean => {

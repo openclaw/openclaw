@@ -18,7 +18,7 @@ export function formatSlackBotTokenIdentityWarning(params: {
     accountId === "default"
       ? "channels.slack.botToken, channels.slack.accounts.default.botToken, or SLACK_BOT_TOKEN"
       : `channels.slack.accounts.${accountId}.botToken`;
-  return `Slack auth.test identified account "${accountId}" as user ${userId} without bot_id. ${tokenPath} appears to contain a user token; replace it with a Bot User OAuth Token. Until replaced, OpenClaw can mistake mentions of that user for bot mentions.`;
+  return `Slack auth.test identified account "${accountId}" as user ${userId} without bot_id. ${tokenPath} appears to contain a user token; replace it with a Bot User OAuth Token. Until replaced, explicit bot-mention detection is disabled and required-mention channels fail closed.`;
 }
 
 export function resolveSlackBotToken(

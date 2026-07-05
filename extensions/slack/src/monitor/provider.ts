@@ -350,15 +350,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let authIdentityWarning: string | undefined;
   try {
     const auth = await app.client.auth.test();
-    botUserId = auth.user_id ?? "";
-    botId = (auth as { bot_id?: string }).bot_id ?? "";
+    const authUserId = normalizeOptionalString(auth.user_id) ?? "";
+    botId = normalizeOptionalString((auth as { bot_id?: string }).bot_id) ?? "";
+    // Slack documents bot_id only for bot-token identities. Never treat the user behind a
+    // user token as the bot mention target; required-mention channels must fail closed instead.
+    botUserId = botId ? authUserId : "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
     authIdentityWarning = formatSlackBotTokenIdentityWarning({
       auth,
       accountId: account.accountId,
     });
-    if (!botUserId) {
+    if (!authUserId) {
       authTestFailed = true;
       authTestError = "auth.test returned no user_id";
     }
@@ -370,7 +373,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime.log?.(
       warn(
         `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
-          "explicit bot-mention detection will be disabled until restart with a valid bot token",
+          "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
+          "required-mention channels will fail closed without another trusted activation signal",
       ),
     );
   }
