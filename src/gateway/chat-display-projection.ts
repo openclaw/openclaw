@@ -1473,6 +1473,40 @@ function displayTextForDuplicateCheck(message: Record<string, unknown>): string 
   return text ? text : undefined;
 }
 
+function hasThinkingBlock(message: Record<string, unknown>): boolean {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block && typeof block === "object" && (block as Record<string, unknown>).type === "thinking",
+  );
+}
+
+/**
+ * Detects assistant message pairs where the first is a streaming intermediate
+ * (has a thinking block) and the second is the finalized reply with identical
+ * visible text. Drops the intermediate to avoid display duplication.
+ */
+function isStreamingTransitionDuplicate(
+  current: Record<string, unknown>,
+  next: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!next || !current || typeof current !== "object" || typeof next !== "object") {
+    return false;
+  }
+  if (current.role !== "assistant" || next.role !== "assistant") {
+    return false;
+  }
+  if (!hasThinkingBlock(current) || hasThinkingBlock(next)) {
+    return false;
+  }
+  const currentText = displayTextForDuplicateCheck(current);
+  const nextText = displayTextForDuplicateCheck(next);
+  return Boolean(currentText && nextText && currentText === nextText);
+}
+
 function isDuplicateAcpGatewayInjectedMessage(
   current: Record<string, unknown>,
   previousVisible: Record<string, unknown> | undefined,
@@ -1561,6 +1595,10 @@ function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (shouldHideProjectedHistoryMessage(current)) {
+      changed = true;
+      continue;
+    }
+    if (isStreamingTransitionDuplicate(current, next)) {
       changed = true;
       continue;
     }
