@@ -216,7 +216,7 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 | Channel           | Behavior                                                                                                                                     |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `stable`          | Waits `stableDelayHours` (default: 6), then applies with deterministic jitter across `stableJitterHours` (default: 12) for a spread rollout. |
-| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                    |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                |
 | `beta`            | Checks every `betaCheckIntervalHours` (default: 1) and applies immediately.                                                                  |
 | `dev`             | No automatic apply. Use `openclaw update` manually.                                                                                          |
 
