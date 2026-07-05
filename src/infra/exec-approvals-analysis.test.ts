@@ -90,20 +90,39 @@ describe("Windows shell analysis", () => {
     }
   });
 
-  it("rejects PowerShell expansion tokens", () => {
+  it("parses PowerShell expansion tokens for approval review", () => {
     const cases: string[] = [
-      'node tool.js "--user=%USERNAME%"',
       'node app.js "$env:USERPROFILE"',
       "node app.js ${var}",
-      "node app.js $(whoami)",
       'node app.js "$?"',
       'node app.js "$$"',
+      'node app.js "$_"',
     ];
 
     for (const command of cases) {
       const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(false);
+      expect(res.ok).toBe(true);
+      expect(res.segments[0]?.argv[0]).toBe("node");
+      expect(res.segments[0]?.requiresExplicitApproval).toBe("windows-shell-expansion");
     }
+  });
+
+  it("still rejects cmd-style expansion tokens during analysis", () => {
+    const res = analyzeWindowsShellCommand({
+      command: 'node tool.js "--user=%USERNAME%"',
+      platform: "win32",
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("still rejects unquoted PowerShell subexpressions during analysis", () => {
+    const res = analyzeWindowsShellCommand({
+      command: "node app.js $(whoami)",
+      platform: "win32",
+    });
+
+    expect(res.ok).toBe(false);
   });
 
   it("allows bare $ not followed by identifier", () => {
@@ -219,6 +238,26 @@ describe("Windows enforced shell command rendering", () => {
 
     expect(result.ok).toBe(false);
   });
+
+  it("refuses to build enforced commands with PowerShell expansion tokens", () => {
+    const analysis = analyzeWindowsShellCommand({
+      command: 'node app.js "$env:USERPROFILE"',
+      platform: "win32",
+    });
+
+    expect(analysis.ok).toBe(true);
+
+    const result = buildEnforcedShellCommand({
+      command: 'node app.js "$env:USERPROFILE"',
+      segments: analysis.segments,
+      platform: "win32",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "unenforceable windows shell token: $",
+    });
+  });
 });
 
 describe("windowsEscapeArg", () => {
@@ -244,6 +283,7 @@ describe("windowsEscapeArg", () => {
     expect(windowsEscapeArg("$(whoami)")).toEqual({ ok: false });
     expect(windowsEscapeArg("$?")).toEqual({ ok: false });
     expect(windowsEscapeArg("$$")).toEqual({ ok: false });
+    expect(windowsEscapeArg("$_")).toEqual({ ok: false });
   });
 
   it("allows $ not followed by identifier", () => {

@@ -74,6 +74,7 @@ type NodeApprovalAnalysis = {
   nodeSecurity?: ExecSecurity;
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
+  requiresExplicitApproval: boolean;
   requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
@@ -588,6 +589,9 @@ export async function analyzeNodeApprovalRequirement(params: {
         segments: entry.allowlistEval.segments,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
+  const requiresExplicitApproval = policyCommandEvals.some((entry) =>
+    entry.allowlistEval.segments.some((segment) => segment.requiresExplicitApproval !== undefined),
+  );
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
@@ -676,6 +680,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeSecurity: params.prepared.execPolicy?.security,
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
+    requiresExplicitApproval,
     requiresSecurityAuditSuppressionApproval,
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,

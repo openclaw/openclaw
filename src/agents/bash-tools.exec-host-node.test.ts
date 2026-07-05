@@ -687,6 +687,62 @@ describe("executeNodeHostCommand", () => {
     );
   });
 
+  it("requires explicit approval for Windows PowerShell expansion node commands", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "safe read",
+    }));
+    parsePreparedSystemRunPayloadMock.mockReturnValue({
+      plan: {
+        ...preparedPlan,
+        argv: ["powershell", "-NoProfile", "-Command", "$env:USERPROFILE"],
+        commandText: 'powershell -NoProfile -Command "$env:USERPROFILE"',
+      },
+      execPolicy: { security: "full", ask: "off" },
+    });
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [
+        {
+          raw: 'powershell -NoProfile -Command "$env:USERPROFILE"',
+          resolution: null,
+          argv: ["powershell", "-NoProfile", "-Command", "$env:USERPROFILE"],
+          requiresExplicitApproval: "windows-shell-expansion",
+        },
+      ],
+      segmentAllowlistEntries: [],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    requiresExecApprovalMock.mockReturnValue(false);
+
+    const result = await executeNodeHostCommand({
+      command: 'powershell -NoProfile -Command "$env:USERPROFILE"',
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reviews the prepared node plan before suppressing human approval", async () => {
     const divergentPlan = {
       argv: ["rm", "-rf", "/tmp/work"],

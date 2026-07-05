@@ -607,6 +607,9 @@ export async function processGatewayAllowlist(
     );
   }
   if (requiresAsk) {
+    const requiresExplicitApproval = allowlistEval.segments.some(
+      (segment) => segment.requiresExplicitApproval !== undefined,
+    );
     const [autoReviewSegment] = allowlistEval.segments;
     const autoReviewArgv =
       allowlistEval.segments.length === 1 &&
@@ -619,9 +622,13 @@ export async function processGatewayAllowlist(
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
+      !requiresAllowlistPlanApproval &&
+      !requiresExplicitApproval &&
       !requiresSecurityAuditSuppressionApproval;
     let autoReviewRequiresHumanApproval =
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      requiresAllowlistPlanApproval ||
+      requiresExplicitApproval ||
       requiresSecurityAuditSuppressionApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;

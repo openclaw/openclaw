@@ -128,6 +128,7 @@ export async function executeNodeHostCommand(
     nodeSecurity,
     nodeAsk,
     inlineEvalHit,
+    requiresExplicitApproval,
     requiresSecurityAuditSuppressionApproval,
     autoReviewArgv,
     allowAlwaysPersistence,
@@ -153,6 +154,7 @@ export async function executeNodeHostCommand(
       durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
+    requiresExplicitApproval ||
     requiresSecurityAuditSuppressionApproval;
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
@@ -207,12 +209,14 @@ export async function executeNodeHostCommand(
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
+      requiresExplicitApproval ||
       requiresSecurityAuditSuppressionApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
+      !requiresExplicitApproval &&
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;

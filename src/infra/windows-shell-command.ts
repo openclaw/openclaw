@@ -32,13 +32,6 @@ function findWindowsUnsupportedToken(command: string): string | null {
       inDouble = !inDouble;
       continue;
     }
-    if (ch === "$") {
-      const next = command[i + 1];
-      if (next !== undefined && /[A-Za-z_{(?$]/.test(next)) {
-        return "$";
-      }
-      continue;
-    }
     if (WINDOWS_UNSUPPORTED_TOKENS.has(ch)) {
       if (inDouble && !WINDOWS_ALWAYS_UNSAFE_TOKENS.has(ch)) {
         continue;
@@ -168,12 +161,16 @@ export function analyzeWindowsShellCommand(params: {
   if (!argv || argv.length === 0) {
     return { ok: false, reason: "unable to parse windows command", segments: [] };
   }
+  const shellExpansionToken = findWindowsShellExpansionToken(effective);
   return {
     ok: true,
     segments: [
       {
         raw: params.command,
         argv,
+        ...(shellExpansionToken
+          ? { requiresExplicitApproval: "windows-shell-expansion" as const }
+          : {}),
         resolution: resolveCommandResolutionFromArgv(
           argv,
           params.cwd,
@@ -190,7 +187,20 @@ export function isWindowsPlatform(platform?: string | null): boolean {
   return normalized.startsWith("win");
 }
 
-const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$])/;
+const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$_])/;
+
+function findWindowsShellExpansionToken(command: string): string | null {
+  for (let i = 0; i < command.length; i += 1) {
+    if (command[i] !== "$") {
+      continue;
+    }
+    const next = command[i + 1];
+    if (next !== undefined && /[A-Za-z_{(?$_]/.test(next)) {
+      return "$";
+    }
+  }
+  return null;
+}
 
 export function windowsEscapeArg(value: string): { ok: true; escaped: string } | { ok: false } {
   if (value === "") {
@@ -228,6 +238,10 @@ export function rebuildWindowsShellCommandFromSource(params: {
   const unsupported = findWindowsUnsupportedToken(source);
   if (unsupported) {
     return { ok: false, reason: `unsupported windows shell token: ${unsupported}` };
+  }
+  const unenforceable = findWindowsShellExpansionToken(source);
+  if (unenforceable) {
+    return { ok: false, reason: `unenforceable windows shell token: ${unenforceable}` };
   }
   const rendered = params.renderSegment(source, 0);
   if (!rendered.ok) {

@@ -197,6 +197,19 @@ describe("config io write", () => {
       logger: silentLogger,
     });
 
+  it("writes openclaw.json without a UTF-8 BOM", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createFastConfigIO(home);
+
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+
+      const bytes = await fs.readFile(configPath);
+      expect([...bytes.subarray(0, 3)]).not.toEqual([0xef, 0xbb, 0xbf]);
+      expect(bytes[0]).toBe("{".charCodeAt(0));
+    });
+  });
+
   it("writes health state to SQLite through public config reads", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

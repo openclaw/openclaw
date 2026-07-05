@@ -581,6 +581,81 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
+  it("requires explicit approval for Windows PowerShell expansion commands", async () => {
+    const command = 'powershell -NoProfile -Command "$env:USERPROFILE"';
+    requiresExecApprovalMock.mockReturnValue(false);
+    buildEnforcedShellCommandMock.mockReturnValue({
+      ok: false,
+      reason: "unenforceable windows shell token: $",
+    });
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [{ pattern: "powershell.exe", source: "allow-always" }],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [
+        {
+          raw: command,
+          resolution: null,
+          argv: ["powershell", "-NoProfile", "-Command", "$env:USERPROFILE"],
+          requiresExplicitApproval: "windows-shell-expansion",
+        },
+      ],
+      segmentAllowlistEntries: [{ pattern: "powershell.exe", source: "allow-always" }],
+      segmentSatisfiedBy: ["allowlist"],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: true,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("requires explicit approval for Windows PowerShell expansion allowlist misses", async () => {
+    const command = 'node app.js "$(whoami)"';
+    requiresExecApprovalMock.mockReturnValue(true);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: false,
+      segments: [
+        {
+          raw: command,
+          resolution: null,
+          argv: ["node", "app.js", "$(whoami)"],
+          requiresExplicitApproval: "windows-shell-expansion",
+        },
+      ],
+      segmentAllowlistEntries: [],
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command,
+      ask: "on-miss",
+      autoReview: true,
+    });
+
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
   it("auto-reviews heredoc commands instead of forcing human approval", async () => {
     const command = "python3 - <<'PY'\nprint('ok')\nPY";
     requiresExecApprovalMock.mockReturnValue(false);
@@ -722,7 +797,7 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("auto-reviews allowlist plan misses instead of forcing human approval", async () => {
+  it("requires human approval for allowlist plan misses", async () => {
     const command = "echo ok";
     requiresExecApprovalMock.mockReturnValue(false);
     buildEnforcedShellCommandMock.mockReturnValue({
@@ -749,19 +824,9 @@ describe("processGatewayAllowlist", () => {
       autoReview: true,
     });
 
-    expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command,
-        argv: ["echo", "ok"],
-        host: "gateway",
-        reason: "execution-plan-miss",
-      }),
-    );
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      execCommandOverride: undefined,
-      allowWithoutEnforcedCommand: true,
-    });
+    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
   it("omits allow-always when allowlist execution cannot persist reusable patterns", async () => {
