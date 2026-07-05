@@ -627,10 +627,6 @@ is_arch_linux() {
             return 0
         fi
     fi
-    # Fallback: check for pacman
-    if command -v pacman &> /dev/null; then
-        return 0
-    fi
     return 1
 }
 
@@ -677,7 +673,7 @@ install_build_tools_linux() {
         return 0
     fi
 
-    if command -v pacman &> /dev/null || is_arch_linux; then
+    if command -v pacman &> /dev/null && is_arch_linux; then
         if is_root; then
             run_quiet_step "Installing build tools" pacman -Sy --noconfirm base-devel python make cmake gcc
         else
@@ -1814,7 +1810,7 @@ install_node() {
         fi
 
         # Arch-based distros: use pacman with official repos
-        if command -v pacman &> /dev/null || is_arch_linux; then
+        if command -v pacman &> /dev/null && is_arch_linux; then
             ui_info "Installing Node.js via pacman (Arch-based distribution detected)"
             if is_root; then
                 run_required_step "Installing Node.js" pacman -Sy --noconfirm nodejs npm
@@ -1922,7 +1918,7 @@ install_git() {
         elif command -v apt-get &> /dev/null; then
             run_quiet_step "Updating package index" apt_get_update
             run_quiet_step "Installing Git" apt_get_install git
-        elif command -v pacman &> /dev/null || is_arch_linux; then
+        elif command -v pacman &> /dev/null && is_arch_linux; then
             if is_root; then
                 run_quiet_step "Installing Git" pacman -Sy --noconfirm git
             else

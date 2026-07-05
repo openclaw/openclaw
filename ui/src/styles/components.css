@@ -6,8 +6,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100%;
+  overflow-y: auto;
   background: var(--bg);
   padding: 24px;
 }
@@ -21,6 +23,7 @@
 
 .login-gate__card {
   width: min(520px, 100%);
+  margin-block: auto;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -140,12 +143,12 @@
 .login-gate__help-title {
   font-weight: 600;
   font-size: 12px;
-  margin-bottom: 10px;
   color: var(--fg);
+  cursor: pointer;
 }
 
 .login-gate__steps {
-  margin: 0;
+  margin: 10px 0 0;
   padding-left: 20px;
   font-size: 12px;
   line-height: 1.6;
@@ -206,6 +209,44 @@
 .login-gate__docs {
   margin-top: 10px;
   font-size: 12px;
+}
+
+/* Phones (matches the layout.mobile.css breakpoint). The gate renders outside
+   the shell, so it needs its own safe-area padding for notch/home-bar overlap
+   with viewport-fit=cover. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .login-gate {
+    padding: max(16px, var(--safe-area-top)) max(12px, var(--safe-area-right))
+      max(16px, var(--safe-area-bottom)) max(12px, var(--safe-area-left));
+  }
+
+  .login-gate__card {
+    padding: 24px 20px;
+  }
+
+  /* 44px touch targets per platform guidelines. */
+  .login-gate__form .field input {
+    min-height: 44px;
+  }
+
+  .login-gate__secret-row .btn--icon {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .login-gate__connect {
+    min-height: 44px;
+  }
+}
+
+/* The standalone body already owns safe-area insets. Reusing them inside the
+   gate would double notch/home-bar spacing and shrink its scroll viewport. */
+@media (display-mode: standalone) and (max-width: 768px),
+  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .login-gate {
+    padding: 16px 12px;
+  }
 }
 
 /* ===========================================

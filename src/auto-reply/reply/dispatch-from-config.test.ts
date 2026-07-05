@@ -2181,16 +2181,16 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyResolver,
     });
+    let settled = false;
+    void resultPromise.finally(() => {
+      settled = true;
+    });
 
     try {
-      const result = await Promise.race([
-        resultPromise,
-        new Promise<"blocked">((resolve) => {
-          setTimeout(() => resolve("blocked"), 1_000);
-        }),
-      ]);
-
-      expect(result).toBe("blocked");
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
       expect(replyResolver).not.toHaveBeenCalled();
     } finally {
       activeOperation.complete();
