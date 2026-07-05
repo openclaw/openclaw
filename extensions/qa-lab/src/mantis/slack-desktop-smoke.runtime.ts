@@ -694,7 +694,54 @@ qa_status=0
 run_mantis_remote_body() {
   set -e
   echo "remote pwd: $(pwd)"
-  sudo corepack enable >/dev/null 2>&1 || true
+  node_supports_type_stripping() {
+    node_probe="$(mktemp --suffix=.ts)"
+    printf 'const value: number = 1;\nif (value !== 1) process.exit(1);\n' >"$node_probe"
+    node --experimental-strip-types "$node_probe" >/dev/null 2>&1
+    probe_status=$?
+    rm -f "$node_probe"
+    return "$probe_status"
+  }
+  if ! node_supports_type_stripping; then
+    # Distro Node builds can satisfy the version range while omitting native
+    # TypeScript stripping, which the repository build requires.
+    node_version="$(sed -n 's/^node_version="\\([0-9][0-9.]*\\)"$/\\1/p' scripts/crabbox-untrusted-bootstrap.sh)"
+    case "$node_version" in
+      ''|*[!0-9.]*)
+        echo "Could not resolve the trusted Crabbox Node version." >&2
+        exit 3
+        ;;
+    esac
+    case "$(uname -m)" in
+      x86_64) node_arch=x64 ;;
+      aarch64|arm64) node_arch=arm64 ;;
+      *)
+        echo "Unsupported Node bootstrap architecture: $(uname -m)" >&2
+        exit 3
+        ;;
+    esac
+    node_root="$HOME/.cache/openclaw-mantis/node-v$node_version-linux-$node_arch"
+    if [ ! -x "$node_root/bin/node" ]; then
+      node_tmp="$(mktemp -d)"
+      node_archive="node-v$node_version-linux-$node_arch.tar.xz"
+      node_base_url="https://nodejs.org/dist/v$node_version"
+      curl -fsSL --retry 3 --retry-all-errors "$node_base_url/SHASUMS256.txt" \
+        -o "$node_tmp/SHASUMS256.txt"
+      curl -fsSL --retry 3 --retry-all-errors "$node_base_url/$node_archive" \
+        -o "$node_tmp/$node_archive"
+      (cd "$node_tmp" && grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -)
+      rm -rf "$node_root"
+      mkdir -p "$node_root"
+      tar -xJf "$node_tmp/$node_archive" -C "$node_root" --strip-components=1
+      rm -rf "$node_tmp"
+    fi
+    export PATH="$node_root/bin:$PATH"
+    node_supports_type_stripping || {
+      echo "Official Node $node_version lacks required TypeScript stripping." >&2
+      exit 3
+    }
+  fi
+  node --version
   read -r pnpm_version pnpm_sha512 < <(node -e '
 const value = require("./package.json").packageManager ?? "";
 const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)\\+sha512\\.([0-9a-f]{128})$/.exec(value);
@@ -719,7 +766,11 @@ console.log(match[1] + " " + match[2]);
     fi
     tar -xzf "$pnpm_archive" -C "$pnpm_root"
     pnpm_cli="$pnpm_root/package/bin/pnpm.cjs"
-    pnpm() { node "$pnpm_cli" "$@"; }
+    pnpm_bin_dir="$pnpm_root/bin"
+    mkdir -p "$pnpm_bin_dir"
+    ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"
+    export PATH="$pnpm_bin_dir:$PATH"
+    hash -r
     active_pnpm_version="$(pnpm --version)"
   fi
   if [ "$active_pnpm_version" != "$pnpm_version" ]; then
