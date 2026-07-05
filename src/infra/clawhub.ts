@@ -856,6 +856,57 @@ function requiredStringArrayField(
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
 }
 
+function requiredStringField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string {
+  const value = source[field];
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a non-empty string.`);
+}
+
+function requiredNumberField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): number {
+  const value = source[field];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a number.`);
+}
+
+function optionalBooleanField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): boolean | undefined {
+  const value = source[field];
+  if (value === undefined || typeof value === "boolean") {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a boolean.`);
+}
+
+function optionalStringArrayField(
+  source: Record<string, unknown>,
+  field: string,
+  context: string,
+): string[] | undefined {
+  const value = source[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+    return value;
+  }
+  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
+}
+
 function parseOptionalSecurityPackage(value: unknown): ClawHubPackageSecurityResponse["package"] {
   if (value === undefined || value === null) {
     return value;
@@ -1657,4 +1708,126 @@ export function satisfiesGatewayMinimum(
     return false;
   }
   return isAtLeast(current, minimum);
+}
+
+// ─── ClawHub promotions ────────────────────────────────────────────────────
+// Promotional model offers published by ClawHub (GET /api/v1/promotions).
+// The payload is declarative only: provider/authChoiceId/pluginNames are
+// validated against the local provider catalog by the caller before any
+// install/auth action, so a malformed or hostile record cannot execute code.
+
+export type ClawHubPromotionModel = {
+  modelRef: string;
+  alias?: string;
+  suggestedDefault?: boolean;
+};
+
+export type ClawHubPromotion = {
+  slug: string;
+  title: string;
+  blurb: string;
+  sponsor?: string;
+  status: string;
+  active: boolean;
+  startsAt: number;
+  endsAt: number;
+  provider?: string;
+  authChoiceId?: string;
+  pluginNames?: string[];
+  models: ClawHubPromotionModel[];
+  signupUrl?: string;
+  docsUrl?: string;
+  launchPageUrl?: string;
+};
+
+function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPromotionModel {
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected each model to be an object.`);
+  }
+  const model: ClawHubPromotionModel = {
+    modelRef: requiredStringField(value, "modelRef", context),
+  };
+  const alias = optionalStringField(value, "alias", context);
+  if (alias) {
+    model.alias = alias;
+  }
+  const suggestedDefault = optionalBooleanField(value, "suggestedDefault", context);
+  if (suggestedDefault !== undefined) {
+    model.suggestedDefault = suggestedDefault;
+  }
+  return model;
+}
+
+export function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+  const context = "promotion";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
+  const modelsRaw = value.models;
+  if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
+    throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
+  }
+  const promotion: ClawHubPromotion = {
+    slug: requiredStringField(value, "slug", context),
+    title: requiredStringField(value, "title", context),
+    blurb: requiredStringField(value, "blurb", context),
+    status: requiredStringField(value, "status", context),
+    active: requiredBooleanField(value, "active", context),
+    startsAt: requiredNumberField(value, "startsAt", context),
+    endsAt: requiredNumberField(value, "endsAt", context),
+    models: modelsRaw.map((entry) => parseClawHubPromotionModel(entry, context)),
+  };
+  const optionalStrings = [
+    "sponsor",
+    "provider",
+    "authChoiceId",
+    "signupUrl",
+    "docsUrl",
+    "launchPageUrl",
+  ] as const;
+  for (const field of optionalStrings) {
+    const parsed = optionalStringField(value, field, context);
+    if (parsed) {
+      promotion[field] = parsed;
+    }
+  }
+  const pluginNames = optionalStringArrayField(value, "pluginNames", context);
+  if (pluginNames && pluginNames.length > 0) {
+    promotion.pluginNames = pluginNames;
+  }
+  return promotion;
+}
+
+export async function fetchClawHubPromotions(
+  params: {
+    baseUrl?: string;
+    timeoutMs?: number;
+    fetchImpl?: FetchLike;
+  } = {},
+): Promise<ClawHubPromotion[]> {
+  const response = await fetchJson<unknown>({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/promotions",
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+  if (!isJsonObject(response) || !Array.isArray(response.promotions)) {
+    throw new Error("Malformed ClawHub promotions response: expected a promotions array.");
+  }
+  return response.promotions.map((entry) => parseClawHubPromotion(entry));
+}
+
+export async function fetchClawHubPromotion(params: {
+  slug: string;
+  baseUrl?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubPromotion> {
+  const response = await fetchJson<unknown>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/promotions/${encodeURIComponent(params.slug)}`,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+  return parseClawHubPromotion(response);
 }

@@ -30,6 +30,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "promos",
+    description: "Discover and claim promotional model offers from ClawHub",
+    hasSubcommands: true,
+  },
+  {
     name: "infer",
     description: "Run provider-backed model, media, search, and embedding commands",
     hasSubcommands: true,
