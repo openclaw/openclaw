@@ -493,6 +493,10 @@ async function runSetupWizardOnce(
     normalizedExplicitFlow === "import"
       ? normalizedExplicitFlow
       : undefined;
+  const hasExplicitSetupOperation = Object.entries(opts).some(
+    ([key, value]) =>
+      value !== undefined && key !== "acceptRisk" && key !== "skipUi" && key !== "json",
+  );
   let flow: SetupFlowChoice =
     explicitFlow ?? (hasExplicitFullWizardIntent(opts) ? "advanced" : "quickstart");
 
@@ -531,6 +535,11 @@ async function runSetupWizardOnce(
         { value: "reset", label: t("wizard.setup.resetBefore") },
       ],
     });
+
+    if (action === "keep" && !hasExplicitSetupOperation) {
+      await prompter.outro(t("wizard.setup.existingConfigKept"));
+      return;
+    }
 
     if (action === "reset") {
       const workspaceDefault =

@@ -827,6 +827,51 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps an existing config without re-entering bare setup", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            rateLimit: {
+              exemptLoopback: false,
+            },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    replaceConfigFile.mockClear();
+    configureGatewayForSetup.mockClear();
+    setupChannels.mockClear();
+    setupSkills.mockClear();
+    setupInternalHooks.mockClear();
+    finalizeSetupWizard.mockClear();
+
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) =>
+      opts.message === "Config handling" ? "keep" : "quickstart",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+
+    await runSetupWizard({ acceptRisk: true }, createRuntime(), prompter);
+
+    expect(prompter.outro).toHaveBeenCalledWith("Current configuration kept.");
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(configureGatewayForSetup).not.toHaveBeenCalled();
+    expect(setupChannels).not.toHaveBeenCalled();
+    expect(setupSkills).not.toHaveBeenCalled();
+    expect(setupInternalHooks).not.toHaveBeenCalled();
+    expect(finalizeSetupWizard).not.toHaveBeenCalled();
+  });
+
   it("continues an explicit daemon install after keeping the existing config", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
