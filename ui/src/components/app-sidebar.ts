@@ -26,6 +26,7 @@ import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   compareSessionRowsByUpdatedAt,
@@ -423,7 +424,12 @@ export class AppSidebar extends LitElement {
       .filter(Boolean)
       .join(" ");
     return html`
-      <div class=${rowClass} data-session-key=${session.key}>
+      <div
+        class=${rowClass}
+        data-session-key=${session.key}
+        @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
+        @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
+      >
         <a
           href=${session.href}
           class="sidebar-recent-session__link"
@@ -436,7 +442,7 @@ export class AppSidebar extends LitElement {
             this.selectSession(session.key);
           }}
         >
-          <span class="sidebar-recent-session__name">${session.label}</span>
+          <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail">
