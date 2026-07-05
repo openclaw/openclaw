@@ -14,7 +14,7 @@ import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-u
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
-  normalizeLiveAssistantEventText,
+  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
   resolveAssistantLiveChatInput,
   resolveMergedAssistantText,
@@ -757,12 +757,11 @@ export function createAgentEventHandler({
     delta?: unknown,
     opts?: { controlUiVisible?: boolean },
   ) => {
-    const cleaned = normalizeLiveAssistantEventText({ text, delta });
     const previousRawText = chatRunState.rawBuffers.get(clientRunId) ?? "";
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
-      nextText: cleaned.text,
-      nextDelta: cleaned.delta,
+      nextText: text,
+      nextDelta: typeof delta === "string" ? delta : "",
     });
     if (!mergedRawText) {
       return;
@@ -770,7 +769,10 @@ export function createAgentEventHandler({
     const now = Date.now();
     chatRunState.rawBuffers.set(clientRunId, mergedRawText);
     chatRunState.bufferUpdatedAt.set(clientRunId, now);
-    const projected = projectLiveAssistantBufferedText(mergedRawText);
+    // Sanitize only after merging. Protected blocks and directive tags can span
+    // delta frames; cleaning each frame independently can expose their contents.
+    const normalizedText = normalizeLiveAssistantBufferedText(mergedRawText);
+    const projected = projectLiveAssistantBufferedText(normalizedText);
     const mergedText = projected.text;
     chatRunState.buffers.set(clientRunId, mergedText);
     if (projected.suppress) {
@@ -822,9 +824,7 @@ export function createAgentEventHandler({
     sourceRunId: string,
     options?: { suppressLeadFragments?: boolean },
   ) => {
-    const bufferedText = normalizeLiveAssistantEventText({
-      text: chatRunState.buffers.get(clientRunId) ?? "",
-    }).text.trim();
+    const bufferedText = (chatRunState.buffers.get(clientRunId) ?? "").trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,

@@ -63,18 +63,9 @@ export function resolveMergedAssistantText(params: {
   return capLiveAssistantBuffer(previousText);
 }
 
-/** Removes runtime-only context/directive tags from live assistant event text. */
-export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
-  text: string;
-  delta: string;
-} {
-  return {
-    text: stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(params.text).text),
-    delta:
-      typeof params.delta === "string"
-        ? stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(params.delta).text)
-        : "",
-  };
+/** Removes runtime-only context/directive tags from the merged live assistant buffer. */
+export function normalizeLiveAssistantBufferedText(text: string): string {
+  return stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
 }
 
 /** Projects buffered assistant text into display text or a suppressed/pending state. */

@@ -1,6 +1,10 @@
 // Server chat agent-event tests protect event fanout, heartbeat visibility,
 // session lifecycle persistence, and subscriber registry behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
@@ -429,6 +433,40 @@ describe("agent event handler", () => {
     expect(payload.deltaText).toBe("Hello world");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("keeps internal context private when it spans delta-only events", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+    chatRunState.registry.add("run-split-context", {
+      sessionKey: "session-split-context",
+      clientRunId: "client-split-context",
+    });
+
+    const deltas = [
+      `Visible\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`,
+      "private runtime detail\n",
+      `${INTERNAL_RUNTIME_CONTEXT_END}\nAfter`,
+    ];
+    deltas.forEach((delta, index) => {
+      handler({
+        runId: "run-split-context",
+        seq: index + 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { delta },
+      });
+    });
+    emitLifecycleEnd(handler, "run-split-context", 4);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(JSON.stringify(chatCalls)).not.toContain("private runtime detail");
+    const finalPayload = chatCalls.at(-1)?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("Visible\n\nAfter");
     nowSpy?.mockRestore();
   });
 
