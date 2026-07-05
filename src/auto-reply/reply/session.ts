@@ -60,6 +60,7 @@ import {
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import { sleep } from "../../utils.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,
@@ -307,29 +308,42 @@ function resolveInitSessionStateAttemptContext(
   };
 }
 
+/** Max retries for stale-snapshot conflicts during concurrent session init. */
+const STALE_SNAPSHOT_MAX_RETRIES = 3;
+/** Base backoff delay between stale-snapshot retries (exponential: 200ms, 400ms, 800ms). */
+const STALE_SNAPSHOT_BASE_DELAY_MS = 200;
+
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await initSessionStateAttempt(params);
 }
 
-async function initSessionStateAttempt(
-  params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
-): Promise<SessionInitResult> {
+async function initSessionStateAttempt(params: InitSessionStateParams): Promise<SessionInitResult> {
   const attemptContext = resolveInitSessionStateAttemptContext(params);
   // Guarded revision checks only serialize correctly when the snapshot and
-  // commit share the same writer lane.
-  return await runExclusiveSessionStoreWrite(
-    attemptContext.storePath,
-    async () => await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried),
-  );
+  // commit share the same writer lane. Retry stale-snapshot conflicts outside
+  // the lock so each attempt acquires a fresh writer lane and re-reads the
+  // latest snapshot. Exponential backoff gives concurrent writers time to
+  // finish before the next attempt.
+  for (let retries = 0; retries <= STALE_SNAPSHOT_MAX_RETRIES; retries++) {
+    const result = await runExclusiveSessionStoreWrite(
+      attemptContext.storePath,
+      async () => await initSessionStateAttemptLocked(params, attemptContext),
+    );
+    if (result !== "stale-snapshot") {
+      return result;
+    }
+    if (retries < STALE_SNAPSHOT_MAX_RETRIES) {
+      await sleep(STALE_SNAPSHOT_BASE_DELAY_MS * 2 ** retries);
+    }
+  }
+  throw new Error(`reply session initialization conflicted for ${attemptContext.sessionKey}`);
 }
 
 async function initSessionStateAttemptLocked(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
-  staleSnapshotRetried: boolean,
-): Promise<SessionInitResult> {
+): Promise<SessionInitResult | "stale-snapshot"> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
     attemptContext;
@@ -931,10 +945,7 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true);
-    }
-    throw new Error(`reply session initialization conflicted for ${sessionKey}`);
+    return "stale-snapshot";
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
