@@ -201,6 +201,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("sudo corepack enable >/dev/null 2>&1 || true");
     expect(remoteScript).toContain("packageManager ??");
     expect(remoteScript).toContain("[0-9a-f]{128}");
+    expect(remoteScript).toContain('console.log(match[1] + " " + match[2])');
     expect(remoteScript).toContain('active_pnpm_version="$(pnpm --version 2>/dev/null || true)"');
     expect(remoteScript).toContain("https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz");
     expect(remoteScript).toContain('sha512sum "$pnpm_archive"');

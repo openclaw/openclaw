@@ -699,7 +699,7 @@ run_mantis_remote_body() {
 const value = require("./package.json").packageManager ?? "";
 const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)\\+sha512\\.([0-9a-f]{128})$/.exec(value);
 if (!match) process.exit(1);
-process.stdout.write(match[1] + " " + match[2]);
+console.log(match[1] + " " + match[2]);
 ')
   active_pnpm_version="$(pnpm --version 2>/dev/null || true)"
   if [ "$active_pnpm_version" != "$pnpm_version" ]; then
