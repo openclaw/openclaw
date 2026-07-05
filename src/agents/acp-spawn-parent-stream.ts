@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import {
   isAcpTagVisible,
@@ -28,7 +29,6 @@ import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
-import { truncateUtf16Safe } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
@@ -504,7 +504,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     pendingProgressKind = kind;
     pendingText += delta;
     if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
-      pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
+      pendingText = sliceUtf16Safe(pendingText, -STREAM_BUFFER_MAX_CHARS);
     }
     if (pendingText.length >= STREAM_SNIPPET_MAX_CHARS || delta.includes("\n\n")) {
       flushPending();

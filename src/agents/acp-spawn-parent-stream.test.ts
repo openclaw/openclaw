@@ -100,26 +100,6 @@ function firstMockCall(
   return call;
 }
 
-function hasLoneSurrogate(text: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 >= text.length) {
-        return true;
-      }
-      const next = text.charCodeAt(i + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      i++;
-    }
-  }
-  return false;
-}
-
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeAll(async () => {
     ({ emitAgentEvent } = await import("../infra/agent-events.js"));
@@ -1426,6 +1406,37 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it.each([
+    {
+      name: "preview cutoff",
+      delta: `${"a".repeat(218)}😀tail`,
+      expected: `${"a".repeat(218)}…`,
+    },
+    {
+      name: "retained buffer start",
+      delta: `😀${"b".repeat(3_999)}`,
+      expected: `${"b".repeat(219)}…`,
+    },
+  ])("keeps $name on UTF-16 boundaries", ({ delta, expected }) => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-utf16-safe",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:utf16-safe",
+      agentId: "codex",
+      streamFlushMs: 0,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-utf16-safe",
+      stream: "assistant",
+      data: { delta },
+    });
+
+    expect(collectedTexts()[1]).toBe(`codex: ${expected}`);
+    relay.dispose();
+  });
+
   it("resolves ACP spawn stream log path from session metadata", () => {
     readAcpSessionEntryMock.mockReturnValue({
       storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
@@ -1454,37 +1465,5 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(sessionId).toBe("sess-123");
     expect(entry.sessionId).toBe("sess-123");
     expect(options.storePath).toBe("/tmp/openclaw/agents/codex/sessions/sessions.json");
-  });
-
-  it("does not split surrogate pairs when truncating streamed output", () => {
-    const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-utf16-safe",
-      parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:utf16-safe",
-      agentId: "codex",
-      streamFlushMs: 0,
-      noOutputNoticeMs: 120_000,
-    });
-
-    // 218 "a" + "😀" + "moretext" = 228 chars. "😀" occupies positions 218-219.
-    // truncate(value, STREAM_SNIPPET_MAX_CHARS=220): old slice(0, 219) keeps
-    // positions 0-218 = "a".repeat(218) + high surrogate (lone!).
-    // truncateUtf16Safe(value, 219) backs off to 218.
-    const delta = `${"a".repeat(218)}😀moretext`;
-
-    emitAgentEvent({
-      runId: "run-utf16-safe",
-      stream: "assistant",
-      data: { delta },
-    });
-
-    const texts = collectedTexts();
-    // Skip the start notice, check only progress and completion events.
-    const relayTexts = texts.filter((t) => t.includes("codex:") || t.includes("codex "));
-    for (const text of relayTexts) {
-      expect(hasLoneSurrogate(text)).toBe(false);
-    }
-
-    relay.dispose();
   });
 });

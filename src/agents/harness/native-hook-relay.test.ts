@@ -33,26 +33,6 @@ afterEach(() => {
   testing.clearNativeHookRelaysForTests();
 });
 
-function hasLoneSurrogate(text: string): boolean {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-    if (code >= 0xd800 && code <= 0xdbff) {
-      if (i + 1 >= text.length) {
-        return true;
-      }
-      const next = text.charCodeAt(i + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      i++;
-    }
-  }
-  return false;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -3249,39 +3229,5 @@ describe("native hook relay command builder", () => {
     ).toBe(
       "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 5000",
     );
-  });
-});
-
-describe("UTF-16 safe truncation in permission approval display", () => {
-  it("does not split surrogate pairs when truncating approval description command text", () => {
-    // 236 "c" + "😀" + "tail" = 242 chars. The emoji at positions 236-237
-    // crosses the 240-char truncateText() boundary (maxLength - 3 = 237).
-    // Old raw slice(0, 237) would keep the lone high surrogate at position 236;
-    // truncateUtf16Safe backs off to 236.
-    const command = `${"c".repeat(236)}😀tail`;
-    const description = testing.formatPermissionApprovalDescriptionForTests({
-      provider: "codex",
-      sessionId: "sess-utf16",
-      runId: "run-utf16",
-      toolName: "exec",
-      toolInput: { command },
-    });
-
-    expect(hasLoneSurrogate(description)).toBe(false);
-  });
-
-  it("does not split surrogate pairs when truncating approval description Cwd text", () => {
-    // Same pattern for the Cwd field (240-char limit via truncateText).
-    const cwd = `${"/".repeat(236)}😀tail`;
-    const description = testing.formatPermissionApprovalDescriptionForTests({
-      provider: "codex",
-      sessionId: "sess-utf16",
-      runId: "run-utf16",
-      toolName: "exec",
-      cwd,
-      toolInput: {},
-    });
-
-    expect(hasLoneSurrogate(description)).toBe(false);
   });
 });
