@@ -18,18 +18,95 @@ or validating a change without wasting hours.
 
 Prove the touched surface first. Do not reflexively run the whole suite.
 
+Agent sessions are remote-first for tests and computationally intensive work.
+Classify source trust before selecting a backend. Trusted maintainer code
+defaults to Blacksmith Testbox. Untrusted contributor or fork code must use
+secretless fork CI or sanitized direct AWS Crabbox; never sync or run it on the
+credential-hydrated Blacksmith workflow.
+
+When trusted work is likely to change code or need tests, builds, typechecks,
+lint fan-out, Docker, packaging, E2E, or live proof, immediately start this in
+a background command session:
+
+```bash
+node scripts/crabbox-wrapper.mjs warmup \
+  --provider blacksmith-testbox \
+  --keep \
+  --timing-json
+```
+
+For untrusted code, switch to a clean trusted `main` checkout and pre-warm
+direct AWS with an installed trusted Crabbox binary. Do not execute the
+untrusted checkout's wrapper or config locally:
+
+```bash
+cd <trusted-openclaw-main>
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  crabbox config show --json | \
+  jq -e '.aws.instanceProfile == ""' >/dev/null
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  crabbox warmup \
+  --provider aws \
+  --keep \
+  --timing-json
+```
+
+Bind the returned lease to one immutable reviewed head SHA; never repurpose a
+trusted or previously hydrated lease, and stop/rewarm if the head changes.
+Record the reviewed PR's full head SHA with
+`gh pr view <number> --repo <owner/repo> --json headRefOid --jq .headRefOid`.
+Before fetching the PR, upload and run the trusted runtime bootstrap from the
+clean `main` checkout. `--script` bypasses raw-box JavaScript preflight without
+executing PR-controlled setup:
+
+```bash
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
+  crabbox run \
+  --provider aws \
+  --id <cbx_id> \
+  --no-hydrate \
+  --script scripts/crabbox-untrusted-bootstrap.sh
+```
+
+Every untrusted AWS run must override the repo env allowlist, skip Actions
+hydration, verify that exact SHA, and isolate `HOME` before package installation
+or tests:
+
+```bash
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS \
+  crabbox run \
+  --provider aws \
+  --id <cbx_id> \
+  --fresh-pr <owner/repo#number> \
+  --no-hydrate \
+  --timing-json \
+  --shell -- \
+  'token="$(/usr/bin/curl -fsS -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 60" http://169.254.169.254/latest/api/token)" && iam_code="$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/iam/security-credentials/)" && test "$iam_code" = 404 && test "$(/usr/bin/git rev-parse HEAD)" = "<expected_head_sha>" && test "$(/usr/local/bin/node -p '\''require("./package.json").packageManager'\'')" = "pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f" && export HOME="$(/usr/bin/mktemp -d)" COREPACK_HOME=/opt/openclaw-untrusted-corepack && /usr/local/bin/pnpm install --frozen-lockfile && /usr/local/bin/pnpm test <path-or-filter>'
+# After all proof:
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  crabbox stop --provider aws <cbx_id>
+```
+
+Continue inspection and editing while the remote box hydrates. Save the
+returned id, reuse it for the task's focused tests and heavy gates, sync the
+current checkout on every run, and stop it before handoff. Do not pre-warm for
+read-only, docs-only, or clearly trivial work that will not run tests or heavy
+commands.
+
 1. Inspect the diff and classify the touched surface:
-   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed` (delegates to Crabbox/Testbox)
-   - normal source checkout, tests only: `pnpm test:changed`
-   - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
-   - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
-   - Codex worktree or linked/sparse checkout, changed gates or anything broad:
-     use the Crabbox wrapper with the provider that matches the proof surface.
-     For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
-     Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
---provider blacksmith-testbox ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed`. For direct AWS
-     Crabbox proof, pass `--provider aws`; omitting `--provider` follows the
-     `.crabbox.yaml` default (Blacksmith Testbox).
+   - any agent-run test, focused or broad: run it on the pre-warmed safe remote
+     backend; Blacksmith Testbox only for trusted maintainer code
+   - changed gates, builds, typechecks, lint fan-out, Docker, package, E2E, or
+     live work: run it remotely; these are never routine laptop work
+   - normal source checkout, `pnpm check:changed`: it delegates to
+     Crabbox/Testbox, but prefer the explicit kept-lease path when a Testbox was
+     pre-warmed so the task reuses one lease
+   - explicit local fallback requested by the user, one/few files:
+     `node scripts/run-vitest.mjs <path-or-filter>`
+   - direct AWS Crabbox proof: pass `--provider aws`; untrusted code also
+     requires the sanitized invocation above
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -40,21 +117,42 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 ## Guardrails
 
 - Do not kill unrelated processes or tests. If something is running elsewhere, treat it as owned by the user or another agent.
-- Do not run expensive local Docker, full release checks, full `pnpm test`, or full `pnpm check` unless the user asks or the change genuinely requires it.
+- Do not run tests or computationally intensive commands locally unless the user explicitly asks for local proof. Remote-provider unavailability permits only a narrow reported fallback, not a silent local full gate.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
-- If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
+- If dependencies are missing on the selected remote box, run `pnpm install` there, retry
+  once, then report the first actionable error. Do not reconcile or reinstall a
+  local Codex worktree merely to run validation.
 - In a Codex worktree or linked/sparse checkout, do not run direct local
-  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer` until
-  you have verified pnpm will not reconcile or reinstall dependencies. Use
-  `node scripts/run-vitest.mjs` for tiny local proof, `node
-scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
-  after the relevant remote or node-wrapper proof is already clean.
+  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer`. Use
+  `node scripts/crabbox-wrapper.mjs` for remote proof, and `git commit --no-verify`
+  only after the relevant remote proof is already clean. The direct
+  `node scripts/run-vitest.mjs` path is an explicit local fallback only.
 - For remote proof, use the Crabbox wrapper first, but name the actual backend.
   Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
   Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
   `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
   requested proof surface allows either.
+- Treat contributor and fork patches as untrusted unless a maintainer
+  explicitly approves credentialed execution after review. For untrusted AWS
+  runs, `CRABBOX_ENV_ALLOW=CI,NODE_OPTIONS` must replace the repo's
+  `OPENCLAW_*` allowlist, `--no-hydrate` must block auth-profile hydration, and
+  the remote command must use a fresh temporary `HOME`. The lease must be newly
+  warmed for and bound to one reviewed head SHA, never trusted or previously
+  hydrated; stop and rewarm when the SHA changes. Do
+  not execute repo scripts or config from the untrusted local checkout: launch
+  an installed trusted Crabbox binary from a clean trusted `main` checkout and
+  fetch the PR with `--fresh-pr`. Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail
+  closed unless `crabbox config show --json` resolves an empty
+  `aws.instanceProfile`. Before any install/test, use trusted absolute-path
+  tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
+  404, and compare remote `git rev-parse HEAD` with the full reviewed head SHA.
+  Bootstrap Node 24 and the repository-pinned pnpm through trusted
+  `scripts/crabbox-untrusted-bootstrap.sh` before `--fresh-pr`; reject a changed
+  PR `packageManager` pin before install.
+  If the broker cannot provide that no-role proof or no remote PR exists, use
+  secretless fork CI. Do not select `hydrate-github` or a credential-hydrated
+  Testbox workflow.
 - Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
   Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
   before reporting cloud state.
@@ -62,8 +160,14 @@ scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
   coordinating with another lane. If Testbox queues, fails capacity, or cannot
   allocate, report the blocker or switch to direct AWS Crabbox only when that
   still proves the requested surface.
+- Reuse does not mean stale source: omit `--no-sync` so every run uploads the
+  current checkout. Use `--no-sync` only to rerun an unchanged, already-synced
+  tree intentionally.
 
-## Local Test Shortcuts
+## Explicit Local Test Fallbacks
+
+These commands are for human workflows or an agent's explicit local fallback.
+They are not the default agent path.
 
 ```bash
 pnpm changed:lanes --json
