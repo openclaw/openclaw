@@ -7134,6 +7134,36 @@
       "translated": "Quay lại chọn chế độ"
     },
     {
+      "id": "native.apple.4014217851d06190",
+      "source": "Plaintext (local network)",
+      "translated": "Văn bản thuần (mạng cục bộ)"
+    },
+    {
+      "id": "native.apple.cf616b515da5bc19",
+      "source": "Security",
+      "translated": "Bảo mật"
+    },
+    {
+      "id": "native.apple.db7b52a1bbc6fac5",
+      "source": "Use Manual Setup",
+      "translated": "Sử dụng thiết lập thủ công"
+    },
+    {
+      "id": "native.apple.7dbdf9a439f64f08",
+      "source": "Setup Link",
+      "translated": "Liên kết thiết lập"
+    },
+    {
+      "id": "native.apple.6bfb611862fb1687",
+      "source": "Plaintext may expose credentials. Continue only if you trust this local network and host.",
+      "translated": "Văn bản thuần có thể làm lộ thông tin đăng nhập. Chỉ tiếp tục nếu bạn tin tưởng mạng cục bộ và máy chủ này."
+    },
+    {
+      "id": "native.apple.3329c7f367f10c78",
+      "source": "Review this endpoint. Credentials are applied only after you tap Connect.",
+      "translated": "Xem lại điểm cuối này. Thông tin đăng nhập chỉ được áp dụng sau khi bạn nhấn Kết nối."
+    },
+    {
       "id": "native.apple.2f00ef4bc35ecb8d",
       "source": "No gateways found yet.",
       "translated": "Chưa tìm thấy gateway nào."
