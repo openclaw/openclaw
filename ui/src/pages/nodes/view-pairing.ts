@@ -3,26 +3,35 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import type { NodesProps } from "./view.types.ts";
+import type { DevicePairSetup } from "../../lib/device-pair-setup.ts";
 
 const PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
 
-export function renderDevicePairSetup(props: NodesProps) {
-  if (!props.devicePairSetupOpen) {
+export type DevicePairSetupProps = {
+  open: boolean;
+  loading: boolean;
+  error: string | null;
+  setup: DevicePairSetup | null;
+  pendingCount: number;
+  onRefresh: () => void;
+  onClose: () => void;
+  onCopy: (setupCode: string) => void;
+  onManageDevices: () => void;
+};
+
+export function renderDevicePairSetup(props: DevicePairSetupProps) {
+  if (!props.open) {
     return nothing;
   }
   const title = t("nodes.pairing.title");
   const description = t("nodes.pairing.subtitle");
-  const setup = props.devicePairSetup;
-  const pendingCount = props.devicesList?.pending.length ?? 0;
+  const setup = props.setup;
+  const pendingCount = props.pendingCount;
+  const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
 
   return html`
-    <openclaw-modal-dialog
-      label=${title}
-      description=${description}
-      @modal-cancel=${props.onDevicePairSetupClose}
-    >
+    <openclaw-modal-dialog label=${title} description=${description} @modal-cancel=${props.onClose}>
       <section class="device-pair-setup">
         <header class="device-pair-setup__header">
           <div class="device-pair-setup__phone" aria-hidden="true">${icons.smartphone}</div>
@@ -34,14 +43,14 @@ export function renderDevicePairSetup(props: NodesProps) {
             class="btn btn--icon btn--ghost device-pair-setup__close"
             type="button"
             aria-label=${t("common.dismiss")}
-            @click=${props.onDevicePairSetupClose}
+            @click=${props.onClose}
           >
             ${icons.x}
           </button>
         </header>
 
         <div class="device-pair-setup__body">
-          ${props.devicePairSetupLoading && !setup
+          ${props.loading && !setup
             ? html`
                 <div class="device-pair-setup__loading" role="status">
                   <span class="device-pair-setup__spinner" aria-hidden="true"></span>
@@ -49,17 +58,17 @@ export function renderDevicePairSetup(props: NodesProps) {
                 </div>
               `
             : nothing}
-          ${props.devicePairSetupError
+          ${props.error
             ? html`
                 <div class="callout danger device-pair-setup__error" role="alert">
                   <strong>${t("nodes.pairing.failed")}</strong>
-                  <span>${props.devicePairSetupError}</span>
+                  <span>${props.error}</span>
                 </div>
                 <button
                   class="btn primary"
                   type="button"
-                  ?disabled=${props.devicePairSetupLoading}
-                  @click=${props.onDevicePairSetupRefresh}
+                  ?disabled=${props.loading}
+                  @click=${props.onRefresh}
                 >
                   ${icons.refresh} ${t("common.reload")}
                 </button>
@@ -82,29 +91,33 @@ export function renderDevicePairSetup(props: NodesProps) {
 
                 <div class="device-pair-setup__meta">
                   <span class="pill">${setup.auth}</span>
-                  <span class="device-pair-setup__gateway" title=${setup.gatewayUrl}
-                    >${setup.gatewayUrl}</span
-                  >
+                  <div class="device-pair-setup__gateways">
+                    ${gatewayUrls.map(
+                      (gatewayUrl) => html`
+                        <span class="device-pair-setup__gateway" title=${gatewayUrl}
+                          >${gatewayUrl}</span
+                        >
+                      `,
+                    )}
+                  </div>
                 </div>
 
                 <div class="device-pair-setup__actions">
                   <button
                     class="btn primary"
                     type="button"
-                    @click=${() => props.onDevicePairSetupCopy(setup.setupCode)}
+                    @click=${() => props.onCopy(setup.setupCode)}
                   >
                     ${icons.copy} ${t("nodes.pairing.copySetupCode")}
                   </button>
                   <button
                     class="btn"
                     type="button"
-                    ?disabled=${props.devicePairSetupLoading}
-                    @click=${props.onDevicePairSetupRefresh}
+                    ?disabled=${props.loading}
+                    @click=${props.onRefresh}
                   >
                     ${icons.refresh}
-                    ${props.devicePairSetupLoading
-                      ? t("common.refreshing")
-                      : t("nodes.pairing.newCode")}
+                    ${props.loading ? t("common.refreshing") : t("nodes.pairing.newCode")}
                   </button>
                 </div>
 
@@ -119,7 +132,7 @@ export function renderDevicePairSetup(props: NodesProps) {
                         <span>
                           ${t("nodes.pairing.pending", { count: String(pendingCount) })}
                         </span>
-                        <button class="btn btn--sm" @click=${props.onDevicePairSetupClose}>
+                        <button class="btn btn--sm" @click=${props.onManageDevices}>
                           ${t("nodes.pairing.review")}
                         </button>
                       </div>
@@ -133,7 +146,7 @@ export function renderDevicePairSetup(props: NodesProps) {
           <a href=${PAIRING_DOCS_URL} target="_blank" rel="noreferrer">
             ${t("nodes.pairing.help")}
           </a>
-          <button class="btn btn--ghost" type="button" @click=${props.onDevicePairSetupClose}>
+          <button class="btn btn--ghost" type="button" @click=${props.onManageDevices}>
             ${t("nodes.pairing.manageDevices")}
           </button>
         </footer>

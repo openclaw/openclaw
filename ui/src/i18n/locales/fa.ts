@@ -444,6 +444,7 @@ export const fa: TranslationMap = {
     detached: "جداشده",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "عامل‌ها",
@@ -1436,6 +1437,13 @@ export const fa: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "جزئیات استفاده از زمینه",
+        open: "باز کردن جزئیات استفاده از زمینه",
+        summary: "استفاده از زمینهٔ جلسه: {used} از {limit} ({pct}٪)",
+        contextWindow: "پنجرهٔ زمینه",
+        latestRunTokens: "توکن‌های آخرین اجرا",
+      },
       dismissTalkError: "نادیده گرفتن خطای Talk",
       startTalk: "Start Talk",
       stillListening: "هنوز در حال گوش دادن",

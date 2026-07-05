@@ -442,6 +442,7 @@ export const ar: TranslationMap = {
     detached: "غير متصل",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "الوكلاء",
@@ -1418,6 +1419,13 @@ export const ar: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "تفاصيل استخدام السياق",
+        open: "فتح تفاصيل استخدام السياق",
+        summary: "استخدام سياق الجلسة: {used} من {limit} ({pct}%)",
+        contextWindow: "نافذة السياق",
+        latestRunTokens: "رموز التشغيل الأخير",
+      },
       dismissTalkError: "تجاهل خطأ Talk",
       startTalk: "Start Talk",
       stillListening: "لا يزال يستمع",

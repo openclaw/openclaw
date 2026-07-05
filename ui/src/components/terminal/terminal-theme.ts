@@ -1,5 +1,9 @@
-// Maps the Control UI light/dark surfaces onto ghostty-web's 16-color theme.
-import type { ITheme } from "ghostty-web";
+// Maps the Control UI light/dark surfaces onto the terminal's 16-color theme.
+import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
+
+type TerminalTheme = NonNullable<
+  NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]
+>;
 
 // ANSI palette tuned to sit on the Control UI's near-black / near-white surfaces.
 // Shared 8 + bright 8; foreground/background/cursor are overridden per mode below.
@@ -23,7 +27,7 @@ const ANSI = {
 } as const;
 
 /** Builds the terminal theme for the given Control UI color mode. */
-export function terminalTheme(mode: "dark" | "light"): ITheme {
+export function terminalTheme(mode: "dark" | "light"): TerminalTheme {
   if (mode === "light") {
     return {
       ...ANSI,

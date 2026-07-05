@@ -828,6 +828,10 @@ export async function startGatewayServer(
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
+  const crestodianSessions = new Map<
+    string,
+    import("./server-methods/crestodian.js").CrestodianChatSession
+  >();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -896,6 +900,7 @@ export async function startGatewayServer(
     addChatRun,
     removeChatRun,
     chatAbortControllers,
+    chatQueuedTurns,
     toolEventRecipients,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
@@ -1065,6 +1070,7 @@ export async function startGatewayServer(
       lifecycleUnsub: runtimeState.lifecycleUnsub,
       chatRunState,
       chatAbortControllers,
+      chatQueuedTurns,
       restartRecoveryCandidates,
       removeChatRun,
       agentRunSeq,
@@ -1137,6 +1143,7 @@ export async function startGatewayServer(
           logHealth,
           dedupe,
           chatAbortControllers,
+          chatQueuedTurns,
           restartRecoveryCandidates,
           chatRunState,
           chatRunBuffers,
@@ -1466,6 +1473,7 @@ export async function startGatewayServer(
           terminalSessions,
           agentRunSeq,
           chatAbortControllers,
+          chatQueuedTurns,
           chatAbortedRuns: chatRunState.abortedRuns,
           chatRunBuffers: chatRunState.buffers,
           chatDeltaSentAt: chatRunState.deltaSentAt,
@@ -1488,6 +1496,7 @@ export async function startGatewayServer(
           registerToolEventRecipient: toolEventRecipients.add,
           dedupe,
           wizardSessions,
+          crestodianSessions,
           findRunningWizard,
           purgeWizardSession,
           getRuntimeSnapshot,

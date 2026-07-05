@@ -923,6 +923,7 @@ export const SlackChannelSchema = z
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),

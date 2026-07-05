@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   controlUiBrowserOnlySharedModuleAliases,
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../../vite.config.ts";
@@ -33,6 +34,14 @@ describe("Control UI Vite config", () => {
     )?.toEqual({
       find: "@openclaw/normalization-core/string-coerce",
       replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
+    });
+  });
+
+  it("resolves published OpenClaw packages before the broad plugin alias", () => {
+    const aliases = resolveExternalPackageAliasesForVite();
+    expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
+      find: "@openclaw/libterminal/browser",
+      replacement: path.join(repoRoot, "node_modules/@openclaw/libterminal/dist/browser.js"),
     });
   });
 

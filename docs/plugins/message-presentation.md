@@ -12,14 +12,8 @@ Message presentation is OpenClaw's shared contract for rich outbound chat UI.
 It lets agents, CLI commands, approval flows, and plugins describe the message
 intent once, while each channel plugin renders the best native shape it can.
 
-Use presentation for portable message UI:
-
-- text sections
-- small context/footer text
-- dividers
-- buttons
-- select menus
-- card title and tone
+Use presentation for portable message UI: text sections, small context/footer
+text, dividers, buttons, select menus, and card title/tone.
 
 Do not add new provider-native fields such as Discord `components`, Slack
 `blocks`, Telegram `buttons`, Teams `card`, or Feishu `card` to the shared
@@ -111,7 +105,9 @@ Button semantics:
   original order among equal priority buttons. When all controls fit, authored
   order is preserved.
 - `disabled` is optional. Channels must opt in with `supportsDisabled`; otherwise
-  core degrades the disabled control to non-interactive fallback text.
+  core degrades the disabled control to non-interactive fallback text. A
+  disabled button always renders label-only in fallback text, even when it
+  carries a `command` action.
 - `reusable` is optional. Channels that support reusable native callbacks may
   keep the action available after a successful interaction. Use it for
   repeatable or idempotent actions such as refresh, inspect, or more details;
@@ -379,15 +375,16 @@ required and the channel cannot pin the sent message, delivery reports failure.
 
 Current bundled renderers:
 
-| Channel         | Native render target                | Notes                                                                                                                                             |
-| --------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Components and component containers | Preserves legacy `channelData.discord.components` for existing provider-native payload producers, but new shared sends should use `presentation`. |
-| Slack           | Block Kit                           | Preserves legacy `channelData.slack.blocks` for existing provider-native payload producers, but new shared sends should use `presentation`.       |
-| Telegram        | Text plus inline keyboards          | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                         |
-| Mattermost      | Text plus interactive props         | Other blocks degrade to text.                                                                                                                     |
-| Microsoft Teams | Adaptive Cards                      | Plain `message` text is included with the card when both are provided.                                                                            |
-| Feishu          | Interactive cards                   | Card header can use `title`; body avoids duplicating that title.                                                                                  |
-| Plain channels  | Text fallback                       | Channels without a renderer still get readable output.                                                                                            |
+| Channel         | Native render target                      | Notes                                                                                                                                                                                                             |
+| --------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discord         | Components and component containers       | Preserves legacy `channelData.discord.components` for existing provider-native payload producers, but new shared sends should use `presentation`.                                                                 |
+| Feishu          | Interactive cards                         | Card header can use `title`; body avoids duplicating that title.                                                                                                                                                  |
+| Matrix          | Text fallback plus structured event field | Buttons/selects advertise as supported, but every block currently renders as `renderMessagePresentationFallbackText` output carried in a `com.openclaw.presentation` event field, not native interactive widgets. |
+| Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                             |
+| Microsoft Teams | Adaptive Cards                            | Plain `message` text is included with the card when both are provided. Selects, styles, and disabled state are not supported.                                                                                     |
+| Slack           | Block Kit                                 | Preserves legacy `channelData.slack.blocks` for existing provider-native payload producers, but new shared sends should use `presentation`.                                                                       |
+| Telegram        | Text plus inline keyboards                | Buttons/selects require inline button capability for the target surface; otherwise text fallback is used.                                                                                                         |
+| Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                            |
 
 Provider-native payload compatibility is a transition affordance for existing
 reply producers. It is not a reason to add new shared native fields.
@@ -417,18 +414,34 @@ code:
 import {
   adaptMessagePresentationForChannel,
   applyPresentationActionLimits,
+  hasMessagePresentationBlocks,
   interactiveReplyToPresentation,
+  isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
   presentationPageSize,
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationActionValue,
+  resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 ```
 
 New code should accept or produce `MessagePresentation` directly. Existing
 `interactive` payloads are a deprecated subset of `presentation`; runtime
 support remains for older producers.
+
+Non-deprecated helpers worth knowing:
+
+- `normalizeMessagePresentation(raw)` / `hasMessagePresentationBlocks(value)`
+  validate and coerce an untyped payload (for example, JSON from the CLI
+  `--presentation` flag) into `MessagePresentation`.
+- `isMessagePresentationInteractiveBlock(block)` narrows a block to the
+  `buttons` | `select` union.
+- `resolveMessagePresentationActionValue(action)` /
+  `resolveMessagePresentationControlValue(control)` read the effective
+  command/callback value off an `action`, falling back to the legacy `value`
+  field for `resolveMessagePresentationControlValue`.
 
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK:

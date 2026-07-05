@@ -57,6 +57,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
       toolProfile: "coding",
     },
     onSecurityConfigure: vi.fn(),
+    canPairDevice: true,
+    onPairMobile: vi.fn(),
     onBrowserEnabledToggle: vi.fn(),
     onToolProfileChange: vi.fn(),
     theme: "claw",
@@ -74,7 +76,6 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onUserAvatarChange: vi.fn(),
     configObject: {},
     onSelectPreset: vi.fn(),
-    onAdvancedSettings: vi.fn(),
     connected: true,
     gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
@@ -125,11 +126,10 @@ describe("renderQuickSettings", () => {
       "qs-card--model",
       "qs-card--channels",
       "qs-card--security",
-      "qs-card--personal",
       "qs-card--appearance",
+      "qs-card--personal",
       "qs-card--automations",
     ]);
-    expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
@@ -138,13 +138,9 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ configObject: {} })), container);
 
-    const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-profile-stat")).find(
-      (candidate) =>
-        candidate.querySelector(".qs-profile-stat__label")?.textContent?.trim() ===
-        "Bootstrap Per File",
-    );
-    expect(stat?.querySelector(".qs-profile-stat__value")?.textContent?.trim()).toBe(
-      "20,000 chars",
+    const summary = container.querySelector(".qs-profiles__summary-values");
+    expect(summary?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "20,000 chars per file · 60,000 chars total · Every turn",
     );
   });
 
@@ -210,6 +206,19 @@ describe("renderQuickSettings", () => {
       "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
     ]);
+  });
+
+  it("opens mobile pairing from Security quick settings", () => {
+    const onPairMobile = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ onPairMobile })), container);
+
+    expectRowByLabel(container, "OpenClaw mobile");
+    const button = expectButtonByText(container, "Pair mobile device");
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(onPairMobile).toHaveBeenCalledOnce();
   });
 
   it("lets operators change text size from Appearance quick settings", () => {

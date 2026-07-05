@@ -447,6 +447,7 @@ export const ja_JP: TranslationMap = {
     detached: "デタッチ済み",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "エージェント",
@@ -1440,6 +1441,13 @@ export const ja_JP: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "コンテキスト使用量の詳細",
+        open: "コンテキスト使用量の詳細を開く",
+        summary: "セッションのコンテキスト使用量: {used}/{limit} ({pct}%)",
+        contextWindow: "コンテキストウィンドウ",
+        latestRunTokens: "最新実行のトークン",
+      },
       dismissTalkError: "Talkエラーを閉じる",
       startTalk: "Start Talk",
       stillListening: "まだ聞いています",

@@ -244,6 +244,60 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("opens current context and latest-run usage from the composer ring", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          count: 1,
+          defaults: {
+            contextTokens: 200_000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+          },
+          path: "",
+          sessions: [
+            {
+              contextTokens: 200_000,
+              inputTokens: 757_300,
+              key: "main",
+              kind: "direct",
+              model: "gpt-5.5",
+              outputTokens: 42_300,
+              totalTokens: 46_000,
+              updatedAt: Date.now(),
+            },
+          ],
+          ts: Date.now(),
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const trigger = page.locator("summary.context-ring");
+      await trigger.waitFor({ timeout: 10_000 });
+      await trigger.click();
+
+      const popover = page.locator(".context-usage__popover");
+      await expect.poll(() => popover.isVisible()).toBe(true);
+      await expect.poll(() => popover.textContent()).toContain("46k / 200k · 23%");
+      await expect.poll(() => popover.textContent()).toContain("757.3k");
+      await expect.poll(() => popover.textContent()).toContain("42.3k");
+      await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
+
+      await page.keyboard.press("Escape");
+      await expect.poll(() => popover.isHidden()).toBe(true);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps a targetless message-tool source reply beside the automatic final reply", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -482,6 +536,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail__file").count()).toBe(0);
       expect(await page.locator(".chat-workspace-rail__collapsed-icon svg").count()).toBe(1);
+      // The rail docks flush to the window edge in both states (no content gutter).
+      const railEdgeGap = () =>
+        page.locator(".chat-workspace-rail").evaluate((element) => {
+          return window.innerWidth - element.getBoundingClientRect().right;
+        });
+      expect(await railEdgeGap()).toBe(0);
 
       await page.getByRole("button", { name: "Expand session workspace" }).click();
       await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
@@ -495,6 +555,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
       expect(await gateway.getRequests("artifacts.list")).toHaveLength(1);
+      expect(await railEdgeGap()).toBe(0);
 
       await page.getByRole("button", { name: "Collapse session workspace" }).click();
       await page.getByRole("button", { name: "Expand session workspace" }).waitFor({

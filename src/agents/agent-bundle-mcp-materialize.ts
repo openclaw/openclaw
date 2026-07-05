@@ -1,6 +1,7 @@
 /** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
 import type { CallToolResult, ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -16,7 +17,6 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 

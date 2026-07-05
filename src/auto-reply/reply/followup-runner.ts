@@ -53,6 +53,7 @@ import {
 } from "./agent-lifecycle-terminal.js";
 import {
   clearDroppedCliSessionBinding,
+  createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
@@ -521,6 +522,7 @@ export function createFollowupRunner(params: {
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
     let replyOperation: ReplyOperation | undefined;
     let deferred = false;
+    let failed = false;
 
     try {
       queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
@@ -617,6 +619,7 @@ export function createFollowupRunner(params: {
         resetTriggered: false,
         routeThreadId: queued.originatingThreadId,
         upstreamAbortSignal: resolveFollowupAbortSignal(queued),
+        onFollowupAdmissionWaitChange: effectiveQueued.onFollowupAdmissionWaitChange,
       });
       if (admission.status === "skipped") {
         if (admission.reason === "active-run") {
@@ -626,6 +629,9 @@ export function createFollowupRunner(params: {
         return;
       }
       replyOperation = admission.operation;
+      // Multi-source collected turns become atomic at reply-lane admission.
+      // Their queue owner uses this boundary to retire source cancellation ids.
+      effectiveQueued.queuedLifecycle?.onAdmitted?.();
       if (replyOperation.sessionId !== run.sessionId) {
         run = { ...run, sessionId: replyOperation.sessionId };
         effectiveQueued = { ...effectiveQueued, run };
@@ -1017,6 +1023,10 @@ export function createFollowupRunner(params: {
                   emitLifecycleTerminal: false,
                   onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
                   suppressAssistantBridge: run.silentExpected,
+                  onReasoningText: createCliReasoningStreamBridge(opts?.onReasoningStream),
+                  onReasoningProgress: async (payload) => {
+                    await opts?.onReasoningProgress?.(payload);
+                  },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
@@ -1579,6 +1589,9 @@ export function createFollowupRunner(params: {
         },
         { runId },
       );
+    } catch (err) {
+      failed = true;
+      throw err;
     } finally {
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {
@@ -1589,7 +1602,9 @@ export function createFollowupRunner(params: {
           );
         }
       }
-      if (!deferred) {
+      // A thrown attempt stays in the drain queue for retry. Its lifecycle
+      // identity remains live until the drain later consumes or drops it.
+      if (!deferred && !failed) {
         completeFollowupRunLifecycle(queued);
       }
       replyOperation?.complete();

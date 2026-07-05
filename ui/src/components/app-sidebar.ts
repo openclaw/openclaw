@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ModelAuthStatusResult, SessionsListResult } from "../api/types.ts";
+import type { SessionsListResult } from "../api/types.ts";
 import {
   cancelRoutePreload,
   isSettingsNavigationRoute,
@@ -45,8 +45,6 @@ import {
 } from "../lib/sessions/session-options.ts";
 import { icons } from "./icons.ts";
 
-type ProviderQuotaPillRenderer = typeof import("./provider-quota-pill.ts").renderProviderQuotaPill;
-
 type SidebarRecentSession = {
   key: string;
   label: string;
@@ -80,6 +78,7 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) navGroupsCollapsed: Record<string, boolean> = {};
   @property({ attribute: false }) recentSessionsCollapsed = false;
@@ -87,6 +86,7 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
+  @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
@@ -96,15 +96,13 @@ export class AppSidebar extends LitElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private modelAuthStatusResult: ModelAuthStatusResult | null = null;
-  @state() private providerQuotaPillRenderer: ProviderQuotaPillRenderer | null = null;
 
   private stopSessionsSubscription: (() => void) | undefined;
   private stopAgentsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
-  private modelAuthClient: GatewayBrowserClient | null = null;
+  private gatewayClient: GatewayBrowserClient | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -125,7 +123,7 @@ export class AppSidebar extends LitElement {
     this.stopAgentSelectionSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
-    this.modelAuthClient = null;
+    this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
@@ -144,7 +142,7 @@ export class AppSidebar extends LitElement {
     ) {
       return;
     }
-    this.updateModelAuthStatus(context.gateway.snapshot);
+    this.updateGatewayClient(context.gateway.snapshot);
     this.updateSessions(context.sessions.state);
     this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
       this.updateSessions(snapshot);
@@ -156,7 +154,7 @@ export class AppSidebar extends LitElement {
       this.requestUpdate();
     });
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      this.updateModelAuthStatus(snapshot);
+      this.updateGatewayClient(snapshot);
       this.requestUpdate();
     });
   }
@@ -178,44 +176,16 @@ export class AppSidebar extends LitElement {
     }
   };
 
-  private updateModelAuthStatus(snapshot: {
+  private updateGatewayClient(snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
   }) {
     const client = snapshot.connected ? snapshot.client : null;
-    if (client === this.modelAuthClient) {
+    if (client === this.gatewayClient) {
       return;
     }
     this.sessionRowsByAgent = {};
-    this.modelAuthClient = client;
-    this.modelAuthStatusResult = null;
-    if (!client) {
-      return;
-    }
-    void import("../lib/model-auth.ts")
-      .then(async ({ isMonitoredAuthProvider, loadModelAuthStatus }) => {
-        const result = await loadModelAuthStatus(client);
-        if (this.modelAuthClient !== client) {
-          return;
-        }
-        this.modelAuthStatusResult = result;
-        const hasQuota = result.providers.some(
-          (provider) =>
-            isMonitoredAuthProvider(provider) && Boolean(provider.usage?.windows?.length),
-        );
-        if (!hasQuota || this.providerQuotaPillRenderer) {
-          return;
-        }
-        const { renderProviderQuotaPill } = await import("./provider-quota-pill.ts");
-        if (this.modelAuthClient === client) {
-          this.providerQuotaPillRenderer = renderProviderQuotaPill;
-        }
-      })
-      .catch(() => {
-        if (this.modelAuthClient === client) {
-          this.modelAuthStatusResult = null;
-        }
-      });
+    this.gatewayClient = client;
   }
 
   private getRouteSessionKey(): string {
@@ -676,12 +646,6 @@ export class AppSidebar extends LitElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
-    const quotaPill = this.collapsed
-      ? ""
-      : (this.providerQuotaPillRenderer?.({
-          basePath: this.basePath,
-          modelAuthStatusResult: this.modelAuthStatusResult,
-        }) ?? "");
     return html`
       <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
         <div class="sidebar-shell">
@@ -747,7 +711,6 @@ export class AppSidebar extends LitElement {
           </div>
           <div class="sidebar-shell__footer">
             <div class="sidebar-utility-group">
-              ${quotaPill ? html`<div class="sidebar-quota">${quotaPill}</div>` : nothing}
               ${this.collapsed
                 ? html`
                     <openclaw-tooltip
@@ -778,22 +741,39 @@ export class AppSidebar extends LitElement {
               <div class="sidebar-mode-switch">
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </div>
-              <div class="sidebar-status">
-                <openclaw-tooltip .content=${gatewayStatus}>
-                  <span
-                    class="sidebar-status__dot ${this.connected
-                      ? "sidebar-connection-status--online"
-                      : "sidebar-connection-status--offline"}"
-                    role="img"
-                    aria-live="polite"
-                    aria-label=${gatewayStatus}
-                  ></span>
+              <div class="sidebar-footer-row">
+                <div class="sidebar-status">
+                  <openclaw-tooltip .content=${gatewayStatus}>
+                    <span
+                      class="sidebar-status__dot ${this.connected
+                        ? "sidebar-connection-status--online"
+                        : "sidebar-connection-status--offline"}"
+                      role="img"
+                      aria-live="polite"
+                      aria-label=${gatewayStatus}
+                    ></span>
+                  </openclaw-tooltip>
+                  ${this.collapsed
+                    ? nothing
+                    : html`<span class="sidebar-status__text"
+                        >${this.connected ? t("common.online") : t("common.offline")}</span
+                      >`}
+                </div>
+                <openclaw-tooltip
+                  .content=${this.canPairDevice
+                    ? t("nodes.pairing.button")
+                    : t("nodes.pairing.adminRequired")}
+                >
+                  <button
+                    class="sidebar-pair-mobile"
+                    type="button"
+                    aria-label=${t("nodes.pairing.button")}
+                    ?disabled=${!this.canPairDevice}
+                    @click=${() => this.onPairMobile?.()}
+                  >
+                    <span aria-hidden="true">${icons.smartphone}</span>
+                  </button>
                 </openclaw-tooltip>
-                ${this.collapsed
-                  ? nothing
-                  : html`<span class="sidebar-status__text"
-                      >${this.connected ? t("common.online") : t("common.offline")}</span
-                    >`}
               </div>
             </div>
           </div>

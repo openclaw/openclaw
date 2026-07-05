@@ -3186,7 +3186,7 @@ function resolveDocsI18nBehaviorTargets(changedPath) {
   if (!/^scripts\/docs-i18n\/testdata\/behavior\/[^/]+\/[^/]+$/u.test(changedPath)) {
     return null;
   }
-  return ["test/scripts/docs-i18n-behavior.test.ts"];
+  return ["test/scripts/docs-i18n.test.ts"];
 }
 
 function resolveDocsI18nGoTargets(changedPath) {

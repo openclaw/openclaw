@@ -445,6 +445,7 @@ export const tr: TranslationMap = {
     detached: "ayrıldı",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "Aracılar",
@@ -1440,6 +1441,13 @@ export const tr: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Bağlam kullanımı ayrıntıları",
+        open: "Bağlam kullanımı ayrıntılarını aç",
+        summary: "Oturum bağlam kullanımı: {limit} üzerinden {used} ({pct}%)",
+        contextWindow: "Bağlam penceresi",
+        latestRunTokens: "En son çalıştırma token'ları",
+      },
       dismissTalkError: "Talk hatasını kapat",
       startTalk: "Start Talk",
       stillListening: "Hâlâ dinliyor",

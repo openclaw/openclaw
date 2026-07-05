@@ -443,6 +443,7 @@ export const vi: TranslationMap = {
     detached: "đã tách",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "Agent",
@@ -1426,6 +1427,13 @@ export const vi: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Chi tiết mức sử dụng ngữ cảnh",
+        open: "Mở chi tiết mức sử dụng ngữ cảnh",
+        summary: "Mức sử dụng ngữ cảnh phiên: {used} trên {limit} ({pct}%)",
+        contextWindow: "Cửa sổ ngữ cảnh",
+        latestRunTokens: "Token của lần chạy gần nhất",
+      },
       dismissTalkError: "Bỏ qua lỗi Talk",
       startTalk: "Start Talk",
       stillListening: "Vẫn đang nghe",

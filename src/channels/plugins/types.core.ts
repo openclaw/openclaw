@@ -213,6 +213,7 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
@@ -458,6 +459,8 @@ export type ChannelThreadingContext = {
   To?: string;
   ChatType?: string;
   CurrentMessageId?: string | number;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: MsgContext["ReplyToMode"];
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;

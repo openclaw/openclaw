@@ -767,6 +767,7 @@ extension TestChatTransportState {
     }
 }
 
+@Suite(.serialized)
 struct ChatViewModelTests {
     @Test func `keeps distinct idempotent user turns with identical timestamps and content`() async throws {
         let history = historyPayload(
@@ -3432,7 +3433,9 @@ struct ChatViewModelTests {
 
         await gate.open()
         try await waitUntil("history reloaded after compact") {
-            await MainActor.run { vm.messages.first?.content.first?.text == "after compact" }
+            await MainActor.run {
+                vm.messages.first?.content.first?.text == "after compact" && !vm.isLoading
+            }
         }
 
         await MainActor.run {
@@ -3440,9 +3443,12 @@ struct ChatViewModelTests {
             vm.send()
         }
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntil("compact cooldown rejects immediate retry") {
+            await MainActor.run {
+                vm.errorText == "Please wait before compacting this session again."
+            }
+        }
         #expect(await transport.compactSessionKeys() == ["main"])
-        #expect(await MainActor.run { vm.errorText } == "Please wait before compacting this session again.")
     }
 
     @Test func `compact trigger allows immediate retry after failure`() async throws {
@@ -3615,6 +3621,13 @@ struct ChatViewModelTests {
             modelResponses: [models])
 
         try await loadAndWaitBootstrap(vm: vm)
+        try await waitUntil("model metadata bootstrap") {
+            await MainActor.run {
+                vm.showsModelPicker
+                    && vm.modelSelectionID == "anthropic/claude-opus-4-6"
+                    && vm.defaultModelLabel == "Default: openai/gpt-4.1-mini"
+            }
+        }
 
         #expect(await MainActor.run { vm.showsModelPicker })
         #expect(await MainActor.run { vm.modelSelectionID } == "anthropic/claude-opus-4-6")
@@ -3748,15 +3761,17 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.selectModel("openai/gpt-5.4")
-            vm.selectModel("openai/gpt-5.4-pro")
+        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("older model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
         }
+        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
 
-        try await waitUntil("two model patches complete") {
-            let patched = await transport.patchedModels()
-            return patched == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
+        try await waitUntil("two model patches issued") {
+            await transport.patchedModels() == ["openai/gpt-5.4", "openai/gpt-5.4-pro"]
         }
+        await sendUserMessage(vm, text: "after model patches")
+        _ = try await waitForLastSentRunId(transport)
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/gpt-5.4-pro")
         #expect(await MainActor.run { vm.sessions.first(where: { $0.key == "main" })?.model } == "gpt-5.4-pro")
@@ -3848,10 +3863,11 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.selectModel("openai/gpt-5.4")
-            vm.selectModel("openai/gpt-5.4-pro")
+        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("older model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
         }
+        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
 
         try await waitUntil("older model completion wins after latest failure") {
             await MainActor.run {
@@ -3899,10 +3915,11 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
 
-        await MainActor.run {
-            vm.selectModel("openai/gpt-5.4")
-            vm.selectModel("openai/gpt-5.4-pro")
+        await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("earlier model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
         }
+        await MainActor.run { vm.selectModel("openai/gpt-5.4-pro") }
 
         try await waitUntil("latest failure restores prior successful model") {
             await MainActor.run {
@@ -4971,6 +4988,8 @@ struct ChatViewModelTests {
             historyResponses: [
                 historyPayload(sessionKey: "main", sessionId: "sess-main"),
                 historyPayload(sessionKey: "other", sessionId: "sess-other"),
+                historyPayload(sessionKey: "main", sessionId: "sess-main"),
+                historyPayload(sessionKey: "other", sessionId: "sess-other"),
             ],
             sessionsResponses: [sessions, sessions],
             modelResponses: [models, models],
@@ -4983,14 +5002,25 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("main session model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
+        }
         await MainActor.run { vm.switchSession(to: "other") }
 
         try await waitUntil("switched sessions") {
             await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
         }
-        try await waitUntil("late model patch finished") {
-            let patched = await transport.patchedModels()
-            return patched == ["openai/gpt-5.4"]
+
+        await MainActor.run { vm.switchSession(to: "main") }
+        try await waitUntil("returned to original session") {
+            await MainActor.run { vm.sessionKey == "main" && vm.sessionId == "sess-main" }
+        }
+        await sendUserMessage(vm, text: "after late model patch")
+        _ = try await waitForLastSentRunId(transport)
+
+        await MainActor.run { vm.switchSession(to: "other") }
+        try await waitUntil("reopened other session") {
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
         }
 
         #expect(await MainActor.run { vm.modelSelectionID } == OpenClawChatViewModel.defaultModelSelectionID)
@@ -5039,6 +5069,9 @@ struct ChatViewModelTests {
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
         await MainActor.run { vm.selectModel("openai/gpt-5.4") }
+        try await waitUntil("main session model patch starts") {
+            await transport.patchedModels() == ["openai/gpt-5.4"]
+        }
         await MainActor.run { vm.switchSession(to: "other") }
         try await waitUntil("switched to other session") {
             await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
@@ -5399,10 +5432,11 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
 
-        await MainActor.run {
-            vm.selectThinkingLevel("medium")
-            vm.selectThinkingLevel("high")
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+        try await waitUntil("older thinking patch starts") {
+            await transport.patchedThinkingLevels() == ["medium"]
         }
+        await MainActor.run { vm.selectThinkingLevel("high") }
 
         try await waitUntil("thinking patch replayed latest selection") {
             let patched = await transport.patchedThinkingLevels()

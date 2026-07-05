@@ -53,7 +53,8 @@ export function selectCrestodianLocalPlannerBackends(
   return backends;
 }
 
-function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClawConfig {
+/** Minimal run config for a CLI-harness model scoped to one workspace. */
+export function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -64,7 +65,8 @@ function buildCliPlannerConfig(workspaceDir: string, modelRef: string): OpenClaw
   };
 }
 
-function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig {
+/** Run config for the Codex app-server harness (exec must be allowed to spawn it). */
+export function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -74,8 +76,19 @@ function buildCodexAppServerPlannerConfig(workspaceDir: string): OpenClawConfig 
     },
     plugins: {
       entries: {
-        codex: { enabled: true },
+        codex: {
+          enabled: true,
+          // Crestodian carries a single ring-zero tool; advertise it directly
+          // instead of hiding it behind the Codex tool-search index.
+          config: { codexDynamicToolsLoading: "direct" },
+        },
       },
+    },
+    // The Codex app-server harness runs a local process; the ephemeral
+    // configless config must allow exec or the harness refuses to start
+    // ("not available when tools.exec.mode=deny").
+    tools: {
+      exec: { mode: "full" },
     },
   };
 }

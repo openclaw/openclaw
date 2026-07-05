@@ -362,6 +362,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             running: true,
             connected: true,
             lastConnectedAt: Date.now(),
+            lastError: null,
           });
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
@@ -374,6 +375,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             running: true,
             connected: true,
             lastConnectedAt: Date.now(),
+            lastError: null,
           });
           persistAccountCredentialSnapshot(account);
         },
@@ -382,6 +384,19 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           ctx.setStatus({
             ...ctx.getStatus(),
             lastError: error.message,
+          });
+        },
+        onDisconnected: ({ reason, fatal }) => {
+          log?.info(
+            `[qqbot:${account.accountId}] Gateway disconnected${reason ? `: ${reason}` : ""}`,
+          );
+          // Keep the raw lifecycle snapshot truthful so readiness and the shared
+          // health monitor see the failed transport. QQBot's fatal flag only
+          // suppresses its immediate reconnect policy.
+          ctx.setStatus({
+            ...ctx.getStatus(),
+            connected: false,
+            ...(fatal && reason ? { lastError: reason } : {}),
           });
         },
       });

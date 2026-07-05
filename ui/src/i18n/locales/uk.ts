@@ -444,6 +444,7 @@ export const uk: TranslationMap = {
     detached: "відʼєднано",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    unavailable: "The terminal is not available on this gateway.",
   },
   tabs: {
     agents: "Агенти",
@@ -1438,6 +1439,13 @@ export const uk: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
+      contextUsage: {
+        title: "Відомості про використання контексту",
+        open: "Відкрити відомості про використання контексту",
+        summary: "Використання контексту сеансу: {used} з {limit} ({pct}%)",
+        contextWindow: "Контекстне вікно",
+        latestRunTokens: "Токени останнього запуску",
+      },
       dismissTalkError: "Закрити помилку Talk",
       startTalk: "Start Talk",
       stillListening: "Все ще слухаємо",

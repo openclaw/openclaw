@@ -7,24 +7,25 @@ title: "Anthropic"
 
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
-- **API key** — direct Anthropic API access with usage-based billing (`anthropic/*` models)
-- **Claude CLI** — reuse an existing Claude Code login on the same host
+- **API key** - direct Anthropic API access with usage-based billing (`anthropic/*` models)
+- **Claude CLI** - reuse an existing Claude Code login on the same host
 
 <Warning>
 OpenClaw's Claude CLI backend runs the installed Claude Code CLI in
-non-interactive print mode. Anthropic's current Claude Code docs describe
-`claude -p` as Agent SDK/programmatic usage. Anthropic's June 15, 2026 support
-update paused the announced Agent SDK billing change. For now, Anthropic says
-Claude Agent SDK, `claude -p`, and third-party app usage still draw from a
-subscription's usage limits. The previously announced monthly Agent SDK credit
-is not available while Anthropic revises that plan.
+non-interactive print mode (`claude -p`). Anthropic's current Claude Code docs
+describe that mode as Agent SDK/programmatic usage. Anthropic's June 15, 2026
+support update paused the announced separate Agent SDK billing change: Claude
+Agent SDK, `claude -p`, and third-party app usage still draw from a signed-in
+subscription's usage limits, and the previously announced monthly Agent SDK
+credit is not available while Anthropic revises that plan.
 
-Interactive Claude Code still draws from the signed-in Claude plan limits. API
-key auth remains direct pay-as-you-go API billing. For long-lived gateway hosts,
-shared automation, and predictable production spend, use an Anthropic API key.
+Interactive Claude Code still draws from the signed-in Claude plan's limits.
+API key auth is direct pay-as-you-go billing and does not depend on that plan.
+For long-lived gateway hosts, shared automation, and predictable production
+spend, use an Anthropic API key.
 
-Check Anthropic's current support articles before relying on subscription
-billing behavior:
+Anthropic's current support articles can change this behavior without an
+OpenClaw release:
 
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
@@ -145,8 +146,8 @@ billing behavior:
 
     - Anthropic's June 15, 2026 support update paused the previously announced
       separate Agent SDK credit plan.
-    - For now, subscription-plan Claude Agent SDK, `claude -p`, and third-party
-      app usage still draw from the signed-in subscription's usage limits.
+    - Subscription-plan Claude Agent SDK, `claude -p`, and third-party app usage
+      still draw from the signed-in subscription's usage limits.
     - The previously announced monthly Agent SDK credit is not available while
       Anthropic revises that plan.
     - Console/API-key logins use pay-as-you-go API billing and do not receive
@@ -177,11 +178,15 @@ billing behavior:
 ## Thinking defaults (Claude Fable 5, 4.8, and 4.6)
 
 `anthropic/claude-fable-5` always uses adaptive thinking and defaults to `high`
-effort. Because Anthropic does not allow thinking to be disabled for this model,
-`/think off` and `/think minimal` use `low` effort. OpenClaw also omits custom
-temperature values for Fable 5 requests.
+effort. Anthropic does not allow thinking to be disabled for this model, so
+`/think off` and `/think minimal` map to `low` effort instead. OpenClaw also
+omits custom temperature values for Fable 5 requests, since Anthropic rejects
+a temperature override on any thinking-enabled request.
 
-Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends Anthropic's Opus 4.8 effort values; Claude 4.6 models default to `adaptive`.
+Claude Opus 4.8 keeps thinking off by default in OpenClaw. When you explicitly
+enable adaptive thinking with `/think high|xhigh|max`, OpenClaw sends
+Anthropic's Opus 4.8 effort values; Claude 4.6 models (Opus 4.6 and Sonnet 4.6)
+default to `adaptive`.
 
 Override per-message with `/think:<level>` or in model params:
 
@@ -223,7 +228,7 @@ Fable 5 classifiers return `stop_reason: "refusal"` on requests in restricted
 domains, and they also false-positive on benign-adjacent work (security
 tooling, life sciences, or even asking the model to reproduce its raw
 reasoning). Without a fallback, the turn dies with an error even though
-another Claude model would happily serve it — Anthropic's own refusal message
+another Claude model would happily serve it - Anthropic's own refusal message
 tells API integrators to configure a fallback model.
 
 ### How it works
@@ -246,7 +251,7 @@ tells API integrators to configure a fallback model.
    error, exactly like before this feature.
 
 The fallback happens at the Anthropic API level, so `claude-opus-4-8` does not
-need to be in your configured model list or fallback chain — a Fable-capable
+need to be in your configured model list or fallback chain - a Fable-capable
 API key can always serve Opus.
 
 ### Observability and billing
@@ -345,7 +350,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="Fast mode">
-    OpenClaw's shared `/fast` toggle supports direct Anthropic traffic (API-key and OAuth to `api.anthropic.com`).
+    OpenClaw's shared `/fast` toggle sets Anthropic's `service_tier` field for direct API-key traffic to `api.anthropic.com`.
 
     | Command | Maps to |
     |---------|---------|
@@ -367,7 +372,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```
 
     <Note>
-    - Only injected for direct `api.anthropic.com` requests. Proxy routes leave `service_tier` untouched.
+    - Only applies to direct `api.anthropic.com` requests made with an API key. OAuth/subscription-token requests and proxy routes never get a `service_tier` field.
     - Explicit `serviceTier` or `service_tier` params override `/fast` when both are set.
     - On accounts without Priority Tier capacity, `service_tier: "auto"` may resolve to `standard`.
 
@@ -377,7 +382,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   <Accordion title="Media understanding (image and PDF)">
     The bundled Anthropic plugin registers image and PDF understanding. OpenClaw
-    auto-resolves media capabilities from the configured Anthropic auth — no
+    auto-resolves media capabilities from the configured Anthropic auth; no
     additional config is needed.
 
     | Property        | Value                 |
@@ -391,9 +396,9 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Anthropic's 1M context window is available on GA-capable Claude 4.x models
-    such as Opus 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes those models at
-    1M automatically:
+    Anthropic's 1M context window is GA on Claude 4.x models with adaptive
+    thinking: Opus 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes those
+    models at 1,048,576 tokens automatically, no `params.context1m` needed:
 
     ```json5
     {
@@ -407,15 +412,15 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     }
     ```
 
-    Older configs can keep `params.context1m: true`, but OpenClaw no longer sends
-    the retired `context-1m-2025-08-07` beta header. Older `anthropicBeta` config
-    entries with that value are ignored during request header resolution and
+    Older configs can keep `params.context1m: true`; it is a harmless no-op for
+    these models and OpenClaw no longer sends the retired
+    `context-1m-2025-08-07` beta header regardless. Older `anthropicBeta` config
+    entries with that value are dropped during request header resolution, and
     unsupported older Claude models stay on their normal context window.
 
-    `params.context1m: true` also applies to the Claude CLI backend
-    (`claude-cli/*`) for eligible GA-capable Opus and Sonnet models, preserving
-    the runtime context window for those CLI sessions to match the direct-API
-    behavior.
+    `params.context1m: true` behaves the same way for the Claude CLI backend
+    (`claude-cli/*`): eligible GA-capable Opus and Sonnet models already get the
+    1M window automatically, so the param is optional there too.
 
     <Warning>
     Requires long-context access on your Anthropic credential. OAuth/subscription token auth keeps its required Anthropic beta headers, but OpenClaw strips the retired 1M beta header if it remains in older config.
@@ -425,7 +430,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   <Accordion title="Claude Opus 4.8 1M context">
     `anthropic/claude-opus-4-8` and its `claude-cli` variant have a 1M context
-    window by default — no `params.context1m: true` needed.
+    window by default; no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>
 
@@ -437,7 +442,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title='No API key found for provider "anthropic"'>
-    Anthropic auth is **per agent** — new agents do not inherit the main agent's keys. Re-run onboarding for that agent (or configure an API key on the gateway host), then verify with `openclaw models status`.
+    Anthropic auth is **per agent**; new agents do not inherit the main agent's keys. Re-run onboarding for that agent (or configure an API key on the gateway host), then verify with `openclaw models status`.
   </Accordion>
 
   <Accordion title='No credentials found for profile "anthropic:default"'>

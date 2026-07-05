@@ -2,6 +2,26 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd.
+
+### Fixes
+
+- **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
+- **WhatsApp credential recovery:** restore malformed primary auth state from a valid backup during startup. (#99070) Thanks @LeonidasLux.
+- **WhatsApp quoted replies:** preserve bot-authored outbound quote metadata so replies to those messages keep their reply bubble in WhatsApp Desktop. (#94879) Thanks @Bartok9.
+- **WhatsApp reconnect catch-up:** admit recently missed Baileys `append` messages during a bounded reconnect window while preserving startup stale-history guards. (#80642) Thanks @VishalJ99.
+- **WhatsApp restart recovery:** stop automatic restart loops after logged-out or connection-replaced disconnects until the account reconnects. (#78511) Thanks @openperf.
+- **Local Gateway CLI auth:** keep loopback CLI token/password calls off durable device scopes so read probes cannot block later write/admin commands behind a stale pairing baseline. (#95997) Thanks @vincentkoc.
+- **Plugin module identity:** keep OpenClaw package chunks on Node's native module graph when jiti transforms plugin entries, preventing duplicate evaluation and class identity drift. (#88384) Thanks @vincentkoc.
+- **Shell completion repair:** generate core-only caches during doctor and update repair while preserving full plugin command completion for onboarding and explicit user rebuilds. (#76235)
+- **MCP schema diagnostics:** attribute draft-2020-12 compiler failures to the external MCP schema so malformed patterns produce actionable setup errors. Thanks @vincentkoc.
+- **iMessage group warnings:** suppress the false drop-all startup warning when an effective group sender allowlist can admit groups, and point true empty-allowlist configurations at the correct remedy. (#100046)
+- **Control UI mobile login:** keep Gateway recovery guidance visible after connection failures, make the disconnected gate scroll safely on constrained screens, and improve mobile keyboard and tap-target behavior. (#100208)
+
 ## 2026.7.1
 
 ### Highlights
@@ -18,6 +38,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Control UI context usage:** show context-window progress, latest-run input/output tokens, and the active model when the chat context ring is opened.
+- **Apple Watch voice turns:** dictate a message from the Watch chat and hear the new OpenClaw reply spoken on the Watch, with explicit silent-message and stop-speaking controls. (#100224)
+- **Conversational onboarding:** add a real agent-loop Crestodian setup flow across the CLI, Gateway, web install, and macOS app, with typed operations, exact approval binding, masked credential prompts, isolated session transcripts, and safe handoff to the normal agent.
 - **Generated session titles:** name new Control UI sessions from their first message, and add default/per-agent `utilityModel` routing for lower-cost session, topic, and thread title generation. Thanks @Juliangsm and @zhangguiping-xydt.
 - **ClawRouter routing and quotas:** add the bundled ClawRouter provider plugin with credential-scoped dynamic model discovery, OpenAI-compatible and native Anthropic/Gemini transports, and managed budget reporting across OpenClaw usage surfaces. (#99658)
 - **Model and provider coverage:** add GPT-5.6 support, use Nemotron Super's 1M context window, and preserve explicit OpenRouter authentication headers. (#98333, #98726, #98187) Thanks @steipete-oai, @eleqtrizit, @sunlit-deng, and @laurencebrown.
@@ -31,6 +54,16 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Mobile pairing routes:** advertise verified persistent Tailscale Serve fallbacks alongside `gateway.bind=lan` setup URLs, show every route in the Control UI and CLI, and let iOS save the first reachable endpoint. (#100280)
+- **Control UI terminal tabs:** vertically center the new-session button in the terminal tab strip.
+- **Control UI composer scrollbar:** show the message-field scrollbar only when the draft actually overflows its autosized height.
+- **Control UI terminal cursor:** hide the browser-native contenteditable caret so the integrated terminal shows only its canvas-rendered cursor.
+- **macOS SSH tunnels:** resolve user-installed SSH `ProxyCommand` helpers through the app's managed PATH while preserving inherited connection environment, so remote aliases work after Finder and sanitized-script launches.
+- **Control UI OpenAI speed picker:** show only Standard and Fast choices for OpenAI models.
+- **Control UI terminal rendering:** adopt the shared `@openclaw/libterminal` browser lifecycle and add Nerd Font fallbacks so icon-enabled shell listings render their glyphs when a compatible local font is installed.
+- **Slack transcript history:** let Codex app-server own its persisted assistant replies so Slack does not append redundant delivery-mirror rows, while the Control UI keeps legacy duplicate mirrors hidden.
+- **Control UI chat history:** hide redundant channel-final delivery mirrors when the preceding app-server assistant reply already shows the same text.
+- **Control UI chat spacing:** keep the first message comfortably clear of the topbar with a responsive minimum transcript inset.
 - **ClawRouter auth profiles:** resolve credential-scoped catalog models during agent runs when the proxy key is stored in an auth profile, and document plugin and model allowlists.
 - **Telegram durability:** recover stalled ingress claims, retry restart-dropped media, survive transient polling errors, dead-letter poison updates, preserve forwarded rich text, route plugin callbacks correctly, keep progress updates in one stable multi-line window, map self-hosted Bot API container paths through trusted host roots, and fall back safely when Telegram rejects rich final replies. (#97118, #98102, #98735, #98775, #98776, #97174, #98907, #91984, #98786) Thanks @vincentkoc, @luoyanglang, @DaveArcher18, @obviyus, @goldmar, @Marvinthebored, @Dizesales, and @shakkernerd.
 - **Cross-channel inbound media:** preserve captions and expose unavailable-attachment notices when WhatsApp, LINE, Signal, iMessage, Microsoft Teams, Feishu, Mattermost, or Zalo cannot materialize inbound media, instead of dispatching phantom placeholders or dropping media-only turns. (#100092)

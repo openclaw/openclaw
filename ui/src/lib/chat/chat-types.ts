@@ -131,6 +131,7 @@ export type NormalizedMessage = {
 /** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
+  callId?: string;
   name: string;
   args?: unknown;
   inputText?: string;
