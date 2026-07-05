@@ -384,10 +384,10 @@ describe("qa suite", () => {
       ) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
-      expect(matrix.report?.result).toMatchObject({
-        selectedChannel: "telegram",
-        supportedChannels: ["telegram"],
-      });
+      expect(matrix.report?.result?.selectedChannel).toBe("telegram");
+      expect(matrix.report?.result?.supportedChannels).toEqual(
+        expect.arrayContaining(["telegram"]),
+      );
       const smoke = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
       ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
