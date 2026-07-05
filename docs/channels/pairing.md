@@ -30,7 +30,7 @@ Pairing codes:
 
 - 8 characters, uppercase, no ambiguous chars (`0O1I`).
 - **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
-- Pending DM pairing requests are capped at **3 per channel** by default; additional requests are ignored until one expires or is approved.
+- Pending DM pairing requests are capped at **3 per channel account**; additional requests are ignored until one expires or is approved.
 
 ### Approve a sender
 
@@ -39,13 +39,15 @@ openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
+Add `--notify` to the approve command to tell the requester on the same channel. Multi-account channels take `--account <id>`.
+
 If no command owner is configured yet, approving a DM pairing code also bootstraps
 `commands.ownerAllowFrom` to the approved sender, such as `telegram:123456789`.
 That gives first-time setups an explicit owner for privileged commands and exec
 approval prompts. After an owner exists, later pairing approvals only grant DM
 access; they do not add more owners.
 
-Supported channels: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 
 ### Reusable sender groups
 
@@ -81,14 +83,14 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 Stored under `~/.openclaw/credentials/`:
 
 - Pending requests: `<channel>-pairing.json`
-- Approved allowlist store:
-  - Default account: `<channel>-allowFrom.json`
-  - Non-default account: `<channel>-<accountId>-allowFrom.json`
+- Approved allowlist store: `<channel>-<accountId>-allowFrom.json` (approvals for the
+  default account use `<channel>-default-allowFrom.json`)
 
 Account scoping behavior:
 
 - Non-default accounts read/write only their scoped allowlist file.
-- Default account uses the channel-scoped unscoped allowlist file.
+- The default account also keeps honoring a legacy unscoped `<channel>-allowFrom.json`
+  file from older installs; entries from both files are merged on read.
 
 Treat these as sensitive (they gate access to your assistant).
 
@@ -131,14 +133,16 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 1. In Telegram, message your bot: `/pair`
 2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
 3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
-4. Scan the QR code or paste the setup code and connect.
+4. Scan the QR code (`/pair qr`) or paste the setup code and connect.
 5. The official mobile app connects automatically. If `/pair pending` shows a
    request, review its role and scopes before approving it.
 
 The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
-- `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
+- `bootstrapToken`: a single-use bootstrap token for the initial pairing handshake (expires after 10 minutes; `expiresAtMs` is included in the payload)
+
+Run `/pair cleanup` to invalidate unused setup codes once pairing finishes.
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
@@ -209,7 +213,7 @@ approval.
 
 Stored under `~/.openclaw/devices/`:
 
-- `pending.json` (short-lived; pending requests expire)
+- `pending.json` (short-lived; pending requests expire after 5 minutes)
 - `paired.json` (paired devices + tokens)
 
 ### Notes

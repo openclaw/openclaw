@@ -161,21 +161,6 @@ function withTinyGitRepo(files: Record<string, string>, test: (cwd: string) => v
   }
 }
 
-function commitTinyGitRepo(cwd: string): void {
-  const commit = spawnSync("git", ["commit", "-m", "initial"], {
-    cwd,
-    env: {
-      ...process.env,
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_AUTHOR_NAME: "OpenClaw Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "OpenClaw Test",
-    },
-    stdio: "ignore",
-  });
-  expect(commit.status).toBe(0);
-}
-
 function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => void): void {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-projects-"));
   try {
@@ -3185,36 +3170,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/ui/control-ui-chunking.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes unit ui test targets to the unit ui lane", () => {
-    expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
-    expect(buildVitestRunPlans(["ui/src/ui/views/chat.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/views/chat.test.ts"],
-        watchMode: false,
-      },
-    ]);
-
-    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        includePatterns: ["ui/src/app/control-ui-chunking.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3243,11 +3199,11 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes control ui e2e tests to the ui e2e lane", () => {
-    expect(buildVitestRunPlans(["ui/src/ui/e2e/chat-flow.e2e.test.ts"])).toEqual([
+    expect(buildVitestRunPlans(["ui/src/e2e/chat-flow.e2e.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.ui-e2e.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/ui/e2e/chat-flow.e2e.test.ts"],
+        includePatterns: ["ui/src/e2e/chat-flow.e2e.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3261,31 +3217,16 @@ describe("scripts/test-projects changed-target routing", () => {
       },
     ]);
 
-    expect(buildVitestRunPlans(["ui/src/ui/e2e"])).toEqual([
+    expect(buildVitestRunPlans(["ui/src/e2e"])).toEqual([
       {
         config: "test/vitest/vitest.ui-e2e.config.ts",
         forwardedArgs: [],
-        includePatterns: ["ui/src/ui/e2e/**/*.test.ts"],
+        includePatterns: ["ui/src/e2e/**/*.test.ts"],
         watchMode: false,
       },
     ]);
 
-    expect(buildVitestArgs(["ui/src/ui/e2e"])).toContain("--configLoader");
-  });
-
-  it("routes changed unit ui tests to the unit ui lane", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "ui/src/ui/chat/grouped-render.test.ts",
-    ]);
-
-    expect(plans).toEqual([
-      {
-        config: "test/vitest/vitest.unit-ui.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
-        watchMode: false,
-      },
-    ]);
+    expect(buildVitestArgs(["ui/src/e2e"])).toContain("--configLoader");
   });
 
   it("routes auto-reply route source files to route regression tests", () => {
@@ -4199,7 +4140,6 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
-      "test/vitest/vitest.unit-ui.config.ts",
       "test/vitest/vitest.unit-support.config.ts",
       "test/vitest/vitest.boundary.config.ts",
       "test/vitest/vitest.tooling.config.ts",

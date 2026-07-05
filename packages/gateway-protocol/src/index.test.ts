@@ -118,6 +118,7 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         runId: "run-global-work",
+        preserveSideRuns: true,
       }),
     ).toBe(true);
     expect(

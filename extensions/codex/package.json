@@ -42,6 +42,9 @@
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true,
+      "requireLatestDependencies": [
+        "@openai/codex"
+      ],
       "bundleRuntimeDependencies": false
     }
   }

@@ -1,6 +1,7 @@
 // Qa Lab tests cover suite runtime gateway plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  fetchJson,
   getGatewayRetryAfterMs,
   isConfigApplyNoopForSnapshot,
   isConfigHashConflict,
@@ -48,6 +49,38 @@ function createConfigMutationEnv(
 }
 
 describe("qa suite gateway helpers", () => {
+  it("bounds oversized suite gateway JSON responses", async () => {
+    let chunksRead = 0;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (chunksRead === 0) {
+            chunksRead += 1;
+            controller.enqueue(new TextEncoder().encode('{"payload":"'));
+            return;
+          }
+          if (chunksRead <= 256) {
+            chunksRead += 1;
+            controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+            return;
+          }
+          controller.enqueue(new TextEncoder().encode('"}'));
+          controller.close();
+        },
+      }),
+      {
+        headers: { "content-type": "application/json" },
+      },
+    );
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
+
+    await expect(fetchJson("http://127.0.0.1:43123/config")).rejects.toThrow(
+      "qa-lab-suite-fetch-json: JSON response exceeds 16777216 bytes",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reads retry-after from the primary gateway error before appended logs", () => {
     const error = new Error(
       "rate limit exceeded for config.patch; retry after 38s\nGateway logs:\nprevious config changed since last load",

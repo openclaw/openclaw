@@ -66,6 +66,76 @@ export const TerminalCloseParamsSchema = Type.Object(
 );
 export type TerminalCloseParams = Static<typeof TerminalCloseParamsSchema>;
 
+/**
+ * Rebinds a live-or-detached session to the calling admin connection.
+ * Attach is take-over (tmux-like): the previous owner, if still connected,
+ * receives `terminal.exit` with reason "detached".
+ */
+export const TerminalAttachParamsSchema = Type.Object(
+  { sessionId: NonEmptyString },
+  { additionalProperties: false },
+);
+export type TerminalAttachParams = Static<typeof TerminalAttachParamsSchema>;
+
+/** Result of a successful attach; mirrors open plus the replay buffer. */
+export const TerminalAttachResultSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    agentId: NonEmptyString,
+    shell: NonEmptyString,
+    cwd: NonEmptyString,
+    confined: Type.Boolean(),
+    // Recent raw output from the server's bounded ring buffer, replayed into
+    // the client emulator before live terminal.data resumes. Not a true screen
+    // snapshot: after truncation it can start mid-escape-sequence; emulators
+    // recover on the next full repaint (prompt, clear, resize redraw).
+    buffer: Type.String(),
+  },
+  { additionalProperties: false },
+);
+export type TerminalAttachResult = Static<typeof TerminalAttachResultSchema>;
+
+/** One attachable session, as reported by terminal.list. */
+export const TerminalSessionInfoSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    agentId: NonEmptyString,
+    shell: NonEmptyString,
+    cwd: NonEmptyString,
+    confined: Type.Boolean(),
+    /** False while the session is detached (no connection owns its stream). */
+    attached: Type.Boolean(),
+    createdAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+export type TerminalSessionInfo = Static<typeof TerminalSessionInfoSchema>;
+
+/**
+ * Sessions a reconnecting admin client can attach. All admin connections see
+ * the same list: the terminal surface is already operator.admin (full host
+ * access), so cross-connection visibility adds no privilege.
+ */
+export const TerminalListResultSchema = Type.Object(
+  { sessions: Type.Array(TerminalSessionInfoSchema) },
+  { additionalProperties: false },
+);
+export type TerminalListResult = Static<typeof TerminalListResultSchema>;
+
+/** Reads the current output buffer as plain text without attaching. */
+export const TerminalTextParamsSchema = Type.Object(
+  { sessionId: NonEmptyString },
+  { additionalProperties: false },
+);
+export type TerminalTextParams = Static<typeof TerminalTextParamsSchema>;
+
+/** Plain-text buffer contents (ANSI stripped); an agent/LLM affordance. */
+export const TerminalTextResultSchema = Type.Object(
+  { text: Type.String() },
+  { additionalProperties: false },
+);
+export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
+
 /** Shared ok/void result for input, resize, and close. */
 export const TerminalAckResultSchema = Type.Object(
   { ok: Type.Boolean() },
@@ -97,6 +167,9 @@ export const TerminalExitEventSchema = Type.Object(
         Type.Literal("process_exit"),
         Type.Literal("closed"),
         Type.Literal("disconnected"),
+        // Another admin connection attached the session away; the session is
+        // still alive server-side, but no longer streams to this connection.
+        Type.Literal("detached"),
         Type.Literal("error"),
       ]),
     ),

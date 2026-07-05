@@ -1,5 +1,9 @@
 # OpenClaw iOS Changelog
 
+## Unreleased
+
+- Animated the OpenClaw mascot (float, blink, antenna wiggle, claw snaps) across onboarding, sidebar, and command center, matching openclaw.ai.
+
 ## 2026.6.11 - 2026-07-01
 
 Maintenance update for the current OpenClaw release.

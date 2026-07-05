@@ -170,6 +170,7 @@ vi.mock("../infra/update-check.js", () => ({
   }),
   fetchNpmPackageTargetStatus: vi.fn(),
   fetchNpmTagVersion: vi.fn(),
+  resolveExtendedStablePackage: vi.fn(),
   resolveNpmChannelTag: vi.fn(),
 }));
 
@@ -376,8 +377,13 @@ const {
   readSourceConfigBestEffort,
   replaceConfigFile,
 } = await import("../config/config.js");
-const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
-  await import("../infra/update-check.js");
+const {
+  checkUpdateStatus,
+  fetchNpmPackageTargetStatus,
+  fetchNpmTagVersion,
+  resolveExtendedStablePackage,
+  resolveNpmChannelTag,
+} = await import("../infra/update-check.js");
 const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
   await import("../infra/update-control-plane-sentinel.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
@@ -799,6 +805,12 @@ describe("update-cli", () => {
       target: "latest",
       version: "9999.0.0",
       nodeEngine: ">=22.19.0",
+    });
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValue({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2026.6.33",
+      packageSpec: "openclaw@2026.6.33",
     });
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
@@ -2526,6 +2538,184 @@ describe("update-cli", () => {
     await updateCommand({});
 
     expectPackageInstallSpec("openclaw@latest");
+  });
+
+  it("installs the verified exact package and persists an explicit extended-stable channel", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+
+    await updateCommand({ channel: "extended-stable", yes: true, restart: false });
+
+    expect(resolveExtendedStablePackage).toHaveBeenCalledWith({
+      installKind: "package",
+      timeoutMs: undefined,
+      packageName: "openclaw",
+    });
+    expectPackageInstallSpec("openclaw@2026.6.33");
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
+    expect(syncPluginCall()?.channel).toBe("stable");
+    expect(lastNpmPluginUpdateCall()?.updateChannel).toBe("stable");
+  });
+
+  it("uses the same exact resolver for a bare update with stored extended-stable", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: config,
+      config,
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(resolveExtendedStablePackage).toHaveBeenCalledWith({
+      installKind: "package",
+      timeoutMs: undefined,
+      packageName: "openclaw",
+    });
+    expectPackageInstallSpec("openclaw@2026.6.33");
+    expect(syncPluginCall()?.channel).toBe("stable");
+  });
+
+  it("fails closed without config or package mutation when extended-stable resolution fails", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "failed",
+      reason: "selector_missing",
+    });
+
+    await updateCommand({ channel: "extended-stable", yes: true });
+
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+    expect(lastWriteJsonCall()).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails a stored extended-stable update before launchd cleanup when resolution fails", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      sourceConfig: config,
+      resolved: config,
+      runtimeConfig: config,
+      config,
+    });
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "failed",
+      reason: "selector_query_failed",
+    });
+
+    await updateCommand({ yes: true });
+
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "explicit", explicit: true },
+    { name: "stored", explicit: false },
+  ])("rejects --tag for an $name extended-stable channel", async ({ explicit }) => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    if (!explicit) {
+      const config = { update: { channel: "extended-stable" } } as OpenClawConfig;
+      vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+        ...baseSnapshot,
+        parsed: config,
+        sourceConfig: config,
+        resolved: config,
+        runtimeConfig: config,
+        config,
+      });
+    }
+
+    await updateCommand({
+      ...(explicit ? { channel: "extended-stable" as const } : {}),
+      tag: "latest",
+      yes: true,
+    });
+
+    expect(resolveExtendedStablePackage).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects extended-stable Git updates before handoff, conversion, or config mutation", async () => {
+    await updateCommand({ channel: "extended-stable", yes: true });
+
+    expect(resolveExtendedStablePackage).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { name: "refuses", yes: false, installs: false },
+    { name: "allows with --yes", yes: true, installs: true },
+  ])("$name an extended-stable downgrade in non-interactive mode", async ({ yes, installs }) => {
+    const tempDir = createCaseDir("openclaw-update");
+    setTty(false);
+    mockPackageInstallStatus(tempDir);
+    readPackageVersion.mockResolvedValue("2026.7.10");
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2026.6.33",
+      packageSpec: "openclaw@2026.6.33",
+    });
+
+    await updateCommand({ channel: "extended-stable", yes, restart: false });
+
+    expect(packageInstallCommandCall() !== undefined).toBe(installs);
+    if (installs) {
+      expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
+    } else {
+      expect(replaceConfigFile).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    }
+  });
+
+  it("retains extended-stable after a post-commit plugin convergence failure", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      changes: [],
+      warnings: [
+        {
+          pluginId: "demo",
+          reason: "plugin smoke failed",
+          message: "plugin smoke failed",
+          guidance: ["Run openclaw update repair."],
+        },
+      ],
+      errored: true,
+      smokeFailures: [],
+      installRecords: {},
+    });
+
+    await updateCommand({ channel: "extended-stable", yes: true, json: true, restart: false });
+
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("extended-stable");
+    const output = lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(output?.status).toBe("error");
+    expect(output?.reason).toBe("post-update-plugins");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("refreshes package-manager updates when the installed version already matches the target", async () => {
@@ -6504,6 +6694,47 @@ describe("update-cli", () => {
     expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
   });
 
+  it("writes an extended-stable selector failure to the control-plane sentinel", async () => {
+    const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
+    const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
+    const metaPath = path.join(metaDir, "meta.json");
+    await fs.writeFile(
+      metaPath,
+      JSON.stringify({
+        version: 1,
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          handoffId: "extended-stable-handoff",
+          note: "Update requested from the agent.",
+        },
+      }),
+    );
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(resolveExtendedStablePackage).mockResolvedValueOnce({
+      status: "failed",
+      reason: "selector_missing",
+    });
+
+    await withEnvAsync(
+      {
+        [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      async () => {
+        await updateCommand({ channel: "extended-stable", yes: true, json: true });
+      },
+    );
+
+    const sentinel = await readRestartSentinel({
+      OPENCLAW_STATE_DIR: stateDir,
+    } as NodeJS.ProcessEnv);
+    expect(sentinel?.payload.status).toBe("error");
+    expect(sentinel?.payload.stats?.reason).toBe("selector_missing");
+    expect(sentinel?.payload.stats?.handoffId).toBe("extended-stable-handoff");
+    expect(sentinel?.payload.continuation).toBeUndefined();
+  });
+
   it("marks the control-plane update sentinel failed when restart health verification fails", async () => {
     const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
     const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
@@ -6839,6 +7070,24 @@ describe("update-cli", () => {
     );
   });
 
+  it("updateFinalizeCommand rejects extended-stable on Git before persistence", async () => {
+    await updateFinalizeCommand({
+      channel: "extended-stable",
+      json: true,
+      restart: false,
+    });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      mode: "git",
+      reason: "unsupported_git_channel",
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
     const preDoctorConfig = {
       update: { channel: "stable" },
@@ -7052,7 +7301,7 @@ describe("update-cli", () => {
       run: async () => await updateWizardCommand({}),
       requireTty: false,
       expectedError:
-        "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
+        "Update wizard requires a TTY. Use `openclaw update --channel <stable|extended-stable|beta|dev>` instead.",
     },
   ] as const)(
     "validates update command invocation errors: $name",

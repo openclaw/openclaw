@@ -107,6 +107,7 @@ export const ChatAbortParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
+    preserveSideRuns: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
