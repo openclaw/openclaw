@@ -516,7 +516,7 @@ export const vi: TranslationMap = {
     debug: "Ảnh chụp, sự kiện, RPC.",
     logs: "Nhật ký gateway trực tiếp.",
     dreams: "Mơ bộ nhớ, hợp nhất và phản chiếu.",
-    plugin: "Plugin-provided panel.",
+    plugin: "Bảng điều khiển do plugin cung cấp.",
   },
   skillWorkshop: {
     header: {

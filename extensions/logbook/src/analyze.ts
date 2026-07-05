@@ -32,11 +32,27 @@ export function clockToMs(day: string, clock: string): number | null {
   if (hours > 23 || minutes > 59 || seconds > 59) {
     return null;
   }
-  const base = new Date(`${day}T00:00:00`);
-  if (Number.isNaN(base.getTime())) {
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!dayMatch) {
     return null;
   }
-  return base.getTime() + ((hours * 60 + minutes) * 60 + seconds) * 1000;
+  const year = Number(dayMatch[1]);
+  const monthIndex = Number(dayMatch[2]) - 1;
+  const dayOfMonth = Number(dayMatch[3]);
+  const date = new Date(year, monthIndex, dayOfMonth, hours, minutes, seconds);
+  // Component construction preserves wall-clock time across DST boundaries;
+  // rejecting normalized fields also excludes invalid dates and skipped hours.
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== monthIndex ||
+    date.getDate() !== dayOfMonth ||
+    date.getHours() !== hours ||
+    date.getMinutes() !== minutes ||
+    date.getSeconds() !== seconds
+  ) {
+    return null;
+  }
+  return date.getTime();
 }
 
 /** Strips code fences and extracts the outermost JSON array/object from model text. */

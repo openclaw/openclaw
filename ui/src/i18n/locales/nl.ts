@@ -517,7 +517,7 @@ export const nl: TranslationMap = {
     debug: "Momentopnamen, gebeurtenissen, RPC.",
     logs: "Live Gateway-logs.",
     dreams: "Geheugendromen, consolidatie en reflectie.",
-    plugin: "Plugin-provided panel.",
+    plugin: "Door een plugin geleverd paneel.",
   },
   skillWorkshop: {
     header: {

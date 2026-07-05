@@ -102,7 +102,7 @@ export default definePluginEntry({
       description: "Your day as a timeline, built from screen snapshots.",
       icon: "sun",
       group: "control",
-      requiredScopes: ["operator.read"],
+      requiredScopes: ["operator.write"],
     });
 
     // Adds logbook.snapshot to the default macOS node allowlist; without a

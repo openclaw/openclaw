@@ -515,7 +515,7 @@ export const pt_BR: TranslationMap = {
     debug: "Snapshots, eventos, RPC.",
     logs: "Logs ao vivo do gateway.",
     dreams: "Consolidação de memória durante o sono.",
-    plugin: "Plugin-provided panel.",
+    plugin: "Painel fornecido pelo plugin.",
   },
   skillWorkshop: {
     header: {

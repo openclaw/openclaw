@@ -488,7 +488,7 @@ export const ar: TranslationMap = {
     debug: "تصحيح الأخطاء",
     logs: "السجلات",
     dreams: "الحلم",
-    plugin: "Plugin",
+    plugin: "المكوّن الإضافي",
   },
   subtitles: {
     agents: "مساحات العمل، والأدوات، والهويات.",
@@ -514,7 +514,7 @@ export const ar: TranslationMap = {
     debug: "اللقطات، والأحداث، وRPC.",
     logs: "سجلات Gateway المباشرة.",
     dreams: "حلم الذاكرة، والدمج، والتأمل.",
-    plugin: "Plugin-provided panel.",
+    plugin: "لوحة مقدمة من المكوّن الإضافي.",
   },
   skillWorkshop: {
     header: {

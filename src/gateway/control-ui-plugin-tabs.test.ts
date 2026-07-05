@@ -30,7 +30,7 @@ describe("projectControlUiPluginTabs", () => {
     const entries = [
       {
         pluginId: "logbook",
-        descriptor: tabDescriptor({ requiredScopes: ["operator.read"] }),
+        descriptor: tabDescriptor({ requiredScopes: ["operator.write"] }),
       },
       {
         pluginId: "adminy",
@@ -41,10 +41,8 @@ describe("projectControlUiPluginTabs", () => {
         }),
       },
     ];
-    expect(projectControlUiPluginTabs(entries, ["operator.read"]).map((tab) => tab.id)).toEqual([
-      "logbook",
-    ]);
-    // Write implies read for visibility, and admin sees everything.
+    expect(projectControlUiPluginTabs(entries, ["operator.read"])).toEqual([]);
+    // Admin implies write for visibility.
     expect(projectControlUiPluginTabs(entries, ["operator.write"]).map((tab) => tab.id)).toEqual([
       "logbook",
     ]);

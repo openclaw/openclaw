@@ -38,6 +38,9 @@ const MODEL_MISSING_LOG_INTERVAL_MS = 10 * 60 * 1000;
 const CAPTURE_FAILURE_PAUSE_TICKS = 10;
 const CAPTURE_FAILURE_THRESHOLD = 3;
 const JPEG_QUALITY = 0.6;
+// Only Codex currently implements the structured image-extraction contract.
+// Borrowed defaults must not select a provider that will fail every batch.
+const STRUCTURED_MEDIA_PROVIDER = "codex";
 
 type SnapshotPayload = {
   format?: string;
@@ -320,7 +323,7 @@ export class LogbookService {
     for (const entry of entries) {
       const usable =
         entry.type !== "cli" &&
-        typeof entry.provider === "string" &&
+        entry.provider?.trim().toLowerCase() === STRUCTURED_MEDIA_PROVIDER &&
         typeof entry.model === "string" &&
         (!entry.capabilities || entry.capabilities.includes("image"));
       if (usable) {
@@ -328,7 +331,7 @@ export class LogbookService {
           // Auth profile fields ride along so profile-scoped media credentials
           // keep working when Logbook borrows the media-understanding default.
           ref: {
-            provider: entry.provider as string,
+            provider: STRUCTURED_MEDIA_PROVIDER,
             model: entry.model as string,
             profile: entry.profile,
             preferredProfile: entry.preferredProfile,

@@ -515,7 +515,7 @@ export const hi: TranslationMap = {
     debug: "स्नैपशॉट, इवेंट, RPC।",
     logs: "लाइव gateway लॉग।",
     dreams: "मेमोरी ड्रीमिंग, कंसॉलिडेशन, और रिफ्लेक्शन।",
-    plugin: "Plugin-provided panel.",
+    plugin: "प्लगइन द्वारा उपलब्ध कराया गया पैनल।",
   },
   skillWorkshop: {
     header: {

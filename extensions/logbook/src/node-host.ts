@@ -3,10 +3,10 @@
 // logbook.snapshot so capture works anywhere the plugin is enabled.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,9 +46,11 @@ export async function handleLogbookSnapshot(rawParams: unknown): Promise<Logbook
       ),
     ),
   );
-  // Owner-only subdirectory keeps captures out of the shared temp namespace.
-  const captureDir = path.join(tmpdir(), "openclaw-logbook");
+  // The shared helper rejects unsafe temp roots; the private subdirectory
+  // keeps captures out of the broader OpenClaw temp namespace.
+  const captureDir = path.join(resolvePreferredOpenClawTmpDir(), "logbook");
   await mkdir(captureDir, { recursive: true, mode: 0o700 });
+  await chmod(captureDir, 0o700);
   const filePath = path.join(captureDir, `logbook-snapshot-${randomUUID()}.jpg`);
   try {
     // Pre-create owner-only: screencapture truncates the existing inode, so

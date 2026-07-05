@@ -486,7 +486,7 @@ export const zh_CN: TranslationMap = {
     debug: "调试",
     logs: "日志",
     dreams: "梦境",
-    plugin: "Plugin",
+    plugin: "插件",
   },
   subtitles: {
     agents: "工作区、工具、身份。",
@@ -512,7 +512,7 @@ export const zh_CN: TranslationMap = {
     debug: "快照、事件、RPC。",
     logs: "实时网关日志。",
     dreams: "睡眠时进行记忆巩固。",
-    plugin: "Plugin-provided panel.",
+    plugin: "插件提供的面板。",
   },
   skillWorkshop: {
     header: {

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   clockToMs,
@@ -31,6 +32,22 @@ describe("clockToMs", () => {
     expect(clockToMs(DAY, "25:00:00")).toBeNull();
     expect(clockToMs(DAY, "half past nine")).toBeNull();
     expect(clockToMs("not-a-day", "10:00:00")).toBeNull();
+  });
+
+  it("preserves local wall-clock time across a DST transition", () => {
+    const moduleUrl = new URL("./analyze.ts", import.meta.url).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--eval",
+        `const { clockToMs } = await import(${JSON.stringify(moduleUrl)}); process.stdout.write(JSON.stringify([clockToMs("2026-03-08", "10:00:00"), clockToMs("2026-03-08", "02:30:00")]));`,
+      ],
+      { encoding: "utf8", env: { ...process.env, TZ: "America/New_York" } },
+    );
+
+    expect(JSON.parse(output)).toEqual([Date.UTC(2026, 2, 8, 14), null]);
   });
 });
 

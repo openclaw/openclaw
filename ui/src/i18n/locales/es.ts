@@ -517,7 +517,7 @@ export const es: TranslationMap = {
     debug: "Instantáneas de la puerta de enlace, eventos y llamadas RPC manuales.",
     logs: "Seguimiento en vivo de los registros de la puerta de enlace.",
     dreams: "Consolidación de la memoria durante el sueño.",
-    plugin: "Plugin-provided panel.",
+    plugin: "Panel proporcionado por el plugin.",
   },
   skillWorkshop: {
     header: {

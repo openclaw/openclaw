@@ -519,7 +519,7 @@ export const it: TranslationMap = {
     debug: "Snapshot, eventi, RPC.",
     logs: "Log gateway live.",
     dreams: "Sogni della memoria, consolidamento e riflessione.",
-    plugin: "Plugin-provided panel.",
+    plugin: "Pannello fornito dal plugin.",
   },
   skillWorkshop: {
     header: {

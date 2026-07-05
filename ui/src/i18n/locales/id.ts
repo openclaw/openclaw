@@ -515,7 +515,7 @@ export const id: TranslationMap = {
     debug: "Snapshot, peristiwa, RPC.",
     logs: "Log Gateway langsung.",
     dreams: "Konsolidasi memori saat tidur.",
-    plugin: "Plugin-provided panel.",
+    plugin: "Panel yang disediakan plugin.",
   },
   skillWorkshop: {
     header: {

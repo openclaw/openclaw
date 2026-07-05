@@ -75,6 +75,7 @@ export type LogbookUiState = {
   askLoading: boolean;
   actionPending: boolean;
   pollTimer: ReturnType<typeof globalThis.setInterval> | null;
+  pollClient: GatewayBrowserClient | null;
   requestUpdate: (() => void) | null;
 };
 
@@ -117,6 +118,7 @@ export function getLogbookState(host: object): LogbookUiState {
       askLoading: false,
       actionPending: false,
       pollTimer: null,
+      pollClient: null,
       requestUpdate: null,
     };
     logbookStates.set(host, state);
@@ -192,6 +194,9 @@ export function stopLogbookPolling(host: object): void {
     clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
+  if (state) {
+    state.pollClient = null;
+  }
 }
 
 export function configureLogbookPolling(
@@ -204,11 +209,16 @@ export function configureLogbookPolling(
       clearInterval(state.pollTimer);
       state.pollTimer = null;
     }
+    state.pollClient = null;
+    return;
+  }
+  if (state.pollTimer && state.pollClient === client) {
     return;
   }
   if (state.pollTimer) {
-    return;
+    clearInterval(state.pollTimer);
   }
+  state.pollClient = client;
   state.pollTimer = setInterval(() => {
     // Silent refresh keeps the timeline current while analysis batches land.
     void loadLogbook(state, client, { silent: true });
@@ -306,11 +316,15 @@ export async function loadLogbookStandup(
   }
   state.standupLoading = true;
   notify(state);
+  const requestedDay = state.day;
   try {
-    state.standup = await client.request<{ day: string; text: string; updatedMs: number }>(
+    const standup = await client.request<{ day: string; text: string; updatedMs: number }>(
       "logbook.standup",
-      { day: state.day, refresh },
+      { day: requestedDay, refresh },
     );
+    if (state.day === requestedDay) {
+      state.standup = standup;
+    }
   } catch (err) {
     state.error = err instanceof Error ? err.message : String(err);
   } finally {
@@ -330,12 +344,15 @@ export async function askLogbook(
   state.askLoading = true;
   state.askAnswer = null;
   notify(state);
+  const requestedDay = state.day;
   try {
     const payload = await client.request<{ answer: string }>("logbook.ask", {
-      day: state.day,
+      day: requestedDay,
       question,
     });
-    state.askAnswer = payload.answer;
+    if (state.day === requestedDay) {
+      state.askAnswer = payload.answer;
+    }
   } catch (err) {
     state.error = err instanceof Error ? err.message : String(err);
   } finally {

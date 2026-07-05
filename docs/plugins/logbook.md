@@ -50,8 +50,9 @@ sidebar only while the plugin is enabled on the connected gateway.
   extraction (the bundled Codex plugin does, for example `codex/gpt-5.5`).
   Logbook resolves the model in order:
   1. `plugins.entries.logbook.config.visionModel` (`"provider/model"` ref)
-  2. the first image-capable entry under `tools.media.image.models` or
-     `tools.media.models`
+  2. the first image-capable Codex entry under `tools.media.image.models` or
+     `tools.media.models` (other media providers do not currently expose the
+     structured extraction contract Logbook requires)
 - Timeline card synthesis, standup notes, and "ask your day" answers use the
   default agent model via the plugin LLM runtime.
 
@@ -118,15 +119,16 @@ Logbook registers Gateway RPC methods for the dashboard. `logbook.status`,
 with `operator.read`. Everything that returns raw screenshot pixels
 (`logbook.frames`, `logbook.frame`), spends model tokens (`logbook.standup`,
 `logbook.ask`), or mutates runtime state (`logbook.capture.set`,
-`logbook.analyze.now`) requires `operator.write`; read-only dashboard sessions
-see the timeline without snapshot keyframes.
+`logbook.analyze.now`) requires `operator.write`. The Control UI tab requires
+`operator.write` because the bundled view exposes those actions and raw frame
+previews; read-only clients may call the derived-text methods directly.
 
 ## Privacy notes
 
 - Snapshots can contain anything on screen, including secrets. Frames never
   leave the machine except as model input for analysis batches.
-- Use a local vision model (for example via a local provider endpoint) for a
-  fully on-device pipeline.
+- Use a structured-extraction provider that runs locally, when available and
+  explicitly configured, for a fully on-device pipeline.
 - Frames, the timeline database, and temporary captures are written with
   owner-only file permissions.
 - Adding `screen.snapshot` to `gateway.nodes.denyCommands` is the

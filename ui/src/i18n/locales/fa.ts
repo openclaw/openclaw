@@ -490,7 +490,7 @@ export const fa: TranslationMap = {
     debug: "اشکال‌زدایی",
     logs: "گزارش‌ها",
     dreams: "رؤیاپردازی",
-    plugin: "Plugin",
+    plugin: "افزونه",
   },
   subtitles: {
     agents: "فضاهای کاری، ابزارها، هویت‌ها.",
@@ -516,7 +516,7 @@ export const fa: TranslationMap = {
     debug: "نماهای لحظه‌ای، رویدادها، RPC.",
     logs: "گزارش‌های زنده Gateway.",
     dreams: "رؤیاپردازی حافظه، یکپارچه‌سازی و بازتاب.",
-    plugin: "Plugin-provided panel.",
+    plugin: "پنل ارائه‌شده توسط افزونه.",
   },
   skillWorkshop: {
     header: {

@@ -133,7 +133,7 @@ function parseDistractions(raw: string): LogbookDistraction[] {
     }
     return parsed.filter(
       (entry): entry is LogbookDistraction =>
-        !!entry &&
+        entry !== null &&
         typeof entry === "object" &&
         typeof (entry as LogbookDistraction).title === "string" &&
         typeof (entry as LogbookDistraction).startMs === "number" &&

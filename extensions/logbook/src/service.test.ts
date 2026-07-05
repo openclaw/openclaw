@@ -18,6 +18,8 @@ const quietLogger = {
 function makeService(params: {
   nodes: NodeRecord[];
   invoke: (args: { nodeId: string; command: string }) => Promise<unknown>;
+  config?: Record<string, unknown>;
+  fullConfig?: Record<string, unknown>;
 }) {
   const dataDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-service-test-")));
   const invoked: Array<{ nodeId: string; command: string }> = [];
@@ -30,12 +32,15 @@ function makeService(params: {
       },
     },
   };
-  const service = new LogbookService(resolveLogbookConfig({ captureEnabled: true }), {
-    runtime: runtime as never,
-    fullConfig: {} as never,
-    logger: quietLogger as never,
-    dataDir,
-  });
+  const service = new LogbookService(
+    resolveLogbookConfig({ captureEnabled: true, ...params.config }),
+    {
+      runtime: runtime as never,
+      fullConfig: (params.fullConfig ?? {}) as never,
+      logger: quietLogger as never,
+      dataDir,
+    },
+  );
   service.start();
   const tick = () =>
     (service as unknown as { captureTick(): Promise<void> }).captureTick.call(service);
@@ -93,5 +98,65 @@ describe("LogbookService capture node selection", () => {
     await tick();
     expect(invoked.map((call) => call.nodeId)).toEqual(["a-broken", "b-working"]);
     expect(service.status().lastCaptureError).toBeUndefined();
+  });
+});
+
+describe("LogbookService vision model selection", () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) {
+      cleanup();
+    }
+  });
+
+  it("borrows only a media provider with structured extraction", () => {
+    const { service, dataDir } = makeService({
+      nodes: [],
+      invoke: async () => framePayload,
+      fullConfig: {
+        tools: {
+          media: {
+            image: {
+              models: [
+                { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+                { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
+              ],
+            },
+          },
+        },
+      },
+    });
+    cleanups.push(() => {
+      service.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    expect(service.status()).toMatchObject({
+      visionModel: "codex/gpt-5.5",
+      visionModelSource: "media-defaults",
+    });
+  });
+
+  it("reports a missing model when borrowed defaults cannot extract structured data", () => {
+    const { service, dataDir } = makeService({
+      nodes: [],
+      invoke: async () => framePayload,
+      fullConfig: {
+        tools: {
+          media: {
+            models: [{ provider: "openai", model: "gpt-5.5", capabilities: ["image"] }],
+          },
+        },
+      },
+    });
+    cleanups.push(() => {
+      service.stop();
+      rmSync(dataDir, { recursive: true, force: true });
+    });
+
+    expect(service.status()).toMatchObject({
+      visionModel: undefined,
+      visionModelSource: "missing",
+    });
   });
 });
