@@ -1,6 +1,9 @@
 // Openai tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
-import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceTool,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -123,6 +126,7 @@ type SentRealtimeEvent = {
       create_response?: boolean;
     };
     output_modalities?: string[];
+    tools?: Array<{ name?: string }>;
     audio?: {
       input?: {
         format?: Record<string, unknown>;
@@ -237,6 +241,35 @@ function requireSession(socket: FakeWebSocketInstance, index = 0): Record<string
 
 function hasSentEventType(socket: FakeWebSocketInstance, type: string): boolean {
   return parseSent(socket).some((event) => event.type === type);
+}
+
+function createRealtimeTool(name: string): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name,
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createUnreadableToolName(): RealtimeVoiceTool {
+  return {
+    type: "function",
+    get name(): string {
+      throw new Error("unreadable tool name");
+    },
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createMalformedToolName(name: unknown): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name,
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  } as unknown as RealtimeVoiceTool;
 }
 
 describe("buildOpenAIRealtimeVoiceProvider", () => {
@@ -470,6 +503,31 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     // api.openai.com passes the CORS preflight (only authorization,content-type
     // allowed — #76435). All three are filtered, leaving no browser offer headers.
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
+  });
+
+  it("omits unsupported OpenAI tool names from browser sessions", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse({ client_secret: { value: "client-secret-123" } }),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    if (!provider.createBrowserSession) {
+      throw new Error("expected OpenAI realtime provider to support browser sessions");
+    }
+
+    await provider.createBrowserSession({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      tools: [
+        createRealtimeTool("1_lookup"),
+        createRealtimeTool("calendar.lookup:next"),
+        createMalformedToolName(undefined),
+        createUnreadableToolName(),
+      ],
+    });
+
+    const bodySession = requireRecord(requireFetchJsonBody().session, "fetch session");
+    const tools = bodySession.tools as Array<{ name?: string }>;
+    expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
   });
 
   it("resolves keychain OPENAI_API_KEY refs before creating browser sessions", async () => {
@@ -866,6 +924,40 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it("omits unsupported OpenAI tool names from GA session updates", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      tools: [
+        createRealtimeTool("1_lookup"),
+        createRealtimeTool("calendar.lookup:next"),
+        createRealtimeTool("bad/name"),
+        createRealtimeTool("x".repeat(65)),
+        createMalformedToolName(null),
+        createMalformedToolName(42),
+        createUnreadableToolName(),
+      ],
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+
+    const tools = requireSession(socket).tools as Array<{ name?: string }>;
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "1_lookup",
+      "x".repeat(65),
+    ]);
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+  });
+
   it("rotates realtime bridges on provider max-duration events without reporting an error", async () => {
     vi.useFakeTimers();
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -953,6 +1045,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions: "Be helpful.",
+      tools: [
+        createRealtimeTool("1_lookup"),
+        createRealtimeTool("calendar.lookup:next"),
+        createRealtimeTool("x".repeat(65)),
+      ],
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
@@ -989,6 +1086,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
     expect(session).not.toHaveProperty("type");
     expect(session).not.toHaveProperty("audio");
+    const tools = session.tools as Array<{ name?: string }>;
+    expect(tools.map((tool) => tool.name)).toEqual(["1_lookup"]);
 
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;

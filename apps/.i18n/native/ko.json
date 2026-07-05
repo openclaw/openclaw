@@ -4539,6 +4539,21 @@
       "translated": "준비됨"
     },
     {
+      "id": "native.apple.e5524d5756a62744",
+      "source": "Unable to Export Transcript",
+      "translated": "대화 기록을 내보낼 수 없음"
+    },
+    {
+      "id": "native.apple.942d6a10fd90d6e3",
+      "source": "OK",
+      "translated": "확인"
+    },
+    {
+      "id": "native.apple.3548c8d1ab43e85e",
+      "source": "OpenClaw could not prepare the Markdown file.",
+      "translated": "OpenClaw에서 Markdown 파일을 준비할 수 없습니다."
+    },
+    {
       "id": "native.apple.202b97e93b938049",
       "source": "What would you like to work on?",
       "translated": "무엇을 작업하시겠어요?"
@@ -4552,6 +4567,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "설정 / Gateway를 엽니다"
+    },
+    {
+      "id": "native.apple.ced228bb4d20a726",
+      "source": "Export Transcript",
+      "translated": "대화 기록 내보내기"
+    },
+    {
+      "id": "native.apple.940e1f943750c94b",
+      "source": "Chat actions",
+      "translated": "채팅 작업"
     },
     {
       "id": "native.apple.b635acd93246d67b",

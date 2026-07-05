@@ -2410,6 +2410,12 @@ describe("package artifact reuse", () => {
     );
     expect(fullRelease.jobs?.prepare_release_package).toBeUndefined();
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(
+      workflowStep(
+        workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+        "Setup Node environment",
+      ).with?.["install-deps"],
+    ).toBe("true");
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(

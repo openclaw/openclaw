@@ -806,7 +806,12 @@ type ExternalRunFailureReply = {
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
-function isNonDirectConversationContext(ctx: TemplateContext): boolean {
+type ExternalFailureConversationContext = Pick<
+  TemplateContext,
+  "ChatType" | "Provider" | "SessionKey" | "Surface"
+>;
+
+function isNonDirectConversationContext(ctx: ExternalFailureConversationContext): boolean {
   const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
   return chatType === "group" || chatType === "channel";
 }
@@ -817,7 +822,7 @@ function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean
 
 function resolveExternalRunFailureTextForConversation(params: {
   text: string;
-  sessionCtx: TemplateContext;
+  sessionCtx: ExternalFailureConversationContext;
   isGenericRunnerFailure: boolean;
   cfg?: OpenClawConfig;
 }): string {
@@ -1045,6 +1050,57 @@ function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T 
     marked.isError = true;
   }
   return marked;
+}
+
+export function buildTerminalAgentRunFailureReplyPayload(params: {
+  isHeartbeat?: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload {
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: params.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
+}
+
+export function buildEmptyInteractiveReplyPayload(params: {
+  isInteractive: boolean;
+  isHeartbeat?: boolean;
+  silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  isMessageToolOnly: boolean;
+  hasPendingContinuation: boolean;
+  hasExplicitSilentReply: boolean;
+  hasCommittedDelivery: boolean;
+  sessionCtx: ExternalFailureConversationContext;
+  cfg?: OpenClawConfig;
+}): ReplyPayload | undefined {
+  if (
+    !params.isInteractive ||
+    params.isHeartbeat === true ||
+    params.silentExpected === true ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
+    params.isMessageToolOnly ||
+    params.hasPendingContinuation ||
+    params.hasExplicitSilentReply ||
+    params.hasCommittedDelivery
+  ) {
+    return undefined;
+  }
+  return markAgentRunFailureReplyPayload({
+    text: resolveExternalRunFailureTextForConversation({
+      text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
+      sessionCtx: params.sessionCtx,
+      isGenericRunnerFailure: true,
+      cfg: params.cfg,
+    }),
+  });
 }
 
 /** Converts known agent-run failures into user-facing reply payloads. */
@@ -3530,15 +3586,10 @@ async function runAgentTurnWithFallbackInternal(
     }
   }
   const terminalFailurePayload = terminalRunFailed
-    ? markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text: params.isHeartbeat
-            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-            : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-          sessionCtx: params.sessionCtx,
-          isGenericRunnerFailure: true,
-          cfg: params.followupRun.run.config,
-        }),
+    ? buildTerminalAgentRunFailureReplyPayload({
+        isHeartbeat: params.isHeartbeat,
+        sessionCtx: params.sessionCtx,
+        cfg: params.followupRun.run.config,
       })
     : undefined;
 

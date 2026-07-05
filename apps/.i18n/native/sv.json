@@ -4539,6 +4539,21 @@
       "translated": "Redo"
     },
     {
+      "id": "native.apple.e5524d5756a62744",
+      "source": "Unable to Export Transcript",
+      "translated": "Det gick inte att exportera transkript"
+    },
+    {
+      "id": "native.apple.942d6a10fd90d6e3",
+      "source": "OK",
+      "translated": "OK"
+    },
+    {
+      "id": "native.apple.3548c8d1ab43e85e",
+      "source": "OpenClaw could not prepare the Markdown file.",
+      "translated": "OpenClaw kunde inte förbereda Markdown-filen."
+    },
+    {
       "id": "native.apple.202b97e93b938049",
       "source": "What would you like to work on?",
       "translated": "Vad vill du arbeta med?"
@@ -4552,6 +4567,16 @@
       "id": "native.apple.d19c9577e0fdfea7",
       "source": "Opens Settings / Gateway",
       "translated": "Öppnar Inställningar / Gateway"
+    },
+    {
+      "id": "native.apple.ced228bb4d20a726",
+      "source": "Export Transcript",
+      "translated": "Exportera transkript"
+    },
+    {
+      "id": "native.apple.940e1f943750c94b",
+      "source": "Chat actions",
+      "translated": "Chattåtgärder"
     },
     {
       "id": "native.apple.b635acd93246d67b",
