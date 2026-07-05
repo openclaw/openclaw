@@ -13,7 +13,7 @@ internal object ChatEventText {
   fun assistantTextFromMessage(messageEl: JsonElement?): String? {
     val message = messageEl.asObjectOrNull() ?: return null
     val role = message["role"].asStringOrNull()?.trim()
-    // Voice stays fail-closed on missing roles (#99123); only canonical assistant roles speak.
+    // Voice stays fail-closed on missing roles; only canonical assistant roles speak.
     if (role.isNullOrEmpty()) return null
     if (!role.equals("assistant", ignoreCase = true)) return null
     return textFromContent(message["content"])
